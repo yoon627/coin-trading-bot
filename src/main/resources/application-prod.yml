@@ -1,0 +1,13 @@
+spring:
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslMode=disable
+    username: ${DB_USER:trading}
+    password: ${DB_PASSWORD:trading}
+  flyway:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslmode=disable
+    user: ${DB_USER:trading}
+    password: ${DB_PASSWORD:trading}
+
+logging:
+  level:
+    com.trading.bot: INFO
