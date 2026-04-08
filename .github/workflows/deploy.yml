@@ -5,13 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  AWS_REGION: ap-northeast-2
-
-permissions:
-  id-token: write
-  contents: read
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -52,15 +45,17 @@ jobs:
           echo "$EC2_SSH_KEY" > /tmp/key.pem
           chmod 600 /tmp/key.pem
 
-          JAR=$(ls -t build/libs/*.jar | head -1)
+          JAR=$(ls -t build/libs/*.jar | grep -v plain | head -1)
 
           scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
             "$JAR" ec2-user@$EC2_HOST:/opt/app/app.jar
 
           ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST bash <<'EOF'
+          cd /opt/app
+          docker compose up -d 2>/dev/null || true
+          sleep 2
           pkill -f 'java.*app.jar' 2>/dev/null || true
           sleep 2
-          cd /opt/app
           set -a; source .env; set +a
           nohup java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -jar app.jar > app.log 2>&1 &
           EOF
