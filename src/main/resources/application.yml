@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: coin-trading-bot
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    deserialization:
+      fail-on-unknown-properties: false
+  r2dbc:
+    url: r2dbc:h2:mem:///trading
+    username: sa
+    password:
+  flyway:
+    enabled: true
+    url: jdbc:h2:mem:trading;DB_CLOSE_DELAY=-1
+    user: sa
+    password:
+    locations: classpath:db/migration
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+upbit:
+  access-key: ${UPBIT_ACCESS_KEY:}
+  secret-key: ${UPBIT_SECRET_KEY:}
+  base-url: https://api.upbit.com
+
+trading:
+  tickers: ${TRADING_TICKERS:KRW-BTC}
+  strategy: ${TRADING_STRATEGY:volatility_breakout}
+  invest-ratio: ${TRADING_INVEST_RATIO:0.1}
+  max-invest-amount: ${TRADING_MAX_INVEST_AMOUNT:100000}
+  k-value: ${TRADING_K_VALUE:0.5}
+  take-profit-pct: ${TRADING_TAKE_PROFIT_PCT:2.0}
+  max-loss-pct: ${TRADING_MAX_LOSS_PCT:5.0}
+  interval-seconds: ${TRADING_INTERVAL_SECONDS:10}
+  auto-start: ${TRADING_AUTO_START:false}
+
+discord:
+  webhook-url: ${DISCORD_WEBHOOK_URL:}
+
+logging:
+  level:
+    com.trading.bot: DEBUG
