@@ -33,6 +33,14 @@ async function initUser() {
         if (!me.has_upbit_keys) {
             document.getElementById('keys-banner').style.display = '';
         }
+        const leaderboardNote = document.getElementById('leaderboard-note');
+        if (!me.public_profile) {
+            leaderboardNote.textContent = '현재 계정은 Public Profile이 꺼져 있어서 Leaderboard에 표시되지 않습니다. Settings에서 켜세요.';
+            leaderboardNote.style.display = '';
+        } else {
+            leaderboardNote.textContent = '현재 계정은 Leaderboard 표시 대상입니다.';
+            leaderboardNote.style.display = '';
+        }
     } catch (_) {}
 }
 
@@ -80,12 +88,13 @@ async function refreshPortfolio() {
 function renderHoldings(holdings) {
     const tbody = document.getElementById('holdings-body');
     if (!holdings.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No holdings</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No holdings</td></tr>';
         return;
     }
     tbody.innerHTML = holdings.map(h => {
         const pnlClass = h.pnl_percent > 0 ? 'pnl-positive' : h.pnl_percent < 0 ? 'pnl-negative' : 'pnl-zero';
         const sign = h.pnl_percent >= 0 ? '+' : '';
+        const market = escapeHtml(h.market);
         return `<tr>
             <td><strong>${escapeHtml(h.currency)}</strong></td>
             <td>${h.balance.toFixed(8)}</td>
@@ -93,6 +102,7 @@ function renderHoldings(holdings) {
             <td>${formatKRW(h.current_price)}</td>
             <td>${formatKRW(h.eval_amount)}</td>
             <td class="${pnlClass}">${sign}${h.pnl_percent.toFixed(2)}%<br><small>${sign}${formatKRW(h.pnl_amount)}</small></td>
+            <td><button class="btn btn-stop btn-sm-action" onclick="sellHolding('${market}')">Sell All</button></td>
         </tr>`;
     }).join('');
 }
@@ -214,6 +224,12 @@ async function manualBuy() {
 async function manualSell() {
     const market = document.getElementById('trade-market').value.trim();
     if (!market) { toast('Market을 입력하세요', 'error'); return; }
+    await sellHolding(market);
+}
+
+async function sellHolding(market) {
+    if (!market) { toast('Market을 입력하세요', 'error'); return; }
+    document.getElementById('trade-market').value = market;
     if (!confirm(`${market} 전량 매도하시겠습니까?`)) return;
     try {
         const data = await fetchJson('/api/trade/sell', { method: 'POST', body: JSON.stringify({ market, sell_all: true }) });

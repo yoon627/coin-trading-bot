@@ -252,6 +252,13 @@ footer {
 .user-info { font-size: 0.875rem; color: var(--text-muted); }
 .btn-sm { padding: 0.25rem 0.75rem; font-size: 0.75rem; background: var(--border); color: var(--text-muted); border: none; border-radius: 6px; cursor: pointer; }
 .btn-sm:hover { background: var(--text-muted); color: var(--bg); }
+.btn-sm-action { padding: 0.35rem 0.6rem; font-size: 0.75rem; }
+
+.section-note {
+    margin: -0.25rem 0 1rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
 
 /* Keys banner */
 .keys-banner { border-color: var(--yellow); }
