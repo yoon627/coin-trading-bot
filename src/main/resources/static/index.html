@@ -14,10 +14,23 @@
         <div class="header-right">
             <span id="status-badge" class="badge badge-stopped">STOPPED</span>
             <span id="clock" class="clock"></span>
+            <span id="user-info" class="user-info"></span>
+            <button class="btn btn-sm" onclick="logout()">Logout</button>
         </div>
     </header>
 
     <main>
+        <!-- API Keys Banner (shown if not configured) -->
+        <section id="keys-banner" class="card keys-banner" style="display:none;">
+            <h2>Upbit API Keys Required</h2>
+            <p>Set your Upbit API keys to start trading.</p>
+            <div class="keys-form">
+                <input type="text" id="input-access-key" placeholder="Access Key">
+                <input type="password" id="input-secret-key" placeholder="Secret Key">
+                <button class="btn btn-secondary" onclick="saveKeys()">Save Keys</button>
+            </div>
+        </section>
+
         <!-- Control Panel -->
         <section class="card control-panel">
             <h2>Control</h2>
@@ -29,8 +42,12 @@
                         <option value="rsi_bounce">RSI Bounce</option>
                         <option value="golden_cross">Golden Cross</option>
                         <option value="combined">Combined</option>
+                        <option value="bollinger_bounce">Bollinger Bounce</option>
+                        <option value="macd_cross">MACD Cross</option>
+                        <option value="mean_reversion">Mean Reversion</option>
+                        <option value="ml_model">ML Model</option>
                     </select>
-                    <button id="btn-strategy" class="btn btn-secondary" onclick="changeStrategy()">Apply</button>
+                    <button class="btn btn-secondary" onclick="changeStrategy()">Apply</button>
                 </div>
                 <div class="control-buttons">
                     <button id="btn-start" class="btn btn-start" onclick="startBot()">Start Bot</button>
@@ -41,35 +58,157 @@
 
         <!-- Dashboard Grid -->
         <div class="grid">
-            <!-- Account Balance -->
+            <!-- Portfolio -->
             <section class="card">
-                <h2>Account</h2>
-                <div id="account-info" class="account-info">
+                <h2>Portfolio</h2>
+                <div id="portfolio-summary" class="account-info">
                     <div class="account-item">
                         <span class="label">KRW Balance</span>
                         <span id="krw-balance" class="value">-</span>
                     </div>
                     <div class="account-item">
-                        <span class="label">Total Assets</span>
-                        <span id="total-assets" class="value">-</span>
+                        <span class="label">Total Eval</span>
+                        <span id="total-eval" class="value">-</span>
                     </div>
                 </div>
             </section>
 
-            <!-- Positions -->
+            <!-- Bot Positions -->
             <section class="card">
-                <h2>Positions</h2>
+                <h2>Bot Positions</h2>
                 <div id="positions-container">
                     <p class="empty-state">No open positions</p>
                 </div>
             </section>
         </div>
 
+        <!-- Holdings -->
+        <section class="card">
+            <h2>My Holdings</h2>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Coin</th>
+                            <th>Balance</th>
+                            <th>Avg Buy</th>
+                            <th>Current</th>
+                            <th>Eval</th>
+                            <th>PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="holdings-body">
+                        <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- ML Model -->
+        <section class="card">
+            <h2>ML Model Training</h2>
+            <div class="controls" style="margin-bottom:1rem; flex-wrap:wrap;">
+                <div class="control-group">
+                    <label for="ml-ticker">Ticker</label>
+                    <select id="ml-ticker">
+                        <option value="KRW-BTC">BTC</option>
+                        <option value="KRW-ETH">ETH</option>
+                        <option value="KRW-XRP">XRP</option>
+                        <option value="KRW-SOL">SOL</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="ml-days">Train Days</label>
+                    <select id="ml-days">
+                        <option value="100">100</option>
+                        <option value="200" selected>200</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="ml-target">Target %</label>
+                    <input type="number" id="ml-target" value="2" step="0.5" min="0.5" max="10" style="width:65px;">
+                </div>
+                <div class="control-group">
+                    <label for="ml-horizon">Horizon (d)</label>
+                    <input type="number" id="ml-horizon" value="5" step="1" min="1" max="14" style="width:65px;">
+                </div>
+                <button class="btn btn-secondary" onclick="trainMl()">Train Model</button>
+                <button class="btn btn-sm" onclick="predictMl()" style="margin-top:auto;">Predict Now</button>
+            </div>
+            <div id="ml-result" style="font-size:0.85rem; color:var(--text-muted);"></div>
+        </section>
+
+        <!-- Strategy Backtest -->
+        <section class="card">
+            <h2>Strategy Comparison (Backtest)</h2>
+            <div class="controls" style="margin-bottom:0.75rem; flex-wrap:wrap;">
+                <div class="control-group">
+                    <label for="bt-ticker">Ticker</label>
+                    <select id="bt-ticker">
+                        <option value="KRW-BTC">BTC</option>
+                        <option value="KRW-ETH">ETH</option>
+                        <option value="KRW-XRP">XRP</option>
+                        <option value="KRW-SOL">SOL</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="bt-days">Days</label>
+                    <select id="bt-days">
+                        <option value="60">60</option>
+                        <option value="100">100</option>
+                        <option value="200" selected>200</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="bt-tp">TP%</label>
+                    <input type="number" id="bt-tp" value="5" step="0.5" min="0.5" max="30" style="width:65px;">
+                </div>
+                <div class="control-group">
+                    <label for="bt-sl">SL%</label>
+                    <input type="number" id="bt-sl" value="3" step="0.5" min="0.5" max="20" style="width:65px;">
+                </div>
+                <div class="control-group">
+                    <label for="bt-trail">Trail%</label>
+                    <input type="number" id="bt-trail" value="2" step="0.5" min="0.5" max="10" style="width:65px;">
+                </div>
+                <div class="control-group">
+                    <label for="bt-hold">Hold(d)</label>
+                    <input type="number" id="bt-hold" value="7" step="1" min="1" max="30" style="width:65px;">
+                </div>
+                <div class="control-group" style="display:flex;align-items:center;gap:0.3rem;padding-top:1.1rem;">
+                    <input type="checkbox" id="bt-mf" checked>
+                    <label for="bt-mf" style="margin:0;">Trend Filter</label>
+                </div>
+                <button class="btn btn-secondary" onclick="runBacktest()">Run Backtest</button>
+            </div>
+            <div id="bh-baseline" style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.75rem;display:none;"></div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Strategy</th>
+                            <th>Trades</th>
+                            <th>Win Rate</th>
+                            <th>Return</th>
+                            <th>Avg Return</th>
+                            <th>MDD</th>
+                            <th>Sharpe</th>
+                            <th>PF</th>
+                            <th>Avg Hold</th>
+                        </tr>
+                    </thead>
+                    <tbody id="backtest-body">
+                        <tr><td colspan="9" class="empty-state">Click "Run Backtest" to compare strategies</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
         <!-- Trade History -->
         <section class="card">
             <h2>Trade History</h2>
             <div class="table-wrapper">
-                <table id="trades-table">
+                <table>
                     <thead>
                         <tr>
                             <th>Time</th>

@@ -285,3 +285,15 @@ footer {
 .toast.success { background: var(--green); color: #fff; }
 .toast.error { background: var(--red); color: #fff; }
 .toast.info { background: var(--blue); color: #fff; }
+
+/* User info */
+.user-info { font-size: 0.875rem; color: var(--text-muted); }
+.btn-sm { padding: 0.25rem 0.75rem; font-size: 0.75rem; background: var(--border); color: var(--text-muted); border: none; border-radius: 6px; cursor: pointer; }
+.btn-sm:hover { background: var(--text-muted); color: var(--bg); }
+
+/* Keys banner */
+.keys-banner { border-color: var(--yellow); }
+.keys-banner p { color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem; }
+.keys-form { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.keys-form input { flex: 1; min-width: 200px; padding: 0.5rem 0.75rem; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-size: 0.875rem; }
+.keys-form input:focus { outline: 2px solid var(--accent); border-color: transparent; }
