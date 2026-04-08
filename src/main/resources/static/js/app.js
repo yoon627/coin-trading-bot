@@ -1,9 +1,6 @@
 // ── Auth ──
-const token = localStorage.getItem('token');
-if (!token) window.location.href = '/login.html';
-
 function authHeaders() {
-    return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+    return { 'Content-Type': 'application/json' };
 }
 
 async function fetchJson(url, options = {}) {
@@ -15,9 +12,10 @@ async function fetchJson(url, options = {}) {
 }
 
 function logout() {
-    localStorage.removeItem('token');
     localStorage.removeItem('username');
-    window.location.href = '/login.html';
+    fetch('/api/auth/logout', { method: 'POST' }).finally(() => {
+        window.location.href = '/login.html';
+    });
 }
 
 // ── Init ──
@@ -89,7 +87,7 @@ function renderHoldings(holdings) {
         const pnlClass = h.pnl_percent > 0 ? 'pnl-positive' : h.pnl_percent < 0 ? 'pnl-negative' : 'pnl-zero';
         const sign = h.pnl_percent >= 0 ? '+' : '';
         return `<tr>
-            <td><strong>${h.currency}</strong></td>
+            <td><strong>${escapeHtml(h.currency)}</strong></td>
             <td>${h.balance.toFixed(8)}</td>
             <td>${formatKRW(h.avg_buy_price)}</td>
             <td>${formatKRW(h.current_price)}</td>
@@ -117,12 +115,12 @@ async function refreshLeaderboard() {
                 : '<span class="badge badge-stopped" style="font-size:0.65rem;">OFF</span>';
             return `<tr>
                 <td>${rank}</td>
-                <td><strong>${r.username}</strong></td>
+                <td><strong>${escapeHtml(r.username)}</strong></td>
                 <td>${r.total_trades}</td>
                 <td>${r.win_rate.toFixed(1)}%</td>
                 <td class="${pnlClass}"><strong>${r.total_pnl_pct >= 0 ? '+' : ''}${r.total_pnl_pct.toFixed(2)}%</strong></td>
                 <td>${r.avg_pnl_pct >= 0 ? '+' : ''}${r.avg_pnl_pct.toFixed(2)}%</td>
-                <td>${r.strategy}</td>
+                <td>${escapeHtml(r.strategy)}</td>
                 <td>${statusBadge}</td>
             </tr>`;
         }).join('');
@@ -147,12 +145,12 @@ async function refreshTrades() {
             const pnl = t.pnl_percent != null ? formatPnl(t.pnl_percent) : '-';
             return `<tr>
                 <td>${formatTime(t.created_at)}</td>
-                <td>${t.ticker}</td>
+                <td>${escapeHtml(t.ticker)}</td>
                 <td class="${sideClass}">${t.side}</td>
                 <td>${formatKRW(t.price)}</td>
                 <td>${formatKRW(t.total_amount)}</td>
                 <td>${pnl}</td>
-                <td>${t.reason || t.strategy || '-'}</td>
+                <td>${escapeHtml(t.reason || t.strategy || '-')}</td>
             </tr>`;
         }).join('');
     } catch (_) {}
@@ -250,4 +248,14 @@ function toast(message, type = 'info') {
     const el = document.getElementById('toast');
     el.textContent = message; el.className = `toast ${type} show`;
     setTimeout(() => { el.className = 'toast'; }, 3000);
+}
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+    }[ch]));
 }

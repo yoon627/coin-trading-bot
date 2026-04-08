@@ -1,19 +1,17 @@
 package com.trading.bot.auth
 
+import com.trading.bot.security.SecretKeyMaterialProvider
 import io.jsonwebtoken.Jwts
 import io.jsonwebtoken.security.Keys
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.util.Date
 
 @Component
 class JwtProvider(
-    @Value("\${app.jwt-secret:default-secret-key-that-is-at-least-32-bytes-long!!}")
-    private val secret: String,
-    @Value("\${app.jwt-expiration-ms:86400000}")
-    private val expirationMs: Long,
+    secretKeyMaterialProvider: SecretKeyMaterialProvider,
 ) {
-    private val key by lazy { Keys.hmacShaKeyFor(secret.toByteArray()) }
+    private val key = Keys.hmacShaKeyFor(secretKeyMaterialProvider.jwtKeyBytes())
+    private val expirationMs = secretKeyMaterialProvider.jwtExpirationMs()
 
     fun generateToken(userId: Long, username: String): String {
         val now = Date()
