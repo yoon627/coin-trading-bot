@@ -3,6 +3,7 @@ package com.trading.bot.api
 import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
+import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
@@ -15,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException
 class PortfolioController(
     private val userTradingManager: UserTradingManager,
     private val userRepository: UserRepository,
+    private val userSecretsService: UserSecretsService,
 ) {
     @GetMapping
     suspend fun getPortfolio(): Map<String, Any> {
@@ -25,7 +27,7 @@ class PortfolioController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys not configured")
         }
 
-        val client = userTradingManager.createUpbitClient(user)
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
         val accounts = client.getAccounts()
 
         val krw = accounts.find { it.currency == "KRW" }

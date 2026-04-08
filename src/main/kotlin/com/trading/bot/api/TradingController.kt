@@ -3,7 +3,7 @@ package com.trading.bot.api
 import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
-import com.trading.bot.persistence.entity.UserEntity
+import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.http.HttpStatus
@@ -19,12 +19,16 @@ import org.springframework.web.server.ResponseStatusException
 class TradingController(
     private val userTradingManager: UserTradingManager,
     private val userRepository: UserRepository,
+    private val requestValidators: RequestValidators,
+    private val userSecretsService: UserSecretsService,
 ) {
 
     @PostMapping("/bot/start")
     suspend fun startBot(@RequestBody(required = false) req: StartBotRequest?): Map<String, Any> {
         val userId = currentUserId()
-        return userTradingManager.startBot(userId, req?.tickers, req?.strategy)
+        val tickers = req?.tickers?.let(requestValidators::normalizeMarkets)
+        val strategy = req?.strategy?.let(requestValidators::normalizeStrategy)
+        return userTradingManager.startBot(userId, tickers, strategy)
     }
 
     @PostMapping("/bot/stop")
@@ -39,11 +43,12 @@ class TradingController(
 
     @PostMapping("/bot/strategy")
     suspend fun changeStrategy(@RequestBody request: StrategyRequest): Map<String, Any> {
-        val success = userTradingManager.setStrategy(currentUserId(), request.strategy)
+        val strategy = requestValidators.normalizeStrategy(request.strategy)
+        val success = userTradingManager.setStrategy(currentUserId(), strategy)
         return if (success) {
-            mapOf("status" to "changed", "strategy" to request.strategy)
+            mapOf("status" to "changed", "strategy" to strategy)
         } else {
-            mapOf("status" to "error", "message" to "Unknown strategy: ${request.strategy}")
+            mapOf("status" to "error", "message" to "Unknown strategy: $strategy")
         }
     }
 
@@ -55,7 +60,7 @@ class TradingController(
         if (user.upbitAccessKey.isNullOrBlank()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys not configured")
         }
-        val client = userTradingManager.createUpbitClient(user)
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
         return client.getAccounts()
     }
 
@@ -64,9 +69,13 @@ class TradingController(
         val userId = currentUserId()
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found")
+        val accessKey = requestValidators.normalizeApiKey(req.accessKey, "accessKey")
+        val secretKey = requestValidators.normalizeApiKey(req.secretKey, "secretKey")
+        val (encryptedAccessKey, encryptedSecretKey) = userSecretsService.encryptUpbitKeys(accessKey, secretKey)
         userRepository.save(
-            user.copy(upbitAccessKey = req.accessKey, upbitSecretKey = req.secretKey)
+            user.copy(upbitAccessKey = encryptedAccessKey, upbitSecretKey = encryptedSecretKey)
         ).awaitSingle()
+        userTradingManager.reloadUserRuntime(userId)
         return mapOf("status" to "saved")
     }
 
@@ -81,7 +90,7 @@ class TradingController(
             "has_upbit_keys" to (!user.upbitAccessKey.isNullOrBlank()),
             "public_profile" to user.publicProfile,
             "public_strategy" to user.publicStrategy,
-            "discord_webhook_url" to (user.discordWebhookUrl ?: ""),
+            "has_discord_webhook" to (!user.discordWebhookUrl.isNullOrBlank()),
         )
     }
 }
