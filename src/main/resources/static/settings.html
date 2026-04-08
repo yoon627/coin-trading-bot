@@ -67,11 +67,8 @@
     </div>
 
     <script>
-        const token = localStorage.getItem('token');
-        if (!token) window.location.href = '/login.html';
-
         function authHeaders() {
-            return { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+            return { 'Content-Type': 'application/json' };
         }
 
         async function loadSettings() {
@@ -81,7 +78,9 @@
                 const me = await res.json();
                 document.getElementById('chk-public-profile').checked = me.public_profile || false;
                 document.getElementById('chk-public-strategy').checked = me.public_strategy || false;
-                document.getElementById('input-discord').value = me.discord_webhook_url || '';
+                if (me.has_discord_webhook) {
+                    document.getElementById('input-discord').placeholder = 'Configured. Enter a new URL to replace or leave blank to clear.';
+                }
             } catch (_) {}
         }
 

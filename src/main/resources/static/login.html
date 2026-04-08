@@ -88,7 +88,6 @@
                     throw new Error(data.message || `Error ${res.status}`);
                 }
                 const data = await res.json();
-                localStorage.setItem('token', data.token);
                 localStorage.setItem('username', data.username);
                 window.location.href = '/';
             } catch (err) {
@@ -98,8 +97,10 @@
             }
             return false;
         }
-        // Redirect if already logged in
-        if (localStorage.getItem('token')) window.location.href = '/';
+        // Redirect if already authenticated via cookie
+        fetch('/api/user/me').then(res => {
+            if (res.ok) window.location.href = '/';
+        }).catch(() => {});
     </script>
 </body>
 </html>

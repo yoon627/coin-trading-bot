@@ -42,8 +42,9 @@ trading:
   auto-start: ${TRADING_AUTO_START:false}
 
 app:
-  jwt-secret: ${JWT_SECRET:coin-trading-bot-default-secret-key-32b}
+  jwt-secret: ${JWT_SECRET:}
   jwt-expiration-ms: 86400000
+  encryption-secret: ${APP_ENCRYPTION_SECRET:}
 
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}
