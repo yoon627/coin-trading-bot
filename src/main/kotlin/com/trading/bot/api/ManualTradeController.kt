@@ -9,6 +9,7 @@ import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.UserRepository
+import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.PostMapping
@@ -25,6 +26,8 @@ class ManualTradeController(
     private val userRepository: UserRepository,
     private val tradeRecordRepository: TradeRecordRepository,
     private val discordNotifier: DiscordNotifier,
+    private val requestValidators: RequestValidators,
+    private val userSecretsService: UserSecretsService,
 ) {
     @PostMapping("/buy")
     suspend fun manualBuy(@RequestBody req: ManualBuyRequest): Map<String, Any> {
@@ -34,27 +37,26 @@ class ManualTradeController(
         if (user.upbitAccessKey.isNullOrBlank()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys not configured")
         }
-        if (req.amount < 5000) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Minimum order: 5,000 KRW")
-        }
+        val market = requestValidators.normalizeMarket(req.market)
+        requestValidators.validateOrderAmount(req.amount)
 
-        val client = userTradingManager.createUpbitClient(user)
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
 
         val order = client.placeOrder(
             OrderRequest(
-                market = req.market,
+                market = market,
                 side = "bid",
                 ordType = "price",
                 price = floor(req.amount).toLong().toString(),
             )
         )
 
-        val ticker = client.getTicker(req.market).firstOrNull()
+        val ticker = client.getTicker(market).firstOrNull()
         val currentPrice = ticker?.tradePrice ?: 0.0
         val volume = if (currentPrice > 0) req.amount / currentPrice else 0.0
 
         val record = TradeRecord(
-            ticker = req.market, side = TradeSide.BUY, price = currentPrice,
+            ticker = market, side = TradeSide.BUY, price = currentPrice,
             volume = volume, totalAmount = req.amount, strategy = "manual", userId = userId,
         )
         tradeRecordRepository.save(record)
@@ -75,9 +77,10 @@ class ManualTradeController(
         if (user.upbitAccessKey.isNullOrBlank()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys not configured")
         }
+        val market = requestValidators.normalizeMarket(req.market)
 
-        val client = userTradingManager.createUpbitClient(user)
-        val currency = req.market.substringAfter("-")
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
+        val currency = market.substringAfter("-")
 
         val sellVolume = if (req.sellAll == true) {
             val accounts = client.getAccounts()
@@ -87,17 +90,19 @@ class ManualTradeController(
             if (balance <= 0) throw ResponseStatusException(HttpStatus.BAD_REQUEST, "No balance for $currency")
             balance.toString()
         } else {
-            req.volume ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Specify volume or sell_all")
+            requestValidators.normalizeSellVolume(
+                req.volume ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Specify volume or sell_all")
+            )
         }
 
-        val ticker = client.getTicker(req.market).firstOrNull()
+        val ticker = client.getTicker(market).firstOrNull()
         val currentPrice = ticker?.tradePrice ?: 0.0
         val avgBuyPrice = client.getAccounts().find { it.currency == currency }?.avgBuyPriceDouble() ?: 0.0
         val pnl = if (avgBuyPrice > 0) ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0 else null
 
         val order = client.placeOrder(
             OrderRequest(
-                market = req.market,
+                market = market,
                 side = "ask",
                 ordType = "market",
                 volume = sellVolume,
@@ -106,7 +111,7 @@ class ManualTradeController(
 
         val vol = sellVolume.toDoubleOrNull() ?: 0.0
         val record = TradeRecord(
-            ticker = req.market, side = TradeSide.SELL, price = currentPrice,
+            ticker = market, side = TradeSide.SELL, price = currentPrice,
             volume = vol, totalAmount = currentPrice * vol, pnlPercent = pnl,
             reason = SellReason.MANUAL.name, strategy = "manual", userId = userId,
         )

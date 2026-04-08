@@ -11,13 +11,14 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/trades")
 class TradeHistoryController(
     private val tradeRecordRepository: TradeRecordRepository,
+    private val requestValidators: RequestValidators,
 ) {
     @GetMapping
     suspend fun getTrades(
         @RequestParam(defaultValue = "100") limit: Int,
     ): Map<String, Any> {
         val userId = currentUserId()
-        val records = tradeRecordRepository.findByUserId(userId, limit)
+        val records = tradeRecordRepository.findByUserId(userId, requestValidators.sanitizeTradeLimit(limit))
         val total = tradeRecordRepository.countByUserId(userId)
         return mapOf("total" to total, "records" to records)
     }
