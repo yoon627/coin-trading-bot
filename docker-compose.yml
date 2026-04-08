@@ -1,0 +1,59 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      UPBIT_ACCESS_KEY: ${UPBIT_ACCESS_KEY}
+      UPBIT_SECRET_KEY: ${UPBIT_SECRET_KEY}
+      TRADING_TICKERS: ${TRADING_TICKERS:-KRW-BTC}
+      TRADING_STRATEGY: ${TRADING_STRATEGY:-volatility_breakout}
+      TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: trading
+      DB_USER: trading
+      DB_PASSWORD: trading
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: trading
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:
