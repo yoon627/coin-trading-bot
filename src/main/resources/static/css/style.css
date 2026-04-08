@@ -41,12 +41,6 @@ header h1 {
     gap: 1rem;
 }
 
-.clock {
-    font-size: 0.875rem;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-}
-
 .badge {
     padding: 0.25rem 0.75rem;
     border-radius: 9999px;
@@ -57,6 +51,8 @@ header h1 {
 }
 
 .badge-running { background: rgba(34,197,94,0.15); color: var(--green); }
+.badge-running::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .badge-stopped { background: rgba(239,68,68,0.15); color: var(--red); }
 
 main {
@@ -177,43 +173,9 @@ select:focus { outline: 2px solid var(--accent); border-color: transparent; }
     font-variant-numeric: tabular-nums;
 }
 
-/* Positions */
-.position-card {
-    background: var(--bg);
-    border-radius: 8px;
-    padding: 1rem;
-    margin-bottom: 0.5rem;
-}
-
-.position-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-}
-
-.position-ticker {
-    font-weight: 700;
-    font-size: 1rem;
-}
-
-.position-pnl {
-    font-weight: 700;
-    font-size: 0.95rem;
-    font-variant-numeric: tabular-nums;
-}
-
 .pnl-positive { color: var(--green); }
 .pnl-negative { color: var(--red); }
 .pnl-zero { color: var(--text-muted); }
-
-.position-details {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.25rem;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-}
 
 /* Table */
 .table-wrapper { overflow-x: auto; }

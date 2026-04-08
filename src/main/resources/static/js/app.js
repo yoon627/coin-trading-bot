@@ -23,8 +23,6 @@ function logout() {
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('user-info').textContent = localStorage.getItem('username') || '';
-    updateClock();
-    setInterval(updateClock, 1000);
     initUser();
     refreshAll();
     setInterval(refreshAll, 5000);
@@ -37,8 +35,6 @@ async function initUser() {
         if (!me.has_upbit_keys) {
             document.getElementById('keys-banner').style.display = '';
         }
-        document.getElementById('chk-public-profile').checked = me.public_profile || false;
-        document.getElementById('chk-public-strategy').checked = me.public_strategy || false;
     } catch (_) {}
 }
 
@@ -57,14 +53,13 @@ async function refreshStatus() {
         const btnStop = document.getElementById('btn-stop');
 
         if (data.running) {
-            badge.textContent = 'RUNNING'; badge.className = 'badge badge-running';
+            badge.textContent = 'Bot Running'; badge.className = 'badge badge-running';
             btnStart.disabled = true; btnStop.disabled = false;
         } else {
-            badge.textContent = 'STOPPED'; badge.className = 'badge badge-stopped';
+            badge.textContent = 'Bot Stopped'; badge.className = 'badge badge-stopped';
             btnStart.disabled = false; btnStop.disabled = true;
         }
         document.getElementById('strategy-select').value = data.strategy;
-        renderPositions(data.positions || []);
     } catch (_) {}
 }
 
@@ -163,27 +158,6 @@ async function refreshTrades() {
     } catch (_) {}
 }
 
-// ── Positions ──
-function renderPositions(positions) {
-    const container = document.getElementById('positions-container');
-    const active = positions.filter(p => p.position);
-    if (!active.length) {
-        container.innerHTML = '<p class="empty-state">No open positions</p>';
-        return;
-    }
-    container.innerHTML = active.map(p => `
-        <div class="position-card">
-            <div class="position-header">
-                <span class="position-ticker">${p.ticker}</span>
-                <span>Avg: ${formatKRW(p.avg_buy_price)}</span>
-            </div>
-            <div class="position-details">
-                <span>Volume: ${p.hold_volume.toFixed(8)}</span>
-                <span>Today: ${p.bought_today ? 'Yes' : 'No'}</span>
-            </div>
-        </div>`).join('');
-}
-
 // ── Actions ──
 async function startBot() {
     try {
@@ -228,17 +202,26 @@ async function saveKeys() {
     } catch (e) { toast('Failed to save keys', 'error'); }
 }
 
-async function saveSettings() {
+async function manualBuy() {
+    const market = document.getElementById('trade-market').value.trim();
+    const amount = parseFloat(document.getElementById('trade-amount').value);
+    if (!market || !amount || amount < 5000) { toast('Market과 금액(5,000원 이상)을 입력하세요', 'error'); return; }
     try {
-        const data = await fetchJson('/api/user/settings', {
-            method: 'POST',
-            body: JSON.stringify({
-                public_profile: document.getElementById('chk-public-profile').checked,
-                public_strategy: document.getElementById('chk-public-strategy').checked,
-            }),
-        });
-        if (data) toast('Settings saved', 'success');
-    } catch (e) { toast('Failed to save settings', 'error'); }
+        const data = await fetchJson('/api/trade/buy', { method: 'POST', body: JSON.stringify({ market, amount }) });
+        if (data?.status === 'success') { toast(`${market} 매수 완료`, 'success'); refreshAll(); }
+        else toast(data?.error || 'Failed', 'error');
+    } catch (e) { toast('매수 실패: ' + e.message, 'error'); }
+}
+
+async function manualSell() {
+    const market = document.getElementById('trade-market').value.trim();
+    if (!market) { toast('Market을 입력하세요', 'error'); return; }
+    if (!confirm(`${market} 전량 매도하시겠습니까?`)) return;
+    try {
+        const data = await fetchJson('/api/trade/sell', { method: 'POST', body: JSON.stringify({ market, sell_all: true }) });
+        if (data?.status === 'success') { toast(`${market} 매도 완료`, 'success'); refreshAll(); }
+        else toast(data?.error || 'Failed', 'error');
+    } catch (e) { toast('매도 실패: ' + e.message, 'error'); }
 }
 
 // ── Formatting ──
@@ -261,12 +244,6 @@ function formatTime(ts) {
     const d = new Date(ts);
     if (isNaN(d.getTime())) return ts.substring(0, 16).replace('T', ' ');
     return d.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function updateClock() {
-    document.getElementById('clock').textContent = new Date().toLocaleString('ko-KR', {
-        timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
-    }) + ' KST';
 }
 
 function toast(message, type = 'info') {
