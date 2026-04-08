@@ -16,5 +16,6 @@ data class TradeRecordEntity(
     val pnlPercent: Double? = null,
     val reason: String? = null,
     val strategy: String? = null,
+    val userId: Long? = null,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )
