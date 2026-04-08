@@ -2,6 +2,13 @@ package com.trading.bot.config
 
 import org.springframework.boot.context.properties.ConfigurationProperties
 
+@ConfigurationProperties(prefix = "app")
+data class AppProperties(
+    val jwtSecret: String = "",
+    val jwtExpirationMs: Long = 86_400_000,
+    val encryptionSecret: String = "",
+)
+
 @ConfigurationProperties(prefix = "upbit")
 data class UpbitProperties(
     val accessKey: String = "",
