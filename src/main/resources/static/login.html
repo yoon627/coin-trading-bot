@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Coin Trading Bot</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .auth-card { width: 100%; max-width: 400px; padding: 2rem; }
+        .auth-card h1 { font-size: 1.5rem; margin-bottom: 0.5rem; text-align: center; }
+        .auth-card p.sub { color: var(--text-muted); text-align: center; margin-bottom: 2rem; font-size: 0.875rem; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.25rem; font-size: 0.8rem; color: var(--text-muted); }
+        .form-group input { width: 100%; padding: 0.6rem 0.75rem; background: var(--bg); color: var(--text);
+            border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem; }
+        .form-group input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+        .btn-full { width: 100%; padding: 0.65rem; margin-top: 0.5rem; }
+        .toggle { text-align: center; margin-top: 1.5rem; font-size: 0.85rem; color: var(--text-muted); }
+        .toggle a { color: var(--accent); cursor: pointer; text-decoration: none; }
+        .error-msg { color: var(--red); font-size: 0.85rem; margin-top: 0.5rem; text-align: center; display: none; }
+    </style>
+</head>
+<body>
+    <div class="card auth-card">
+        <h1 id="title">Login</h1>
+        <p class="sub">Coin Trading Bot</p>
+        <div id="error" class="error-msg"></div>
+        <form id="auth-form" onsubmit="return handleSubmit(event)">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" required minlength="3" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" required minlength="6" autocomplete="current-password">
+            </div>
+            <div id="api-keys-section" style="display:none;">
+                <hr style="border-color:var(--border); margin:1rem 0;">
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">Upbit API Keys (Upbit > My Page > Open API)</p>
+                <div class="form-group">
+                    <label for="access-key">Access Key</label>
+                    <input type="text" id="access-key" placeholder="Upbit Access Key">
+                </div>
+                <div class="form-group">
+                    <label for="secret-key">Secret Key</label>
+                    <input type="password" id="secret-key" placeholder="Upbit Secret Key">
+                </div>
+            </div>
+            <button type="submit" id="submit-btn" class="btn btn-secondary btn-full">Login</button>
+        </form>
+        <div class="toggle">
+            <span id="toggle-text">Don't have an account? </span>
+            <a id="toggle-link" onclick="toggleMode()">Register</a>
+        </div>
+    </div>
+    <script>
+        let isLogin = true;
+        function toggleMode() {
+            isLogin = !isLogin;
+            document.getElementById('title').textContent = isLogin ? 'Login' : 'Register';
+            document.getElementById('submit-btn').textContent = isLogin ? 'Login' : 'Register';
+            document.getElementById('toggle-text').textContent = isLogin ? "Don't have an account? " : "Already have an account? ";
+            document.getElementById('toggle-link').textContent = isLogin ? 'Register' : 'Login';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('api-keys-section').style.display = isLogin ? 'none' : '';
+        }
+        async function handleSubmit(e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+            const body = { username, password };
+            if (!isLogin) {
+                const ak = document.getElementById('access-key').value.trim();
+                const sk = document.getElementById('secret-key').value.trim();
+                if (ak) body.upbit_access_key = ak;
+                if (sk) body.upbit_secret_key = sk;
+            }
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.message || `Error ${res.status}`);
+                }
+                const data = await res.json();
+                localStorage.setItem('token', data.token);
+                localStorage.setItem('username', data.username);
+                window.location.href = '/';
+            } catch (err) {
+                const el = document.getElementById('error');
+                el.textContent = err.message;
+                el.style.display = 'block';
+            }
+            return false;
+        }
+        // Redirect if already logged in
+        if (localStorage.getItem('token')) window.location.href = '/';
+    </script>
+</body>
+</html>
