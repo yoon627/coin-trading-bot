@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coin Trading Bot</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>Coin Trading Bot</h1>
+        </div>
+        <div class="header-right">
+            <span id="status-badge" class="badge badge-stopped">STOPPED</span>
+            <span id="clock" class="clock"></span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Control Panel -->
+        <section class="card control-panel">
+            <h2>Control</h2>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="strategy-select">Strategy</label>
+                    <select id="strategy-select">
+                        <option value="volatility_breakout">Volatility Breakout</option>
+                        <option value="rsi_bounce">RSI Bounce</option>
+                        <option value="golden_cross">Golden Cross</option>
+                        <option value="combined">Combined</option>
+                    </select>
+                    <button id="btn-strategy" class="btn btn-secondary" onclick="changeStrategy()">Apply</button>
+                </div>
+                <div class="control-buttons">
+                    <button id="btn-start" class="btn btn-start" onclick="startBot()">Start Bot</button>
+                    <button id="btn-stop" class="btn btn-stop" onclick="stopBot()" disabled>Stop Bot</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dashboard Grid -->
+        <div class="grid">
+            <!-- Account Balance -->
+            <section class="card">
+                <h2>Account</h2>
+                <div id="account-info" class="account-info">
+                    <div class="account-item">
+                        <span class="label">KRW Balance</span>
+                        <span id="krw-balance" class="value">-</span>
+                    </div>
+                    <div class="account-item">
+                        <span class="label">Total Assets</span>
+                        <span id="total-assets" class="value">-</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Positions -->
+            <section class="card">
+                <h2>Positions</h2>
+                <div id="positions-container">
+                    <p class="empty-state">No open positions</p>
+                </div>
+            </section>
+        </div>
+
+        <!-- Trade History -->
+        <section class="card">
+            <h2>Trade History</h2>
+            <div class="table-wrapper">
+                <table id="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Ticker</th>
+                            <th>Side</th>
+                            <th>Price</th>
+                            <th>Amount</th>
+                            <th>PnL</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-body">
+                        <tr><td colspan="7" class="empty-state">No trades yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <span>Auto-refresh: <strong>5s</strong></span>
+        <span id="last-updated"></span>
+    </footer>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>
