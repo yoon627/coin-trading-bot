@@ -13,6 +13,7 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
     fun findByTicker(ticker: String, sort: Sort): Flux<TradeRecordEntity>
     fun findByUserId(userId: Long, sort: Sort): Flux<TradeRecordEntity>
     fun countByUserId(userId: Long): Mono<Long>
+    fun findBySideAndPnlPercentIsNotNull(side: String): Flux<TradeRecordEntity>
 }
 
 @Repository
@@ -44,5 +45,11 @@ class TradeRecordRepository(
 
     suspend fun countByUserId(userId: Long): Long {
         return r2dbcRepository.countByUserId(userId).awaitSingle()
+    }
+
+    suspend fun findAllSells(): List<TradeRecordEntity> {
+        return r2dbcRepository.findBySideAndPnlPercentIsNotNull("SELL")
+            .collectList()
+            .awaitSingle()
     }
 }

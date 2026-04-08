@@ -30,6 +30,8 @@ class SecurityConfig(private val jwtAuthFilter: JwtAuthFilter) {
             .authorizeExchange {
                 it.pathMatchers("/", "/index.html", "/css/**", "/js/**").permitAll()
                     .pathMatchers("/api/auth/**").permitAll()
+                    .pathMatchers("/api/leaderboard").permitAll()
+                    .pathMatchers("/api/user/*/profile").permitAll()
                     .pathMatchers("/actuator/**").permitAll()
                     .pathMatchers("/login.html").permitAll()
                     .anyExchange().authenticated()

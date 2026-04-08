@@ -79,6 +79,8 @@ class TradingController(
             "id" to user.id,
             "username" to user.username,
             "has_upbit_keys" to (!user.upbitAccessKey.isNullOrBlank()),
+            "public_profile" to user.publicProfile,
+            "public_strategy" to user.publicStrategy,
         )
     }
 }

@@ -20,7 +20,7 @@
     </header>
 
     <main>
-        <!-- API Keys Banner (shown if not configured) -->
+        <!-- API Keys Banner -->
         <section id="keys-banner" class="card keys-banner" style="display:none;">
             <h2>Upbit API Keys Required</h2>
             <p>Set your Upbit API keys to start trading.</p>
@@ -104,103 +104,43 @@
             </div>
         </section>
 
-        <!-- ML Model -->
+        <!-- Leaderboard -->
         <section class="card">
-            <h2>ML Model Training</h2>
-            <div class="controls" style="margin-bottom:1rem; flex-wrap:wrap;">
-                <div class="control-group">
-                    <label for="ml-ticker">Ticker</label>
-                    <select id="ml-ticker">
-                        <option value="KRW-BTC">BTC</option>
-                        <option value="KRW-ETH">ETH</option>
-                        <option value="KRW-XRP">XRP</option>
-                        <option value="KRW-SOL">SOL</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="ml-days">Train Days</label>
-                    <select id="ml-days">
-                        <option value="100">100</option>
-                        <option value="200" selected>200</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="ml-target">Target %</label>
-                    <input type="number" id="ml-target" value="2" step="0.5" min="0.5" max="10" style="width:65px;">
-                </div>
-                <div class="control-group">
-                    <label for="ml-horizon">Horizon (d)</label>
-                    <input type="number" id="ml-horizon" value="5" step="1" min="1" max="14" style="width:65px;">
-                </div>
-                <button class="btn btn-secondary" onclick="trainMl()">Train Model</button>
-                <button class="btn btn-sm" onclick="predictMl()" style="margin-top:auto;">Predict Now</button>
-            </div>
-            <div id="ml-result" style="font-size:0.85rem; color:var(--text-muted);"></div>
-        </section>
-
-        <!-- Strategy Backtest -->
-        <section class="card">
-            <h2>Strategy Comparison (Backtest)</h2>
-            <div class="controls" style="margin-bottom:0.75rem; flex-wrap:wrap;">
-                <div class="control-group">
-                    <label for="bt-ticker">Ticker</label>
-                    <select id="bt-ticker">
-                        <option value="KRW-BTC">BTC</option>
-                        <option value="KRW-ETH">ETH</option>
-                        <option value="KRW-XRP">XRP</option>
-                        <option value="KRW-SOL">SOL</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="bt-days">Days</label>
-                    <select id="bt-days">
-                        <option value="60">60</option>
-                        <option value="100">100</option>
-                        <option value="200" selected>200</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label for="bt-tp">TP%</label>
-                    <input type="number" id="bt-tp" value="5" step="0.5" min="0.5" max="30" style="width:65px;">
-                </div>
-                <div class="control-group">
-                    <label for="bt-sl">SL%</label>
-                    <input type="number" id="bt-sl" value="3" step="0.5" min="0.5" max="20" style="width:65px;">
-                </div>
-                <div class="control-group">
-                    <label for="bt-trail">Trail%</label>
-                    <input type="number" id="bt-trail" value="2" step="0.5" min="0.5" max="10" style="width:65px;">
-                </div>
-                <div class="control-group">
-                    <label for="bt-hold">Hold(d)</label>
-                    <input type="number" id="bt-hold" value="7" step="1" min="1" max="30" style="width:65px;">
-                </div>
-                <div class="control-group" style="display:flex;align-items:center;gap:0.3rem;padding-top:1.1rem;">
-                    <input type="checkbox" id="bt-mf" checked>
-                    <label for="bt-mf" style="margin:0;">Trend Filter</label>
-                </div>
-                <button class="btn btn-secondary" onclick="runBacktest()">Run Backtest</button>
-            </div>
-            <div id="bh-baseline" style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.75rem;display:none;"></div>
+            <h2>Leaderboard</h2>
             <div class="table-wrapper">
                 <table>
                     <thead>
                         <tr>
-                            <th>Strategy</th>
+                            <th>#</th>
+                            <th>User</th>
                             <th>Trades</th>
                             <th>Win Rate</th>
-                            <th>Return</th>
-                            <th>Avg Return</th>
-                            <th>MDD</th>
-                            <th>Sharpe</th>
-                            <th>PF</th>
-                            <th>Avg Hold</th>
+                            <th>Total PnL</th>
+                            <th>Avg PnL</th>
+                            <th>Strategy</th>
+                            <th>Status</th>
                         </tr>
                     </thead>
-                    <tbody id="backtest-body">
-                        <tr><td colspan="9" class="empty-state">Click "Run Backtest" to compare strategies</td></tr>
+                    <tbody id="leaderboard-body">
+                        <tr><td colspan="8" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </section>
+
+        <!-- Settings -->
+        <section class="card">
+            <h2>Profile Settings</h2>
+            <div class="controls">
+                <div class="control-group" style="display:flex;align-items:center;gap:0.5rem;">
+                    <input type="checkbox" id="chk-public-profile">
+                    <label for="chk-public-profile" style="margin:0;">Public Profile (leaderboard에 표시)</label>
+                </div>
+                <div class="control-group" style="display:flex;align-items:center;gap:0.5rem;">
+                    <input type="checkbox" id="chk-public-strategy">
+                    <label for="chk-public-strategy" style="margin:0;">Public Strategy (사용 중인 전략 공개)</label>
+                </div>
+                <button class="btn btn-secondary" onclick="saveSettings()">Save</button>
             </div>
         </section>
 

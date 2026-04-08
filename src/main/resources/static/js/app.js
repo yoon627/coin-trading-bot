@@ -33,14 +33,17 @@ document.addEventListener('DOMContentLoaded', () => {
 async function initUser() {
     try {
         const me = await fetchJson('/api/user/me');
-        if (me && !me.has_upbit_keys) {
+        if (!me) return;
+        if (!me.has_upbit_keys) {
             document.getElementById('keys-banner').style.display = '';
         }
+        document.getElementById('chk-public-profile').checked = me.public_profile || false;
+        document.getElementById('chk-public-strategy').checked = me.public_strategy || false;
     } catch (_) {}
 }
 
 async function refreshAll() {
-    await Promise.allSettled([refreshStatus(), refreshPortfolio(), refreshTrades()]);
+    await Promise.allSettled([refreshStatus(), refreshPortfolio(), refreshTrades(), refreshLeaderboard()]);
     document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString('ko-KR');
 }
 
@@ -99,6 +102,39 @@ function renderHoldings(holdings) {
             <td class="${pnlClass}">${sign}${h.pnl_percent.toFixed(2)}%<br><small>${sign}${formatKRW(h.pnl_amount)}</small></td>
         </tr>`;
     }).join('');
+}
+
+// ── Leaderboard ──
+async function refreshLeaderboard() {
+    try {
+        const data = await fetch('/api/leaderboard').then(r => r.json());
+        const tbody = document.getElementById('leaderboard-body');
+        const rankings = data.rankings || [];
+        if (!rankings.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No public users yet</td></tr>';
+            return;
+        }
+        tbody.innerHTML = rankings.map((r, i) => {
+            const pnlClass = r.total_pnl_pct > 0 ? 'pnl-positive' : r.total_pnl_pct < 0 ? 'pnl-negative' : 'pnl-zero';
+            const rank = i === 0 ? '<strong style="color:var(--yellow);">1</strong>' : i + 1;
+            const statusBadge = r.bot_running
+                ? '<span class="badge badge-running" style="font-size:0.65rem;">ON</span>'
+                : '<span class="badge badge-stopped" style="font-size:0.65rem;">OFF</span>';
+            return `<tr>
+                <td>${rank}</td>
+                <td><strong>${r.username}</strong></td>
+                <td>${r.total_trades}</td>
+                <td>${r.win_rate.toFixed(1)}%</td>
+                <td class="${pnlClass}"><strong>${r.total_pnl_pct >= 0 ? '+' : ''}${r.total_pnl_pct.toFixed(2)}%</strong></td>
+                <td>${r.avg_pnl_pct >= 0 ? '+' : ''}${r.avg_pnl_pct.toFixed(2)}%</td>
+                <td>${r.strategy}</td>
+                <td>${statusBadge}</td>
+            </tr>`;
+        }).join('');
+    } catch (_) {
+        document.getElementById('leaderboard-body').innerHTML =
+            '<tr><td colspan="8" class="empty-state">Failed to load leaderboard</td></tr>';
+    }
 }
 
 // ── Trades ──
@@ -192,124 +228,17 @@ async function saveKeys() {
     } catch (e) { toast('Failed to save keys', 'error'); }
 }
 
-// ── ML ──
-async function trainMl() {
-    const el = document.getElementById('ml-result');
-    el.innerHTML = '<em>Training model... (this may take a few seconds)</em>';
+async function saveSettings() {
     try {
-        const data = await fetchJson('/api/ml/train', {
+        const data = await fetchJson('/api/user/settings', {
             method: 'POST',
             body: JSON.stringify({
-                ticker: document.getElementById('ml-ticker').value,
-                days: parseInt(document.getElementById('ml-days').value),
-                target_pct: parseFloat(document.getElementById('ml-target').value),
-                horizon: parseInt(document.getElementById('ml-horizon').value),
+                public_profile: document.getElementById('chk-public-profile').checked,
+                public_strategy: document.getElementById('chk-public-strategy').checked,
             }),
         });
-        if (!data) return;
-        if (data.success && data.metrics) {
-            const m = data.metrics;
-            const features = (m.top_features || []).map(f => `${f.name}: ${f.importance}`).join(', ');
-            el.innerHTML = `
-                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:0.5rem; margin-bottom:0.75rem;">
-                    <div class="account-item"><span class="label">Accuracy</span><span class="value" style="font-size:1rem;">${m.accuracy}</span></div>
-                    <div class="account-item"><span class="label">Precision</span><span class="value" style="font-size:1rem;">${m.precision}</span></div>
-                    <div class="account-item"><span class="label">Recall</span><span class="value" style="font-size:1rem;">${m.recall}</span></div>
-                    <div class="account-item"><span class="label">Data</span><span class="value" style="font-size:1rem;">${m.train_size}/${m.test_size}</span></div>
-                    <div class="account-item"><span class="label">Buy Signal Rate</span><span class="value" style="font-size:1rem;">${m.positive_rate}</span></div>
-                </div>
-                <div style="font-size:0.8rem;color:var(--text-muted);">Top features: ${features}</div>
-                <div style="margin-top:0.5rem;color:var(--green);font-size:0.85rem;">Model ready — select "ML Model" strategy to use it.</div>`;
-            toast('Model trained successfully', 'success');
-        } else {
-            el.innerHTML = `<span style="color:var(--red);">Training failed: ${data.error || 'Unknown error'}</span>`;
-        }
-    } catch (e) {
-        el.innerHTML = '<span style="color:var(--red);">Training failed. Check API keys.</span>';
-        toast('ML training failed', 'error');
-    }
-}
-
-async function predictMl() {
-    const ticker = document.getElementById('ml-ticker').value;
-    const el = document.getElementById('ml-result');
-    try {
-        const data = await fetchJson(`/api/ml/predict?ticker=${ticker}`);
-        if (!data) return;
-        const sigClass = data.signal === 'BUY' ? 'pnl-positive' : 'pnl-zero';
-        el.innerHTML = `
-            <div style="font-size:1.1rem;margin-bottom:0.5rem;">
-                Signal: <strong class="${sigClass}">${data.signal}</strong>
-                (confidence: ${data.confidence})
-            </div>`;
-        toast(`${ticker}: ${data.signal} (${data.confidence})`, data.signal === 'BUY' ? 'success' : 'info');
-    } catch (e) {
-        toast('Prediction failed — train model first', 'error');
-    }
-}
-
-// ── Backtest ──
-async function runBacktest() {
-    const tbody = document.getElementById('backtest-body');
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Running backtest...</td></tr>';
-    document.getElementById('bh-baseline').style.display = 'none';
-    try {
-        const ticker = document.getElementById('bt-ticker').value;
-        const days = parseInt(document.getElementById('bt-days').value);
-        const tp = parseFloat(document.getElementById('bt-tp').value);
-        const sl = parseFloat(document.getElementById('bt-sl').value);
-        const trail = parseFloat(document.getElementById('bt-trail').value);
-        const hold = parseInt(document.getElementById('bt-hold').value);
-        const mf = document.getElementById('bt-mf').checked;
-
-        const data = await fetchJson('/api/strategies/backtest', {
-            method: 'POST',
-            body: JSON.stringify({
-                ticker, days,
-                take_profit_pct: tp,
-                max_loss_pct: sl,
-                trailing_stop_pct: trail,
-                max_hold_days: hold,
-                use_market_filter: mf,
-            }),
-        });
-        if (!data) return;
-        const results = data.results || [data];
-        if (!results.length) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No results</td></tr>';
-            return;
-        }
-
-        // Show Buy & Hold baseline
-        const bh = results[0].buy_and_hold_pct;
-        const bhEl = document.getElementById('bh-baseline');
-        const bhClass = bh >= 0 ? 'pnl-positive' : 'pnl-negative';
-        bhEl.innerHTML = `Baseline <strong>Buy & Hold</strong>: <span class="${bhClass}">${bh >= 0 ? '+' : ''}${bh.toFixed(2)}%</span> — strategies must beat this to be worthwhile`;
-        bhEl.style.display = '';
-
-        results.sort((a, b) => b.total_return_pct - a.total_return_pct);
-        tbody.innerHTML = results.map((r, i) => {
-            const retClass = r.total_return_pct > 0 ? 'pnl-positive' : r.total_return_pct < 0 ? 'pnl-negative' : 'pnl-zero';
-            const beatsBH = r.total_return_pct > bh;
-            const rowStyle = i === 0 ? ' style="background:rgba(34,197,94,0.08)"' : '';
-            const bhBadge = beatsBH ? ' <small style="color:var(--green)">BH</small>' : '';
-            return `<tr${rowStyle}>
-                <td><strong>${r.strategy_name}</strong>${bhBadge}</td>
-                <td>${r.total_trades}</td>
-                <td>${r.win_rate.toFixed(1)}%</td>
-                <td class="${retClass}"><strong>${r.total_return_pct >= 0 ? '+' : ''}${r.total_return_pct.toFixed(2)}%</strong></td>
-                <td>${r.avg_return_pct >= 0 ? '+' : ''}${r.avg_return_pct.toFixed(2)}%</td>
-                <td class="pnl-negative">${r.max_drawdown_pct.toFixed(2)}%</td>
-                <td>${r.sharpe_ratio.toFixed(2)}</td>
-                <td>${r.profit_factor.toFixed(2)}</td>
-                <td>${r.avg_hold_days.toFixed(1)}d</td>
-            </tr>`;
-        }).join('');
-        toast(`Backtest: ${results.length} strategies vs B&H ${bh >= 0 ? '+' : ''}${bh.toFixed(1)}%`, 'success');
-    } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Backtest failed. Check API keys.</td></tr>';
-        toast('Backtest failed', 'error');
-    }
+        if (data) toast('Settings saved', 'success');
+    } catch (e) { toast('Failed to save settings', 'error'); }
 }
 
 // ── Formatting ──
