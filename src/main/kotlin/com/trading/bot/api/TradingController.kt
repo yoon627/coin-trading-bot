@@ -81,6 +81,7 @@ class TradingController(
             "has_upbit_keys" to (!user.upbitAccessKey.isNullOrBlank()),
             "public_profile" to user.publicProfile,
             "public_strategy" to user.publicStrategy,
+            "discord_webhook_url" to (user.discordWebhookUrl ?: ""),
         )
     }
 }
