@@ -25,6 +25,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    implementation("org.springframework.boot:spring-boot-starter-security")
+    implementation("org.springframework.security:spring-security-crypto")
 
     // Kotlin
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
@@ -45,6 +47,10 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
+
+    // ML - Smile (Statistical Machine Intelligence and Learning Engine)
+    implementation("com.github.haifengl:smile-core:3.1.1")
+    implementation("com.github.haifengl:smile-kotlin:3.1.1")
 
     // Monitoring
     implementation("io.micrometer:micrometer-registry-prometheus")
