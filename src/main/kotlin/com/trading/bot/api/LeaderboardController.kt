@@ -103,11 +103,13 @@ class LeaderboardController(
             user.copy(
                 publicProfile = req.publicProfile ?: user.publicProfile,
                 publicStrategy = req.publicStrategy ?: user.publicStrategy,
+                discordWebhookUrl = req.discordWebhookUrl ?: user.discordWebhookUrl,
             )
         ).awaitSingle()
         return mapOf(
             "public_profile" to (req.publicProfile ?: user.publicProfile),
             "public_strategy" to (req.publicStrategy ?: user.publicStrategy),
+            "discord_webhook_url" to (req.discordWebhookUrl ?: user.discordWebhookUrl ?: ""),
         )
     }
 }
@@ -115,4 +117,5 @@ class LeaderboardController(
 data class UserSettingsRequest(
     val publicProfile: Boolean? = null,
     val publicStrategy: Boolean? = null,
+    val discordWebhookUrl: String? = null,
 )
