@@ -2,10 +2,10 @@ package com.trading.bot.client
 
 import com.trading.bot.config.UpbitProperties
 import io.jsonwebtoken.Jwts
+import io.jsonwebtoken.security.Keys
 import org.springframework.stereotype.Component
 import java.security.MessageDigest
 import java.util.UUID
-import javax.crypto.spec.SecretKeySpec
 
 @Component
 class UpbitAuthProvider(private val upbitProperties: UpbitProperties) {
@@ -24,14 +24,11 @@ class UpbitAuthProvider(private val upbitProperties: UpbitProperties) {
             claims["query_hash_alg"] = "SHA512"
         }
 
-        val key = SecretKeySpec(
-            upbitProperties.secretKey.toByteArray(),
-            "HmacSHA256"
-        )
+        val key = Keys.hmacShaKeyFor(upbitProperties.secretKey.toByteArray())
 
         return Jwts.builder()
             .claims(claims)
-            .signWith(key)
+            .signWith(key, Jwts.SIG.HS256)
             .compact()
     }
 
