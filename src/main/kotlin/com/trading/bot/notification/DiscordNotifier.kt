@@ -16,11 +16,12 @@ class DiscordNotifier(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    fun sendMessage(message: String) {
-        sendPayload(mapOf("content" to message))
-    }
-
-    fun sendTradeEmbed(record: TradeRecord, krwBalance: Double? = null) {
+    fun sendTradeEmbed(
+        record: TradeRecord,
+        krwBalance: Double? = null,
+        webhookUrl: String? = null,
+        username: String? = null,
+    ) {
         val isBuy = record.side == TradeSide.BUY
         val color = if (isBuy) 0x22C55E else if ((record.pnlPercent ?: 0.0) >= 0) 0x3B82F6 else 0xEF4444
         val title = if (isBuy) "📈 매수" else "📉 매도"
@@ -45,25 +46,30 @@ class DiscordNotifier(
             fields.add(mapOf("name" to "잔고", "value" to "%,.0f원".format(krwBalance), "inline" to true))
         }
 
-        val embed = mapOf(
+        val embed = mutableMapOf<String, Any>(
             "title" to "$title ${record.ticker}",
             "color" to color,
             "fields" to fields,
             "timestamp" to record.createdAt.toString(),
         )
 
-        sendPayload(mapOf("embeds" to listOf(embed)))
+        if (username != null) {
+            embed["footer"] = mapOf("text" to username)
+        }
+
+        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
     }
 
-    private fun sendPayload(payload: Map<String, Any>) {
-        if (discordProperties.webhookUrl.isBlank()) {
+    private fun sendPayload(payload: Map<String, Any>, webhookUrl: String? = null) {
+        val url = webhookUrl?.takeIf { it.isNotBlank() } ?: discordProperties.webhookUrl
+        if (url.isBlank()) {
             log.debug("Discord webhook not configured, skipping notification")
             return
         }
 
         try {
             discordWebClient.post()
-                .uri(discordProperties.webhookUrl)
+                .uri(url)
                 .bodyValue(payload)
                 .retrieve()
                 .bodyToMono<String>()

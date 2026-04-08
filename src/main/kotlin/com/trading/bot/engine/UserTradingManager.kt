@@ -147,6 +147,8 @@ class UserTradingManager(
             strategies = strategies,
             tradingProperties = tradingProperties,
             userId = user.id!!,
+            username = user.username,
+            discordWebhookUrl = user.discordWebhookUrl,
         )
     }
 

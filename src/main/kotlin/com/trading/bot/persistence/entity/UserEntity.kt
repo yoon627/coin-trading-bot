@@ -14,5 +14,6 @@ data class UserEntity(
     val upbitSecretKey: String? = null,
     val publicProfile: Boolean = false,
     val publicStrategy: Boolean = false,
+    val discordWebhookUrl: String? = null,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )
