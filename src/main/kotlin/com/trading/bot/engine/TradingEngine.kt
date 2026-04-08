@@ -4,7 +4,6 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
@@ -28,6 +27,8 @@ class TradingEngine(
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
     private val userId: Long = 0,
+    private val username: String = "",
+    private val discordWebhookUrl: String? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -44,14 +45,14 @@ class TradingEngine(
     fun start(tickers: List<String> = tradingProperties.tickerList()) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
-            log.info("Starting trading engine for user {} with strategy: {}", userId, activeStrategy?.name)
+            log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             scope.launch { runLoop() }
         }
     }
 
     fun stop() {
         if (running.compareAndSet(true, false)) {
-            log.info("Stopping trading engine for user {}", userId)
+            log.info("Stopping trading engine for user {} ({})", userId, username)
         }
     }
 
@@ -64,7 +65,7 @@ class TradingEngine(
     fun setStrategy(strategyName: String): Boolean {
         val strategy = strategies.find { it.name == strategyName } ?: return false
         activeStrategy = strategy
-        log.info("User {} strategy changed to: {}", userId, strategyName)
+        log.info("User {} ({}) strategy changed to: {}", userId, username, strategyName)
         return true
     }
 
@@ -76,8 +77,6 @@ class TradingEngine(
         activeTickers.forEach { ticker ->
             positionManager.syncPosition(ticker, states[ticker]!!)
         }
-
-        discordNotifier.sendMessage("[User $userId] Bot started — strategy: ${activeStrategy?.name}, tickers: $activeTickers")
 
         while (running.get() && scope.isActive) {
             try {
@@ -94,8 +93,6 @@ class TradingEngine(
                 delay(60_000)
             }
         }
-
-        discordNotifier.sendMessage("[User $userId] Bot stopped")
     }
 
     private suspend fun processTicker(ticker: String) {
@@ -145,6 +142,6 @@ class TradingEngine(
         val krwBalance = try {
             upbitClient.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
         } catch (_: Exception) { null }
-        discordNotifier.sendTradeEmbed(record, krwBalance)
+        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
     }
 }
