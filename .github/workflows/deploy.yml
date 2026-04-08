@@ -1,0 +1,68 @@
+name: Build & Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-2
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: ./gradlew test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build JAR
+        run: ./gradlew bootJar -x test
+
+      - name: Deploy to EC2
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          echo "$EC2_SSH_KEY" > /tmp/key.pem
+          chmod 600 /tmp/key.pem
+
+          JAR=$(ls -t build/libs/*.jar | head -1)
+
+          scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
+            "$JAR" ec2-user@$EC2_HOST:/opt/app/app.jar
+
+          ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST bash <<'EOF'
+          pkill -f 'java.*app.jar' 2>/dev/null || true
+          sleep 2
+          cd /opt/app
+          set -a; source .env; set +a
+          nohup java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -jar app.jar > app.log 2>&1 &
+          EOF
+
+          rm -f /tmp/key.pem
