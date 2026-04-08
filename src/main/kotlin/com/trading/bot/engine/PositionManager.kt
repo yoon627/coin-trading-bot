@@ -122,6 +122,17 @@ class PositionManager(
         return state.pnlPercent(currentPrice) <= -tradingProperties.maxLossPct
     }
 
+    fun checkTrailingStop(state: TradingState, currentPrice: Double): Boolean {
+        if (!state.position) return false
+        // Update peak price
+        state.updatePeakPrice(currentPrice)
+        val pnl = state.pnlPercent(currentPrice)
+        // Only activate trailing stop if in profit
+        if (pnl <= 0) return false
+        val dropFromPeak = state.dropFromPeakPercent(currentPrice)
+        return dropFromPeak >= 2.0 // 고점 대비 2% 하락
+    }
+
     private suspend fun getKrwBalance(): Double {
         val accounts = upbitClient.getAccounts()
         val krw = accounts.find { it.currency == "KRW" }

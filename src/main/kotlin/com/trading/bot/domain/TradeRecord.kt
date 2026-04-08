@@ -11,6 +11,7 @@ data class TradeRecord(
     val pnlPercent: Double? = null,
     val reason: String? = null,
     val strategy: String? = null,
+    val userId: Long = 0,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )
 
@@ -20,6 +21,7 @@ enum class TradeSide {
 
 enum class SellReason {
     TAKE_PROFIT,
+    TRAILING_STOP,
     STOP_LOSS,
     DAILY_RESET,
     MANUAL,
