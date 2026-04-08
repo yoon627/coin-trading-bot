@@ -1,5 +1,6 @@
 package com.trading.bot.notification
 
+import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
@@ -13,6 +14,7 @@ import reactor.core.publisher.Mono
 class DiscordNotifier(
     private val discordWebClient: WebClient,
     private val discordProperties: DiscordProperties,
+    private val requestValidators: RequestValidators,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -61,8 +63,15 @@ class DiscordNotifier(
     }
 
     private fun sendPayload(payload: Map<String, Any>, webhookUrl: String? = null) {
-        val url = webhookUrl?.takeIf { it.isNotBlank() } ?: discordProperties.webhookUrl
-        if (url.isBlank()) {
+        val url = try {
+            requestValidators.normalizeDiscordWebhookUrl(
+                webhookUrl?.takeIf { it.isNotBlank() } ?: discordProperties.webhookUrl
+            )
+        } catch (e: Exception) {
+            log.warn("Skipping Discord notification due to invalid webhook URL")
+            return
+        }
+        if (url.isNullOrBlank()) {
             log.debug("Discord webhook not configured, skipping notification")
             return
         }

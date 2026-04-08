@@ -10,6 +10,7 @@ import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
+import com.trading.bot.security.UserSecretsService
 import com.trading.bot.strategy.TradingStrategy
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +33,7 @@ class UserTradingManager(
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
     private val upbitWebClient: WebClient,
+    private val userSecretsService: UserSecretsService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -50,7 +52,9 @@ class UserTradingManager(
                         if (user.upbitAccessKey.isNullOrBlank()) continue
                         val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                         userStrategies[state.userId] = state.strategy
-                        val engine = engines.computeIfAbsent(state.userId) { createEngine(user) }
+                        val engine = engines.computeIfAbsent(state.userId) {
+                            createEngine(userSecretsService.decryptUserSecrets(user))
+                        }
                         engine.setStrategy(state.strategy)
                         engine.start(tickers)
                         log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, state.strategy, tickers)
@@ -74,7 +78,8 @@ class UserTradingManager(
             return mapOf("error" to "Upbit API keys not configured. Set them via /api/user/keys")
         }
 
-        val engine = engines.computeIfAbsent(userId) { createEngine(user) }
+        val decryptedUser = userSecretsService.decryptUserSecrets(user)
+        val engine = engines.computeIfAbsent(userId) { createEngine(decryptedUser) }
 
         val strategy = strategyName ?: userStrategies[userId]
         if (strategy != null) engine.setStrategy(strategy)
@@ -131,6 +136,23 @@ class UserTradingManager(
         )
         val authProvider = UpbitAuthProvider(props)
         return UpbitClient(upbitWebClient, authProvider)
+    }
+
+    suspend fun reloadUserRuntime(userId: Long) {
+        val existing = engines[userId] ?: return
+        val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
+        val decryptedUser = userSecretsService.decryptUserSecrets(user)
+        val wasRunning = existing.isRunning()
+        val tickers = existing.getActiveTickers()
+        val strategy = existing.getActiveStrategyName()
+        existing.stop()
+        val replacement = createEngine(decryptedUser)
+        replacement.setStrategy(strategy)
+        engines[userId] = replacement
+        userStrategies[userId] = strategy
+        if (wasRunning) {
+            replacement.start(tickers.ifEmpty { tradingProperties.tickerList() })
+        }
     }
 
     private fun createEngine(user: UserEntity): TradingEngine {

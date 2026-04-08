@@ -60,6 +60,8 @@ class TradingEngine(
 
     fun getStates(): Map<String, TradingState> = states.toMap()
 
+    fun getActiveTickers(): List<String> = activeTickers.toList()
+
     fun getActiveStrategyName(): String = activeStrategy?.name ?: "none"
 
     fun setStrategy(strategyName: String): Boolean {

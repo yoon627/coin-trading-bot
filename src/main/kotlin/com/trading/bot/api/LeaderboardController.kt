@@ -21,6 +21,7 @@ class LeaderboardController(
     private val userRepository: UserRepository,
     private val tradeRecordRepository: TradeRecordRepository,
     private val userTradingManager: UserTradingManager,
+    private val requestValidators: RequestValidators,
 ) {
     @GetMapping("/leaderboard")
     suspend fun getLeaderboard(): Map<String, Any> {
@@ -99,17 +100,19 @@ class LeaderboardController(
     suspend fun updateSettings(@RequestBody req: UserSettingsRequest): Map<String, Any> {
         val userId = currentUserId()
         val user = userRepository.findById(userId).awaitSingle()
+        val webhookUrl = requestValidators.normalizeDiscordWebhookUrl(req.discordWebhookUrl)
         userRepository.save(
             user.copy(
                 publicProfile = req.publicProfile ?: user.publicProfile,
                 publicStrategy = req.publicStrategy ?: user.publicStrategy,
-                discordWebhookUrl = req.discordWebhookUrl ?: user.discordWebhookUrl,
+                discordWebhookUrl = webhookUrl,
             )
         ).awaitSingle()
+        userTradingManager.reloadUserRuntime(userId)
         return mapOf(
             "public_profile" to (req.publicProfile ?: user.publicProfile),
             "public_strategy" to (req.publicStrategy ?: user.publicStrategy),
-            "discord_webhook_url" to (req.discordWebhookUrl ?: user.discordWebhookUrl ?: ""),
+            "has_discord_webhook" to (webhookUrl != null),
         )
     }
 }
