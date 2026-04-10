@@ -16,10 +16,13 @@ class TradeHistoryController(
     @GetMapping
     suspend fun getTrades(
         @RequestParam(defaultValue = "100") limit: Int,
+        @RequestParam(defaultValue = "0") offset: Int,
     ): Map<String, Any> {
         val userId = currentUserId()
-        val records = tradeRecordRepository.findByUserId(userId, requestValidators.sanitizeTradeLimit(limit))
+        val sanitizedLimit = requestValidators.sanitizeTradeLimit(limit)
+        val sanitizedOffset = offset.coerceAtLeast(0)
+        val records = tradeRecordRepository.findByUserId(userId, sanitizedLimit, sanitizedOffset)
         val total = tradeRecordRepository.countByUserId(userId)
-        return mapOf("total" to total, "records" to records)
+        return mapOf("total" to total, "limit" to sanitizedLimit, "offset" to sanitizedOffset, "records" to records)
     }
 }

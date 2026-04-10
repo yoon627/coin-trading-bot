@@ -9,7 +9,7 @@ import kotlin.math.absoluteValue
 @Component
 class RequestValidators {
     fun normalizeUsername(username: String): String {
-        val normalized = username.trim()
+        val normalized = username.trim().lowercase()
         if (!USERNAME_REGEX.matches(normalized)) {
             throw ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
@@ -64,6 +64,9 @@ class RequestValidators {
         if (!amount.isFinite() || amount < 5_000) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Minimum order: 5,000 KRW")
         }
+        if (amount > MAX_ORDER_AMOUNT) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Maximum order: ${"%,.0f".format(MAX_ORDER_AMOUNT)} KRW")
+        }
     }
 
     fun normalizeSellVolume(volume: String): String {
@@ -102,9 +105,10 @@ class RequestValidators {
     fun sanitizeTradeLimit(limit: Int): Int = limit.coerceIn(1, 500)
 
     companion object {
-        private val USERNAME_REGEX = Regex("^[A-Za-z0-9_-]{3,30}$")
+        private val USERNAME_REGEX = Regex("^[a-z0-9_-]{3,30}$")
         private val API_KEY_REGEX = Regex("^[A-Za-z0-9_-]+$")
         private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
+        private const val MAX_ORDER_AMOUNT = 10_000_000.0  // 1000만원
     }
 }
