@@ -34,12 +34,19 @@ data class TradingState(
     }
 
     fun markBought(price: Double, volume: Double) {
-        position = true
-        avgBuyPrice = price
-        holdVolume = volume
-        peakPrice = price
-        buyDate = LocalDate.now(ZoneId.of("Asia/Seoul"))
-        boughtToday = true
+        if (position) {
+            // 추가 매수: 평균 단가 계산
+            val totalCost = avgBuyPrice * holdVolume + price * volume
+            val totalVolume = holdVolume + volume
+            avgBuyPrice = totalCost / totalVolume
+            holdVolume = totalVolume
+        } else {
+            position = true
+            avgBuyPrice = price
+            holdVolume = volume
+            buyDate = LocalDate.now(ZoneId.of("Asia/Seoul"))
+        }
+        peakPrice = max(peakPrice, price)
         lastTradeTime = LocalDateTime.now(ZoneId.of("Asia/Seoul"))
     }
 

@@ -65,12 +65,13 @@ class UpbitClient(
     }
 
     suspend fun placeOrder(request: OrderRequest): Order {
-        val queryString = request.toQueryString()
+        val params = request.toParamMap()
+        val queryString = params.entries.joinToString("&") { "${it.key}=${it.value}" }
         return Mono.defer {
             upbitWebClient.post()
                 .uri("/v1/orders")
                 .header("Authorization", authProvider.authorizationHeader(queryString))
-                .bodyValue(request)
+                .bodyValue(params)
                 .retrieve()
                 .onStatus(HttpStatusCode::isError) { handleError(it) }
                 .bodyToMono<Order>()
