@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.http.server.reactive.ServerHttpResponse
+import org.springframework.core.env.Environment
+import org.springframework.core.env.Profiles
 import org.springframework.web.server.ResponseStatusException
 import java.time.Duration
 
@@ -25,6 +27,7 @@ class AuthController(
     private val jwtProvider: JwtProvider,
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
+    private val environment: Environment,
 ) {
     @PostMapping("/register")
     suspend fun register(@RequestBody req: AuthRequest, response: ServerHttpResponse): AuthResponse {
@@ -84,9 +87,11 @@ class AuthController(
     }
 
     private fun writeAuthCookie(response: ServerHttpResponse, token: String) {
+        val isProd = environment.acceptsProfiles(Profiles.of("prod"))
         response.addCookie(
             ResponseCookie.from("token", token)
                 .httpOnly(true)
+                .secure(isProd)
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(Duration.ofDays(1))

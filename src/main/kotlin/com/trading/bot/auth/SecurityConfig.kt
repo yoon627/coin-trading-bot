@@ -19,6 +19,7 @@ class SecurityConfig(private val jwtAuthFilter: JwtAuthFilter) {
     fun securityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
         return http
             .csrf { it.disable() }
+            .cors { it.configurationSource(corsConfig()) }
             .httpBasic { it.disable() }
             .formLogin { it.disable() }
             .exceptionHandling {
@@ -42,4 +43,16 @@ class SecurityConfig(private val jwtAuthFilter: JwtAuthFilter) {
 
     @Bean
     fun passwordEncoder(): PasswordEncoder = BCryptPasswordEncoder()
+
+    private fun corsConfig(): org.springframework.web.cors.reactive.CorsConfigurationSource {
+        val config = org.springframework.web.cors.CorsConfiguration()
+        config.allowedOriginPatterns = listOf("*")
+        config.allowedMethods = listOf("GET", "POST", "PUT", "DELETE", "OPTIONS")
+        config.allowedHeaders = listOf("*")
+        config.allowCredentials = true
+        config.maxAge = 3600
+        val source = org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource()
+        source.registerCorsConfiguration("/**", config)
+        return source
+    }
 }
