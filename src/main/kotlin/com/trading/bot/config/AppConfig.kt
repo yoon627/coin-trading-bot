@@ -25,8 +25,20 @@ data class TradingProperties(
     val kValue: Double = 0.5,
     val takeProfitPct: Double = 2.0,
     val maxLossPct: Double = 5.0,
+    val trailingStopPct: Double = 2.0,
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
+) {
+    fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+}
+
+@ConfigurationProperties(prefix = "claude")
+data class ClaudeProperties(
+    val apiKey: String = "",
+    val analysisEnabled: Boolean = false,
+    val sleepStartHour: Int = 23,
+    val sleepEndHour: Int = 7,
+    val tickers: String = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL",
 ) {
     fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 }

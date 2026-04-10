@@ -71,6 +71,28 @@
             </div>
         </section>
 
+        <!-- Watchlist -->
+        <section class="card">
+            <h2>Watchlist</h2>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Coin</th>
+                            <th>Price</th>
+                            <th>1H</th>
+                            <th>24H</th>
+                            <th>High / Low</th>
+                            <th>Volume (24H)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="watchlist-body">
+                        <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
         <!-- Holdings -->
         <section class="card">
             <h2>My Holdings</h2>
@@ -91,25 +113,6 @@
                         <tr><td colspan="7" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
-            </div>
-        </section>
-
-        <!-- Manual Trade -->
-        <section class="card">
-            <h2>Manual Trade</h2>
-            <div class="controls">
-                <div class="control-group">
-                    <label for="trade-market">Market</label>
-                    <input type="text" id="trade-market" placeholder="KRW-BTC" value="KRW-BTC" style="width:120px;">
-                </div>
-                <div class="control-group">
-                    <label for="trade-amount">Amount (KRW)</label>
-                    <input type="number" id="trade-amount" placeholder="50000" min="5000" step="1000" style="width:120px;">
-                </div>
-                <div class="control-buttons">
-                    <button class="btn btn-start" onclick="manualBuy()">Buy</button>
-                    <button class="btn btn-stop" onclick="manualSell()">Sell All</button>
-                </div>
             </div>
         </section>
 

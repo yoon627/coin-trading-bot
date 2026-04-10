@@ -28,14 +28,18 @@ data class OrderRequest(
     val price: String? = null,
 ) {
     fun toQueryString(): String {
-        val params = mutableListOf(
-            "market=$market",
-            "side=$side",
-            "ord_type=$ordType",
+        return toParamMap().entries.joinToString("&") { "${it.key}=${it.value}" }
+    }
+
+    fun toParamMap(): Map<String, String> {
+        val params = mutableMapOf(
+            "market" to market,
+            "side" to side,
+            "ord_type" to ordType,
         )
-        volume?.let { params.add("volume=$it") }
-        price?.let { params.add("price=$it") }
-        return params.joinToString("&")
+        volume?.let { params["volume"] = it }
+        price?.let { params["price"] = it }
+        return params
     }
 }
 
@@ -43,6 +47,12 @@ data class Ticker(
     val market: String = "",
     @JsonProperty("trade_price")
     val tradePrice: Double = 0.0,
+    @JsonProperty("high_price")
+    val highPrice: Double = 0.0,
+    @JsonProperty("low_price")
+    val lowPrice: Double = 0.0,
+    @JsonProperty("acc_trade_volume_24h")
+    val accTradeVolume24h: Double = 0.0,
     @JsonProperty("signed_change_rate")
     val signedChangeRate: Double = 0.0,
     @JsonProperty("acc_trade_price_24h")

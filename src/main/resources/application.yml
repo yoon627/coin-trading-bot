@@ -46,6 +46,13 @@ app:
   jwt-expiration-ms: 86400000
   encryption-secret: ${APP_ENCRYPTION_SECRET:}
 
+claude:
+  api-key: ${CLAUDE_API_KEY:}
+  analysis-enabled: ${CLAUDE_ANALYSIS_ENABLED:false}
+  sleep-start-hour: ${CLAUDE_SLEEP_START:23}
+  sleep-end-hour: ${CLAUDE_SLEEP_END:7}
+  tickers: ${CLAUDE_ANALYSIS_TICKERS:KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR}
+
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}
 

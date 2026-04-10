@@ -15,5 +15,6 @@ data class UserEntity(
     val publicProfile: Boolean = false,
     val publicStrategy: Boolean = false,
     val discordWebhookUrl: String? = null,
+    val admin: Boolean = false,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )

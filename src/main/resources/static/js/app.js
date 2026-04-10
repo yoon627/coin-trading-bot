@@ -45,7 +45,7 @@ async function initUser() {
 }
 
 async function refreshAll() {
-    await Promise.allSettled([refreshStatus(), refreshPortfolio(), refreshTrades(), refreshLeaderboard()]);
+    await Promise.allSettled([refreshStatus(), refreshPortfolio(), refreshWatchlist(), refreshTrades(), refreshLeaderboard()]);
     document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString('ko-KR');
 }
 
@@ -105,6 +105,40 @@ function renderHoldings(holdings) {
             <td><button class="btn btn-stop btn-sm-action" onclick="sellHolding('${market}')">Sell All</button></td>
         </tr>`;
     }).join('');
+}
+
+// ── Watchlist ──
+async function refreshWatchlist() {
+    try {
+        const data = await fetchJson('/api/watchlist');
+        if (!data) return;
+        const tbody = document.getElementById('watchlist-body');
+        const coins = data.coins || [];
+        if (!coins.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No data yet</td></tr>';
+            return;
+        }
+        tbody.innerHTML = coins.map(c => {
+            const ch24 = c.change_24h;
+            const ch1h = c.change_1h;
+            const cls24 = ch24 > 0 ? 'pnl-positive' : ch24 < 0 ? 'pnl-negative' : 'pnl-zero';
+            const cls1h = ch1h != null ? (ch1h > 0 ? 'pnl-positive' : ch1h < 0 ? 'pnl-negative' : 'pnl-zero') : '';
+            const vol = c.volume_24h >= 1e12 ? (c.volume_24h / 1e12).toFixed(1) + 'T'
+                      : c.volume_24h >= 1e8 ? (c.volume_24h / 1e8).toFixed(1) + 'B'
+                      : c.volume_24h >= 1e4 ? (c.volume_24h / 1e4).toFixed(0) + 'M' : formatKRW(c.volume_24h);
+            return `<tr>
+                <td><strong>${escapeHtml(c.currency)}</strong></td>
+                <td>${formatKRW(c.price)}</td>
+                <td class="${cls1h}">${ch1h != null ? (ch1h >= 0 ? '+' : '') + ch1h.toFixed(2) + '%' : '-'}</td>
+                <td class="${cls24}">${ch24 >= 0 ? '+' : ''}${ch24.toFixed(2)}%</td>
+                <td><small>${formatKRW(c.high_price)} / ${formatKRW(c.low_price)}</small></td>
+                <td>${vol}</td>
+            </tr>`;
+        }).join('');
+    } catch (_) {
+        document.getElementById('watchlist-body').innerHTML =
+            '<tr><td colspan="6" class="empty-state">Failed to load watchlist</td></tr>';
+    }
 }
 
 // ── Leaderboard ──
@@ -210,26 +244,8 @@ async function saveKeys() {
     } catch (e) { toast('Failed to save keys', 'error'); }
 }
 
-async function manualBuy() {
-    const market = document.getElementById('trade-market').value.trim();
-    const amount = parseFloat(document.getElementById('trade-amount').value);
-    if (!market || !amount || amount < 5000) { toast('Market과 금액(5,000원 이상)을 입력하세요', 'error'); return; }
-    try {
-        const data = await fetchJson('/api/trade/buy', { method: 'POST', body: JSON.stringify({ market, amount }) });
-        if (data?.status === 'success') { toast(`${market} 매수 완료`, 'success'); refreshAll(); }
-        else toast(data?.error || 'Failed', 'error');
-    } catch (e) { toast('매수 실패: ' + e.message, 'error'); }
-}
-
-async function manualSell() {
-    const market = document.getElementById('trade-market').value.trim();
-    if (!market) { toast('Market을 입력하세요', 'error'); return; }
-    await sellHolding(market);
-}
-
 async function sellHolding(market) {
     if (!market) { toast('Market을 입력하세요', 'error'); return; }
-    document.getElementById('trade-market').value = market;
     if (!confirm(`${market} 전량 매도하시겠습니까?`)) return;
     try {
         const data = await fetchJson('/api/trade/sell', { method: 'POST', body: JSON.stringify({ market, sell_all: true }) });
