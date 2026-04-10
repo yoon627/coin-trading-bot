@@ -9,10 +9,8 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import org.slf4j.LoggerFactory
-import org.springframework.stereotype.Component
 import kotlin.math.floor
 
-@Component
 class PositionManager(
     private val upbitClient: UpbitClient,
     private val tradingProperties: TradingProperties,
@@ -36,11 +34,6 @@ class PositionManager(
     }
 
     suspend fun buy(ticker: String, state: TradingState, currentPrice: Double, strategyName: String): TradeRecord? {
-        if (state.position || state.boughtToday) {
-            log.debug("Skip buy for {}: position={}, boughtToday={}", ticker, state.position, state.boughtToday)
-            return null
-        }
-
         try {
             val krwAccount = getKrwBalance()
             val investAmount = calculateInvestAmount(krwAccount)
@@ -130,7 +123,7 @@ class PositionManager(
         // Only activate trailing stop if in profit
         if (pnl <= 0) return false
         val dropFromPeak = state.dropFromPeakPercent(currentPrice)
-        return dropFromPeak >= 2.0 // 고점 대비 2% 하락
+        return dropFromPeak >= tradingProperties.trailingStopPct
     }
 
     private suspend fun getKrwBalance(): Double {
@@ -140,7 +133,6 @@ class PositionManager(
     }
 
     private fun calculateInvestAmount(krwBalance: Double): Double {
-        val ratioAmount = krwBalance * tradingProperties.investRatio
-        return minOf(ratioAmount, tradingProperties.maxInvestAmount)
+        return minOf(krwBalance, tradingProperties.maxInvestAmount)
     }
 }

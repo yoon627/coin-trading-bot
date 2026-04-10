@@ -6,8 +6,6 @@ import com.trading.bot.config.TradingProperties
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
-import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
@@ -18,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import com.trading.bot.persistence.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
@@ -28,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
 class UserTradingManager(
     private val userRepository: UserRepository,
     private val botStateRepository: BotStateRepository,
-    private val tradeRecordRepository: TradeRecordRepository,
+    private val tradeExecutionService: TradeExecutionService,
     private val discordNotifier: DiscordNotifier,
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
@@ -121,7 +120,6 @@ class UserTradingManager(
         userStrategies[userId] = strategyName
         engines[userId]?.setStrategy(strategyName)
 
-        // 전략 변경도 DB에 반영
         val existing = botStateRepository.findByUserId(userId).awaitSingleOrNull()
         if (existing != null) {
             botStateRepository.save(existing.copy(strategy = strategyName, updatedAt = LocalDateTime.now())).awaitSingle()
@@ -164,8 +162,7 @@ class UserTradingManager(
             upbitClient = client,
             positionManager = positionManager,
             dailyResetManager = dailyResetManager,
-            tradeRecordRepository = tradeRecordRepository,
-            discordNotifier = discordNotifier,
+            tradeExecutionService = tradeExecutionService,
             strategies = strategies,
             tradingProperties = tradingProperties,
             userId = user.id!!,
