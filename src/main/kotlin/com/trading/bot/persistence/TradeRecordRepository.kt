@@ -36,8 +36,9 @@ class TradeRecordRepository(
         return r2dbcRepository.save(entity).awaitSingle()
     }
 
-    suspend fun findByUserId(userId: Long, limit: Int = 100): List<TradeRecordEntity> {
+    suspend fun findByUserId(userId: Long, limit: Int = 100, offset: Int = 0): List<TradeRecordEntity> {
         return r2dbcRepository.findByUserId(userId, Sort.by(Sort.Direction.DESC, "createdAt"))
+            .skip(offset.toLong())
             .take(limit.toLong())
             .collectList()
             .awaitSingle()
