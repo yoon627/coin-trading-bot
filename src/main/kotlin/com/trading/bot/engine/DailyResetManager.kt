@@ -2,13 +2,11 @@ package com.trading.bot.engine
 
 import com.trading.bot.domain.TradingState
 import org.slf4j.LoggerFactory
-import org.springframework.stereotype.Component
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
-@Component
 class DailyResetManager {
     private val log = LoggerFactory.getLogger(javaClass)
     private val kst = ZoneId.of("Asia/Seoul")
