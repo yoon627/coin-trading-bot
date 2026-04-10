@@ -1,13 +1,13 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
-import com.trading.bot.client.UpbitClient
 import com.trading.bot.config.TradingProperties
 import com.trading.bot.engine.BacktestConfig
 import com.trading.bot.engine.BacktestEngine
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.UserRepository
+import com.trading.bot.security.UserSecretsService
 import com.trading.bot.strategy.TradingStrategy
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.http.HttpStatus
@@ -27,6 +27,7 @@ class StrategyController(
     private val tradeRecordRepository: TradeRecordRepository,
     private val userTradingManager: UserTradingManager,
     private val userRepository: UserRepository,
+    private val userSecretsService: UserSecretsService,
 ) {
     private val backtestEngine = BacktestEngine(strategies, tradingProperties)
 
@@ -71,7 +72,7 @@ class StrategyController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys required for backtest")
         }
 
-        val client = userTradingManager.createUpbitClient(user)
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
         val ticker = req.ticker ?: "KRW-BTC"
         val days = (req.days ?: 200).coerceIn(30, 200)
         val candles = client.getDayCandles(ticker, days)
