@@ -5,8 +5,6 @@ import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
-import com.trading.bot.notification.DiscordNotifier
-import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.strategy.TradingStrategy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,8 +20,7 @@ class TradingEngine(
     private val upbitClient: UpbitClient,
     private val positionManager: PositionManager,
     private val dailyResetManager: DailyResetManager,
-    private val tradeRecordRepository: TradeRecordRepository,
-    private val discordNotifier: DiscordNotifier,
+    private val tradeExecutionService: TradeExecutionService,
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
     private val userId: Long = 0,
@@ -124,14 +121,12 @@ class TradingEngine(
                 }
             }
 
-            if (!state.position && !state.boughtToday) {
-                val candles = upbitClient.getDayCandles(ticker, 30)
-                val shouldBuy = strategy.shouldBuy(candles, currentPrice, tradingProperties)
-                if (shouldBuy) {
-                    val buyRecord = positionManager.buy(ticker, state, currentPrice, strategy.name)
-                    if (buyRecord != null) {
-                        onTrade(buyRecord)
-                    }
+            val candles = upbitClient.getDayCandles(ticker, 30)
+            val shouldBuy = strategy.shouldBuy(candles, currentPrice, tradingProperties)
+            if (shouldBuy) {
+                val buyRecord = positionManager.buy(ticker, state, currentPrice, strategy.name)
+                if (buyRecord != null) {
+                    onTrade(buyRecord)
                 }
             }
         } catch (e: Exception) {
@@ -140,10 +135,11 @@ class TradingEngine(
     }
 
     private suspend fun onTrade(record: TradeRecord) {
-        tradeRecordRepository.save(record.copy(userId = userId))
-        val krwBalance = try {
-            upbitClient.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
-        } catch (_: Exception) { null }
-        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
+        tradeExecutionService.saveAndNotify(
+            record = record.copy(userId = userId),
+            client = upbitClient,
+            username = username,
+            discordWebhookUrl = discordWebhookUrl,
+        )
     }
 }
