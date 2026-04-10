@@ -3,10 +3,18 @@ spring:
     url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslMode=disable
     username: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
+    pool:
+      initial-size: 5
+      max-size: 20
+      max-idle-time: 30m
   flyway:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslmode=disable
     user: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
+
+app:
+  jwt-secret: ${JWT_SECRET:}
+  encryption-secret: ${APP_ENCRYPTION_SECRET:}
 
 logging:
   level:
