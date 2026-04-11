@@ -40,6 +40,9 @@ out/
 ### VS Code ###
 .vscode/
 
+### Gradle ###
+gradle.properties
+
 ### Environment ###
 .env
 deploy/aws/.state
