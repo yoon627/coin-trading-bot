@@ -6,18 +6,18 @@ spring:
     deserialization:
       fail-on-unknown-properties: false
   r2dbc:
-    url: r2dbc:h2:mem:///trading
-    username: sa
-    password:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:trading}
+    username: ${DB_USER:trading}
+    password: ${DB_PASSWORD:trading}
   data:
     redis:
       host: ${REDIS_HOST:}
       port: ${REDIS_PORT:6379}
   flyway:
     enabled: true
-    url: jdbc:h2:mem:trading;DB_CLOSE_DELAY=-1
-    user: sa
-    password:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:trading}
+    user: ${DB_USER:trading}
+    password: ${DB_PASSWORD:trading}
     locations: classpath:db/migration
 
 management:
