@@ -43,6 +43,9 @@ out/
 ### Gradle ###
 gradle.properties
 
+### Docker ###
+docker-compose.override.yml
+
 ### Environment ###
 .env
 deploy/aws/.state
