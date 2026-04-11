@@ -5,9 +5,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -18,8 +25,24 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Test & Build
-        run: ./gradlew test bootJar --parallel
+      - name: Test
+        run: ./gradlew test --parallel
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
       - name: Deploy to EC2
         if: github.ref == 'refs/heads/main'
@@ -30,19 +53,37 @@ jobs:
           echo "$EC2_SSH_KEY" > /tmp/key.pem
           chmod 600 /tmp/key.pem
 
-          JAR=$(ls -t build/libs/*.jar | grep -v plain | head -1)
+          scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
+            docker-compose.yml ec2-user@$EC2_HOST:/opt/app/docker-compose.yml
 
           scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
-            "$JAR" ec2-user@$EC2_HOST:/opt/app/app.jar
+            -r monitoring ec2-user@$EC2_HOST:/opt/app/monitoring
 
           ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST bash <<'EOF'
           cd /opt/app
-          docker compose up -d 2>/dev/null || true
-          sleep 2
+
+          # Stop old JAR process if still running
           pkill -f 'java.*app.jar' 2>/dev/null || true
-          sleep 2
-          set -a; source .env; set +a
-          nohup java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -jar app.jar > app.log 2>&1 &
+
+          # Login to GHCR and pull latest image
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker compose pull app
+
+          # Rolling restart: bring up new containers
+          docker compose up -d --remove-orphans
+
+          # Wait for health check
+          echo "Waiting for app to be healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
+              echo "App is healthy!"
+              break
+            fi
+            sleep 5
+          done
+
+          # Cleanup old images
+          docker image prune -f
           EOF
 
           rm -f /tmp/key.pem

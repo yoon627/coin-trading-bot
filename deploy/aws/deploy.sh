@@ -2,18 +2,19 @@
 set -euo pipefail
 
 # ============================================================
-# Coin Trading Bot - AWS CLI 배포 스크립트 (프리티어, RDS 없음)
+# Coin Trading Bot - AWS CLI 배포 스크립트 (프리티어)
 #
-# EC2 t2.micro + Docker PostgreSQL (EC2 내부)
+# EC2 t2.micro + Docker Compose (전체 컨테이너화)
+# 구성: App + PostgreSQL + Redis + Prometheus + Loki + Grafana
 #
 # 사용법:
 #   ./deploy/aws/deploy.sh setup    # 1회: 키페어 + VPC + EC2 생성
-#   ./deploy/aws/deploy.sh deploy   # 앱 빌드 + EC2 배포
+#   ./deploy/aws/deploy.sh deploy   # docker-compose 배포
 #   ./deploy/aws/deploy.sh ssh      # EC2 접속
 #   ./deploy/aws/deploy.sh status   # 상태 확인
 #   ./deploy/aws/deploy.sh logs     # 앱 로그
-#   ./deploy/aws/deploy.sh stop     # 앱 중지
-#   ./deploy/aws/deploy.sh start    # 앱 시작
+#   ./deploy/aws/deploy.sh stop     # 전체 중지
+#   ./deploy/aws/deploy.sh start    # 전체 시작
 #   ./deploy/aws/deploy.sh destroy  # 전체 삭제
 # ============================================================
 
@@ -76,10 +77,11 @@ do_setup() {
     save_state RTB_ID "$RTB_ID"
 
     log "4/6 보안 그룹"
-    SG_ID=$(aws ec2 create-security-group --group-name "${APP_NAME}-sg" --description "SSH + App" \
+    SG_ID=$(aws ec2 create-security-group --group-name "${APP_NAME}-sg" --description "Trading Bot" \
         --vpc-id "$VPC_ID" --region "$AWS_REGION" --query 'GroupId' --output text)
-    aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "${SSH_ALLOW_CIDR:-0.0.0.0/0}" --region "$AWS_REGION" > /dev/null
-    aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 8080 --cidr "0.0.0.0/0" --region "$AWS_REGION" > /dev/null
+    for port in 22 80 443 8080 3000 9090; do
+        aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port "$port" --cidr "0.0.0.0/0" --region "$AWS_REGION" > /dev/null
+    done
     save_state SG_ID "$SG_ID"
 
     log "5/6 EC2 인스턴스 (t2.micro)"
@@ -87,56 +89,18 @@ do_setup() {
         --filters "Name=name,Values=al2023-ami-2023.*-x86_64" "Name=state,Values=available" \
         --region "$AWS_REGION" --query 'sort_by(Images, &CreationDate)[-1].ImageId' --output text)
 
-    USERDATA=$(cat <<UDEOF
+    USERDATA=$(cat <<'UDEOF'
 #!/bin/bash
 set -ex
 dnf update -y
-dnf install -y docker java-21-amazon-corretto-headless
+dnf install -y docker
 systemctl enable docker && systemctl start docker
 usermod -aG docker ec2-user
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-\$(uname -m)" \
+curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
     -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
-mkdir -p /opt/app
-cat > /opt/app/.env << 'ENVEOF'
-SPRING_PROFILES_ACTIVE=prod
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_NAME=trading
-DB_USER=trading
-DB_PASSWORD=trading
-UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY:-}
-UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY:-}
-TRADING_TICKERS=${TRADING_TICKERS:-KRW-BTC}
-TRADING_STRATEGY=${TRADING_STRATEGY:-volatility_breakout}
-TRADING_AUTO_START=${TRADING_AUTO_START:-false}
-DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
-ENVEOF
-
-cat > /opt/app/docker-compose.yml << 'DCEOF'
-services:
-  db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: trading
-      POSTGRES_USER: trading
-      POSTGRES_PASSWORD: trading
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "127.0.0.1:5432:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trading"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-volumes:
-  pgdata:
-DCEOF
-
+mkdir -p /opt/app/monitoring
 chown -R ec2-user:ec2-user /opt/app
 UDEOF
 )
@@ -151,9 +115,6 @@ UDEOF
     echo "인스턴스: $INSTANCE_ID"
 
     aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region "$AWS_REGION"
-    EC2_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --region "$AWS_REGION" \
-        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
-    save_state EC2_PUBLIC_IP "$EC2_PUBLIC_IP"
 
     log "6/6 Elastic IP"
     EIP_ALLOC=$(aws ec2 allocate-address --domain vpc --region "$AWS_REGION" --query 'AllocationId' --output text)
@@ -176,36 +137,39 @@ do_deploy() {
     load_state
     [[ -z "${EC2_PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
 
-    log "JAR 빌드"
+    log "Docker 이미지 빌드 & 푸시"
     cd "$PROJECT_DIR"
     ./gradlew bootJar -x test
-    JAR_PATH=$(ls -t "$PROJECT_DIR/build/libs"/*.jar | grep -v plain | head -1)
+    docker build -t ghcr.io/yoon627/coin-trading-bot:latest .
+    docker push ghcr.io/yoon627/coin-trading-bot:latest
 
-    log "SSH 대기"
-    for i in $(seq 1 20); do
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" "echo ok" &>/dev/null && break
-        echo "  ($i/20)..."; sleep 10
-    done
+    log "설정 파일 업로드"
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" \
+        docker-compose.yml ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" \
+        -r monitoring ec2-user@"$EC2_PUBLIC_IP":/opt/app/monitoring
 
-    log "Docker PostgreSQL 시작"
-    ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" \
-        'cd /opt/app && docker compose up -d 2>/dev/null && sleep 3 && docker compose ps'
-
-    log "JAR 업로드"
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$JAR_PATH" ec2-user@"$EC2_PUBLIC_IP":/opt/app/app.jar
-
-    log "앱 시작"
+    log "컨테이너 배포"
     ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" bash <<'REMOTE'
 cd /opt/app
-pkill -f 'java.*app.jar' 2>/dev/null || true; sleep 2
-set -a; source .env; set +a
-nohup java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -jar app.jar > app.log 2>&1 &
-echo "PID: $!"
+docker compose pull app
+docker compose up -d --remove-orphans
+echo "Waiting for health check..."
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
+        echo "App is healthy!"
+        break
+    fi
+    sleep 5
+done
+docker compose ps
+docker image prune -f
 REMOTE
 
     echo ""
     log "배포 완료!"
-    echo "  http://$EC2_PUBLIC_IP:8080"
+    echo "  App:      http://$EC2_PUBLIC_IP:8080"
+    echo "  Grafana:  http://$EC2_PUBLIC_IP:3000"
 }
 
 # ── utils ──
@@ -215,29 +179,26 @@ do_status() {
     load_state
     echo "EC2 IP: ${EC2_PUBLIC_IP:-none}"
     [[ -n "${EC2_PUBLIC_IP:-}" ]] && {
-        curl -s --connect-timeout 5 "http://$EC2_PUBLIC_IP:8080/actuator/health" 2>/dev/null || echo "(not reachable)"
+        ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" 'cd /opt/app && docker compose ps' 2>/dev/null || echo "(not reachable)"
     }
 }
 
 do_logs() {
     load_state
-    ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" 'tail -100 /opt/app/app.log'
+    ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" \
+        'cd /opt/app && docker compose logs --tail=100 app'
 }
 
 do_stop() {
     load_state
     ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" \
-        'pkill -f "java.*app.jar" 2>/dev/null && echo "중지 완료" || echo "실행 중 아님"'
+        'cd /opt/app && docker compose down && echo "중지 완료"'
 }
 
 do_start() {
     load_state
-    ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" bash <<'REMOTE'
-cd /opt/app; docker compose up -d 2>/dev/null; sleep 2
-set -a; source .env; set +a
-nohup java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -jar app.jar > app.log 2>&1 &
-echo "시작 완료 (PID: $!)"
-REMOTE
+    ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" \
+        'cd /opt/app && docker compose up -d && echo "시작 완료"'
 }
 
 # ── destroy ──
