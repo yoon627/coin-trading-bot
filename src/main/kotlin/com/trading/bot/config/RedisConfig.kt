@@ -10,7 +10,7 @@ import org.springframework.data.redis.serializer.RedisSerializationContext
 import org.springframework.data.redis.serializer.StringRedisSerializer
 
 @Configuration
-@ConditionalOnProperty(name = ["spring.data.redis.host"], matchIfMissing = false)
+@ConditionalOnProperty(name = ["redis.enabled"], havingValue = "true", matchIfMissing = false)
 class RedisConfig {
 
     @Bean
