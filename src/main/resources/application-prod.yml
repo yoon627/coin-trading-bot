@@ -1,4 +1,10 @@
 spring:
+  autoconfigure:
+    exclude: []
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
   r2dbc:
     url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslMode=disable
     username: ${DB_USER:trading}
@@ -11,6 +17,9 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslmode=disable
     user: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
+
+redis:
+  enabled: ${REDIS_ENABLED:false}
 
 app:
   jwt-secret: ${JWT_SECRET:}
