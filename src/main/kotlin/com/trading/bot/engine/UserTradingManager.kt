@@ -2,6 +2,7 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.config.TradingProperties
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.notification.DiscordNotifier
@@ -33,6 +34,7 @@ class UserTradingManager(
     private val tradingProperties: TradingProperties,
     private val upbitWebClient: WebClient,
     private val userSecretsService: UserSecretsService,
+    private val upbitWebSocketClient: UpbitWebSocketClient,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -168,6 +170,7 @@ class UserTradingManager(
             userId = user.id!!,
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
+            webSocketClient = upbitWebSocketClient,
         )
     }
 

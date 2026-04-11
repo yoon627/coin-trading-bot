@@ -18,12 +18,64 @@ function logout() {
     });
 }
 
+// ── Real-time Price Stream ──
+let priceEventSource = null;
+
+function connectPriceStream() {
+    if (priceEventSource) priceEventSource.close();
+
+    const tickers = 'KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL';
+    priceEventSource = new EventSource(`/api/prices/stream?tickers=${tickers}`);
+
+    priceEventSource.addEventListener('price', (event) => {
+        try {
+            const price = JSON.parse(event.data);
+            updateRealtimePrice(price);
+        } catch (_) {}
+    });
+
+    priceEventSource.onerror = () => {
+        const indicator = document.getElementById('ws-status');
+        if (indicator) indicator.className = 'ws-indicator ws-disconnected';
+        // EventSource auto-reconnects
+    };
+
+    priceEventSource.onopen = () => {
+        const indicator = document.getElementById('ws-status');
+        if (indicator) indicator.className = 'ws-indicator ws-connected';
+    };
+}
+
+function updateRealtimePrice(price) {
+    // Update watchlist prices in real-time
+    const watchlistBody = document.getElementById('watchlist-body');
+    if (!watchlistBody) return;
+    const rows = watchlistBody.querySelectorAll('tr');
+    rows.forEach(row => {
+        const currencyCell = row.querySelector('td:first-child strong');
+        if (!currencyCell) return;
+        const currency = currencyCell.textContent;
+        const market = 'KRW-' + currency;
+        if (market === price.market) {
+            const priceCell = row.querySelectorAll('td')[1];
+            if (priceCell) priceCell.textContent = formatKRW(price.tradePrice);
+            const changeCell = row.querySelectorAll('td')[3];
+            if (changeCell) {
+                const pct = price.signedChangeRate * 100;
+                changeCell.className = pct > 0 ? 'pnl-positive' : pct < 0 ? 'pnl-negative' : 'pnl-zero';
+                changeCell.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+            }
+        }
+    });
+}
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('user-info').textContent = localStorage.getItem('username') || '';
     initUser();
     refreshAll();
-    setInterval(refreshAll, 5000);
+    connectPriceStream();
+    setInterval(refreshAll, 15000); // Reduced from 5s to 15s (prices come via SSE now)
 });
 
 async function initUser() {

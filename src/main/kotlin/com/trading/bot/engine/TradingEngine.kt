@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
@@ -26,6 +27,7 @@ class TradingEngine(
     private val userId: Long = 0,
     private val username: String = "",
     private val discordWebhookUrl: String? = null,
+    private val webSocketClient: UpbitWebSocketClient? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -94,13 +96,22 @@ class TradingEngine(
         }
     }
 
+    private fun getRealtimePrice(ticker: String): Double? {
+        val wsPrice = webSocketClient?.latestPrice(ticker)
+        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < 30_000) {
+            return wsPrice.tradePrice
+        }
+        return null
+    }
+
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
         val strategy = activeStrategy ?: return
 
         try {
-            val tickers = upbitClient.getTicker(ticker)
-            val currentPrice = tickers.firstOrNull()?.tradePrice ?: return
+            val currentPrice = getRealtimePrice(ticker)
+                ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
+                ?: return
 
             if (state.position) {
                 state.updatePeakPrice(currentPrice)
