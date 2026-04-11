@@ -9,6 +9,10 @@ spring:
     url: r2dbc:h2:mem:///trading
     username: sa
     password:
+  data:
+    redis:
+      host: ${REDIS_HOST:}
+      port: ${REDIS_PORT:6379}
   flyway:
     enabled: true
     url: jdbc:h2:mem:trading;DB_CLOSE_DELAY=-1
@@ -52,6 +56,11 @@ claude:
   sleep-start-hour: ${CLAUDE_SLEEP_START:23}
   sleep-end-hour: ${CLAUDE_SLEEP_END:7}
   tickers: ${CLAUDE_ANALYSIS_TICKERS:KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR}
+
+ml:
+  model-dir: ${ML_MODEL_DIR:./ml-models}
+  auto-load-on-startup: ${ML_AUTO_LOAD:true}
+  auto-retrain-enabled: ${ML_AUTO_RETRAIN:false}
 
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}
