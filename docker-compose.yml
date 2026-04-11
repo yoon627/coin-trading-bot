@@ -69,19 +69,21 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # --- Monitoring (optional, use: docker compose --profile monitoring up -d) ---
+
   prometheus:
     image: prom/prometheus:latest
+    profiles: ["monitoring"]
     ports:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheusdata:/prometheus
-    depends_on:
-      - app
     restart: unless-stopped
 
   loki:
     image: grafana/loki:2.9.0
+    profiles: ["monitoring"]
     ports:
       - "3100:3100"
     volumes:
@@ -92,6 +94,7 @@ services:
 
   promtail:
     image: grafana/promtail:2.9.0
+    profiles: ["monitoring"]
     volumes:
       - ./monitoring/promtail.yml:/etc/promtail/config.yml
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -102,6 +105,7 @@ services:
 
   grafana:
     image: grafana/grafana:latest
+    profiles: ["monitoring"]
     ports:
       - "3000:3000"
     environment:
