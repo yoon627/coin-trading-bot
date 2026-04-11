@@ -300,8 +300,11 @@ docker compose up -d postgres redis
 ### 전체 스택 실행 (모니터링 포함)
 
 ```bash
-# 앱 이미지 빌드 + 전체 서비스 실행
+# 앱 이미지 빌드 + 코어 서비스 실행
 docker compose up -d --build
+
+# 모니터링 포함 실행
+docker compose --profile monitoring up -d --build
 
 # 접속
 # App:       http://localhost:8080
