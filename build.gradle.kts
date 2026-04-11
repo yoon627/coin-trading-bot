@@ -5,6 +5,7 @@ plugins {
     id("io.spring.dependency-management") version "1.1.7"
     kotlin("jvm") version "2.1.0"
     kotlin("plugin.spring") version "2.1.0"
+    jacoco
 }
 
 group = "com.trading"
@@ -52,6 +53,13 @@ dependencies {
     implementation("com.github.haifengl:smile-core:3.1.1")
     implementation("com.github.haifengl:smile-kotlin:3.1.1")
 
+    // Redis
+    implementation("org.springframework.boot:spring-boot-starter-data-redis-reactive")
+
+    // Resilience
+    implementation("io.github.resilience4j:resilience4j-reactor:2.2.0")
+    implementation("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
+
     // Monitoring
     implementation("io.micrometer:micrometer-registry-prometheus")
 
@@ -60,6 +68,9 @@ dependencies {
     testImplementation("io.projectreactor:reactor-test")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("io.mockk:mockk:1.13.13")
+    testImplementation("com.ninja-squad:springmockk:4.0.2")
+    testImplementation("org.springframework.security:spring-security-test")
 }
 
 tasks.withType<KotlinCompile> {
@@ -70,4 +81,12 @@ tasks.withType<KotlinCompile> {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+    }
 }
