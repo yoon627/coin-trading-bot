@@ -11,11 +11,16 @@ services:
       TRADING_STRATEGY: ${TRADING_STRATEGY:-volatility_breakout}
       TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      ML_MODEL_DIR: /app/ml-models
+      ML_AUTO_RETRAIN: ${ML_AUTO_RETRAIN:-true}
+      REDIS_HOST: redis
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: trading
       DB_USER: trading
       DB_PASSWORD: trading
+    volumes:
+      - ml-models:/app/ml-models
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,6 +42,16 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -52,8 +67,11 @@ services:
       - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
 
 volumes:
   pgdata:
+  ml-models:
