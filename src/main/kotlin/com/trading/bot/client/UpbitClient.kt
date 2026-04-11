@@ -19,7 +19,7 @@ import java.time.Duration
 @Component
 class UpbitClient(
     private val upbitWebClient: WebClient,
-    private val authProvider: UpbitAuthProvider,
+    private val authProvider: UpbitAuthProvider?,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -27,7 +27,7 @@ class UpbitClient(
         return Mono.defer {
             upbitWebClient.get()
                 .uri("/v1/accounts")
-                .header("Authorization", authProvider.authorizationHeader())
+                .header("Authorization", authProvider!!.authorizationHeader())
                 .retrieve()
                 .onStatus(HttpStatusCode::isError) { handleError(it) }
                 .bodyToMono<List<Account>>()
@@ -70,7 +70,7 @@ class UpbitClient(
         return Mono.defer {
             upbitWebClient.post()
                 .uri("/v1/orders")
-                .header("Authorization", authProvider.authorizationHeader(queryString))
+                .header("Authorization", authProvider!!.authorizationHeader(queryString))
                 .bodyValue(params)
                 .retrieve()
                 .onStatus(HttpStatusCode::isError) { handleError(it) }
@@ -83,7 +83,7 @@ class UpbitClient(
         return Mono.defer {
             upbitWebClient.get()
                 .uri("/v1/order?uuid={uuid}", uuid)
-                .header("Authorization", authProvider.authorizationHeader(queryString))
+                .header("Authorization", authProvider!!.authorizationHeader(queryString))
                 .retrieve()
                 .onStatus(HttpStatusCode::isError) { handleError(it) }
                 .bodyToMono<Order>()
@@ -95,7 +95,7 @@ class UpbitClient(
         return Mono.defer {
             upbitWebClient.delete()
                 .uri("/v1/order?uuid={uuid}", uuid)
-                .header("Authorization", authProvider.authorizationHeader(queryString))
+                .header("Authorization", authProvider!!.authorizationHeader(queryString))
                 .retrieve()
                 .onStatus(HttpStatusCode::isError) { handleError(it) }
                 .bodyToMono<Order>()
