@@ -1,12 +1,13 @@
 services:
   app:
+    image: ghcr.io/yoon627/coin-trading-bot:${APP_VERSION:-latest}
     build: .
     ports:
       - "8080:8080"
     environment:
       SPRING_PROFILES_ACTIVE: prod
-      UPBIT_ACCESS_KEY: ${UPBIT_ACCESS_KEY}
-      UPBIT_SECRET_KEY: ${UPBIT_SECRET_KEY}
+      UPBIT_ACCESS_KEY: ${UPBIT_ACCESS_KEY:-}
+      UPBIT_SECRET_KEY: ${UPBIT_SECRET_KEY:-}
       TRADING_TICKERS: ${TRADING_TICKERS:-KRW-BTC}
       TRADING_STRATEGY: ${TRADING_STRATEGY:-volatility_breakout}
       TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
@@ -14,24 +15,36 @@ services:
       ML_MODEL_DIR: /app/ml-models
       ML_AUTO_RETRAIN: ${ML_AUTO_RETRAIN:-true}
       REDIS_HOST: redis
+      REDIS_ENABLED: "true"
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: trading
       DB_USER: trading
-      DB_PASSWORD: trading
+      DB_PASSWORD: ${DB_PASSWORD:-trading}
+      JWT_SECRET: ${JWT_SECRET:-}
+      APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:-}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      CLAUDE_ANALYSIS_ENABLED: ${CLAUDE_ANALYSIS_ENABLED:-false}
     volumes:
       - ml-models:/app/ml-models
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_DB: trading
       POSTGRES_USER: trading
-      POSTGRES_PASSWORD: trading
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-trading}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -41,16 +54,20 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:latest
@@ -58,20 +75,49 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheusdata:/prometheus
     depends_on:
       - app
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml
+      - lokidata:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - grafanadata:/var/lib/grafana
     depends_on:
       - prometheus
+      - loki
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  redisdata:
   ml-models:
+  prometheusdata:
+  lokidata:
+  grafanadata:
