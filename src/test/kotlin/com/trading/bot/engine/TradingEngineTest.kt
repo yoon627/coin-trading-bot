@@ -7,6 +7,7 @@ import com.trading.bot.domain.*
 import com.trading.bot.strategy.TradingStrategy
 import io.mockk.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -123,7 +124,7 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `falls back to REST when WebSocket price is stale`() = runTest {
+    fun `falls back to REST when WebSocket price is stale`() = runBlocking {
         val stalePrice = RealtimePrice(
             market = "KRW-BTC",
             tradePrice = 50000000.0,
@@ -138,7 +139,7 @@ class TradingEngineTest {
 
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
-        delay(1500)
+        delay(3000)
         engine.stop()
 
         coVerify(atLeast = 1) { upbitClient.getTicker("KRW-BTC") }
