@@ -48,18 +48,20 @@ class RateLimitFilterTest {
     }
 
     @Test
-    fun `filter skips auth endpoints`() {
+    fun `filter applies stricter rate limit to auth endpoints`() {
         val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
+        val valueOps = mockk<ReactiveValueOperations<String, String>>()
+        every { redisTemplate.opsForValue() } returns valueOps
+        every { valueOps.increment(any()) } returns Mono.just(11L) // exceeds auth limit (10)
         val filter = RateLimitFilter(redisTemplate)
         val exchange = MockServerWebExchange.from(
             MockServerHttpRequest.post("/api/auth/login").build()
         )
         val chain = mockk<WebFilterChain>()
-        every { chain.filter(exchange) } returns Mono.empty()
 
         filter.filter(exchange, chain).block()
 
-        io.mockk.verify { chain.filter(exchange) }
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, exchange.response.statusCode)
     }
 
     @Test
