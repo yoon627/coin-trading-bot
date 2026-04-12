@@ -16,26 +16,29 @@ class RateLimitFilter(
 
     companion object {
         private const val MAX_REQUESTS_PER_MINUTE = 60
+        private const val MAX_AUTH_REQUESTS_PER_MINUTE = 10
         private const val KEY_PREFIX = "ratelimit:"
         private val WINDOW = Duration.ofMinutes(1)
     }
 
     override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
-        // Skip rate limiting if Redis is not configured
         if (redisTemplate == null) return chain.filter(exchange)
 
         val path = exchange.request.path.value()
-        // Skip rate limiting for health/prometheus/static/auth endpoints
-        if (path.startsWith("/actuator") || path.startsWith("/api/auth") ||
+        // 정적 리소스와 헬스체크만 Rate Limiting 제외
+        if (path.startsWith("/actuator") ||
             path.startsWith("/css") || path.startsWith("/js") || path == "/" ||
             path.endsWith(".html") || path.startsWith("/api/prices")
         ) {
             return chain.filter(exchange)
         }
 
-        val userId = exchange.request.headers.getFirst("X-User-Id")
-            ?: exchange.request.remoteAddress?.address?.hostAddress
-            ?: "anonymous"
+        val clientIp = exchange.request.remoteAddress?.address?.hostAddress ?: "anonymous"
+        val isAuthEndpoint = path.startsWith("/api/auth")
+        val limit = if (isAuthEndpoint) MAX_AUTH_REQUESTS_PER_MINUTE else MAX_REQUESTS_PER_MINUTE
+
+        val userId = if (isAuthEndpoint) clientIp
+            else exchange.request.headers.getFirst("X-User-Id") ?: clientIp
 
         val key = "$KEY_PREFIX$userId:${System.currentTimeMillis() / 60000}"
 
@@ -43,11 +46,11 @@ class RateLimitFilter(
             .flatMap { count ->
                 if (count == 1L) {
                     redisTemplate.expire(key, WINDOW).then(chain.filter(exchange))
-                } else if (count <= MAX_REQUESTS_PER_MINUTE) {
+                } else if (count <= limit) {
                     chain.filter(exchange)
                 } else {
                     exchange.response.statusCode = HttpStatus.TOO_MANY_REQUESTS
-                    exchange.response.headers.set("X-RateLimit-Limit", MAX_REQUESTS_PER_MINUTE.toString())
+                    exchange.response.headers.set("X-RateLimit-Limit", limit.toString())
                     exchange.response.headers.set("Retry-After", "60")
                     exchange.response.setComplete()
                 }

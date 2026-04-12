@@ -47,9 +47,13 @@ class SecurityConfig(private val jwtAuthFilter: JwtAuthFilter) {
 
     private fun corsConfig(): org.springframework.web.cors.reactive.CorsConfigurationSource {
         val config = org.springframework.web.cors.CorsConfiguration()
-        config.allowedOriginPatterns = listOf("*")
+        // allowCredentials=true일 때 wildcard("*")는 보안 취약점 — 명시적 도메인만 허용
+        config.allowedOrigins = listOf(
+            "http://localhost:3000",
+            "http://localhost:8080",
+        )
         config.allowedMethods = listOf("GET", "POST", "PUT", "DELETE", "OPTIONS")
-        config.allowedHeaders = listOf("*")
+        config.allowedHeaders = listOf("Authorization", "Content-Type", "X-Requested-With")
         config.allowCredentials = true
         config.maxAge = 3600
         val source = org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource()
