@@ -48,8 +48,9 @@ class TradeRecordRepository(
         return r2dbcRepository.countByUserId(userId).awaitSingle()
     }
 
-    suspend fun findAllSells(): List<TradeRecordEntity> {
+    suspend fun findAllSells(limit: Int = 1000): List<TradeRecordEntity> {
         return r2dbcRepository.findBySideAndPnlPercentIsNotNull("SELL")
+            .take(limit.toLong())
             .collectList()
             .awaitSingle()
     }
