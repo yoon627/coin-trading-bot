@@ -14,6 +14,8 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import reactor.core.publisher.Mono
 import reactor.util.retry.Retry
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.time.Duration
 
 @Component
@@ -66,7 +68,9 @@ class UpbitClient(
 
     suspend fun placeOrder(request: OrderRequest): Order {
         val params = request.toParamMap()
-        val queryString = params.entries.joinToString("&") { "${it.key}=${it.value}" }
+        val queryString = params.entries.joinToString("&") {
+            "${URLEncoder.encode(it.key, StandardCharsets.UTF_8)}=${URLEncoder.encode(it.value, StandardCharsets.UTF_8)}"
+        }
         return Mono.defer {
             upbitWebClient.post()
                 .uri("/v1/orders")
@@ -113,7 +117,7 @@ class UpbitClient(
         return this.retryWhen(
             Retry.backoff(2, Duration.ofSeconds(1))
                 .filter { it is UpbitApiException && "429" in it.message.orEmpty() }
-                .doBeforeRetry { log.warn("Retrying Upbit API call (rate limit): attempt ${it.totalRetries() + 1}") }
+                .doBeforeRetry { log.warn("Retrying Upbit API call (rate limit): attempt {}", it.totalRetries() + 1) }
         )
     }
 }

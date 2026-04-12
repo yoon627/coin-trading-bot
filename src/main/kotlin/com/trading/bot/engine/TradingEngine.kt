@@ -141,7 +141,7 @@ class TradingEngine(
                 }
             }
         } catch (e: Exception) {
-            log.error("Error processing {} (user {}): {}", ticker, userId, e.message)
+            log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
         }
     }
 
