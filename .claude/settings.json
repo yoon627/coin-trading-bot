@@ -1,0 +1,35 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "TASKS=$(cat /tmp/claude-task-status 2>/dev/null || echo 'idle'); echo \"$TASKS\"",
+    "refreshInterval": 3,
+    "padding": 1
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are a Kotlin/Spring Boot code reviewer for a cryptocurrency trading bot. Review the code change that just happened. Check ONLY for these violations and respond ONLY if you find a problem:\n\n1. Wildcard imports (import x.y.*)\n2. Blocking calls in suspend functions (Thread.sleep, blocking I/O without withContext)\n3. Hardcoded secrets or API keys\n4. Missing error handling (bare throws without proper ResponseStatusException pattern)\n5. String concatenation in log messages instead of parameterized format (log.info(\"x\" + y) should be log.info(\"x {}\", y))\n6. Entity classes without 'Entity' suffix for @Table annotated classes\n\nIf the file is NOT a .kt file, respond with nothing.\nIf no violations found, respond with nothing.\nIf violations found, list them concisely with line references.\n\nTool input: $ARGUMENTS",
+            "statusMessage": "Reviewing code..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "STAGED=$(git diff --cached --name-only 2>/dev/null); if echo \"$STAGED\" | grep -qE '\\.env|\\.pem|credentials|secret'; then echo '{\"decision\":\"block\",\"reason\":\"보안 민감 파일(.env, .pem, credentials)이 커밋에 포함되어 있습니다.\"}'; fi",
+            "statusMessage": "Checking for sensitive files..."
+          }
+        ]
+      }
+    ]
+  }
+}
