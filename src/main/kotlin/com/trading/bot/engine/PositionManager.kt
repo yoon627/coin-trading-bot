@@ -17,6 +17,10 @@ class PositionManager(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    companion object {
+        private const val MIN_ORDER_AMOUNT_KRW = 5000.0
+    }
+
     suspend fun syncPosition(ticker: String, state: TradingState) {
         try {
             val accounts = upbitClient.getAccounts()
@@ -37,7 +41,7 @@ class PositionManager(
         try {
             val krwAccount = getKrwBalance()
             val investAmount = calculateInvestAmount(krwAccount)
-            if (investAmount < 5000) {
+            if (investAmount < MIN_ORDER_AMOUNT_KRW) {
                 log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
                 return null
             }

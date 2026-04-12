@@ -30,6 +30,11 @@ class TradingEngine(
     private val webSocketClient: UpbitWebSocketClient? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    companion object {
+        private const val ERROR_RETRY_DELAY_MS = 60_000L
+        private const val WS_PRICE_STALE_THRESHOLD_MS = 30_000L
+    }
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
     private val states = ConcurrentHashMap<String, TradingState>()
@@ -91,14 +96,14 @@ class TradingEngine(
                 delay(tradingProperties.intervalSeconds * 1000)
             } catch (e: Exception) {
                 log.error("Trading loop error (user {}): {}", userId, e.message, e)
-                delay(60_000)
+                delay(ERROR_RETRY_DELAY_MS)
             }
         }
     }
 
     private fun getRealtimePrice(ticker: String): Double? {
         val wsPrice = webSocketClient?.latestPrice(ticker)
-        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < 30_000) {
+        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < WS_PRICE_STALE_THRESHOLD_MS) {
             return wsPrice.tradePrice
         }
         return null
