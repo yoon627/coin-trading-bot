@@ -14,9 +14,9 @@ data class BacktestConfig(
     val maxLossPct: Double = 3.0,
     val kValue: Double = 0.5,
     val feeRate: Double = 0.0005,
-    val trailingStopPct: Double = 2.0,   // trailing stop: 고점 대비 N% 하락 시 매도
-    val maxHoldDays: Int = 7,            // 최대 보유일
-    val useMarketFilter: Boolean = true, // 하락장 필터
+    val trailingStopPct: Double = 2.0,
+    val maxHoldDays: Int = 7,
+    val useMarketFilter: Boolean = true,
 )
 
 data class BacktestTrade(
@@ -50,6 +50,12 @@ class BacktestEngine(
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
 ) {
+    companion object {
+        private const val MIN_CANDLES = 50
+        private const val INITIAL_BALANCE = 1_000_000.0
+        private const val MAX_PROFIT_FACTOR = 999.0
+    }
+
     suspend fun run(
         strategyName: String,
         candles: List<Candle>,
@@ -58,107 +64,129 @@ class BacktestEngine(
     ): BacktestResult? {
         val strategy = strategies.find { it.name == strategyName } ?: return null
         val chronological = candles.reversed()
-        if (chronological.size < 50) return null
+        if (chronological.size < MIN_CANDLES) return null
 
-        val trades = mutableListOf<BacktestTrade>()
-        var balance = 1_000_000.0
-        var peakBalance = balance
-        var maxDrawdown = 0.0
-        var position = false
-        var buyPrice = 0.0
-        var peakPrice = 0.0
-        var buyIndex = 0
-        val returns = mutableListOf<Double>()
+        val simulation = simulateTrades(strategy, chronological, config)
+        return buildResult(strategyName, ticker, chronological, simulation, config)
+    }
 
-        for (i in 50 until chronological.size) {
+    private suspend fun simulateTrades(
+        strategy: TradingStrategy,
+        chronological: List<Candle>,
+        config: BacktestConfig,
+    ): SimulationState {
+        val state = SimulationState()
+
+        for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
-            val window = chronological.subList(max(0, i - 49), i + 1).reversed()
+            val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
 
-            if (position) {
-                peakPrice = max(peakPrice, currentPrice)
-                val pnl = ((currentPrice - buyPrice) / buyPrice) * 100.0
-                val dropFromPeak = ((peakPrice - currentPrice) / peakPrice) * 100.0
-                val holdDays = i - buyIndex
-
-                val reason = when {
-                    pnl <= -config.maxLossPct -> "STOP_LOSS"
-                    dropFromPeak >= config.trailingStopPct && pnl > 0 -> "TRAILING_STOP"
-                    pnl >= config.takeProfitPct -> "TAKE_PROFIT"
-                    holdDays >= config.maxHoldDays -> "TIME_EXIT"
-                    else -> null
-                }
-
-                if (reason != null) {
-                    val netPnl = pnl - (config.feeRate * 2 * 100)
-                    balance *= (1 + netPnl / 100.0)
-                    trades.add(BacktestTrade(buyIndex, i, buyPrice, currentPrice, netPnl, holdDays, reason))
-                    returns.add(netPnl)
-                    peakBalance = max(peakBalance, balance)
-                    maxDrawdown = max(maxDrawdown, (peakBalance - balance) / peakBalance * 100)
-                    position = false
-                }
+            if (state.position) {
+                processExit(state, i, currentPrice, config)
             } else {
-                // Market regime filter: only buy if price > 50-day MA (uptrend)
-                if (config.useMarketFilter) {
-                    val ma50 = Indicators.calculateMa(window, min(50, window.size))
-                    if (ma50 > 0 && currentPrice < ma50) continue
-                }
-
-                val shouldBuy = strategy.shouldBuy(window, currentPrice, tradingProperties)
-                if (shouldBuy) {
-                    buyPrice = currentPrice
-                    peakPrice = currentPrice
-                    buyIndex = i
-                    position = true
-                }
+                processEntry(state, strategy, i, currentPrice, window, config)
             }
         }
 
-        // Close open position
-        if (position) {
-            val lastPrice = chronological.last().tradePrice
-            val pnl = ((lastPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
-            balance *= (1 + pnl / 100.0)
-            trades.add(BacktestTrade(buyIndex, chronological.size - 1, buyPrice, lastPrice, pnl, chronological.size - 1 - buyIndex, "END"))
-            returns.add(pnl)
+        closeOpenPosition(state, chronological, config)
+        return state
+    }
+
+    private fun processExit(state: SimulationState, index: Int, currentPrice: Double, config: BacktestConfig) {
+        state.peakPrice = max(state.peakPrice, currentPrice)
+        val pnl = ((currentPrice - state.buyPrice) / state.buyPrice) * 100.0
+        val dropFromPeak = ((state.peakPrice - currentPrice) / state.peakPrice) * 100.0
+        val holdDays = index - state.buyIndex
+
+        val reason = when {
+            pnl <= -config.maxLossPct -> "STOP_LOSS"
+            dropFromPeak >= config.trailingStopPct && pnl > 0 -> "TRAILING_STOP"
+            pnl >= config.takeProfitPct -> "TAKE_PROFIT"
+            holdDays >= config.maxHoldDays -> "TIME_EXIT"
+            else -> null
+        } ?: return
+
+        val netPnl = pnl - (config.feeRate * 2 * 100)
+        state.balance *= (1 + netPnl / 100.0)
+        state.trades.add(BacktestTrade(state.buyIndex, index, state.buyPrice, currentPrice, netPnl, holdDays, reason))
+        state.returns.add(netPnl)
+        state.peakBalance = max(state.peakBalance, state.balance)
+        state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
+        state.position = false
+    }
+
+    private suspend fun processEntry(
+        state: SimulationState,
+        strategy: TradingStrategy,
+        index: Int,
+        currentPrice: Double,
+        window: List<Candle>,
+        config: BacktestConfig,
+    ) {
+        if (config.useMarketFilter) {
+            val ma50 = Indicators.calculateMa(window, min(MIN_CANDLES, window.size))
+            if (ma50 > 0 && currentPrice < ma50) return
         }
 
-        // Buy & Hold baseline
-        val firstPrice = chronological[50].tradePrice
+        if (strategy.shouldBuy(window, currentPrice, tradingProperties)) {
+            state.buyPrice = currentPrice
+            state.peakPrice = currentPrice
+            state.buyIndex = index
+            state.position = true
+        }
+    }
+
+    private fun closeOpenPosition(state: SimulationState, chronological: List<Candle>, config: BacktestConfig) {
+        if (!state.position) return
+        val lastPrice = chronological.last().tradePrice
+        val pnl = ((lastPrice - state.buyPrice) / state.buyPrice) * 100.0 - (config.feeRate * 2 * 100)
+        state.balance *= (1 + pnl / 100.0)
+        state.trades.add(BacktestTrade(state.buyIndex, chronological.size - 1, state.buyPrice, lastPrice, pnl, chronological.size - 1 - state.buyIndex, "END"))
+        state.returns.add(pnl)
+    }
+
+    private fun buildResult(
+        strategyName: String,
+        ticker: String,
+        chronological: List<Candle>,
+        state: SimulationState,
+        config: BacktestConfig,
+    ): BacktestResult {
+        val firstPrice = chronological[MIN_CANDLES].tradePrice
         val lastPrice = chronological.last().tradePrice
         val buyAndHold = ((lastPrice - firstPrice) / firstPrice) * 100.0
 
-        val winTrades = trades.count { it.pnlPercent > 0 }
-        val lossTrades = trades.count { it.pnlPercent <= 0 }
-        val totalReturn = ((balance - 1_000_000.0) / 1_000_000.0) * 100.0
+        val winTrades = state.trades.count { it.pnlPercent > 0 }
+        val lossTrades = state.trades.count { it.pnlPercent <= 0 }
+        val totalReturn = ((state.balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100.0
 
-        val grossProfit = returns.filter { it > 0 }.sum()
-        val grossLoss = returns.filter { it < 0 }.map { -it }.sum()
-        val profitFactor = if (grossLoss > 0) grossProfit / grossLoss else if (grossProfit > 0) 999.0 else 0.0
+        val grossProfit = state.returns.filter { it > 0 }.sum()
+        val grossLoss = state.returns.filter { it < 0 }.map { -it }.sum()
+        val profitFactor = if (grossLoss > 0) grossProfit / grossLoss else if (grossProfit > 0) MAX_PROFIT_FACTOR else 0.0
 
-        val avgReturn = if (returns.isNotEmpty()) returns.average() else 0.0
-        val stdDev = if (returns.size > 1) {
-            val mean = returns.average()
-            sqrt(returns.map { (it - mean) * (it - mean) }.average())
+        val avgReturn = if (state.returns.isNotEmpty()) state.returns.average() else 0.0
+        val stdDev = if (state.returns.size > 1) {
+            val mean = state.returns.average()
+            sqrt(state.returns.map { (it - mean) * (it - mean) }.average())
         } else 0.0
         val sharpe = if (stdDev > 0) avgReturn / stdDev else 0.0
-        val avgHold = if (trades.isNotEmpty()) trades.map { it.holdDays }.average() else 0.0
+        val avgHold = if (state.trades.isNotEmpty()) state.trades.map { it.holdDays }.average() else 0.0
 
         return BacktestResult(
             strategyName = strategyName,
             ticker = ticker,
-            totalTrades = trades.size,
+            totalTrades = state.trades.size,
             winTrades = winTrades,
             lossTrades = lossTrades,
-            winRate = if (trades.isNotEmpty()) winTrades.toDouble() / trades.size * 100.0 else 0.0,
+            winRate = if (state.trades.isNotEmpty()) winTrades.toDouble() / state.trades.size * 100.0 else 0.0,
             totalReturnPct = totalReturn,
             avgReturnPct = avgReturn,
-            maxDrawdownPct = maxDrawdown,
+            maxDrawdownPct = state.maxDrawdown,
             sharpeRatio = sharpe,
-            profitFactor = min(profitFactor, 999.0),
+            profitFactor = min(profitFactor, MAX_PROFIT_FACTOR),
             buyAndHoldPct = buyAndHold,
             avgHoldDays = avgHold,
-            trades = trades,
+            trades = state.trades,
         )
     }
 
@@ -171,4 +199,16 @@ class BacktestEngine(
             run(strategy.name, candles, ticker, config)
         }
     }
+
+    private class SimulationState(
+        var balance: Double = INITIAL_BALANCE,
+        var peakBalance: Double = INITIAL_BALANCE,
+        var maxDrawdown: Double = 0.0,
+        var position: Boolean = false,
+        var buyPrice: Double = 0.0,
+        var peakPrice: Double = 0.0,
+        var buyIndex: Int = 0,
+        val trades: MutableList<BacktestTrade> = mutableListOf(),
+        val returns: MutableList<Double> = mutableListOf(),
+    )
 }
