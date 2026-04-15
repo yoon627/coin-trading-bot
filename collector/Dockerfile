@@ -7,15 +7,15 @@ COPY bot/build.gradle.kts ./bot/
 COPY collector/build.gradle.kts ./collector/
 RUN gradle dependencies --no-daemon || true
 COPY common ./common
-COPY bot ./bot
-RUN gradle :bot:bootJar --no-daemon -x test
+COPY collector ./collector
+RUN gradle :collector:bootJar --no-daemon -x test
 
 FROM eclipse-temurin:21-jre-alpine
 RUN apk add --no-cache curl
 WORKDIR /app
-COPY --from=build /app/bot/build/libs/*.jar app.jar
-EXPOSE 8080
+COPY --from=build /app/collector/build/libs/*.jar app.jar
+EXPOSE 8081
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8080/actuator/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8081/actuator/health || exit 1
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

@@ -25,12 +25,15 @@ services:
       APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:-}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
       CLAUDE_ANALYSIS_ENABLED: ${CLAUDE_ANALYSIS_ENABLED:-false}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     volumes:
       - ml-models:/app/ml-models
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     restart: unless-stopped
     logging:
@@ -117,6 +120,28 @@ services:
       - prometheus
       - loki
     restart: unless-stopped
+
+  collector:
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COLLECTOR_UPBIT_ENABLED: "true"
+      COLLECTOR_UPBIT_MARKETS: ${COLLECTOR_UPBIT_MARKETS:-KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL}
+      COLLECTOR_BINANCE_ENABLED: "true"
+      COLLECTOR_BINANCE_MARKETS: ${COLLECTOR_BINANCE_MARKETS:-BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # --- Kafka (event backbone) ---
 
