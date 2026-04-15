@@ -23,6 +23,18 @@ class WebClientConfig {
     }
 
     @Bean
+    fun kisWebClient(): WebClient {
+        val httpClient = HttpClient.create()
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
+            .responseTimeout(Duration.ofSeconds(15))
+        return WebClient.builder()
+            .baseUrl("https://openapi.koreainvestment.com:9443")
+            .clientConnector(ReactorClientHttpConnector(httpClient))
+            .codecs { it.defaultCodecs().maxInMemorySize(1024 * 1024) }
+            .build()
+    }
+
+    @Bean
     fun binanceWebClient(): WebClient {
         val httpClient = HttpClient.create()
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)

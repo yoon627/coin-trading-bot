@@ -8,6 +8,7 @@ object MarketPair {
     fun normalize(exchange: Exchange, rawSymbol: String): String = when (exchange) {
         Exchange.UPBIT -> fromUpbitFormat(rawSymbol)
         Exchange.BINANCE -> fromBinanceFormat(rawSymbol)
+        Exchange.KIS -> fromKisFormat(rawSymbol)
         else -> rawSymbol
     }
 
@@ -25,6 +26,26 @@ object MarketPair {
         val parts = symbol.split("-")
         if (parts.size != 2) return symbol
         return "${parts[1]}/${parts[0]}"
+    }
+
+    /**
+     * KIS format: "AAPL" (ticker only) or "NAS:AAPL" (exchange:ticker)
+     * Normalized: "AAPL/USD"
+     */
+    fun toKisFormat(normalized: String): String {
+        val (base, _) = normalized.split("/")
+        return base
+    }
+
+    fun toKisExchangeCode(normalized: String): String {
+        // Default to NASDAQ; caller can override based on actual exchange
+        return "NAS"
+    }
+
+    private fun fromKisFormat(symbol: String): String {
+        // "NAS:AAPL" → "AAPL/USD", "AAPL" → "AAPL/USD"
+        val ticker = if (symbol.contains(":")) symbol.substringAfter(":") else symbol
+        return "$ticker/USD"
     }
 
     private fun fromBinanceFormat(symbol: String): String {
