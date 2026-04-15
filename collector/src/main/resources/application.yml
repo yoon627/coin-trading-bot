@@ -14,6 +14,11 @@ collector:
   binance:
     enabled: true
     markets: BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT
+  kis:
+    enabled: ${COLLECTOR_KIS_ENABLED:false}
+    markets: ${COLLECTOR_KIS_MARKETS:AAPL,MSFT,GOOGL,AMZN,TSLA,NVDA,META}
+    app-key: ${KIS_APP_KEY:}
+    app-secret: ${KIS_APP_SECRET:}
 
 logging:
   level:
