@@ -11,6 +11,7 @@ data class BotConfigEntity(
     val exchange: String,
     val market: String,
     val strategy: String,
+    val tradeMode: String = "SWING",
     val parameters: String = "{}",
     val enabled: Boolean = true,
     val createdAt: Instant = Instant.now(),
