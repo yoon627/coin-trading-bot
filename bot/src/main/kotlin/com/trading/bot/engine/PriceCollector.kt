@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
