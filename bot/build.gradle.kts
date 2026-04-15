@@ -39,6 +39,9 @@ dependencies {
     implementation("com.github.haifengl:smile-core:3.1.1")
     implementation("com.github.haifengl:smile-kotlin:3.1.1")
 
+    // Kafka
+    implementation("org.springframework.kafka:spring-kafka")
+
     // Redis
     implementation("org.springframework.boot:spring-boot-starter-data-redis-reactive")
 
