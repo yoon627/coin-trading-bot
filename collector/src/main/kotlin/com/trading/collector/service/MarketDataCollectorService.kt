@@ -2,7 +2,9 @@ package com.trading.collector.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.collector.config.CollectorProperties
+import com.trading.collector.config.ExchangeConfig
 import com.trading.collector.exchange.ExchangeClient
+import com.trading.common.domain.AssetType
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
@@ -76,7 +78,8 @@ class MarketDataCollectorService(
         while (true) {
             for (market in markets) {
                 try {
-                    val candles = client.getCandles(market, CandleInterval.M1, 1)
+                    val candleInterval = if (client.assetType == AssetType.STOCK) CandleInterval.D1 else CandleInterval.M1
+                    val candles = client.getCandles(market, candleInterval, 1)
                     for (candle in candles) {
                         val key = "${candle.exchange}:${candle.market}:${candle.interval.label}"
                         val value = objectMapper.writeValueAsString(candle)
@@ -90,9 +93,13 @@ class MarketDataCollectorService(
         }
     }
 
-    private fun getConfigFor(exchange: Exchange) = when (exchange) {
+    private fun getConfigFor(exchange: Exchange): ExchangeConfig? = when (exchange) {
         Exchange.UPBIT -> collectorProperties.upbit
         Exchange.BINANCE -> collectorProperties.binance
+        Exchange.KIS -> ExchangeConfig(
+            enabled = collectorProperties.kis.enabled,
+            markets = collectorProperties.kis.markets,
+        )
         else -> null
     }
 }
