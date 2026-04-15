@@ -5,6 +5,7 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.config.TradingProperties
 import com.trading.bot.config.UpbitProperties
+import com.trading.bot.kafka.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
 import com.trading.bot.persistence.entity.BotStateEntity
@@ -35,6 +36,7 @@ class UserTradingManager(
     private val upbitWebClient: WebClient,
     private val userSecretsService: UserSecretsService,
     private val upbitWebSocketClient: UpbitWebSocketClient,
+    private val marketDataStore: MarketDataStore,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -43,6 +45,10 @@ class UserTradingManager(
 
     @PostConstruct
     fun restoreOnStartup() {
+        if (!tradingProperties.autoStart) {
+            log.info("Auto-start disabled. Skipping bot restoration.")
+            return
+        }
         scope.launch {
             try {
                 val states = botStateRepository.findByRunningTrue().collectList().awaitSingle()
@@ -171,6 +177,7 @@ class UserTradingManager(
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
             webSocketClient = upbitWebSocketClient,
+            marketDataStore = marketDataStore,
         )
     }
 

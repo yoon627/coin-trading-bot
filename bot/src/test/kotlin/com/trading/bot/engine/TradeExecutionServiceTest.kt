@@ -4,7 +4,9 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.Ticker
+import com.trading.bot.kafka.TradeEventProducer
 import com.trading.bot.notification.DiscordNotifier
+import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeRecordEntity
 import io.mockk.coEvery
@@ -18,16 +20,20 @@ import org.junit.jupiter.api.Test
 class TradeExecutionServiceTest {
 
     private lateinit var tradeRecordRepository: TradeRecordRepository
+    private lateinit var tradeExecutionRepository: TradeExecutionRepository
     private lateinit var discordNotifier: DiscordNotifier
+    private lateinit var tradeEventProducer: TradeEventProducer
     private lateinit var service: TradeExecutionService
     private lateinit var client: UpbitClient
 
     @BeforeEach
     fun setup() {
         tradeRecordRepository = mockk(relaxed = true)
+        tradeExecutionRepository = mockk(relaxed = true)
         discordNotifier = mockk(relaxed = true)
+        tradeEventProducer = mockk(relaxed = true)
         client = mockk()
-        service = TradeExecutionService(tradeRecordRepository, discordNotifier)
+        service = TradeExecutionService(tradeRecordRepository, tradeExecutionRepository, discordNotifier, tradeEventProducer)
     }
 
     @Test

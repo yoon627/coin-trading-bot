@@ -5,8 +5,11 @@ import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import com.trading.bot.kafka.TradeEventProducer
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
+import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.entity.TradeExecutionEntity
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import kotlin.math.floor
@@ -14,7 +17,9 @@ import kotlin.math.floor
 @Service
 class TradeExecutionService(
     private val tradeRecordRepository: TradeRecordRepository,
+    private val tradeExecutionRepository: TradeExecutionRepository,
     private val discordNotifier: DiscordNotifier,
+    private val tradeEventProducer: TradeEventProducer,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -147,7 +152,7 @@ class TradeExecutionService(
     }
 
     /**
-     * TradingEngine에서 사용 - 이미 만들어진 TradeRecord를 저장 + 알림
+     * TradingEngine에서 사용 - 이미 만들어진 TradeRecord를 저장 + 알림 + Kafka 발행
      */
     suspend fun saveAndNotify(
         record: TradeRecord,
@@ -156,11 +161,43 @@ class TradeExecutionService(
         discordWebhookUrl: String?,
     ) {
         tradeRecordRepository.save(record)
+
+        // Publish to new trade_executions table + Kafka
+        val executionEntity = TradeExecutionEntity(
+            userId = record.userId ?: 0,
+            exchange = "UPBIT",
+            market = record.ticker,
+            side = record.side.name,
+            price = record.price,
+            volume = record.volume,
+            totalAmount = record.totalAmount,
+            pnlPercent = record.pnlPercent,
+            reason = record.reason,
+            strategy = record.strategy,
+        )
+        tradeExecutionRepository.save(executionEntity).subscribe { saved ->
+            tradeEventProducer.publishTradeExecution(saved)
+        }
+
         val krwBalance = try {
             client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
         } catch (_: Exception) {
             null
         }
+
+        // Publish notification to Kafka
+        tradeEventProducer.publishNotification(
+            userId = record.userId ?: 0,
+            notification = mapOf(
+                "type" to "trade",
+                "record" to record,
+                "krwBalance" to (krwBalance ?: 0.0),
+                "webhookUrl" to (discordWebhookUrl ?: ""),
+                "username" to (username ?: ""),
+            ),
+        )
+
+        // Also send directly (for backward compatibility)
         discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
     }
 
