@@ -6,7 +6,11 @@ import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
+import com.trading.bot.kafka.MarketDataStore
 import com.trading.bot.strategy.TradingStrategy
+import com.trading.common.domain.CandleInterval
+import com.trading.common.domain.Exchange
+import com.trading.common.domain.MarketPair
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +32,8 @@ class TradingEngine(
     private val username: String = "",
     private val discordWebhookUrl: String? = null,
     private val webSocketClient: UpbitWebSocketClient? = null,
+    private val marketDataStore: MarketDataStore? = null,
+    private val exchange: Exchange = Exchange.UPBIT,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -102,6 +108,12 @@ class TradingEngine(
     }
 
     private fun getRealtimePrice(ticker: String): Double? {
+        // Prefer Kafka-backed MarketDataStore
+        val normalizedMarket = MarketPair.normalize(exchange, ticker)
+        val kafkaPrice = marketDataStore?.getLatestPrice(exchange, normalizedMarket)
+        if (kafkaPrice != null) return kafkaPrice
+
+        // Fallback to WebSocket
         val wsPrice = webSocketClient?.latestPrice(ticker)
         if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < WS_PRICE_STALE_THRESHOLD_MS) {
             return wsPrice.tradePrice
@@ -137,8 +149,14 @@ class TradingEngine(
                 }
             }
 
-            val candles = upbitClient.getDayCandles(ticker, 30)
-            val shouldBuy = strategy.shouldBuy(candles, currentPrice, tradingProperties)
+            val normalizedMarket = MarketPair.normalize(exchange, ticker)
+            val kafkaCandles = marketDataStore?.getCandles(exchange, normalizedMarket, CandleInterval.D1, 30)
+            val shouldBuy = if (kafkaCandles != null && kafkaCandles.size >= 2) {
+                strategy.shouldBuyNormalized(kafkaCandles, currentPrice, tradingProperties)
+            } else {
+                val candles = upbitClient.getDayCandles(ticker, 30)
+                strategy.shouldBuy(candles, currentPrice, tradingProperties)
+            }
             if (shouldBuy) {
                 val buyRecord = positionManager.buy(ticker, state, currentPrice, strategy.name)
                 if (buyRecord != null) {
