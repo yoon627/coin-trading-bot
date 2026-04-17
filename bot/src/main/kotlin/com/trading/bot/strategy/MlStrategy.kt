@@ -1,8 +1,10 @@
 package com.trading.bot.strategy
 
-import com.trading.bot.config.TradingProperties
-import com.trading.bot.domain.Candle
 import com.trading.bot.ml.MlModelService
+import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Candle
+import com.trading.common.strategy.Indicators
+import com.trading.common.strategy.TradingStrategy
 import org.springframework.stereotype.Component
 
 @Component

@@ -1,8 +1,12 @@
 package com.trading.bot.ml
 
 import com.trading.bot.config.MlProperties
-import com.trading.bot.domain.Candle
+import com.trading.common.domain.Candle
 import jakarta.annotation.PostConstruct
+import java.io.File
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import smile.classification.GradientTreeBoost
@@ -16,10 +20,6 @@ import smile.data.type.StructType
 import smile.validation.metric.Accuracy
 import smile.validation.metric.Precision
 import smile.validation.metric.Recall
-import java.io.File
-import java.io.ObjectInputStream
-import java.io.ObjectOutputStream
-import java.util.concurrent.ConcurrentHashMap
 
 data class ModelMetrics(
     val accuracy: Double,

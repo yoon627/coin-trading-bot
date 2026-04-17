@@ -2,9 +2,9 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitWebSocketClient
-import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.*
-import com.trading.bot.strategy.TradingStrategy
+import com.trading.common.config.TradingProperties
+import com.trading.common.strategy.TradingStrategy
 import io.mockk.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
