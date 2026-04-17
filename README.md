@@ -281,7 +281,7 @@ coin-trading-bot/
 ### 테스트
 
 ```bash
-# 55 tests (Testcontainers DB 테스트는 기본 skip)
+# 14 unit tests + 1 opt-in Testcontainers 통합 테스트
 JAVA_HOME=... ./gradlew :research:test
 
 # DB 통합 테스트 opt-in
