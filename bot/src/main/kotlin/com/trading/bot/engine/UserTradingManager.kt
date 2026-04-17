@@ -3,27 +3,27 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitWebSocketClient
-import com.trading.bot.config.TradingProperties
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.kafka.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
-import com.trading.bot.strategy.TradingStrategy
+import com.trading.common.config.TradingProperties
+import com.trading.common.strategy.TradingStrategy
 import jakarta.annotation.PostConstruct
+import java.time.LocalDateTime
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
-import com.trading.bot.persistence.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
-import java.time.LocalDateTime
-import java.util.concurrent.ConcurrentHashMap
 
 @Service
 class UserTradingManager(
