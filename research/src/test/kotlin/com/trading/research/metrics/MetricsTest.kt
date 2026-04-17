@@ -62,4 +62,51 @@ class MetricsTest {
         assertTrue(var95 <= -0.095)
         assertTrue(var95 >= -0.101)
     }
+
+    @Test
+    fun `historicalCvar averages the tail beyond VaR threshold`() {
+        val rets = (1..100).map { it * -0.001 } // -0.001 .. -0.1
+        // At percentile=0.95, cutoff=5, take worst 5 → avg of {-0.1,-0.099,-0.098,-0.097,-0.096}
+        val cvar = Metrics.historicalCvar(rets, 0.95)
+        closeTo(cvar, -0.098, tol = 1e-9)
+    }
+
+    @Test
+    fun `historicalCvar rejects out-of-range percentile`() {
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            Metrics.historicalCvar(listOf(-0.01, 0.02), 0.3)
+        }
+    }
+
+    @Test
+    fun `calmar divides annualized return by max drawdown`() {
+        closeTo(Metrics.calmar(annualizedReturn = 0.2, maxDd = 0.1), 2.0)
+        closeTo(Metrics.calmar(annualizedReturn = 0.5, maxDd = 0.0), 0.0) // guard
+    }
+
+    @Test
+    fun `winRate fraction of positive trades`() {
+        closeTo(Metrics.winRate(listOf(10.0, -5.0, 20.0, -3.0, -1.0)), 0.4)
+        closeTo(Metrics.winRate(emptyList()), 0.0)
+    }
+
+    @Test
+    fun `profitFactor returns ratio of gross profit to gross loss`() {
+        // wins: 30.0; losses: 20.0 → 1.5
+        closeTo(Metrics.profitFactor(listOf(20.0, 10.0, -15.0, -5.0)), 1.5)
+    }
+
+    @Test
+    fun `profitFactor caps to finite sentinel when no losses`() {
+        // All-winners must not return Infinity — JSON-unsafe. Returns PROFIT_FACTOR_CAP (999.0).
+        val allWins = Metrics.profitFactor(listOf(10.0, 20.0, 30.0))
+        closeTo(allWins, 999.0)
+        assertTrue(allWins.isFinite(), "profitFactor must be finite for JSON serialization")
+    }
+
+    @Test
+    fun `profitFactor returns 0 for empty or all-zero input`() {
+        closeTo(Metrics.profitFactor(emptyList()), 0.0)
+        closeTo(Metrics.profitFactor(listOf(0.0, 0.0)), 0.0)
+    }
 }
