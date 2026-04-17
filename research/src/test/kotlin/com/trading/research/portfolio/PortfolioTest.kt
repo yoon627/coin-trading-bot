@@ -42,4 +42,13 @@ class PortfolioTest {
         assertEquals(6_000.0, p.positions[asset]!!.marketValue)
         assertEquals(cashBefore + 6_000.0, p.totalEquity)
     }
+
+    @Test
+    fun `sell rejects oversell that exceeds open quantity`() {
+        val p = Portfolio(initialCash = 10_000.0)
+        p.applyFill(Fill(asset, OrderSide.BUY, 0.1, 50_000.0, 5.0, "entry"))
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            p.applyFill(Fill(asset, OrderSide.SELL, 0.2, 55_000.0, 5.5, "oversell"))
+        }
+    }
 }
