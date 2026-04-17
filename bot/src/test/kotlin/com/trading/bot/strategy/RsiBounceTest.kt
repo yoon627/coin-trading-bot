@@ -1,7 +1,8 @@
 package com.trading.bot.strategy
 
-import com.trading.bot.config.TradingProperties
-import com.trading.bot.domain.Candle
+import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Candle
+import com.trading.common.strategy.RsiBounce
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test

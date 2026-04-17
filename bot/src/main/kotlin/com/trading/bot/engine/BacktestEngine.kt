@@ -1,9 +1,9 @@
 package com.trading.bot.engine
 
-import com.trading.bot.config.TradingProperties
-import com.trading.bot.domain.Candle
-import com.trading.bot.strategy.Indicators
-import com.trading.bot.strategy.TradingStrategy
+import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Candle
+import com.trading.common.strategy.Indicators
+import com.trading.common.strategy.TradingStrategy
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt

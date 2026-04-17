@@ -1,6 +1,6 @@
-package com.trading.bot.strategy
+package com.trading.common.strategy
 
-import com.trading.bot.domain.Candle
+import com.trading.common.domain.Candle
 import kotlin.math.max
 import kotlin.math.sqrt
 

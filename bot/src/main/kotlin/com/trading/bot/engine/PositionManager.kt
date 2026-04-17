@@ -1,15 +1,15 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
-import org.slf4j.LoggerFactory
+import com.trading.common.config.TradingProperties
 import kotlin.math.floor
+import org.slf4j.LoggerFactory
 
 class PositionManager(
     private val upbitClient: UpbitClient,
