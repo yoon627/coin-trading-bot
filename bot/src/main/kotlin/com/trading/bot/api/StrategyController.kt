@@ -1,14 +1,14 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
-import com.trading.bot.config.TradingProperties
 import com.trading.bot.engine.BacktestConfig
 import com.trading.bot.engine.BacktestEngine
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.security.UserSecretsService
-import com.trading.bot.strategy.TradingStrategy
+import com.trading.common.config.TradingProperties
+import com.trading.common.strategy.TradingStrategy
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping

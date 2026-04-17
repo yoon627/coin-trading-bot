@@ -1,4 +1,4 @@
-package com.trading.bot.domain
+package com.trading.common.domain
 
 import com.fasterxml.jackson.annotation.JsonProperty
 
