@@ -32,14 +32,16 @@ class Portfolio(initialCash: Double) {
     var cash: Double = initialCash
         private set
 
-    val positions: MutableMap<Asset, Position> = mutableMapOf()
+    private val _positions: MutableMap<Asset, Position> = mutableMapOf()
+    val positions: Map<Asset, Position> get() = _positions
 
     var totalEquity: Double = initialCash
         private set
 
-    val realizedPnlByAsset: MutableMap<Asset, Double> = mutableMapOf()
+    private val _realizedPnlByAsset: MutableMap<Asset, Double> = mutableMapOf()
+    val realizedPnlByAsset: Map<Asset, Double> get() = _realizedPnlByAsset
 
-    fun hasPosition(asset: Asset): Boolean = positions[asset]?.let { it.quantity != 0.0 } ?: false
+    fun hasPosition(asset: Asset): Boolean = _positions[asset]?.let { it.quantity != 0.0 } ?: false
 
     fun applyFill(fill: Fill) {
         when (fill.side) {
@@ -51,9 +53,9 @@ class Portfolio(initialCash: Double) {
     private fun applyBuy(fill: Fill) {
         val notional = fill.quantity * fill.fillPrice
         cash -= (notional + fill.fee)
-        val existing = positions[fill.asset]
+        val existing = _positions[fill.asset]
         if (existing == null) {
-            positions[fill.asset] = Position(
+            _positions[fill.asset] = Position(
                 asset = fill.asset,
                 quantity = fill.quantity,
                 avgEntryPrice = fill.fillPrice,
@@ -69,19 +71,22 @@ class Portfolio(initialCash: Double) {
     }
 
     private fun applySell(fill: Fill) {
+        val existing = _positions[fill.asset]
+            ?: error("sell without open position on ${fill.asset}")
+        require(fill.quantity <= existing.quantity + CLOSED_POSITION_EPS) {
+            "oversell on ${fill.asset}: fill.qty=${fill.quantity} > position.qty=${existing.quantity}"
+        }
         val notional = fill.quantity * fill.fillPrice
         cash += (notional - fill.fee)
-        val existing = positions[fill.asset]
-            ?: error("sell without open position on ${fill.asset}")
         val realized = (fill.fillPrice - existing.avgEntryPrice) * fill.quantity - fill.fee
-        realizedPnlByAsset.merge(fill.asset, realized) { previous, delta -> previous + delta }
+        _realizedPnlByAsset.merge(fill.asset, realized) { previous, delta -> previous + delta }
         existing.quantity -= fill.quantity
-        if (existing.quantity <= CLOSED_POSITION_EPS) positions.remove(fill.asset)
+        if (existing.quantity <= CLOSED_POSITION_EPS) _positions.remove(fill.asset)
     }
 
     fun markToMarket(lastPrices: Map<Asset, Double>) {
         var marketValueSum = 0.0
-        for ((asset, position) in positions) {
+        for ((asset, position) in _positions) {
             lastPrices[asset]?.let { position.updateMarket(it) }
             marketValueSum += position.marketValue
         }
