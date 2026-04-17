@@ -1,6 +1,6 @@
 package com.trading.bot.ml
 
-import com.trading.bot.domain.Candle
+import com.trading.common.domain.Candle
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import smile.classification.gbm
