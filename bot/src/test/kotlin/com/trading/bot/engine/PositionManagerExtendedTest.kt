@@ -1,8 +1,8 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.config.TradingProperties
 import com.trading.bot.domain.*
+import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest

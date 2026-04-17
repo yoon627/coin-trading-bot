@@ -1,7 +1,7 @@
 package com.trading.bot.ml
 
-import com.trading.bot.domain.Candle
-import com.trading.bot.strategy.Indicators
+import com.trading.common.domain.Candle
+import com.trading.common.strategy.Indicators
 import kotlin.math.ln
 import kotlin.math.max
 
