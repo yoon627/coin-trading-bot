@@ -7,6 +7,13 @@ object Metrics {
     // Epsilon guard for near-zero floating-point stdev comparisons (catches FP drift on constant inputs).
     private const val STDEV_EPS = 1e-12
 
+    // JSON-safe sentinel for profit factor when all trades are winners (grossLoss == 0).
+    // Double.POSITIVE_INFINITY serializes to non-RFC JSON token; downstream report pipelines break.
+    private const val PROFIT_FACTOR_CAP = 999.0
+
+    private const val MIN_VAR_PERCENTILE = 0.5
+    private const val MAX_VAR_PERCENTILE = 0.9999
+
     fun periodReturns(equity: List<Double>): List<Double> {
         if (equity.size < 2) return emptyList()
         return equity.zipWithNext { prev, curr -> (curr - prev) / prev }
@@ -49,7 +56,9 @@ object Metrics {
 
     /** percentile: 0.95 → 5% tail (loss). Returns negative for loss. */
     fun historicalVar(returns: List<Double>, percentile: Double): Double {
-        require(percentile in 0.5..0.9999) { "percentile in (0.5, 1)" }
+        require(percentile in MIN_VAR_PERCENTILE..MAX_VAR_PERCENTILE) {
+            "percentile must be in [$MIN_VAR_PERCENTILE, $MAX_VAR_PERCENTILE]"
+        }
         if (returns.isEmpty()) return 0.0
         val sorted = returns.sorted()
         val idx = ((1.0 - percentile) * sorted.size).toInt().coerceAtLeast(0)
@@ -57,6 +66,9 @@ object Metrics {
     }
 
     fun historicalCvar(returns: List<Double>, percentile: Double): Double {
+        require(percentile in MIN_VAR_PERCENTILE..MAX_VAR_PERCENTILE) {
+            "percentile must be in [$MIN_VAR_PERCENTILE, $MAX_VAR_PERCENTILE]"
+        }
         if (returns.isEmpty()) return 0.0
         val sorted = returns.sorted()
         val cutoff = ((1.0 - percentile) * sorted.size).toInt().coerceAtLeast(1)
@@ -70,7 +82,7 @@ object Metrics {
     fun profitFactor(tradePnls: List<Double>): Double {
         val grossProfit = tradePnls.filter { it > 0 }.sum()
         val grossLoss = -tradePnls.filter { it < 0 }.sum()
-        return if (grossLoss == 0.0) if (grossProfit > 0) Double.POSITIVE_INFINITY else 0.0
+        return if (grossLoss == 0.0) if (grossProfit > 0) PROFIT_FACTOR_CAP else 0.0
         else grossProfit / grossLoss
     }
 }
