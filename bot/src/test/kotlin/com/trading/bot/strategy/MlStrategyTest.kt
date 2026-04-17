@@ -1,9 +1,10 @@
 package com.trading.bot.strategy
 
-import com.trading.bot.config.TradingProperties
-import com.trading.bot.domain.Candle
 import com.trading.bot.ml.MlModelService
 import com.trading.bot.ml.PredictionResult
+import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Candle
+import com.trading.common.strategy.Indicators
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest

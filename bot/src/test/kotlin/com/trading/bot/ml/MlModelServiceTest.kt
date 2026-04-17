@@ -1,10 +1,10 @@
 package com.trading.bot.ml
 
 import com.trading.bot.config.MlProperties
-import com.trading.bot.domain.Candle
+import com.trading.common.domain.Candle
+import java.nio.file.Files
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
-import java.nio.file.Files
 
 class MlModelServiceTest {
 

@@ -2,9 +2,9 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.config.TradingProperties
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.TradingState
+import com.trading.common.config.TradingProperties
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test

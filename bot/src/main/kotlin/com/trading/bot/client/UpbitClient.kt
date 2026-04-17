@@ -1,10 +1,13 @@
 package com.trading.bot.client
 
 import com.trading.bot.domain.Account
-import com.trading.bot.domain.Candle
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.Ticker
+import com.trading.common.domain.Candle
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.time.Duration
 import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatusCode
@@ -14,9 +17,6 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import reactor.core.publisher.Mono
 import reactor.util.retry.Retry
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
-import java.time.Duration
 
 @Component
 class UpbitClient(

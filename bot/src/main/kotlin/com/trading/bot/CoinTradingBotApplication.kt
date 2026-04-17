@@ -5,8 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan
 import org.springframework.boot.runApplication
 import org.springframework.scheduling.annotation.EnableScheduling
 
-@SpringBootApplication
-@ConfigurationPropertiesScan
+@SpringBootApplication(scanBasePackages = ["com.trading.bot", "com.trading.common.strategy"])
+@ConfigurationPropertiesScan(basePackages = ["com.trading.bot", "com.trading.common.config"])
 @EnableScheduling
 class CoinTradingBotApplication
 
