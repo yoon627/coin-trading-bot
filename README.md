@@ -183,6 +183,20 @@ coin-trading-bot/
 ├── deploy/aws/                            # AWS 배포 스크립트
 │   └── deploy.sh                          # setup/deploy/ssh/status/logs/destroy
 │
+├── research/                              # 리서치·백테스트·리포트 전용 모듈 (:common만 의존)
+│   └── src/main/kotlin/com/trading/research/
+│       ├── engine/                        #   이벤트 드리븐 시뮬레이터
+│       ├── strategy/                      #   ResearchStrategy + LegacyStrategyAdapter
+│       ├── data/                          #   DataLoader (PG JDBC + HikariCP)
+│       ├── execution/                     #   OrderBook, FillSimulator, CostModel
+│       ├── portfolio/                     #   Position, Portfolio 회계
+│       ├── risk/                          #   RiskManager + KillSwitch
+│       ├── sizing/                        #   SizingCalculator
+│       ├── walkforward/                   #   WalkForwardRunner + ParameterGrid
+│       ├── metrics/                       #   Sharpe/Sortino/Calmar/MaxDD/VaR
+│       ├── report/                        #   JSON/CSV/Markdown 리포트
+│       └── cli/                           #   Clikt 기반 CLI 러너
+│
 ├── docker-compose.yml                     # 전체 서비스 정의
 ├── Dockerfile                             # 멀티스테이지 빌드
 └── .github/workflows/deploy.yml           # CI/CD 파이프라인
@@ -223,6 +237,56 @@ coin-trading-bot/
 | 최대 보유일 | 7일 초과 시 강제 매도 |
 | 시장 필터 | 50일 MA 아래에서는 매수 차단 |
 | 일일 리셋 | 09:00 KST 기준 매수 플래그 초기화 |
+
+## 리서치 / 백테스트 (`:research` 모듈)
+
+실거래 투입 전 "이 전략이 진짜 돈을 버는가"를 검증하기 위한 **이벤트 드리븐 백테스트 프레임워크**. 라이브 엔진(`:bot`)과 완전히 분리되어 있으며, `:common`에만 의존합니다 (Spring Boot 없음).
+
+### 핵심 특징
+
+| 항목 | 내용 |
+|------|------|
+| Lookahead bias 방지 | BarStream은 close 이후에만 시그널 생성, 체결은 다음 바 시가 기준 |
+| 정확한 Sharpe | per-period 수익률 기반 × √252 (일봉) 연율화 |
+| 포지션 사이징 | `FixedFraction`, `VolTarget`(변동성 타깃), `Notional`(고정 금액) 지원 |
+| 리스크 관리 | Stop loss / Trailing stop / Take profit / Time exit + 일/누적 DD 킬 스위치 |
+| Walk-forward | In-sample 파라미터 그리드 서치 → Out-of-sample 검증 자동화 |
+| 결정론 | 동일 입력 → 동일 바이트 수준 결과 (난수 시드 고정, 이터레이션 순서 고정) |
+
+### 사용법
+
+```bash
+# CLI (v1 주의: dry-run 외에는 v1.1에서 strategy factory 와이어링 예정)
+./gradlew :research:run --args='\
+  --strategy RsiBounce \
+  --assets UPBIT:BTC/KRW,KIS:AAPL \
+  --from 2022-01-01 --to 2024-12-31 \
+  --initial-cash 10000000 \
+  --sizing fixed-fraction:0.1'
+```
+
+현 v1에서는 **프로그래매틱 `Engine.run()`** 사용을 권장합니다. 기존 스윙 전략 7개는 `LegacyStrategyAdapter`로 `:research`에서 바로 검증 가능합니다.
+
+### 리포트 출력
+
+`research-reports/{strategy}/{YYYYMMDD-HHMMSS}/` 아래에 4개 파일 생성:
+
+| 파일 | 내용 |
+|------|------|
+| `result.json` | 메트릭 전체 (Sharpe, Sortino, Calmar, MaxDD, VaR 등) + 설정 스냅샷 |
+| `report.md` | 사람이 읽는 요약 (전략/기간/성과/리스크) |
+| `trades.csv` | 체결 이력 (entry/exit, PnL, holding period) |
+| `equity-curve.csv` | 일별 자본 곡선 |
+
+### 테스트
+
+```bash
+# 55 tests (Testcontainers DB 테스트는 기본 skip)
+JAVA_HOME=... ./gradlew :research:test
+
+# DB 통합 테스트 opt-in
+JAVA_HOME=... ./gradlew :research:test -Dtest.docker=true
+```
 
 ## API 엔드포인트
 
