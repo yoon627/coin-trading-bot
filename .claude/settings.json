@@ -6,18 +6,6 @@
     "padding": 1
   },
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You are a Kotlin/Spring Boot code reviewer for a cryptocurrency trading bot. Review the code change that just happened. Check ONLY for these violations and respond ONLY if you find a problem:\n\n1. Wildcard imports (import x.y.*)\n2. Blocking calls in suspend functions (Thread.sleep, blocking I/O without withContext)\n3. Hardcoded secrets or API keys\n4. Missing error handling (bare throws without proper ResponseStatusException pattern)\n5. String concatenation in log messages instead of parameterized format (log.info(\"x\" + y) should be log.info(\"x {}\", y))\n6. Entity classes without 'Entity' suffix for @Table annotated classes\n\nIf the file is NOT a .kt file, respond with nothing.\nIf no violations found, respond with nothing.\nIf violations found, list them concisely with line references.\n\nTool input: $ARGUMENTS",
-            "statusMessage": "Reviewing code..."
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -27,6 +15,13 @@
             "if": "Bash(git commit*)",
             "command": "STAGED=$(git diff --cached --name-only 2>/dev/null); if echo \"$STAGED\" | grep -qE '\\.env|\\.pem|credentials|secret'; then echo '{\"decision\":\"block\",\"reason\":\"보안 민감 파일(.env, .pem, credentials)이 커밋에 포함되어 있습니다.\"}'; fi",
             "statusMessage": "Checking for sensitive files..."
+          },
+          {
+            "type": "agent",
+            "if": "Bash(git commit*)",
+            "timeout": 120,
+            "prompt": "스테이징된 Kotlin(.kt) 파일을 읽기 전용으로 리뷰한다. 파일을 수정하거나 git 상태를 변경하지 말 것.\n\n절차:\n1) `git diff --cached --name-only`로 스테이징 파일 목록 확인. `.kt` 파일이 하나도 없으면 즉시 종료하고 빈 응답만 반환.\n2) `.kt` 파일 각각에 대해 `git diff --cached -- <file>`로 추가된 라인(`+`로 시작) 위주 검사.\n3) 아래 패턴만 검사 — 다른 의견/리팩토링 제안 금지:\n   - Wildcard imports (`import x.y.*`)\n   - suspend 함수 내 blocking 호출 (`Thread.sleep`, `withContext(Dispatchers.IO)` 없는 blocking I/O)\n   - 하드코딩된 시크릿/API 키 (UPBIT/KIS 키, JWT 시크릿, DB 비밀번호 등 리터럴)\n   - log 메시지에서 문자열 연결 (`log.info(\\\"x\\\" + y)` → `log.info(\\\"x {}\\\", y)` 필요)\n   - `@Table`/`@Entity` 어노테이션이 붙은 클래스에 `Entity` 접미사 누락\n   - 매직 넘버 (의미 있는 리터럴이 상수화되지 않음)\n\n출력 규칙:\n- 위반이 하나도 없으면 아무 텍스트도 출력하지 말 것 (완전히 빈 응답). 커밋이 통과됨.\n- 위반이 있으면 각 건을 `- [패턴명] 파일경로:라인 — 한 줄 설명` 형식으로만 나열. 서문/요약/맺음말 금지.",
+            "statusMessage": "커밋 전 코드 리뷰 중..."
           }
         ]
       }
