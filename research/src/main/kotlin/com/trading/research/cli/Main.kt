@@ -41,12 +41,15 @@ class BacktestCommand : CliktCommand(name = "research") {
     val dryRun by option("--dry-run", help = "Parse args and exit without running the engine").flag(default = false)
 
     override fun run() {
-        if (dryRun) {
-            echo("Dry run: strategy=$strategy assets=$assets period=$from..$to")
-            return
-        }
+        // Validate sizing BEFORE honoring --dry-run: the whole point of --dry-run is to
+        // catch argument errors in CI/scripts, so unsupported sizings (e.g. vol-target while
+        // assetDailyVol=0.0) must be rejected here, not only on a real run.
         val assetList = assets.split(",").map { Asset.parse(it.trim()) }
         val sizingRule = parseSizing(sizing)
+        if (dryRun) {
+            echo("Dry run: strategy=$strategy assets=$assetList sizing=$sizingRule period=$from..$to")
+            return
+        }
 
         runBlocking {
             // v1: strategy instantiation + data loading is wired in a follow-up (v1.1).
