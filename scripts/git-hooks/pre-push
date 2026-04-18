@@ -1,14 +1,15 @@
 #!/bin/bash
 # pre-push gate: runs `codex exec review --json` at high reasoning on the commits
-# being pushed. Parses the JSONL agent_message for P0/P1 issue markers.
+# being pushed. Parses the JSONL agent_message for P0/P1/P2/P3 issue markers.
 #
 # Policy:
-#   - BLOCK if codex emits any `- [P0]` or `- [P1]` finding.
-#   - WARN + allow if only `- [P2]`/`- [P3]` findings.
+#   - BLOCK if codex emits any `- [P0]` or `- [P1]` finding. Must fix before push.
+#   - BLOCK P2/P3 findings UNTIL the user explicitly acknowledges by re-running
+#     with `CODEX_ACK=1 git push`. The acknowledgement means "I reviewed the
+#     findings and accept the push as-is."
 #   - Fail-closed on codex errors or unparseable output.
 #   - Docs-only pushes bypass (strict filter: only true documentation paths).
-#   - No --no-verify escape hatch in policy; emergency only via `CODEX_SKIP=1 git push`
-#     (should be used rarely; leaves a local audit line in logs).
+#   - Emergency total bypass via `CODEX_SKIP=1 git push` (audit logged, discouraged).
 #
 # Stdin from git: <local_ref> <local_sha> <remote_ref> <remote_sha>  per ref being pushed.
 
@@ -190,13 +191,23 @@ review_ref() {
   fi
 
   if echo "$message" | grep -qE '(^|[^[:alnum:]])\[P[23]\]([^[:alnum:]]|$)'; then
-    echo "[codex-pre-push] WARN: codex found non-blocking issues for $local_ref (push allowed):" >&2
+    if [ "${CODEX_ACK:-0}" = "1" ]; then
+      echo "[codex-pre-push] ACK: user acknowledged P2/P3 findings for $local_ref (CODEX_ACK=1)." >&2
+      echo "---" >&2
+      echo "$message" >&2
+      echo "---" >&2
+      echo "[codex-pre-push] Log: $log_file" >&2
+      return 0
+    fi
+    echo "[codex-pre-push] BLOCK: codex found P2/P3 findings for $local_ref that require explicit user review." >&2
     echo "---" >&2
     echo "$message" >&2
     echo "---" >&2
-  else
-    echo "[codex-pre-push] OK: codex found no blocking issues for $local_ref."
+    echo "[codex-pre-push] Review the findings above, then re-run:  CODEX_ACK=1 git push" >&2
+    echo "[codex-pre-push] Log: $log_file" >&2
+    return 1
   fi
+  echo "[codex-pre-push] OK: codex found no blocking issues for $local_ref."
   return 0
 }
 
