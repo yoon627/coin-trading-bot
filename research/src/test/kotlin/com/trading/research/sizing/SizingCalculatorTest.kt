@@ -1,6 +1,7 @@
 package com.trading.research.sizing
 
 import com.trading.research.domain.SizingRule
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -36,9 +37,15 @@ class SizingCalculatorTest {
     }
 
     @Test
-    fun `VolTarget with zero assetVol falls back to FixedFraction 0_1`() {
+    fun `VolTarget with zero or negative assetVol fails loudly instead of silent fallback`() {
+        // A silent fallback to 10% FixedFraction produced wrong exposure/PnL whenever callers
+        // opted into VolTarget without supplying realized vol (caught in Apr 2026 codex review).
         val rule = SizingRule.VolTarget(annualVol = 0.15)
-        val out = SizingCalculator.notional(rule, equity = 10_000.0, assetDailyVol = 0.0)
-        near(out, 1_000.0)
+        assertThrows(IllegalStateException::class.java) {
+            SizingCalculator.notional(rule, equity = 10_000.0, assetDailyVol = 0.0)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            SizingCalculator.notional(rule, equity = 10_000.0, assetDailyVol = -0.01)
+        }
     }
 }
