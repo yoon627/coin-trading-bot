@@ -1,7 +1,8 @@
 # Fix P1: VolTarget CLI should not crash at runtime
 
-status: pending
+status: completed
 created: 2026-04-18
+updated: 2026-04-18
 blocks: (none — isolated to CLI)
 blocked_by: (none)
 estimated: 15-30 min
@@ -39,19 +40,26 @@ engine (separate follow-up), `vol-target` should not be selectable.
 
 ## Steps
 
-- [ ] Read `research/src/main/kotlin/com/trading/research/cli/Main.kt` to confirm exact current shape
-- [ ] Decide: reject-with-error vs remove-from-parser (recommend: reject with clear message + updated help)
-- [ ] Write failing test for CLI parser rejecting `vol-target:...`
-- [ ] Implement the rejection
-- [ ] Update help text (`help = "..."`) to drop `vol-target` mention
-- [ ] Grep repo for `vol-target` in docs, update if referenced (likely none)
-- [ ] Run `:research:test` — all green
+- [x] Read `research/src/main/kotlin/com/trading/research/cli/Main.kt` to confirm exact current shape
+- [x] Decide: reject-with-error vs remove-from-parser (chose: reject via `UsageError` + updated help)
+- [x] Write failing test for CLI parser rejecting `vol-target:...`
+- [x] Implement the rejection
+- [x] Update help text (`help = "..."`) to drop `vol-target` mention
+- [x] Grep repo for `vol-target` in docs — README clean; only historical plan/spec + inline source references remain (intentional)
+- [x] Run `:research:test` — all green
 - [ ] Commit: `fix(research,cli): reject vol-target sizing until realized vol is wired in`
-- [ ] Mark status: completed + update progress log
+- [x] Mark status: completed + update progress log
 
 ## Progress log
 
-_(append entries here as work proceeds)_
+## 2026-04-18 — Landed
+
+- Added two `MainTest` cases: help must not advertise `vol-target`, and `--sizing vol-target:0.15` must exit non-zero with actionable message.
+- Replaced VolTarget branch in `parseSizing` with a clikt `UsageError` (paramName `--sizing`) that names the v1 limitation and points callers to `fixed-fraction`/`notional`. Also converted the generic `else` branch from `error(...)` to `UsageError` for consistent CLI error reporting.
+- Removed `vol-target:0.15` from the `--sizing` help string.
+- `./gradlew :research:test` green (4 MainTest + rest of :research suite).
+- README had no `vol-target` mention; only matches left are in historical `docs/superpowers/plans|specs` (frozen records) and inline source comments that still accurately describe the v1 constraint — left untouched.
+- Pending: commit with the subject above; push still deferred until all 3 P1 plans land (per handoff plan).
 
 ## Resume context (for next session)
 
