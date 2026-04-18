@@ -57,6 +57,62 @@ class EngineSmokeTest {
     }
 
     @Test
+    fun `total-drawdown kill-switch halts on the breaching bar, not one bar later`() = runTest {
+        val t0 = Instant.parse("2024-01-01T00:00:00Z")
+        // Bar 0 close=100 (peak established at entry)
+        // Bar 1 open=100 close=90  → buy fills at 100, equity ≈ 9000 (10% DD, safe under 20%)
+        // Bar 2 open=90  close=70  → equity ≈ 7000 (30% DD — must halt AT this bar's close)
+        // Bar 3 open=70  close=60  → must never be processed after the fix
+        val opens  = listOf(100.0, 100.0, 90.0, 70.0)
+        val closes = listOf(100.0,  90.0, 70.0, 60.0)
+        val bars = opens.indices.map { i ->
+            val t = t0.plusSeconds(i.toLong() * 86400)
+            val open = opens[i]; val close = closes[i]
+            Bar(t, t.plusSeconds(86400), open, maxOf(open, close), minOf(open, close), close, 1.0, close)
+        }
+
+        // Strategy buys on bar 0: signal queued for bar 1 open fill so position exposure mirrors the drop.
+        val strategy = object : ResearchStrategy {
+            override val name = "BuyOnBar0"
+            override val warmupBars = 0
+            override suspend fun onBar(ctx: ResearchContext, event: BarEvent): List<OrderRequest> {
+                return if (event.barIndex == 0L && !ctx.portfolio.hasPosition(event.asset))
+                    listOf(OrderRequest(event.asset, OrderSide.BUY, SizingRule.FixedFraction(1.0)))
+                else emptyList()
+            }
+        }
+
+        val config = BacktestRunConfig(
+            strategy = strategy,
+            history = mapOf(asset to bars),
+            initialCash = 10_000.0,
+            costModel = FlatFeeSlippageModel(feeRate = 0.0, slippageBps = 0.0),
+            risk = RiskPolicy(
+                stopLossPct = null,
+                trailingStopPct = null,
+                takeProfitPct = null,
+                timeExitBars = null,
+            ),
+            killSwitch = KillSwitch(totalDdHaltPct = 0.20),
+        )
+
+        val result = Engine.run(config)
+
+        // Expected semantics after the Apr-2026 post-merge reorder + codex-review follow-up:
+        //   - Halt observes bar-2 close (-30% from peak) in the SAME bar-2 iteration (not deferred).
+        //   - Bar 2 IS recorded before the break — otherwise the curve silently omits the breach
+        //     loss and Sharpe/MaxDD look better than they were.
+        //   - Bar 3 is never processed (no fills, no record).
+        assertEquals(3, result.equityCurve.size, "halt bar's close must land in equity curve")
+        assertEquals(
+            7000.0,
+            result.equityCurve.last().equity,
+            1e-6,
+            "last equity-curve entry must be the breaching bar's close",
+        )
+    }
+
+    @Test
     fun `engine closes position via stop-loss at next bar open`() = runTest {
         val t0 = Instant.parse("2024-01-01T00:00:00Z")
         // Flat prices until entry (bar 5), then sharp fall to trigger a 1% stop-loss.
