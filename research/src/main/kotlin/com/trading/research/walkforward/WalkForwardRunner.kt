@@ -6,6 +6,7 @@ import com.trading.research.engine.BacktestRunConfig
 import com.trading.research.engine.Engine
 import com.trading.research.engine.RunResult
 import com.trading.research.metrics.Metrics
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -41,15 +42,25 @@ class WalkForwardRunner(
         val testHistory = sliceHistory(baseConfig.history, window.testStart, window.testEnd, warmupBars)
         requireWindowHasBars(trainHistory, window.trainStart, window.trainEnd, label = "train")
         requireWindowHasBars(testHistory, window.testStart, window.testEnd, label = "test")
+        val trainWarmupUntil = warmupBoundaryOrNull(warmupBars, window.trainStart)
+        val testWarmupUntil = warmupBoundaryOrNull(warmupBars, window.testStart)
 
         val evaluations = grid.combinations().toList().map { params ->
-            val trainCfg = baseConfig.copy(history = trainHistory, params = params)
+            val trainCfg = baseConfig.copy(
+                history = trainHistory,
+                params = params,
+                warmupUntil = trainWarmupUntil,
+            )
             params to Engine.run(trainCfg)
         }
         require(evaluations.isNotEmpty()) { "grid produced no parameter combinations" }
 
         val best = evaluations.maxBy { scoreOf(it.second, optimizeFor) }
-        val testCfg = baseConfig.copy(history = testHistory, params = best.first)
+        val testCfg = baseConfig.copy(
+            history = testHistory,
+            params = best.first,
+            warmupUntil = testWarmupUntil,
+        )
         val testResult = Engine.run(testCfg)
         return WindowOutcome(
             window = window,
@@ -93,6 +104,19 @@ class WalkForwardRunner(
         }.let { if (it < 0) bars.size else it }
         val preRollStart = (windowStart - warmupBars).coerceAtLeast(0)
         bars.subList(preRollStart, windowEnd)
+    }
+
+    /**
+     * Warmup ends the instant just before the window's opening UTC midnight. Paired with
+     * [BacktestRunConfig.warmupUntil] the Engine treats every pre-roll bar (whose closeTime
+     * is strictly before `windowFrom` 00:00 UTC) as warmup-only — it updates the universe
+     * so the first real bar sees prior history, but skips fills, metrics, kill-switch peak,
+     * and strategy invocations. `null` when warmupBars is 0 so plain backtests retain their
+     * existing behavior.
+     */
+    private fun warmupBoundaryOrNull(warmupBars: Int, windowFrom: LocalDate): Instant? {
+        if (warmupBars <= 0) return null
+        return windowFrom.atStartOfDay(WINDOW_ZONE).toInstant().minusNanos(1)
     }
 
     private fun requireWindowHasBars(

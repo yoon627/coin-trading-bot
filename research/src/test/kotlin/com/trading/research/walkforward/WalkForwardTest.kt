@@ -126,15 +126,20 @@ class WalkForwardTest {
             config = WalkForwardConfig(),
         )
 
-        runner.run(baseConfig, window)
+        val outcome = runner.run(baseConfig, window)
 
-        // Without pre-roll: first bar of the sliced history has 1 recentBar (itself only).
-        // With pre-roll (warmup=5): first bar sees 1 recentBar still, but by the time the
-        // window truly starts (pre-roll index 5), the strategy has already seen ≥ warmupBars.
-        // Simpler assertion: total bars fed to strategy must exceed the 10-day window.
+        // Warmup bars advance clock + universe so history is available, but they must NOT
+        // produce fills, touch the kill-switch peak, or land in the equity curve — otherwise
+        // pre-window PnL silently contaminates walk-forward scoring.
+        assertEquals(10, outcome.trainResult.equityCurve.size, "train equity curve excludes warmup")
+        assertEquals(10, outcome.testResult.equityCurve.size, "test equity curve excludes warmup")
+        // Strategy invocations only happen on in-window bars: 10 train + 10 test.
+        assertEquals(20, observer.totalInvocations, "strategy must be skipped during warmup")
+        // Yet the first in-window call still sees warmup history via ctx.universe.recentBars().
         assertTrue(
-            observer.totalInvocations >= 15,
-            "strategy must see pre-roll + window bars; got ${observer.totalInvocations}",
+            observer.firstInvocationRecentBarCount >= 5,
+            "first in-window invocation must see ≥ warmupBars historical bars; " +
+                "got ${observer.firstInvocationRecentBarCount}",
         )
     }
 
@@ -147,7 +152,11 @@ class WalkForwardTest {
     private class FirstBarObserverStrategy(override val warmupBars: Int) : ResearchStrategy {
         override val name = "FirstBarObserver"
         var totalInvocations: Int = 0; private set
+        var firstInvocationRecentBarCount: Int = -1; private set
         override suspend fun onBar(ctx: ResearchContext, event: BarEvent): List<OrderRequest> {
+            if (firstInvocationRecentBarCount < 0) {
+                firstInvocationRecentBarCount = ctx.universe.recentBars(event.asset, Int.MAX_VALUE).size
+            }
             totalInvocations++
             return emptyList()
         }

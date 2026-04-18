@@ -47,7 +47,7 @@ engine (separate follow-up), `vol-target` should not be selectable.
 - [x] Update help text (`help = "..."`) to drop `vol-target` mention
 - [x] Grep repo for `vol-target` in docs — README clean; only historical plan/spec + inline source references remain (intentional)
 - [x] Run `:research:test` — all green
-- [ ] Commit: `fix(research,cli): reject vol-target sizing until realized vol is wired in`
+- [x] Commit: `fix(research,cli): reject vol-target sizing until realized vol is wired in` (c1cb54d)
 - [x] Mark status: completed + update progress log
 
 ## Progress log

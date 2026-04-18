@@ -1,7 +1,8 @@
 # Fix P1: Walk-forward warmup bars must not trade or score
 
-status: pending
+status: completed
 created: 2026-04-18
+updated: 2026-04-18
 blocks: (none directly, but see parallelization note)
 blocked_by: (none)
 estimated: 45-75 min
@@ -49,17 +50,17 @@ split for any indicator-based backtest.
 
 ## Steps
 
-- [ ] Read current `Engine.run()` loop to map exact insertion points
-- [ ] Add `warmupUntil: Instant? = null` to `BacktestRunConfig`
-- [ ] Introduce `isWarmup` check at top of the loop; early-continue after clock + universe advance
-- [ ] Update `WalkForwardRunner.run()` to compute `warmupUntil` from the sliced history (last bar with `closeTime < window.from`)
-- [ ] Write failing test asserting first in-window invocation sees warmup history
-- [ ] Implement → tests green
-- [ ] Update the previously-broken `observer.totalInvocations` assertion
-- [ ] Update KDoc on `Engine` pipeline to describe the warmup phase
-- [ ] `./gradlew :research:test` green
+- [x] Read current `Engine.run()` loop to map exact insertion points
+- [x] Add `warmupUntil: Instant? = null` to `BacktestRunConfig`
+- [x] Introduce `isWarmup` check at top of the loop; early-continue after clock + universe advance
+- [x] Update `WalkForwardRunner.run()` to compute `warmupUntil` from the sliced history (last bar with `closeTime < window.from`)
+- [x] Write failing test asserting first in-window invocation sees warmup history
+- [x] Implement → tests green
+- [x] Update the previously-broken `observer.totalInvocations` assertion
+- [x] Update KDoc on `Engine` pipeline to describe the warmup phase
+- [x] `./gradlew :research:test` green
 - [ ] Commit: `fix(research,engine): skip fills/metrics during walk-forward warmup phase`
-- [ ] Mark status: completed + progress log update
+- [x] Mark status: completed + progress log update
 
 ## Parallelization / coordination
 
@@ -71,7 +72,14 @@ Do NOT run both edits in parallel without at least one of these, or Engine.kt di
 
 ## Progress log
 
-_(append entries here)_
+## 2026-04-18 — Landed
+
+- Added `warmupUntil: Instant? = null` to `BacktestRunConfig`; old call sites unaffected thanks to the default. Documented the contract in the KDoc.
+- Engine.run loop now short-circuits at the top of each iteration when `closeTime <= warmupUntil`: `clock.advanceTo` and `universe.advance` still run (so `recentBars()` on the first real bar sees pre-roll history), but fills, day-rollover, mark-to-market, kill-switch peak, metrics, risk exits, and strategy invocation are all skipped. Engine pipeline KDoc updated to include this step-0.
+- `WalkForwardRunner.run()` computes `warmupUntil = windowFrom.atStartOfDay(UTC) - 1ns` when `warmupBars > 0` (else `null`), and passes it through `baseConfig.copy(..., warmupUntil = ...)` for both train and test configs.
+- `WalkForwardTest.run prepends warmup buffer bars ...` rewritten: now asserts `equityCurve.size == 10` (train & test), `totalInvocations == 20` (warmup skipped), and `firstInvocationRecentBarCount >= 5` (warmup history still visible). `FirstBarObserverStrategy` gained `firstInvocationRecentBarCount` capturing `ctx.universe.recentBars(asset, Int.MAX_VALUE).size` on first call.
+- `./gradlew :research:test` green (WalkForwardTest + EngineSmokeTest + AntiLookaheadTest + DeterminismTest + LegacyStrategyAcceptanceTest + GoldenDatasetTest). `./gradlew compileKotlin` green across all modules.
+- Pending: commit with the subject above; push still deferred until plan 3 (multi-asset halt batching) also lands.
 
 ## Resume context
 

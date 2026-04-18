@@ -17,6 +17,10 @@ import java.time.LocalDate
  * Central orchestrator of the research backtest loop.
  *
  * Per-bar pipeline (see Task 13 design notes + Apr 2026 post-merge codex review for rationale):
+ *   0. Warmup short-circuit — when [BacktestRunConfig.warmupUntil] is set and the bar's
+ *      `closeTime` is at-or-before it, advance the clock + universe and skip to the next bar.
+ *      No fills, no metrics, no halt check, no strategy invocation happen during warmup, so
+ *      pre-window history is available to strategies without polluting PnL / kill-switch state.
  *   1. Fill pending entry orders for THIS asset at this bar's OPEN; re-queue orders for other assets.
  *   2. Fill pending exit orders for THIS asset at this bar's OPEN (risk-triggered on prior bars).
  *   3. Day rollover hook — uses pre-close equity so the new day's DD baseline is set at bar OPEN.
@@ -33,6 +37,8 @@ import java.time.LocalDate
  *  - Risk-triggered exits on bar N's close are filled at bar N+1's open, matching entry semantics.
  *  - [RollingUniverseView] is advanced BEFORE strategy.onBar so recentBars() includes the just-closed
  *    current bar (whose close the strategy already observed via the event) and nothing further.
+ *  - Warmup bars advance the universe so they ARE visible via recentBars() on the first real bar,
+ *    but they never reach the strategy or fill pipeline.
  */
 object Engine {
 
@@ -56,9 +62,16 @@ object Engine {
         val pendingExits = mutableListOf<OrderRequest>()
         var lastDay: LocalDate? = null
 
+        val warmupUntil = config.warmupUntil
         for (event in stream) {
             clock.advanceTo(event.bar.closeTime)
             universe.advance(event.asset, event.barIndex)
+
+            if (warmupUntil != null && !event.bar.closeTime.isAfter(warmupUntil)) {
+                // Warmup bar: history is now visible to strategies via recentBars(), but no
+                // trading, scoring, or risk state mutates on this bar.
+                continue
+            }
 
             applyEntryFills(event, portfolio, orderBook, fillSim, allFills)
             applyExitFills(event, portfolio, pendingExits, fillSim, allFills, closedTrades)
