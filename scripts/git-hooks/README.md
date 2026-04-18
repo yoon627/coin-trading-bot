@@ -29,11 +29,21 @@ git config core.hooksPath scripts/git-hooks
 
 | Event | Action |
 |-------|--------|
-| `codex` finds any `- [P0]` or `- [P1]` | BLOCK push |
-| `codex` finds only `- [P2]`/`- [P3]` | Allow, print warnings |
+| `codex` finds any `- [P0]` or `- [P1]` | BLOCK push — must fix before pushing |
+| `codex` finds only `- [P2]`/`- [P3]` | BLOCK push until user re-runs with `CODEX_ACK=1 git push` (explicit review + accept) |
 | `codex` finds nothing | Allow silently |
 | `codex` exits non-zero, missing, or output unparseable | BLOCK (fail-closed) |
 | Diff touches only docs (`*.md`, `docs/`, `.claude/tasks|memory/`, etc.) | Bypass codex |
+
+### Acknowledging P2/P3 findings
+
+```bash
+git push                    # shows P2/P3 findings, blocks
+# review the findings, decide they're acceptable
+CODEX_ACK=1 git push        # passes P2/P3 gate; still blocks on P0/P1 and on codex errors
+```
+
+`CODEX_ACK=1` only relaxes the P2/P3 gate. P0/P1 findings and codex infrastructure failures still block unconditionally.
 
 ### Emergency bypass
 
