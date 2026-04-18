@@ -140,8 +140,18 @@ review_ref() {
   # (other-branch push, detached HEAD, worktree mismatch), the review would
   # silently target the wrong commits. Use a throwaway detached worktree at
   # $local_sha so codex always reviews exactly the commits being pushed.
-  local current_head review_rc worktree_dir sandbox_flag
+  local current_head review_rc worktree_dir sandbox_flag working_tree_dirty
   current_head="$(git rev-parse HEAD 2>/dev/null || echo "")"
+  # Any uncommitted change (including untracked files) means the current worktree does NOT
+  # represent the commit being pushed. Running the review there would let codex see files
+  # that aren't part of the push — either hiding bugs behind local fixes or flagging
+  # problems that don't exist in the pushed ref. Fall through to the detached-worktree
+  # path in that case.
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    working_tree_dirty=1
+  else
+    working_tree_dirty=0
+  fi
   review_rc=0
   # Codex sandbox bypass is opt-in only. `codex exec review` runs an LLM-driven agent that
   # can execute commands in the workspace while analyzing the diff; bypassing the sandbox
@@ -154,7 +164,7 @@ review_ref() {
     sandbox_flag="--dangerously-bypass-approvals-and-sandbox"
   fi
   echo "[codex-pre-push] running codex exec review --base $base --json (high reasoning)..."
-  if [ "$current_head" = "$local_sha" ]; then
+  if [ "$current_head" = "$local_sha" ] && [ "$working_tree_dirty" -eq 0 ]; then
     codex exec review \
         --base "$base" \
         --json \
