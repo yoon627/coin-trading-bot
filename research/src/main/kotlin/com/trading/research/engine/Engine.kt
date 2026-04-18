@@ -57,13 +57,16 @@ object Engine {
         // populates its index, so recentBars() cannot read bars before that asset's first event.
         val universe = RollingUniverseView(config.history, currentBarIndex = emptyMap())
 
-        val stream = BarStream(config.history)
+        // Materialized so the loop can peek one event ahead for closeTime-group boundaries.
+        // At research scale the full event list is small compared to per-bar allocations;
+        // a peekable-stream wrapper would add complexity without a measurable win here.
+        val events = BarStream(config.history).toList()
 
         val pendingExits = mutableListOf<OrderRequest>()
         var lastDay: LocalDate? = null
 
         val warmupUntil = config.warmupUntil
-        for (event in stream) {
+        for ((i, event) in events.withIndex()) {
             clock.advanceTo(event.bar.closeTime)
             universe.advance(event.asset, event.barIndex)
 
@@ -84,13 +87,15 @@ object Engine {
             // the equity curve one bar short of finalEquity, producing Sharpe/MaxDD values
             // that silently exclude the terminal breach loss.
             metrics.recordDailyEquity(clock.currentDate(), portfolio.totalEquity)
-            // TODO(multi-asset halt): on portfolios where several assets share a closeTime,
-            // [BarStream] emits each as a separate event. The halt check here runs after
-            // marking ONLY event.asset, so the first asset in the tie-break order may trip
-            // the kill-switch on a partial mark even if later same-timestamp assets would
-            // offset the drawdown. Safe for single-asset v1; fix requires batching events
-            // by closeTime before the halt check.
-            if (config.killSwitch.shouldHaltSimulation(portfolio.totalEquity)) break
+
+            // Multi-asset halt gate: when several assets share a closeTime, BarStream emits
+            // each as a separate event. We let per-asset mark/peak/metrics updates run on
+            // every event, but only evaluate the halt AFTER the last event at this closeTime
+            // — otherwise the first asset in tie-break order could trip the kill-switch on
+            // a partial mark that a later same-timestamp mark would have offset.
+            val isLastInCloseTimeGroup =
+                i == events.lastIndex || events[i + 1].bar.closeTime != event.bar.closeTime
+            if (isLastInCloseTimeGroup && config.killSwitch.shouldHaltSimulation(portfolio.totalEquity)) break
 
             queueRiskExits(event, portfolio, risk, pendingExits)
             runStrategyAndSubmit(event, config, clock, portfolio, universe, orderBook)

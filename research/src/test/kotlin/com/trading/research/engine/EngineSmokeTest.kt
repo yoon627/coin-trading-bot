@@ -113,6 +113,62 @@ class EngineSmokeTest {
     }
 
     @Test
+    fun `total-drawdown halt waits for all same-closeTime marks before triggering`() = runTest {
+        // Two assets share every closeTime. On bar 1 A crashes (-70%) and B rallies (+70%).
+        // With per-event halting, A's partial mark at bar 1 showed ~35% DD and halted
+        // before B's mark could offset — a false halt that blocks multi-asset backtests.
+        // Post-batching, the halt check runs once per closeTime group, after both marks.
+        val t0 = Instant.parse("2024-01-01T00:00:00Z")
+        val t1 = t0.plusSeconds(86400)
+        val t2 = t0.plusSeconds(2 * 86400)
+
+        val assetA = Asset(Exchange.UPBIT, "A/KRW")
+        val assetB = Asset(Exchange.UPBIT, "B/KRW")
+
+        // Bar 0: both flat at 100. Bar 1: A closes at 30, B closes at 170. Symmetric.
+        val barsA = listOf(
+            Bar(t0, t1, 100.0, 100.0, 100.0, 100.0, 1.0, 100.0),
+            Bar(t1, t2, 100.0, 100.0, 30.0, 30.0, 1.0, 30.0),
+        )
+        val barsB = listOf(
+            Bar(t0, t1, 100.0, 100.0, 100.0, 100.0, 1.0, 100.0),
+            Bar(t1, t2, 100.0, 170.0, 100.0, 170.0, 1.0, 170.0),
+        )
+
+        // Strategy queues a Notional(5000) buy for each asset on its bar-0 event; both fill at bar 1 open.
+        val strategy = object : ResearchStrategy {
+            override val name = "BuyEachOnBar0"
+            override val warmupBars = 0
+            override suspend fun onBar(ctx: ResearchContext, event: BarEvent): List<OrderRequest> {
+                return if (event.barIndex == 0L && !ctx.portfolio.hasPosition(event.asset))
+                    listOf(OrderRequest(event.asset, OrderSide.BUY, SizingRule.Notional(5000.0)))
+                else emptyList()
+            }
+        }
+
+        val config = BacktestRunConfig(
+            strategy = strategy,
+            history = mapOf(assetA to barsA, assetB to barsB),
+            initialCash = 10_000.0,
+            costModel = FlatFeeSlippageModel(feeRate = 0.0, slippageBps = 0.0),
+            risk = RiskPolicy(null, null, null, null),
+            killSwitch = KillSwitch(totalDdHaltPct = 0.20),
+        )
+
+        val result = Engine.run(config)
+
+        // Both bars processed fully → one equity-curve entry per closeTime date.
+        assertEquals(2, result.equityCurve.size, "halt must not fire on the partial A-only mark")
+        // Last entry reflects the fully-marked bar-1 portfolio: 50*30 (A) + 50*170 (B) = 10_000.
+        assertEquals(
+            10_000.0,
+            result.equityCurve.last().equity,
+            1e-6,
+            "final equity must reflect both assets' bar-1 closes, not just A's",
+        )
+    }
+
+    @Test
     fun `engine closes position via stop-loss at next bar open`() = runTest {
         val t0 = Instant.parse("2024-01-01T00:00:00Z")
         // Flat prices until entry (bar 5), then sharp fall to trigger a 1% stop-loss.
