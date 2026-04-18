@@ -1,6 +1,7 @@
 package com.trading.research.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.UsageError
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.parameters.options.convert
 import com.github.ajalt.clikt.parameters.options.default
@@ -32,7 +33,7 @@ class BacktestCommand : CliktCommand(name = "research") {
     val slippageBps by option("--slippage-bps", help = "Slippage in basis points").double().default(DEFAULT_SLIPPAGE_BPS)
     val sizing by option(
         "--sizing",
-        help = "Position sizing rule, e.g. fixed-fraction:0.1 | vol-target:0.15 | notional:1000000",
+        help = "Position sizing rule, e.g. fixed-fraction:0.1 | notional:1000000",
     ).default(DEFAULT_SIZING)
     val output by option("--output", help = "Report output directory")
         .path(canBeFile = false)
@@ -64,9 +65,14 @@ class BacktestCommand : CliktCommand(name = "research") {
         val (kind, arg) = parts
         return when (kind) {
             "fixed-fraction" -> SizingRule.FixedFraction(arg.toDouble())
-            "vol-target" -> SizingRule.VolTarget(arg.toDouble())
             "notional" -> SizingRule.Notional(arg.toDouble())
-            else -> error("Unknown sizing: $raw")
+            "vol-target" -> throw UsageError(
+                "vol-target sizing is not supported in v1: the engine currently hardcodes " +
+                    "assetDailyVol=0.0 and SizingCalculator.notional throws on non-positive vol. " +
+                    "Use fixed-fraction:<f> or notional:<amount> until realized-vol wiring lands.",
+                paramName = "--sizing",
+            )
+            else -> throw UsageError("Unknown sizing: '$raw'", paramName = "--sizing")
         }
     }
 
