@@ -52,4 +52,24 @@ class MainTest {
             "error should mention vol-target; got: ${result.output}",
         )
     }
+
+    @Test
+    fun `dry-run also rejects vol-target sizing`() {
+        // --dry-run is explicitly argument-validation mode for CI/scripts, so unsupported
+        // sizings must fail here too — otherwise vol-target slips through pre-flight checks
+        // and only blows up on a real run.
+        val result = BacktestCommand().test(
+            "--strategy", "RsiBounce",
+            "--assets", "UPBIT:BTC/KRW",
+            "--from", "2024-01-01",
+            "--to", "2024-06-01",
+            "--sizing", "vol-target:0.15",
+            "--dry-run",
+        )
+        assertNotEquals(0, result.statusCode, "dry-run must not mask vol-target rejection")
+        assertTrue(
+            result.output.contains("vol-target", ignoreCase = true),
+            "error should mention vol-target; got: ${result.output}",
+        )
+    }
 }
