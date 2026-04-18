@@ -1,9 +1,16 @@
 #!/bin/bash
-# pre-push gate: runs `codex exec review` at high reasoning on the commits being pushed.
-# Policy: fail-closed on codex errors; docs-only pushes bypass; no --no-verify escape hatch.
+# pre-push gate: runs `codex exec review --json` at high reasoning on the commits
+# being pushed. Parses the JSONL agent_message for P0/P1 issue markers.
+#
+# Policy:
+#   - BLOCK if codex emits any `- [P0]` or `- [P1]` finding.
+#   - WARN + allow if only `- [P2]`/`- [P3]` findings.
+#   - Fail-closed on codex errors or unparseable output.
+#   - Docs-only pushes bypass (strict filter: only true documentation paths).
+#   - No --no-verify escape hatch in policy; emergency only via `CODEX_SKIP=1 git push`
+#     (should be used rarely; leaves a local audit line in logs).
 #
 # Stdin from git: <local_ref> <local_sha> <remote_ref> <remote_sha>  per ref being pushed.
-# We review each ref's (remote_sha..local_sha) range.
 
 set -uo pipefail
 
@@ -11,14 +18,24 @@ ZERO_SHA="0000000000000000000000000000000000000000"
 LOG_DIR="$(git rev-parse --git-dir)/codex-pre-push"
 mkdir -p "$LOG_DIR"
 
-# Detect codex CLI
+# Emergency bypass (discouraged; leaves a log trail).
+if [ "${CODEX_SKIP:-0}" = "1" ]; then
+  ts="$(date +%Y%m%d-%H%M%S)"
+  echo "[codex-pre-push] BYPASS at $ts (CODEX_SKIP=1 set)" | tee -a "$LOG_DIR/bypass.log" >&2
+  exit 0
+fi
+
 if ! command -v codex >/dev/null 2>&1; then
-  echo "[codex-pre-push] FAIL: codex CLI not found on PATH. Install codex or adjust PATH." >&2
-  echo "[codex-pre-push]        Fail-closed: push blocked." >&2
+  echo "[codex-pre-push] FAIL: codex CLI not found on PATH. Fail-closed: push blocked." >&2
   exit 1
 fi
 
-# Read ref updates from stdin. If none, nothing to push.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[codex-pre-push] FAIL: python3 not found on PATH (needed to parse JSONL)." >&2
+  exit 1
+fi
+
+# Read ref updates from stdin.
 ref_updates=""
 while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
   [ -z "${local_ref:-}" ] && continue
@@ -29,32 +46,74 @@ if [ -z "${ref_updates// /}" ]; then
   exit 0
 fi
 
-# Helper: decide if a diff touches only docs.
+# Docs-only filter. INTENTIONALLY STRICT: only pure documentation extensions /
+# paths bypass the gate. CI configs (.github/workflows), shell hooks, and
+# .claude/settings.json always go through review.
 is_docs_only() {
   local base="$1" head="$2"
   local files
   files="$(git diff --name-only "$base..$head")" || return 1
   [ -z "$files" ] && return 1
-  # Any file NOT matching doc patterns disqualifies docs-only.
-  if echo "$files" | grep -qvE '\.(md|txt|rst|adoc)$|^docs/|^\.claude/|^\.github/'; then
+  if echo "$files" | grep -qvE '\.(md|txt|rst|adoc)$|^docs/|^\.claude/(tasks|memory)/|^CHANGELOG|^LICENSE'; then
     return 1
   fi
   return 0
 }
 
+# Base-ref resolution for first push of a branch. Uses origin/HEAD (typically
+# main or master) via symbolic-ref, not a hardcoded branch name.
+resolve_new_branch_base() {
+  local local_sha="$1"
+  local default_remote_branch base
+  default_remote_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
+  if [ -n "$default_remote_branch" ] && git show-ref --verify --quiet "refs/remotes/$default_remote_branch"; then
+    base="$(git merge-base "$default_remote_branch" "$local_sha" 2>/dev/null)"
+  fi
+  if [ -z "${base:-}" ]; then
+    base="$(git rev-parse "${local_sha}^" 2>/dev/null || echo "$local_sha")"
+  fi
+  echo "$base"
+}
+
+# Extract the final agent_message.text from a JSONL log file.
+# Returns empty on no message.
+extract_agent_message() {
+  local log_file="$1"
+  python3 - "$log_file" <<'PY'
+import json, sys
+path = sys.argv[1]
+last = ""
+try:
+    with open(path) as fh:
+        for line in fh:
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("type") != "item.completed":
+                continue
+            item = d.get("item", {}) or {}
+            if item.get("type") == "agent_message":
+                text = item.get("text") or ""
+                if text:
+                    last = text
+except FileNotFoundError:
+    pass
+sys.stdout.write(last)
+PY
+}
+
 review_ref() {
   local local_ref="$1" local_sha="$2" remote_ref="$3" remote_sha="$4"
 
-  # Deletions: remote_ref deletion pushes local_sha=ZERO_SHA. Nothing to review.
   if [ "$local_sha" = "$ZERO_SHA" ]; then
     echo "[codex-pre-push] $local_ref: deletion, skipping review."
     return 0
   fi
 
-  # New branch push: remote_sha is ZERO_SHA. Base on merge-base with main.
   local base
   if [ "$remote_sha" = "$ZERO_SHA" ]; then
-    base="$(git merge-base main "$local_sha" 2>/dev/null || echo "${local_sha}^")"
+    base="$(resolve_new_branch_base "$local_sha")"
     echo "[codex-pre-push] $local_ref: new branch, reviewing $base..$local_sha"
   else
     base="$remote_sha"
@@ -71,55 +130,74 @@ review_ref() {
     return 0
   fi
 
-  local ts log_file review_file
+  local ts log_file
   ts="$(date +%Y%m%d-%H%M%S)"
-  log_file="$LOG_DIR/${ts}.log"
-  review_file="$LOG_DIR/${ts}.review.md"
+  log_file="$LOG_DIR/${ts}.jsonl"
 
-  echo "[codex-pre-push] running codex exec review --base $base (high reasoning)..."
-  # codex exec review --base is incompatible with custom PROMPT; default review covers
-  # correctness + concurrency + security + style + tests.
-  if ! codex exec review \
-      --base "$base" \
-      --dangerously-bypass-approvals-and-sandbox \
-      -c model_reasoning_effort=high \
-      -o "$review_file" \
-      --title "pre-push gate ${local_ref}" </dev/null >"$log_file" 2>&1; then
-    echo "[codex-pre-push] FAIL: codex exec review exited non-zero." >&2
+  # `codex exec review --base X` diffs X against the CWD's HEAD, not against
+  # $local_sha. When the pushed ref's tip does not match the current HEAD
+  # (other-branch push, detached HEAD, worktree mismatch), the review would
+  # silently target the wrong commits. Use a throwaway detached worktree at
+  # $local_sha so codex always reviews exactly the commits being pushed.
+  local current_head review_rc worktree_dir
+  current_head="$(git rev-parse HEAD 2>/dev/null || echo "")"
+  review_rc=0
+  echo "[codex-pre-push] running codex exec review --base $base --json (high reasoning)..."
+  if [ "$current_head" = "$local_sha" ]; then
+    codex exec review \
+        --base "$base" \
+        --json \
+        --dangerously-bypass-approvals-and-sandbox \
+        -c model_reasoning_effort=high \
+        --title "pre-push gate ${local_ref}" </dev/null >"$log_file" 2>&1 || review_rc=$?
+  else
+    worktree_dir="$(mktemp -d)/codex-pre-push-wt"
+    if ! git worktree add --detach "$worktree_dir" "$local_sha" >/dev/null 2>&1; then
+      echo "[codex-pre-push] FAIL: could not create worktree at $local_sha." >&2
+      return 1
+    fi
+    (cd "$worktree_dir" && codex exec review \
+        --base "$base" \
+        --json \
+        --dangerously-bypass-approvals-and-sandbox \
+        -c model_reasoning_effort=high \
+        --title "pre-push gate ${local_ref}" </dev/null) >"$log_file" 2>&1 || review_rc=$?
+    git worktree remove --force "$worktree_dir" >/dev/null 2>&1 || true
+  fi
+  if [ "$review_rc" -ne 0 ]; then
+    echo "[codex-pre-push] FAIL: codex exec review exited non-zero (code=$review_rc)." >&2
     echo "[codex-pre-push] Log: $log_file" >&2
-    tail -80 "$log_file" >&2
+    tail -40 "$log_file" >&2
     return 1
   fi
 
-  # review_file often empty from `codex exec review` (known quirk). Fall back to log.
-  local content=""
-  if [ -s "$review_file" ]; then
-    content="$(cat "$review_file")"
-  fi
-  if [ -z "$content" ]; then
-    content="$(cat "$log_file")"
-  fi
-
-  # Verdict parsing.
-  if echo "$content" | grep -qiE '(^|[^[:alnum:]_])REQUEST_CHANGES([^[:alnum:]_]|$)'; then
-    echo "[codex-pre-push] BLOCK: codex returned REQUEST_CHANGES for $local_ref." >&2
-    echo "[codex-pre-push] Review output:" >&2
-    echo "$content" | tail -120 >&2
-    echo "[codex-pre-push] Full log: $log_file" >&2
-    echo "[codex-pre-push] Review:   $review_file" >&2
+  local message
+  message="$(extract_agent_message "$log_file")"
+  if [ -z "$message" ]; then
+    echo "[codex-pre-push] FAIL: could not extract final agent_message from codex output. Fail-closed." >&2
+    echo "[codex-pre-push] Log: $log_file" >&2
     return 1
   fi
 
-  if echo "$content" | grep -qiE '(^|[^[:alnum:]_])APPROVE([^[:alnum:]_]|$)'; then
-    echo "[codex-pre-push] OK: codex APPROVE for $local_ref."
-    return 0
+  # Block on P0/P1, warn-and-allow on P2/P3.
+  if echo "$message" | grep -qE '(^|[^[:alnum:]])\[P[01]\]([^[:alnum:]]|$)'; then
+    echo "[codex-pre-push] BLOCK: codex found P0/P1 issues for $local_ref." >&2
+    echo "---" >&2
+    echo "$message" >&2
+    echo "---" >&2
+    echo "[codex-pre-push] Log: $log_file" >&2
+    return 1
   fi
 
-  # Fail-closed when the verdict line is absent or unclear.
-  echo "[codex-pre-push] FAIL: could not parse APPROVE/REQUEST_CHANGES verdict. Fail-closed." >&2
-  echo "[codex-pre-push] Log: $log_file" >&2
-  tail -60 "$log_file" >&2
-  return 1
+  if echo "$message" | grep -qE '(^|[^[:alnum:]])\[P[23]\]([^[:alnum:]]|$)'; then
+    echo "[codex-pre-push] WARN: codex found non-blocking issues for $local_ref (push allowed):" >&2
+    echo "---" >&2
+    echo "$message" >&2
+    echo "---" >&2
+  else
+    echo "[codex-pre-push] OK: codex found no blocking issues for $local_ref."
+  fi
+  return 0
 }
 
 status=0
