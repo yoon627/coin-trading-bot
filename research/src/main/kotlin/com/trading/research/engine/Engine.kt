@@ -30,7 +30,11 @@ import java.time.LocalDate
  *   6. Kill-switch halt check — a bar that breaches total-DD on its own close halts the loop
  *      before any further orders are queued for bar N+1.
  *   7. Risk evaluation on open positions using this bar's CLOSE → queue exits for next bar.
- *   8. Strategy.onBar(ctx, event) → queue entries for next bar.
+ *   8. Strategy.onBar(ctx, event) runs per-event; emitted signals buffer in a per-closeTime-group
+ *      staging list. At the last event in the closeTime group, [com.trading.research.risk.KillSwitch.shouldBlockEntries]
+ *      is evaluated ONCE against the fully-marked portfolio and the buffered signals are either
+ *      submitted to [OrderBook] in bulk or dropped. Like step 6, per-event gating would tie the
+ *      decision to asset tie-break order on synchronized multi-asset bars.
  *
  * Anti-lookahead invariants:
  *  - Strategy signals emitted on bar N are filled at bar N+1's open, never same-bar close-to-close.
@@ -63,6 +67,10 @@ object Engine {
         val events = BarStream(config.history).toList()
 
         val pendingExits = mutableListOf<OrderRequest>()
+        // Entry signals from strategy.onBar() within the current closeTime group. Submitted to
+        // [OrderBook] (or dropped) as a batch at the last event in the group so the daily-DD
+        // entry gate sees fully-marked equity instead of whichever asset was tie-broken first.
+        val pendingEntriesThisGroup = mutableListOf<OrderRequest>()
         var lastDay: LocalDate? = null
 
         val warmupUntil = config.warmupUntil
@@ -98,7 +106,16 @@ object Engine {
             if (isLastInCloseTimeGroup && config.killSwitch.shouldHaltSimulation(portfolio.totalEquity)) break
 
             queueRiskExits(event, portfolio, risk, pendingExits)
-            runStrategyAndSubmit(event, config, clock, portfolio, universe, orderBook)
+            pendingEntriesThisGroup += runStrategy(event, config, clock, portfolio, universe)
+
+            if (isLastInCloseTimeGroup) {
+                if (pendingEntriesThisGroup.isNotEmpty() &&
+                    !config.killSwitch.shouldBlockEntries(clock.currentDate(), portfolio.totalEquity)
+                ) {
+                    orderBook.submitAll(pendingEntriesThisGroup)
+                }
+                pendingEntriesThisGroup.clear()
+            }
         }
 
         return RunResult(
@@ -218,18 +235,20 @@ object Engine {
         pendingExits.addAll(exits)
     }
 
-    private suspend fun runStrategyAndSubmit(
+    /**
+     * Invokes the strategy for [event] and returns any entry signals it emits. Submission
+     * and the [com.trading.research.risk.KillSwitch.shouldBlockEntries] gate are deferred
+     * to the closeTime group boundary in the main loop, so the decision is made against the
+     * fully-marked portfolio rather than a partial per-asset snapshot.
+     */
+    private suspend fun runStrategy(
         event: BarEvent,
         config: BacktestRunConfig,
         clock: ResearchClock,
         portfolio: Portfolio,
         universe: RollingUniverseView,
-        orderBook: OrderBook,
-    ) {
+    ): List<OrderRequest> {
         val context = ResearchContextImpl(clock, portfolio.view(), universe, config.params)
-        val signals = config.strategy.onBar(context, event)
-        if (signals.isEmpty()) return
-        if (config.killSwitch.shouldBlockEntries(clock.currentDate(), portfolio.totalEquity)) return
-        orderBook.submitAll(signals)
+        return config.strategy.onBar(context, event)
     }
 }
