@@ -43,8 +43,9 @@ object Engine {
         val allFills = mutableListOf<Fill>()
         val closedTrades = mutableListOf<ClosedTrade>()
 
-        val initialIndices = config.history.keys.associateWith { 0L }
-        val universe = RollingUniverseView(config.history, initialIndices)
+        // Empty indices = "no asset has advanced yet". First universe.advance() per asset
+        // populates its index, so recentBars() cannot read bars before that asset's first event.
+        val universe = RollingUniverseView(config.history, currentBarIndex = emptyMap())
 
         val stream = BarStream(config.history)
 
