@@ -114,9 +114,10 @@ object Engine {
             orders = matching,
             openPrices = mapOf(event.asset to event.bar.open),
             equityBefore = portfolio.totalEquity,
-            // TODO: compute realized vol from universe for VolTarget sizing. Currently
-            // VolTarget silently falls back to its default weight — acceptable for v1
-            // since no in-scope legacy strategy uses vol-targeted sizing.
+            // v1: no in-scope legacy strategy uses vol-targeted sizing, so 0.0 is only read
+            // for FixedFraction/Notional/CloseAll rules (which ignore it). If a caller submits
+            // a VolTarget order, SizingCalculator now throws instead of silently falling back —
+            // forcing us to compute realized vol from the universe before enabling it.
             assetDailyVol = mapOf(event.asset to 0.0),
             barIndex = event.barIndex,
         )
