@@ -59,7 +59,7 @@ split for any indicator-based backtest.
 - [x] Update the previously-broken `observer.totalInvocations` assertion
 - [x] Update KDoc on `Engine` pipeline to describe the warmup phase
 - [x] `./gradlew :research:test` green
-- [ ] Commit: `fix(research,engine): skip fills/metrics during walk-forward warmup phase`
+- [x] Commit: `fix(research,engine): skip fills/metrics during walk-forward warmup phase` (34ebc00)
 - [x] Mark status: completed + progress log update
 
 ## Parallelization / coordination

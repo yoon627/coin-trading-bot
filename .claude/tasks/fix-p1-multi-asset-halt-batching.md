@@ -1,7 +1,8 @@
 # Fix P1: Multi-asset total-DD halt must wait for all same-closeTime marks
 
-status: pending
+status: completed
 created: 2026-04-18
+updated: 2026-04-18
 blocks: (none directly, but see parallelization note)
 blocked_by: (optionally warmup-isolation if touching Engine.kt serially)
 estimated: 30-60 min
@@ -45,16 +46,16 @@ but BLOCKS any future multi-asset research workload until fixed.
 
 ## Steps
 
-- [ ] Re-read `Engine.run()` loop + `BarStream` structure (`research/src/main/kotlin/.../engine/BarStream.kt`)
-- [ ] Decide: materialize-then-iterate (simpler) or peekable-stream (preserves laziness). For research scale, prefer materialize.
-- [ ] Write failing test: 2-asset same-closeTime scenario where partial mark would falsely halt
-- [ ] Implement halt-batching
-- [ ] Run single-asset tests to make sure nothing else regressed
-- [ ] Remove the inline `TODO(multi-asset halt)` block
-- [ ] Update `Engine` KDoc pipeline description (step 6 "Kill-switch halt check" — add "after all same-timestamp events marked")
-- [ ] `./gradlew :research:test` green
+- [x] Re-read `Engine.run()` loop + `BarStream` structure (`research/src/main/kotlin/.../engine/BarStream.kt`)
+- [x] Decide: materialize-then-iterate (simpler) or peekable-stream (preserves laziness). Chose materialize — research-scale event lists are small vs per-bar allocations.
+- [x] Write failing test: 2-asset same-closeTime scenario where partial mark would falsely halt
+- [x] Implement halt-batching
+- [x] Run single-asset tests to make sure nothing else regressed
+- [x] Remove the inline `TODO(multi-asset halt)` block
+- [x] Update `Engine` KDoc pipeline description (step 6 wording rewritten — explicit "only after the last event at this closeTime")
+- [x] `./gradlew :research:test` green
 - [ ] Commit: `fix(research,engine): batch halt check across same-closeTime events`
-- [ ] Mark status: completed + progress log
+- [x] Mark status: completed + progress log
 
 ## Parallelization / coordination
 
@@ -66,7 +67,15 @@ If the warmup plan has already landed when this runs, rebase on top of
 
 ## Progress log
 
-_(append entries here)_
+## 2026-04-18 — Landed
+
+- Materialized `BarStream` into `events = BarStream(config.history).toList()` so the Engine loop can peek one event ahead for closeTime-group boundaries. Research scale makes this trivial vs per-bar allocations; no peekable-stream wrapper needed.
+- Halt check now gated by `isLastInCloseTimeGroup = (i == events.lastIndex || events[i + 1].bar.closeTime != event.bar.closeTime)`. Per-event `markToMarket`, `onPeakUpdate`, and `recordDailyEquity` still run on every event (plan-specified): only the `shouldHaltSimulation` gate is batched.
+- Removed the inline `TODO(multi-asset halt)` comment block; replaced with a short rationale block matching the new behavior.
+- Rewrote Engine KDoc step 6 to say "after the last event at this closeTime" and kept the anti-lookahead invariants section.
+- New test `EngineSmokeTest.total-drawdown halt waits for all same-closeTime marks before triggering`: two assets share every closeTime; on bar 1, A crashes to 30 and B rallies to 170. Pre-fix: A's partial mark showed 35% DD and halted the run at 6500. Post-fix: both marks run → final equity 10_000, simulation continues, equityCurve has 2 entries.
+- `./gradlew :research:test` green (EngineSmokeTest single-asset halt test still passes, AntiLookahead / Determinism / WalkForward / LegacyStrategyAcceptance / GoldenDataset unchanged).
+- Pending: commit with the subject above. All 3 P1 plans now landed — ready for user to push (`CODEX_ACK=1 git push`).
 
 ## Resume context
 
