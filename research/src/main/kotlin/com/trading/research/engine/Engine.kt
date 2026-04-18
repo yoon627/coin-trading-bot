@@ -16,13 +16,17 @@ import java.time.LocalDate
 /**
  * Central orchestrator of the research backtest loop.
  *
- * Per-bar pipeline (see Task 13 design notes for rationale):
+ * Per-bar pipeline (see Task 13 design notes + Apr 2026 post-merge codex review for rationale):
  *   1. Fill pending entry orders for THIS asset at this bar's OPEN; re-queue orders for other assets.
  *   2. Fill pending exit orders for THIS asset at this bar's OPEN (risk-triggered on prior bars).
- *   3. Kill-switch: day rollover hook + halt check (total drawdown).
- *   4. Risk evaluation on open positions using this bar's CLOSE → queue exits for next bar.
- *   5. Strategy.onBar(ctx, event) → queue entries for next bar (unless kill-switch blocks).
- *   6. Mark-to-market at close + peak/metric updates.
+ *   3. Day rollover hook — uses pre-close equity so the new day's DD baseline is set at bar OPEN.
+ *   4. Mark-to-market at this bar's CLOSE + peak update.
+ *   5. Record daily equity for metrics — MUST precede the halt check so a breaching bar's close
+ *      still lands in [equityCurve]; otherwise Sharpe/MaxDD exclude the terminal loss.
+ *   6. Kill-switch halt check — a bar that breaches total-DD on its own close halts the loop
+ *      before any further orders are queued for bar N+1.
+ *   7. Risk evaluation on open positions using this bar's CLOSE → queue exits for next bar.
+ *   8. Strategy.onBar(ctx, event) → queue entries for next bar.
  *
  * Anti-lookahead invariants:
  *  - Strategy signals emitted on bar N are filled at bar N+1's open, never same-bar close-to-close.
@@ -60,14 +64,23 @@ object Engine {
             applyExitFills(event, portfolio, pendingExits, fillSim, allFills, closedTrades)
 
             lastDay = rolloverKillSwitchIfNeeded(config, clock, portfolio, lastDay)
+
+            portfolio.markToMarket(mapOf(event.asset to event.bar.close))
+            config.killSwitch.onPeakUpdate(portfolio.totalEquity)
+            // Record the halting bar's close BEFORE breaking. Omitting it would truncate
+            // the equity curve one bar short of finalEquity, producing Sharpe/MaxDD values
+            // that silently exclude the terminal breach loss.
+            metrics.recordDailyEquity(clock.currentDate(), portfolio.totalEquity)
+            // TODO(multi-asset halt): on portfolios where several assets share a closeTime,
+            // [BarStream] emits each as a separate event. The halt check here runs after
+            // marking ONLY event.asset, so the first asset in the tie-break order may trip
+            // the kill-switch on a partial mark even if later same-timestamp assets would
+            // offset the drawdown. Safe for single-asset v1; fix requires batching events
+            // by closeTime before the halt check.
             if (config.killSwitch.shouldHaltSimulation(portfolio.totalEquity)) break
 
             queueRiskExits(event, portfolio, risk, pendingExits)
             runStrategyAndSubmit(event, config, clock, portfolio, universe, orderBook)
-
-            portfolio.markToMarket(mapOf(event.asset to event.bar.close))
-            config.killSwitch.onPeakUpdate(portfolio.totalEquity)
-            metrics.recordDailyEquity(clock.currentDate(), portfolio.totalEquity)
         }
 
         return RunResult(
