@@ -54,7 +54,7 @@ but BLOCKS any future multi-asset research workload until fixed.
 - [x] Remove the inline `TODO(multi-asset halt)` block
 - [x] Update `Engine` KDoc pipeline description (step 6 wording rewritten — explicit "only after the last event at this closeTime")
 - [x] `./gradlew :research:test` green
-- [ ] Commit: `fix(research,engine): batch halt check across same-closeTime events`
+- [x] Commit: `fix(research,engine): batch halt check across same-closeTime events` (f9371b1)
 - [x] Mark status: completed + progress log
 
 ## Parallelization / coordination
