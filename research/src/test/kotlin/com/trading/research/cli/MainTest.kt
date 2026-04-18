@@ -72,4 +72,40 @@ class MainTest {
             "error should mention vol-target; got: ${result.output}",
         )
     }
+
+    @Test
+    fun `malformed sizing surfaces as clean usage error not a stacktrace`() {
+        // No colon → parseSizing's internal require throws IllegalArgumentException; without
+        // the UsageError wrap the clikt .test() harness would propagate a raw exception,
+        // which in real CLI usage means a stacktrace instead of an actionable message.
+        val result = BacktestCommand().test(
+            "--strategy", "RsiBounce",
+            "--assets", "UPBIT:BTC/KRW",
+            "--from", "2024-01-01",
+            "--to", "2024-06-01",
+            "--sizing", "bogus",
+            "--dry-run",
+        )
+        assertNotEquals(0, result.statusCode, "malformed sizing must exit non-zero")
+        assertTrue(
+            result.output.contains("sizing", ignoreCase = true) || result.output.contains("bogus"),
+            "error should mention the --sizing value; got: ${result.output}",
+        )
+    }
+
+    @Test
+    fun `malformed asset surfaces as clean usage error not a stacktrace`() {
+        val result = BacktestCommand().test(
+            "--strategy", "RsiBounce",
+            "--assets", "bogus",
+            "--from", "2024-01-01",
+            "--to", "2024-06-01",
+            "--dry-run",
+        )
+        assertNotEquals(0, result.statusCode, "malformed asset must exit non-zero")
+        assertTrue(
+            result.output.contains("asset", ignoreCase = true) || result.output.contains("bogus"),
+            "error should mention the --assets value; got: ${result.output}",
+        )
+    }
 }
