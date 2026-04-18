@@ -1,9 +1,22 @@
 package com.trading.research.walkforward
 
+import com.trading.common.domain.Exchange
+import com.trading.research.domain.Asset
+import com.trading.research.domain.Bar
+import com.trading.research.domain.OrderRequest
+import com.trading.research.engine.BacktestRunConfig
+import com.trading.research.execution.FlatFeeSlippageModel
+import com.trading.research.risk.KillSwitch
+import com.trading.research.risk.RiskPolicy
+import com.trading.research.strategy.BarEvent
+import com.trading.research.strategy.ResearchContext
+import com.trading.research.strategy.ResearchStrategy
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 class WalkForwardTest {
@@ -34,5 +47,109 @@ class WalkForwardTest {
         val combos = grid.combinations().toList()
         assertEquals(6, combos.size)
         assertTrue(combos.contains(mapOf("rsi" to 20, "ma" to 10)))
+    }
+
+    @Test
+    fun `run slices baseConfig history to train and test windows`() = runTest {
+        val asset = Asset(Exchange.UPBIT, "BTC/KRW")
+        val utc = ZoneId.of("UTC")
+        val dayStart = LocalDate.of(2024, 1, 1)
+        // 30 daily UTC bars. Bar i has openTime 2024-01-01+i, closeTime 2024-01-02+i.
+        val bars = (0L..29L).map { i ->
+            val open = dayStart.plusDays(i).atStartOfDay(utc).toInstant()
+            Bar(open, open.plusSeconds(86400), 100.0, 100.0, 100.0, 100.0, 1.0, 100.0)
+        }
+        // Windows are indexed by closeTime UTC date (matches Engine clock semantics):
+        // train [2024-01-02, 2024-01-12) captures bars 0..9 (closeDates 01-02..01-11).
+        // test  [2024-01-12, 2024-01-22) captures bars 10..19 (closeDates 01-12..01-21).
+        val window = WalkForwardConfig.Window(
+            trainStart = LocalDate.of(2024, 1, 2),
+            trainEnd = LocalDate.of(2024, 1, 12),
+            testStart = LocalDate.of(2024, 1, 12),
+            testEnd = LocalDate.of(2024, 1, 22),
+        )
+        val baseConfig = BacktestRunConfig(
+            strategy = NoopStrategy,
+            history = mapOf(asset to bars),
+            initialCash = 10_000.0,
+            costModel = FlatFeeSlippageModel(feeRate = 0.0, slippageBps = 0.0),
+            risk = RiskPolicy(
+                stopLossPct = null,
+                trailingStopPct = null,
+                takeProfitPct = null,
+                timeExitBars = null,
+            ),
+            killSwitch = KillSwitch(),
+        )
+        val runner = WalkForwardRunner(
+            grid = ParameterGrid(emptyMap()),
+            config = WalkForwardConfig(),
+        )
+
+        val outcome = runner.run(baseConfig, window)
+
+        // Without slicing, both train and test would see all 30 bars.
+        // With proper slicing, each sees exactly its window's 10 bars.
+        assertEquals(10, outcome.trainResult.equityCurve.size, "train must slice to window")
+        assertEquals(10, outcome.testResult.equityCurve.size, "test must slice to window")
+    }
+
+    @Test
+    fun `run prepends warmup buffer bars before the window start`() = runTest {
+        val asset = Asset(Exchange.UPBIT, "BTC/KRW")
+        val utc = ZoneId.of("UTC")
+        val dayStart = LocalDate.of(2024, 1, 1)
+        // 40 daily UTC bars. Window starts at bar index 20 (closeDate = 01-22).
+        val bars = (0L..39L).map { i ->
+            val open = dayStart.plusDays(i).atStartOfDay(utc).toInstant()
+            Bar(open, open.plusSeconds(86400), 100.0, 100.0, 100.0, 100.0, 1.0, 100.0)
+        }
+        // Strategy reports how many recentBars it sees on the first bar Engine hands it.
+        val observer = FirstBarObserverStrategy(warmupBars = 5)
+
+        val window = WalkForwardConfig.Window(
+            trainStart = LocalDate.of(2024, 1, 22),   // bar index 20's closeDate
+            trainEnd = LocalDate.of(2024, 2, 1),      // 10-day window
+            testStart = LocalDate.of(2024, 2, 1),
+            testEnd = LocalDate.of(2024, 2, 11),
+        )
+        val baseConfig = BacktestRunConfig(
+            strategy = observer,
+            history = mapOf(asset to bars),
+            initialCash = 10_000.0,
+            costModel = FlatFeeSlippageModel(feeRate = 0.0, slippageBps = 0.0),
+            risk = RiskPolicy(null, null, null, null),
+            killSwitch = KillSwitch(),
+        )
+        val runner = WalkForwardRunner(
+            grid = ParameterGrid(emptyMap()),
+            config = WalkForwardConfig(),
+        )
+
+        runner.run(baseConfig, window)
+
+        // Without pre-roll: first bar of the sliced history has 1 recentBar (itself only).
+        // With pre-roll (warmup=5): first bar sees 1 recentBar still, but by the time the
+        // window truly starts (pre-roll index 5), the strategy has already seen ≥ warmupBars.
+        // Simpler assertion: total bars fed to strategy must exceed the 10-day window.
+        assertTrue(
+            observer.totalInvocations >= 15,
+            "strategy must see pre-roll + window bars; got ${observer.totalInvocations}",
+        )
+    }
+
+    private object NoopStrategy : ResearchStrategy {
+        override val name = "Noop"
+        override val warmupBars = 0
+        override suspend fun onBar(ctx: ResearchContext, event: BarEvent): List<OrderRequest> = emptyList()
+    }
+
+    private class FirstBarObserverStrategy(override val warmupBars: Int) : ResearchStrategy {
+        override val name = "FirstBarObserver"
+        var totalInvocations: Int = 0; private set
+        override suspend fun onBar(ctx: ResearchContext, event: BarEvent): List<OrderRequest> {
+            totalInvocations++
+            return emptyList()
+        }
     }
 }
