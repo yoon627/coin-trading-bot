@@ -169,6 +169,75 @@ class EngineSmokeTest {
     }
 
     @Test
+    fun `daily-DD entry block waits for all same-closeTime marks`() = runTest {
+        // Same partial-mark issue as total-DD halt batching, but for the entry-block gate.
+        // On bar 1, A's close (50) alone shows 15% daily DD vs dayStart (10_000) — enough to
+        // trip shouldBlockEntries. B's same-closeTime close (150) restores equity to the
+        // 10% threshold. Pre-fix: the gate was evaluated per event, so any signal emitted
+        // on A's bar-1 event was dropped based on asset tie-break order. Post-fix: signals
+        // buffer per closeTime group and submit at the last event using fully-marked equity.
+        val t0 = Instant.parse("2024-01-01T00:00:00Z")
+        val t1 = t0.plusSeconds(86400)
+        val t2 = t0.plusSeconds(2 * 86400)
+        val t3 = t0.plusSeconds(3 * 86400)
+
+        val assetA = Asset(Exchange.UPBIT, "A/KRW")
+        val assetB = Asset(Exchange.UPBIT, "B/KRW")
+
+        // Bar 0 flat at 100 seeds bar-1 open fills of Notional(3000) each.
+        // Bar 1 close: A=50 (partial DD 15%), B=150 (full DD 0%).
+        // Bar 2 flat at bar-1 close so the extra bar-1 signal can fill cleanly at bar-2 open.
+        val barsA = listOf(
+            Bar(t0, t1, 100.0, 100.0, 100.0, 100.0, 1.0, 100.0),
+            Bar(t1, t2, 100.0, 100.0, 50.0, 50.0, 1.0, 50.0),
+            Bar(t2, t3, 50.0, 50.0, 50.0, 50.0, 1.0, 50.0),
+        )
+        val barsB = listOf(
+            Bar(t0, t1, 100.0, 100.0, 100.0, 100.0, 1.0, 100.0),
+            Bar(t1, t2, 100.0, 150.0, 100.0, 150.0, 1.0, 150.0),
+            Bar(t2, t3, 150.0, 150.0, 150.0, 150.0, 1.0, 150.0),
+        )
+
+        val strategy = object : ResearchStrategy {
+            override val name = "ExtraBuyOnBar1A"
+            override val warmupBars = 0
+            override suspend fun onBar(ctx: ResearchContext, event: BarEvent): List<OrderRequest> {
+                // Bar 0: seed positions for both assets; fills at bar 1 open.
+                if (event.barIndex == 0L) {
+                    return listOf(OrderRequest(event.asset, OrderSide.BUY, SizingRule.Notional(3000.0)))
+                }
+                // Bar 1 event A only: emit a small extra BUY on A. Under partial-mark gating,
+                // shouldBlockEntries(8500) fires (15% DD) and the signal is dropped. Under the
+                // group-gated fix, the decision is deferred to the end of the closeTime group
+                // where full-mark equity is 10_000 → no block → signal submits → bar 2 fill.
+                if (event.barIndex == 1L && event.asset == assetA) {
+                    return listOf(OrderRequest(assetA, OrderSide.BUY, SizingRule.Notional(500.0)))
+                }
+                return emptyList()
+            }
+        }
+
+        val config = BacktestRunConfig(
+            strategy = strategy,
+            history = mapOf(assetA to barsA, assetB to barsB),
+            initialCash = 10_000.0,
+            costModel = FlatFeeSlippageModel(feeRate = 0.0, slippageBps = 0.0),
+            risk = RiskPolicy(null, null, null, null),
+            killSwitch = KillSwitch(dailyDdHaltPct = 0.10, totalDdHaltPct = null),
+        )
+
+        val result = Engine.run(config)
+
+        // 2 bar-0 seed fills at bar 1 open + 1 extra A fill at bar 2 open = 3 total.
+        // Pre-fix this is 2 because the bar-1 extra signal is dropped by the partial mark.
+        assertEquals(
+            3,
+            result.fills.size,
+            "daily-DD entry block must not fire on partial per-asset marks; got ${result.fills}",
+        )
+    }
+
+    @Test
     fun `engine closes position via stop-loss at next bar open`() = runTest {
         val t0 = Instant.parse("2024-01-01T00:00:00Z")
         // Flat prices until entry (bar 5), then sharp fall to trigger a 1% stop-loss.
