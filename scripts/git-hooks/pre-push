@@ -1,0 +1,135 @@
+#!/bin/bash
+# pre-push gate: runs `codex exec review` at high reasoning on the commits being pushed.
+# Policy: fail-closed on codex errors; docs-only pushes bypass; no --no-verify escape hatch.
+#
+# Stdin from git: <local_ref> <local_sha> <remote_ref> <remote_sha>  per ref being pushed.
+# We review each ref's (remote_sha..local_sha) range.
+
+set -uo pipefail
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+LOG_DIR="$(git rev-parse --git-dir)/codex-pre-push"
+mkdir -p "$LOG_DIR"
+
+# Detect codex CLI
+if ! command -v codex >/dev/null 2>&1; then
+  echo "[codex-pre-push] FAIL: codex CLI not found on PATH. Install codex or adjust PATH." >&2
+  echo "[codex-pre-push]        Fail-closed: push blocked." >&2
+  exit 1
+fi
+
+# Read ref updates from stdin. If none, nothing to push.
+ref_updates=""
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_ref:-}" ] && continue
+  ref_updates+="$local_ref $local_sha $remote_ref $remote_sha"$'\n'
+done
+
+if [ -z "${ref_updates// /}" ]; then
+  exit 0
+fi
+
+# Helper: decide if a diff touches only docs.
+is_docs_only() {
+  local base="$1" head="$2"
+  local files
+  files="$(git diff --name-only "$base..$head")" || return 1
+  [ -z "$files" ] && return 1
+  # Any file NOT matching doc patterns disqualifies docs-only.
+  if echo "$files" | grep -qvE '\.(md|txt|rst|adoc)$|^docs/|^\.claude/|^\.github/'; then
+    return 1
+  fi
+  return 0
+}
+
+review_ref() {
+  local local_ref="$1" local_sha="$2" remote_ref="$3" remote_sha="$4"
+
+  # Deletions: remote_ref deletion pushes local_sha=ZERO_SHA. Nothing to review.
+  if [ "$local_sha" = "$ZERO_SHA" ]; then
+    echo "[codex-pre-push] $local_ref: deletion, skipping review."
+    return 0
+  fi
+
+  # New branch push: remote_sha is ZERO_SHA. Base on merge-base with main.
+  local base
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    base="$(git merge-base main "$local_sha" 2>/dev/null || echo "${local_sha}^")"
+    echo "[codex-pre-push] $local_ref: new branch, reviewing $base..$local_sha"
+  else
+    base="$remote_sha"
+    echo "[codex-pre-push] $local_ref: reviewing $base..$local_sha"
+  fi
+
+  if [ "$base" = "$local_sha" ]; then
+    echo "[codex-pre-push] $local_ref: no new commits."
+    return 0
+  fi
+
+  if is_docs_only "$base" "$local_sha"; then
+    echo "[codex-pre-push] $local_ref: docs-only push, bypassing codex review."
+    return 0
+  fi
+
+  local ts log_file review_file
+  ts="$(date +%Y%m%d-%H%M%S)"
+  log_file="$LOG_DIR/${ts}.log"
+  review_file="$LOG_DIR/${ts}.review.md"
+
+  echo "[codex-pre-push] running codex exec review --base $base (high reasoning)..."
+  # codex exec review --base is incompatible with custom PROMPT; default review covers
+  # correctness + concurrency + security + style + tests.
+  if ! codex exec review \
+      --base "$base" \
+      --dangerously-bypass-approvals-and-sandbox \
+      -c model_reasoning_effort=high \
+      -o "$review_file" \
+      --title "pre-push gate ${local_ref}" </dev/null >"$log_file" 2>&1; then
+    echo "[codex-pre-push] FAIL: codex exec review exited non-zero." >&2
+    echo "[codex-pre-push] Log: $log_file" >&2
+    tail -80 "$log_file" >&2
+    return 1
+  fi
+
+  # review_file often empty from `codex exec review` (known quirk). Fall back to log.
+  local content=""
+  if [ -s "$review_file" ]; then
+    content="$(cat "$review_file")"
+  fi
+  if [ -z "$content" ]; then
+    content="$(cat "$log_file")"
+  fi
+
+  # Verdict parsing.
+  if echo "$content" | grep -qiE '(^|[^[:alnum:]_])REQUEST_CHANGES([^[:alnum:]_]|$)'; then
+    echo "[codex-pre-push] BLOCK: codex returned REQUEST_CHANGES for $local_ref." >&2
+    echo "[codex-pre-push] Review output:" >&2
+    echo "$content" | tail -120 >&2
+    echo "[codex-pre-push] Full log: $log_file" >&2
+    echo "[codex-pre-push] Review:   $review_file" >&2
+    return 1
+  fi
+
+  if echo "$content" | grep -qiE '(^|[^[:alnum:]_])APPROVE([^[:alnum:]_]|$)'; then
+    echo "[codex-pre-push] OK: codex APPROVE for $local_ref."
+    return 0
+  fi
+
+  # Fail-closed when the verdict line is absent or unclear.
+  echo "[codex-pre-push] FAIL: could not parse APPROVE/REQUEST_CHANGES verdict. Fail-closed." >&2
+  echo "[codex-pre-push] Log: $log_file" >&2
+  tail -60 "$log_file" >&2
+  return 1
+}
+
+status=0
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  # shellcheck disable=SC2086
+  set -- $line
+  if ! review_ref "$1" "$2" "$3" "$4"; then
+    status=1
+  fi
+done <<< "$ref_updates"
+
+exit "$status"
