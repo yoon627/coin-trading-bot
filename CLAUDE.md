@@ -21,3 +21,17 @@
 
 - 아키텍처 변경은 `PROJECT_ANALYSIS.md`에 반영
 - 설계 스펙은 `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
+
+## 문서 동기화 대상
+
+글로벌 `~/.claude/CLAUDE.md`의 "문서 동기화(범위 한정)" 기준에 해당할 때 업데이트:
+
+| 변경 종류 | 업데이트 대상 |
+|-----------|---------------|
+| 외부 visible behavior / Public API / CLI 변경 | `README.md` |
+| 모듈 구조·의존성·아키텍처 변경 | `PROJECT_ANALYSIS.md` + `README.md` (해당 섹션) |
+| 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
+| 운영/배포 절차 변경 | `docs/runbook/` (존재 시) 또는 `README.md`의 운영 섹션 |
+| 보안 정책 변경 | `SECURITY.md` (존재 시) |
+
+내부 리팩터·테스트 전용·invisible 버그 수정은 문서 업데이트 불필요.
