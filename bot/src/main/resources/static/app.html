@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Tide — 자동매매</title>
+<link rel="stylesheet" href="tide-app/tokens.css"/>
+<style>
+  body { background: var(--bg-soft); }
+  #root { min-height: 100vh; }
+  .loading-screen { display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; gap: 16px; color: var(--ink-500); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="root"><div class="loading-screen"><span class="tide-spinner"></span><span>Tide 로딩 중…</span></div></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="tide-app/api.js"></script>
+<script type="text/babel" src="tide-app/ui.jsx"></script>
+<script type="text/babel" src="tide-app/screens.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  const [user, setUser] = React.useState(null);
+  const [active, setActive] = React.useState(() => {
+    const h = location.hash.replace('#', '');
+    return ['dashboard','bot','trade','orders','backtest','wallet','settings'].includes(h) ? h : 'dashboard';
+  });
+  const [authChecked, setAuthChecked] = React.useState(false);
+
+  const refreshUser = React.useCallback(async () => {
+    try {
+      const u = await TideAPI.me();
+      setUser(u);
+    } catch (e) {
+      // 401 already redirects in api.js
+    } finally {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  React.useEffect(() => { refreshUser(); }, [refreshUser]);
+  React.useEffect(() => { location.hash = active; }, [active]);
+
+  if (!authChecked || !user) {
+    return <div className="loading-screen"><span className="tide-spinner"/><span>인증 확인 중…</span></div>;
+  }
+
+  const props = { user, setActive, refreshUser };
+  switch (active) {
+    case 'dashboard': return <Dashboard {...props}/>;
+    case 'bot':       return <BotPage {...props}/>;
+    case 'trade':     return <TradePage {...props}/>;
+    case 'orders':    return <OrdersPage {...props}/>;
+    case 'backtest':  return <BacktestPage {...props}/>;
+    case 'wallet':    return <WalletPage {...props}/>;
+    case 'settings':  return <SettingsPage {...props}/>;
+    default:          return <Dashboard {...props}/>;
+  }
+}
+
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  }, 50);
+});
+</script>
+</body>
+</html>

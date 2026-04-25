@@ -1,106 +1,113 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Coin Trading Bot</title>
-    <link rel="stylesheet" href="/css/style.css">
-    <style>
-        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        .auth-card { width: 100%; max-width: 400px; padding: 2rem; }
-        .auth-card h1 { font-size: 1.5rem; margin-bottom: 0.5rem; text-align: center; }
-        .auth-card p.sub { color: var(--text-muted); text-align: center; margin-bottom: 2rem; font-size: 0.875rem; }
-        .form-group { margin-bottom: 1rem; }
-        .form-group label { display: block; margin-bottom: 0.25rem; font-size: 0.8rem; color: var(--text-muted); }
-        .form-group input { width: 100%; padding: 0.6rem 0.75rem; background: var(--bg); color: var(--text);
-            border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem; }
-        .form-group input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-        .btn-full { width: 100%; padding: 0.65rem; margin-top: 0.5rem; }
-        .toggle { text-align: center; margin-top: 1.5rem; font-size: 0.85rem; color: var(--text-muted); }
-        .toggle a { color: var(--accent); cursor: pointer; text-decoration: none; }
-        .error-msg { color: var(--red); font-size: 0.85rem; margin-top: 0.5rem; text-align: center; display: none; }
-    </style>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Tide — 로그인</title>
+<link rel="stylesheet" href="tide-app/tokens.css"/>
+<style>
+  body { background: var(--bg-soft); }
+  .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  .login-card { width: 100%; max-width: 400px; background: #fff; border: 1px solid var(--ink-200); border-radius: 20px; padding: 40px 32px; }
+  .login-tab { flex: 1; padding: 10px; text-align: center; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; }
+</style>
 </head>
 <body>
-    <div class="card auth-card">
-        <h1 id="title">Login</h1>
-        <p class="sub">Coin Trading Bot</p>
-        <div id="error" class="error-msg"></div>
-        <form id="auth-form" onsubmit="return handleSubmit(event)">
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" required minlength="3" autocomplete="username">
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" required minlength="6" autocomplete="current-password">
-            </div>
-            <div id="api-keys-section" style="display:none;">
-                <hr style="border-color:var(--border); margin:1rem 0;">
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.75rem;">Upbit API Keys (Upbit > My Page > Open API)</p>
-                <div class="form-group">
-                    <label for="access-key">Access Key</label>
-                    <input type="text" id="access-key" placeholder="Upbit Access Key">
-                </div>
-                <div class="form-group">
-                    <label for="secret-key">Secret Key</label>
-                    <input type="password" id="secret-key" placeholder="Upbit Secret Key">
-                </div>
-            </div>
-            <button type="submit" id="submit-btn" class="btn btn-secondary btn-full">Login</button>
-        </form>
-        <div class="toggle">
-            <span id="toggle-text">Don't have an account? </span>
-            <a id="toggle-link" onclick="toggleMode()">Register</a>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="tide-app/api.js"></script>
+
+<script type="text/babel">
+function TideLogo() {
+  return (
+    <svg width="44" height="44" viewBox="0 0 24 24" fill="none">
+      <path d="M2 14 Q 5 10, 8 14 T 14 14 T 20 14 T 23 14" stroke="#00A6B6" strokeWidth="2.4" strokeLinecap="round"/>
+      <path d="M2 18 Q 5 15.5, 8 18 T 14 18 T 20 18 T 23 18" stroke="#00A6B6" strokeWidth="2.4" strokeLinecap="round" opacity="0.45"/>
+    </svg>
+  );
+}
+
+function Auth() {
+  const [mode, setMode] = React.useState('login');
+  const [username, setUsername] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [accessKey, setAccessKey] = React.useState('');
+  const [secretKey, setSecretKey] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true); setErr(null);
+    try {
+      if (mode === 'login') {
+        await TideAPI.login(username, password);
+      } else {
+        await TideAPI.register(username, password, accessKey || undefined, secretKey || undefined);
+        await TideAPI.login(username, password);
+      }
+      location.href = '/app.html';
+    } catch (e) {
+      setErr(e.message || '오류가 발생했습니다');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <TideLogo/>
+          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 12, letterSpacing: '-0.03em' }}>Tide</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-500)', marginTop: 4 }}>흐름을 읽는 자동매매</div>
         </div>
+
+        <div style={{ display: 'flex', gap: 4, padding: 4, background: 'var(--ink-100)', borderRadius: 10, marginBottom: 24 }}>
+          <div className="login-tab" style={{ background: mode === 'login' ? '#fff' : 'transparent', color: mode === 'login' ? 'var(--ink-900)' : 'var(--ink-500)' }} onClick={() => setMode('login')}>로그인</div>
+          <div className="login-tab" style={{ background: mode === 'register' ? '#fff' : 'transparent', color: mode === 'register' ? 'var(--ink-900)' : 'var(--ink-500)' }} onClick={() => setMode('register')}>회원가입</div>
+        </div>
+
+        <form onSubmit={submit}>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 6 }}>아이디</div>
+            <input className="tide-input" value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username"/>
+          </div>
+          <div style={{ marginBottom: mode === 'register' ? 12 : 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 6 }}>비밀번호</div>
+            <input className="tide-input" type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete={mode === 'login' ? 'current-password' : 'new-password'}/>
+          </div>
+
+          {mode === 'register' && <>
+            <div style={{ fontSize: 11, color: 'var(--ink-500)', marginBottom: 8, padding: '8px 0', borderTop: '1px solid var(--ink-100)', marginTop: 8 }}>Upbit API 키 (나중에 설정에서 추가 가능)</div>
+            <div style={{ marginBottom: 10 }}>
+              <input className="tide-input mono" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="Access Key (선택)"/>
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="Secret Key (선택)"/>
+            </div>
+          </>}
+
+          {err && <div style={{ padding: 12, background: 'var(--up-soft)', color: 'var(--up)', borderRadius: 8, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+
+          <button type="submit" disabled={busy} style={{
+            width: '100%', height: 52, background: 'var(--tide-primary)', color: '#fff',
+            border: 'none', borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
+            fontFamily: 'inherit', letterSpacing: '-0.01em',
+          }}>{busy ? '처리 중…' : (mode === 'login' ? '로그인' : '계정 만들기')}</button>
+        </form>
+
+        <div style={{ marginTop: 20, padding: 12, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 11, color: 'var(--tide-primary-ink)', lineHeight: 1.5 }}>
+          🛡 모든 API 키는 AES-GCM으로 암호화 저장됩니다. <strong>출금 권한은 절대 부여하지 마세요.</strong>
+        </div>
+      </div>
     </div>
-    <script>
-        let isLogin = true;
-        function toggleMode() {
-            isLogin = !isLogin;
-            document.getElementById('title').textContent = isLogin ? 'Login' : 'Register';
-            document.getElementById('submit-btn').textContent = isLogin ? 'Login' : 'Register';
-            document.getElementById('toggle-text').textContent = isLogin ? "Don't have an account? " : "Already have an account? ";
-            document.getElementById('toggle-link').textContent = isLogin ? 'Register' : 'Login';
-            document.getElementById('error').style.display = 'none';
-            document.getElementById('api-keys-section').style.display = isLogin ? 'none' : '';
-        }
-        async function handleSubmit(e) {
-            e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-            const body = { username, password };
-            if (!isLogin) {
-                const ak = document.getElementById('access-key').value.trim();
-                const sk = document.getElementById('secret-key').value.trim();
-                if (ak) body.upbit_access_key = ak;
-                if (sk) body.upbit_secret_key = sk;
-            }
-            try {
-                const res = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                if (!res.ok) {
-                    const data = await res.json().catch(() => ({}));
-                    throw new Error(data.message || `Error ${res.status}`);
-                }
-                const data = await res.json();
-                localStorage.setItem('username', data.username);
-                window.location.href = '/';
-            } catch (err) {
-                const el = document.getElementById('error');
-                el.textContent = err.message;
-                el.style.display = 'block';
-            }
-            return false;
-        }
-        // Redirect if already authenticated via cookie
-        fetch('/api/user/me').then(res => {
-            if (res.ok) window.location.href = '/';
-        }).catch(() => {});
-    </script>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Auth/>);
+</script>
 </body>
 </html>
