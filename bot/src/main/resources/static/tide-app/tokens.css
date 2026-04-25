@@ -1,0 +1,71 @@
+/* Tide — Design tokens (Toss-inspired)
+ * Loaded by both the design canvas and the live app.
+ */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --tide-primary: #00A6B6;
+  --tide-primary-hover: #008A98;
+  --tide-primary-soft: #E5F7F8;
+  --tide-primary-ink: #004F58;
+
+  --up: #FF3B5C;
+  --up-soft: #FFEEF1;
+  --down: #2D6FF7;
+  --down-soft: #EBF1FE;
+  --warn: #FF9F1C;
+  --warn-soft: #FFF4E5;
+
+  --ink-900: #111827;
+  --ink-800: #1F2937;
+  --ink-700: #374151;
+  --ink-600: #4B5563;
+  --ink-500: #6B7280;
+  --ink-400: #9CA3AF;
+  --ink-300: #D1D5DB;
+  --ink-200: #E5E7EB;
+  --ink-100: #F3F4F6;
+  --ink-50:  #F9FAFB;
+  --bg:      #FFFFFF;
+  --bg-soft: #FAFBFC;
+
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 20px; --r-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(17,24,39,0.04), 0 1px 1px rgba(17,24,39,0.03);
+  --shadow-md: 0 4px 12px rgba(17,24,39,0.05), 0 1px 2px rgba(17,24,39,0.03);
+  --shadow-lg: 0 12px 32px rgba(17,24,39,0.08), 0 2px 6px rgba(17,24,39,0.04);
+
+  --font-sans: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: var(--font-sans); color: var(--ink-900); -webkit-font-smoothing: antialiased; background: var(--bg-soft); }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.num { font-feature-settings: 'tnum'; letter-spacing: -0.01em; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+
+.tide-input {
+  width: 100%; height: 44px; padding: 0 14px;
+  border: 1px solid var(--ink-200); border-radius: 10px;
+  font-size: 14px; font-weight: 600; font-family: var(--font-sans);
+  color: var(--ink-900); background: #fff; outline: none;
+  transition: border-color .12s, box-shadow .12s;
+}
+.tide-input:focus { border-color: var(--tide-primary); box-shadow: 0 0 0 3px var(--tide-primary-soft); }
+input[type="range"] { accent-color: var(--tide-primary); }
+
+.tide-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.tide-scroll::-webkit-scrollbar-thumb { background: var(--ink-200); border-radius: 999px; }
+.tide-scroll::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes tide-spin { to { transform: rotate(360deg); } }
+.tide-spinner {
+  width: 18px; height: 18px; border: 2px solid var(--ink-200);
+  border-top-color: var(--tide-primary); border-radius: 50%;
+  animation: tide-spin .8s linear infinite; display: inline-block;
+}
