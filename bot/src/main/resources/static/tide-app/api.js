@@ -29,8 +29,14 @@ const TideAPI = {
 
   // Auth
   login: (username, password) => TideAPI._fetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  // Backend uses Jackson SNAKE_CASE strategy, so optional API key fields must be
+  // sent as snake_case or they're silently dropped from AuthRequest.
   register: (username, password, upbitAccessKey, upbitSecretKey) =>
-    TideAPI._fetch('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password, upbitAccessKey, upbitSecretKey }) }),
+    TideAPI._fetch('/api/auth/register', { method: 'POST', body: JSON.stringify({
+      username, password,
+      upbit_access_key: upbitAccessKey,
+      upbit_secret_key: upbitSecretKey,
+    }) }),
   logout: () => TideAPI._fetch('/api/auth/logout', { method: 'POST' }),
   me: () => TideAPI._fetch('/api/user/me'),
 
@@ -56,8 +62,13 @@ const TideAPI = {
   sell: (market, opts) => TideAPI._fetch('/api/trade/sell', { method: 'POST', body: JSON.stringify({ market, ...opts }) }),
 
   // Settings
+  // Same SNAKE_CASE concern as register — UpbitKeysRequest.accessKey on the
+  // wire is access_key.
   saveKeys: (accessKey, secretKey) =>
-    TideAPI._fetch('/api/user/keys', { method: 'POST', body: JSON.stringify({ accessKey, secretKey }) }),
+    TideAPI._fetch('/api/user/keys', { method: 'POST', body: JSON.stringify({
+      access_key: accessKey,
+      secret_key: secretKey,
+    }) }),
 
   // Leaderboard
   leaderboard: () => TideAPI._fetch('/api/leaderboard'),
