@@ -16,7 +16,11 @@ class RateLimitFilter(
 
     companion object {
         private const val MAX_REQUESTS_PER_MINUTE = 60
-        private const val MAX_AUTH_REQUESTS_PER_MINUTE = 10
+        // Auth flows include register+login pairs (2 calls/success) and natural
+        // retries on validation failure; 10/min was too tight for legitimate SPA
+        // use, especially since all browser traffic shares one client IP behind
+        // Docker NAT. Brute-force defense at 30/min is still meaningful.
+        private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30
         private const val KEY_PREFIX = "ratelimit:"
         private val WINDOW = Duration.ofMinutes(1)
     }
