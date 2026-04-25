@@ -28,7 +28,16 @@ class TradingController(
         val userId = currentUserId()
         val tickers = req?.tickers?.let(requestValidators::normalizeMarkets)
         val strategy = req?.strategy?.let(requestValidators::normalizeStrategy)
-        return userTradingManager.startBot(userId, tickers, strategy)
+        val result = userTradingManager.startBot(userId, tickers, strategy)
+        // UserTradingManager returns {"error": "..."} for precondition failures
+        // (no API keys, user missing). Surface those as proper 4xx so clients
+        // can branch on status instead of having to inspect the body.
+        result["error"]?.let { msg ->
+            val status = if ((msg as? String)?.contains("not found", ignoreCase = true) == true)
+                HttpStatus.NOT_FOUND else HttpStatus.BAD_REQUEST
+            throw ResponseStatusException(status, msg.toString())
+        }
+        return result
     }
 
     @PostMapping("/bot/stop")
@@ -45,11 +54,10 @@ class TradingController(
     suspend fun changeStrategy(@RequestBody request: StrategyRequest): Map<String, Any> {
         val strategy = requestValidators.normalizeStrategy(request.strategy)
         val success = userTradingManager.setStrategy(currentUserId(), strategy)
-        return if (success) {
-            mapOf("status" to "changed", "strategy" to strategy)
-        } else {
-            mapOf("status" to "error", "message" to "Unknown strategy: $strategy")
+        if (!success) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown strategy: $strategy")
         }
+        return mapOf("status" to "changed", "strategy" to strategy)
     }
 
     @GetMapping("/account")
