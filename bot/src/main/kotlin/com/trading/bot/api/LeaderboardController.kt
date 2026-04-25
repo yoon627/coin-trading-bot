@@ -100,19 +100,28 @@ class LeaderboardController(
     suspend fun updateSettings(@RequestBody req: UserSettingsRequest): Map<String, Any> {
         val userId = currentUserId()
         val user = userRepository.findById(userId).awaitSingle()
-        val webhookUrl = requestValidators.normalizeDiscordWebhookUrl(req.discordWebhookUrl)
-        userRepository.save(
+        // Mirror the publicProfile/publicStrategy semantics for the webhook: only
+        // overwrite when the field is actually present in the request. Otherwise
+        // a partial update (e.g. toggling profile visibility) silently wipes a
+        // stored Discord webhook. To clear, send an empty string — that
+        // normalizes to null via normalizeDiscordWebhookUrl.
+        val nextWebhook = if (req.discordWebhookUrl != null) {
+            requestValidators.normalizeDiscordWebhookUrl(req.discordWebhookUrl)
+        } else {
+            user.discordWebhookUrl
+        }
+        val saved = userRepository.save(
             user.copy(
                 publicProfile = req.publicProfile ?: user.publicProfile,
                 publicStrategy = req.publicStrategy ?: user.publicStrategy,
-                discordWebhookUrl = webhookUrl,
+                discordWebhookUrl = nextWebhook,
             )
         ).awaitSingle()
         userTradingManager.reloadUserRuntime(userId)
         return mapOf(
-            "public_profile" to (req.publicProfile ?: user.publicProfile),
-            "public_strategy" to (req.publicStrategy ?: user.publicStrategy),
-            "has_discord_webhook" to (webhookUrl != null),
+            "public_profile" to saved.publicProfile,
+            "public_strategy" to saved.publicStrategy,
+            "has_discord_webhook" to !saved.discordWebhookUrl.isNullOrBlank(),
         )
     }
 }

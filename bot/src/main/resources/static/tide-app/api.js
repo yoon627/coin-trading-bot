@@ -70,6 +70,11 @@ const TideAPI = {
       secret_key: secretKey,
     }) }),
 
+  // Profile + notifications. Server preserves any field omitted from the body
+  // (snake_case wire format matches Jackson SNAKE_CASE strategy).
+  updateSettings: (patch) =>
+    TideAPI._fetch('/api/user/settings', { method: 'POST', body: JSON.stringify(patch) }),
+
   // Leaderboard
   leaderboard: () => TideAPI._fetch('/api/leaderboard'),
 

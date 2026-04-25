@@ -80,6 +80,21 @@ class RateLimitFilterTest {
     }
 
     @Test
+    fun `filter skips tide-app static bundle paths`() {
+        val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
+        val filter = RateLimitFilter(redisTemplate)
+        for (path in listOf("/tide-app/api.js", "/tide-app/screens.jsx", "/tide-app/tokens.css", "/tide-app/ui.jsx")) {
+            val exchange = MockServerWebExchange.from(MockServerHttpRequest.get(path).build())
+            val chain = mockk<WebFilterChain>()
+            every { chain.filter(exchange) } returns Mono.empty()
+
+            filter.filter(exchange, chain).block()
+
+            io.mockk.verify { chain.filter(exchange) }
+        }
+    }
+
+    @Test
     fun `filter allows requests within rate limit`() {
         val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
         val valueOps = mockk<ReactiveValueOperations<String, String>>()
