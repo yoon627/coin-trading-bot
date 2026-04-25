@@ -62,11 +62,10 @@ function App() {
   }
 }
 
-window.addEventListener('load', () => {
-  setTimeout(() => {
-    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
-  }, 50);
-});
+// Babel-standalone compiles type="text/babel" scripts asynchronously, so this
+// inline block typically runs AFTER the window 'load' event has already fired.
+// Mount directly instead of waiting for an event that won't be re-emitted.
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
