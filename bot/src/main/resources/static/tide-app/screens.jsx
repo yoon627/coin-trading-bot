@@ -287,7 +287,7 @@ function TradePage({ user, setActive }) {
                   border: '1px solid', borderColor: market === m ? 'var(--tide-primary)' : 'transparent',
                 }}>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>{m}</div>
-                  <div className="num" style={{ fontSize: 16, fontWeight: 700, marginTop: 4 }}>{fmtKRW(price)}</div>
+                  <div className="num" style={{ fontSize: 16, fontWeight: 700, marginTop: 4 }}>{fmtKRW(price?.trade_price)}</div>
                 </div>
               ))}
               {!Object.keys(prices.data || {}).length && <Empty icon="chart" title="가격 스트림 없음" message="봇을 시작하면 가격이 수집됩니다"/>}
@@ -327,8 +327,10 @@ function TradePage({ user, setActive }) {
 
 // ── ORDERS / TRADES HISTORY ───────────────────────────────
 function OrdersPage({ user, setActive }) {
-  const trades = useAPI(() => TideAPI.trades().catch(() => []), [], 10000);
-  const list = trades.data || [];
+  const trades = useAPI(() => TideAPI.trades().catch(() => null), [], 10000);
+  // /api/trades returns { total, limit, offset, records } — pull the array out
+  // of the envelope, otherwise list.length is undefined and trades render as empty.
+  const list = trades.data?.records || [];
 
   return (
     <Shell active="orders" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
@@ -345,7 +347,7 @@ function OrdersPage({ user, setActive }) {
           </div>
           {list.slice(0, 100).map((o, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: '160px 110px 70px 1fr 1fr 1fr 110px', padding: '14px 24px', fontSize: 13, alignItems: 'center', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
-              <span className="num" style={{ color: 'var(--ink-500)', fontSize: 11.5 }}>{(o.tradedAt || o.traded_at || '').toString().slice(0, 19).replace('T', ' ')}</span>
+              <span className="num" style={{ color: 'var(--ink-500)', fontSize: 11.5 }}>{(o.created_at || o.tradedAt || o.traded_at || '').toString().slice(0, 19).replace('T', ' ')}</span>
               <span style={{ fontWeight: 600 }}>{o.market || o.ticker}</span>
               <span style={{ color: (o.side || '').toUpperCase() === 'BUY' ? 'var(--up)' : 'var(--down)', fontWeight: 600, fontSize: 12 }}>{(o.side || '').toUpperCase() === 'BUY' ? '매수' : '매도'}</span>
               <span className="num" style={{ textAlign: 'right' }}>{fmtKRW(o.price)}</span>
