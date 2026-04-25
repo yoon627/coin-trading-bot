@@ -31,7 +31,8 @@ class RateLimitFilter(
         val path = exchange.request.path.value()
         // 정적 리소스와 헬스체크만 Rate Limiting 제외
         if (path.startsWith("/actuator") ||
-            path.startsWith("/css") || path.startsWith("/js") || path == "/" ||
+            path.startsWith("/css") || path.startsWith("/js") ||
+            path.startsWith("/tide-app") || path == "/" ||
             path.endsWith(".html") || path.startsWith("/api/prices")
         ) {
             return chain.filter(exchange)
