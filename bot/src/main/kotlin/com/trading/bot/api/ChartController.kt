@@ -10,10 +10,12 @@ import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
 import com.trading.common.indicator.Indicators
 import kotlinx.coroutines.reactor.awaitSingle
+import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.server.ResponseStatusException
 
 @RestController
 @RequestMapping("/api/chart")
@@ -24,13 +26,13 @@ class ChartController(
 
     @GetMapping("/candles")
     suspend fun getCandles(
-        @RequestParam exchange: String,
+        @RequestParam(defaultValue = "upbit") exchange: String,
         @RequestParam market: String,
         @RequestParam interval: String,
         @RequestParam(defaultValue = "100") count: Int,
     ): List<CandleResponse> {
-        val ex = Exchange.valueOf(exchange.uppercase())
-        val ci = CandleInterval.fromLabel(interval)
+        val ex = parseExchange(exchange)
+        val ci = parseInterval(interval)
 
         // Try in-memory first
         val memoryCandles = marketDataStore.getCandles(ex, market, ci, count)
@@ -48,14 +50,14 @@ class ChartController(
 
     @GetMapping("/indicators")
     suspend fun getIndicators(
-        @RequestParam exchange: String,
+        @RequestParam(defaultValue = "upbit") exchange: String,
         @RequestParam market: String,
         @RequestParam interval: String,
         @RequestParam(defaultValue = "rsi,macd,bb") indicators: String,
         @RequestParam(defaultValue = "50") count: Int,
     ): IndicatorResponse {
-        val ex = Exchange.valueOf(exchange.uppercase())
-        val ci = CandleInterval.fromLabel(interval)
+        val ex = parseExchange(exchange)
+        val ci = parseInterval(interval)
         val candles = marketDataStore.getCandles(ex, market, ci, count)
 
         val result = mutableMapOf<String, Any?>()
@@ -85,7 +87,7 @@ class ChartController(
     @GetMapping("/tickers")
     suspend fun getTickers(@RequestParam(required = false) exchange: String?): Map<String, TickerResponse> {
         val tickers = if (exchange != null) {
-            val ex = Exchange.valueOf(exchange.uppercase())
+            val ex = parseExchange(exchange)
             marketDataStore.getTickersByExchange(ex).associateBy { "${it.exchange}:${it.market}" }
         } else {
             marketDataStore.getAllTickers()
@@ -99,11 +101,23 @@ class ChartController(
         return markets.split(",").mapNotNull { spec ->
             val parts = spec.trim().split(":")
             if (parts.size != 2) return@mapNotNull null
-            val ex = Exchange.valueOf(parts[0].uppercase())
+            val ex = parseExchange(parts[0])
             val market = parts[1]
             marketDataStore.getLatestTicker(ex, market)?.toResponse()
         }
     }
+
+    private fun parseExchange(value: String): Exchange =
+        try { Exchange.valueOf(value.uppercase()) }
+        catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid exchange: $value")
+        }
+
+    private fun parseInterval(value: String): CandleInterval =
+        try { CandleInterval.fromLabel(value) }
+        catch (e: IllegalArgumentException) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, e.message ?: "Invalid interval: $value")
+        }
 
     data class CandleResponse(
         val exchange: String,
