@@ -34,7 +34,7 @@ class MlController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys required")
         }
 
-        val client = userTradingManager.createUpbitClient(user)
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
         val ticker = req.ticker ?: "KRW-BTC"
         val days = (req.days ?: 200).coerceIn(60, 200)
         val candles = client.getDayCandles(ticker, days)
@@ -78,7 +78,7 @@ class MlController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "No trained model for $ticker. Train first via POST /api/ml/train")
         }
 
-        val client = userTradingManager.createUpbitClient(user)
+        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
         val candles = client.getDayCandles(ticker, 60)
         val prediction = mlModelService.predict(ticker, candles)
             ?: throw ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Prediction failed")
