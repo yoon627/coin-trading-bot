@@ -263,7 +263,7 @@ function TradePage({ user, setActive }) {
   const sell = async (sellAll) => {
     setBusy(true);
     try {
-      await TideAPI.sell(market, sellAll ? { sellAll: true } : { volume });
+      await TideAPI.sell(market, sellAll ? { sell_all: true } : { volume });
       setToast({ msg: `${market} 매도 주문 완료`, tone: 'down' });
       portfolio.reload();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
