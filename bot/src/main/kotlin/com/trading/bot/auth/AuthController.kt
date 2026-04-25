@@ -13,9 +13,8 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.http.server.reactive.ServerHttpRequest
 import org.springframework.http.server.reactive.ServerHttpResponse
-import org.springframework.core.env.Environment
-import org.springframework.core.env.Profiles
 import org.springframework.web.server.ResponseStatusException
 import java.time.Duration
 
@@ -27,10 +26,9 @@ class AuthController(
     private val jwtProvider: JwtProvider,
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
-    private val environment: Environment,
 ) {
     @PostMapping("/register")
-    suspend fun register(@RequestBody req: AuthRequest, response: ServerHttpResponse): AuthResponse {
+    suspend fun register(@RequestBody req: AuthRequest, request: ServerHttpRequest, response: ServerHttpResponse): AuthResponse {
         val username = requestValidators.normalizeUsername(req.username)
         requestValidators.validatePassword(req.password)
         val existing = userRepository.findByUsername(username).awaitSingleOrNull()
@@ -56,12 +54,12 @@ class AuthController(
             )
         ).awaitSingle()
         val token = jwtProvider.generateToken(user.id!!, user.username)
-        writeAuthCookie(response, token)
+        writeAuthCookie(request, response, token)
         return AuthResponse(token = token, username = user.username)
     }
 
     @PostMapping("/login")
-    suspend fun login(@RequestBody req: AuthRequest, response: ServerHttpResponse): AuthResponse {
+    suspend fun login(@RequestBody req: AuthRequest, request: ServerHttpRequest, response: ServerHttpResponse): AuthResponse {
         val username = requestValidators.normalizeUsername(req.username)
         val user = userRepository.findByUsername(username).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")
@@ -69,15 +67,16 @@ class AuthController(
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")
         }
         val token = jwtProvider.generateToken(user.id!!, user.username)
-        writeAuthCookie(response, token)
+        writeAuthCookie(request, response, token)
         return AuthResponse(token = token, username = user.username)
     }
 
     @PostMapping("/logout")
-    fun logout(response: ServerHttpResponse): Map<String, String> {
+    fun logout(request: ServerHttpRequest, response: ServerHttpResponse): Map<String, String> {
         response.addCookie(
             ResponseCookie.from("token", "")
                 .httpOnly(true)
+                .secure(isHttps(request))
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(Duration.ZERO)
@@ -86,17 +85,27 @@ class AuthController(
         return mapOf("status" to "logged_out")
     }
 
-    private fun writeAuthCookie(response: ServerHttpResponse, token: String) {
-        val isProd = environment.acceptsProfiles(Profiles.of("prod"))
+    private fun writeAuthCookie(request: ServerHttpRequest, response: ServerHttpResponse, token: String) {
         response.addCookie(
             ResponseCookie.from("token", token)
                 .httpOnly(true)
-                .secure(isProd)
+                .secure(isHttps(request))
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(Duration.ofDays(1))
                 .build()
         )
+    }
+
+    // Mark the cookie Secure only when the request actually arrived over HTTPS,
+    // either directly or via a TLS-terminating reverse proxy. Tying this to the
+    // 'prod' profile broke local prod-mode (HTTP localhost) browsers that refuse
+    // Secure cookies over HTTP.
+    private fun isHttps(request: ServerHttpRequest): Boolean {
+        if (request.uri.scheme.equals("https", ignoreCase = true)) return true
+        return request.headers.getFirst("X-Forwarded-Proto")
+            ?.split(",")?.firstOrNull()?.trim()
+            ?.equals("https", ignoreCase = true) == true
     }
 }
 
