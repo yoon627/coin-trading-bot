@@ -77,7 +77,8 @@ function Auth() {
           </div>
           <div style={{ marginBottom: mode === 'register' ? 12 : 20 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 6 }}>비밀번호</div>
-            <input className="tide-input" type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete={mode === 'login' ? 'current-password' : 'new-password'}/>
+            <input className="tide-input" type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={mode === 'register' ? 8 : undefined} autoComplete={mode === 'login' ? 'current-password' : 'new-password'}/>
+            {mode === 'register' && <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 4 }}>8자 이상</div>}
           </div>
 
           {mode === 'register' && <>
