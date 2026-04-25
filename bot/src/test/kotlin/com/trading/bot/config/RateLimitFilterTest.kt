@@ -52,7 +52,7 @@ class RateLimitFilterTest {
         val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
         val valueOps = mockk<ReactiveValueOperations<String, String>>()
         every { redisTemplate.opsForValue() } returns valueOps
-        every { valueOps.increment(any()) } returns Mono.just(11L) // exceeds auth limit (10)
+        every { valueOps.increment(any()) } returns Mono.just(31L) // exceeds auth limit (30)
         val filter = RateLimitFilter(redisTemplate)
         val exchange = MockServerWebExchange.from(
             MockServerHttpRequest.post("/api/auth/login").build()
