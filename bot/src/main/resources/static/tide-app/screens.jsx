@@ -457,28 +457,54 @@ function WalletPage({ user, setActive }) {
   );
 }
 
-// ── SETTINGS (API keys) ───────────────────────────────────
+// ── SETTINGS (API keys + profile visibility + Discord webhook) ────────────
 function SettingsPage({ user, setActive, refreshUser }) {
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
+  const [publicProfile, setPublicProfile] = React.useState(!!user?.public_profile);
+  const [publicStrategy, setPublicStrategy] = React.useState(!!user?.public_strategy);
+  const [discordUrl, setDiscordUrl] = React.useState('');
+  const [busyKeys, setBusyKeys] = React.useState(false);
+  const [busyProfile, setBusyProfile] = React.useState(false);
+  const [busyDiscord, setBusyDiscord] = React.useState(false);
   const [toast, setToast] = React.useState(null);
 
-  const save = async () => {
+  const saveKeys = async () => {
     if (!accessKey || !secretKey) return;
-    setBusy(true);
+    setBusyKeys(true);
     try {
       await TideAPI.saveKeys(accessKey, secretKey);
       setToast({ msg: 'API 키가 저장되었습니다', tone: 'up' });
       setAccessKey(''); setSecretKey('');
       await refreshUser();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
-    finally { setBusy(false); }
+    finally { setBusyKeys(false); }
+  };
+
+  const saveProfile = async () => {
+    setBusyProfile(true);
+    try {
+      await TideAPI.updateSettings({ public_profile: publicProfile, public_strategy: publicStrategy });
+      setToast({ msg: '프로필 설정이 저장되었습니다', tone: 'up' });
+      await refreshUser();
+    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
+    finally { setBusyProfile(false); }
+  };
+
+  const saveDiscord = async (clear = false) => {
+    setBusyDiscord(true);
+    try {
+      await TideAPI.updateSettings({ discord_webhook_url: clear ? '' : discordUrl });
+      setToast({ msg: clear ? 'Discord 웹훅이 해제되었습니다' : 'Discord 웹훅이 저장되었습니다', tone: 'up' });
+      setDiscordUrl('');
+      await refreshUser();
+    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
+    finally { setBusyDiscord(false); }
   };
 
   return (
     <Shell active="settings" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
-           title="설정" subtitle="Upbit API 키 관리">
+           title="설정" subtitle="API 키, 프로필 공개, Discord 알림">
       <Card padding={28} style={{ maxWidth: 640 }}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Upbit API 키</div>
         <div style={{ fontSize: 13, color: 'var(--ink-500)', marginBottom: 20 }}>
@@ -496,12 +522,50 @@ function SettingsPage({ user, setActive, refreshUser }) {
           <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="••••••••••••••••"/>
         </div>
 
-        <Button onClick={save} disabled={busy || !accessKey || !secretKey} size="lg">{busy ? '저장 중…' : 'API 키 저장'}</Button>
+        <Button onClick={saveKeys} disabled={busyKeys || !accessKey || !secretKey} size="lg">{busyKeys ? '저장 중…' : 'API 키 저장'}</Button>
 
         <div style={{ marginTop: 24, padding: 16, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 12.5, color: 'var(--tide-primary-ink)' }}>
           🛡 API 키는 AES-GCM으로 암호화되어 저장됩니다. <strong>출금 권한은 절대 부여하지 마세요.</strong>
         </div>
       </Card>
+
+      <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>프로필 공개</div>
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, cursor: 'pointer' }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>리더보드 공개</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginTop: 2 }}>다른 사용자가 내 거래 통계를 볼 수 있습니다</div>
+          </div>
+          <input type="checkbox" checked={publicProfile} onChange={e => setPublicProfile(e.target.checked)} style={{ width: 18, height: 18 }}/>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, cursor: 'pointer' }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>전략 공개</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginTop: 2 }}>현재 사용 중인 전략을 노출합니다 (리더보드 공개와 별개)</div>
+          </div>
+          <input type="checkbox" checked={publicStrategy} onChange={e => setPublicStrategy(e.target.checked)} style={{ width: 18, height: 18 }}/>
+        </label>
+        <Button onClick={saveProfile} disabled={busyProfile} size="lg">{busyProfile ? '저장 중…' : '프로필 저장'}</Button>
+      </Card>
+
+      <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Discord 알림</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-500)', marginBottom: 20 }}>
+          현재 상태: {user?.has_discord_webhook ?
+            <Badge tone="live" dot>등록됨</Badge> :
+            <Badge tone="warn">미등록</Badge>}
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Webhook URL</div>
+          <input className="tide-input mono" value={discordUrl} onChange={e => setDiscordUrl(e.target.value)} placeholder="https://discord.com/api/webhooks/..."/>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button onClick={() => saveDiscord(false)} disabled={busyDiscord || !discordUrl} size="lg">{busyDiscord ? '저장 중…' : '저장'}</Button>
+          {user?.has_discord_webhook && <Button onClick={() => saveDiscord(true)} disabled={busyDiscord} size="lg" variant="outline">해제</Button>}
+        </div>
+        <div style={{ marginTop: 16, fontSize: 11.5, color: 'var(--ink-500)' }}>discord.com 도메인의 HTTPS 웹훅 URL만 허용됩니다.</div>
+      </Card>
+
       {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
     </Shell>
   );
