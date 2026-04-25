@@ -83,4 +83,44 @@ class SafeErrorAttributesTest {
         assertFalse(result.containsKey("message"))
         assertTrue(result.containsKey("status"))
     }
+
+    @Test
+    fun `INCLUDE_EXCEPTION option does not leak exception class name`() {
+        val request = serverRequestWithError(
+            RuntimeException("internal database failure")
+        )
+
+        val result = attrs.getErrorAttributes(
+            request,
+            ErrorAttributeOptions.defaults().including(ErrorAttributeOptions.Include.EXCEPTION)
+        )
+
+        // DefaultErrorAttributes would normally include "exception" with the FQCN
+        // when this option is on; the allowlist override must drop it.
+        assertFalse(result.containsKey("exception")) {
+            "exception class name leaked: ${result["exception"]}"
+        }
+    }
+
+    @Test
+    fun `response only contains the vetted safe keys`() {
+        val request = serverRequestWithError(
+            ResponseStatusException(HttpStatus.BAD_REQUEST, "explicit reason")
+        )
+
+        val result = attrs.getErrorAttributes(
+            request,
+            ErrorAttributeOptions.defaults()
+                .including(ErrorAttributeOptions.Include.MESSAGE)
+                .including(ErrorAttributeOptions.Include.EXCEPTION)
+                .including(ErrorAttributeOptions.Include.STACK_TRACE)
+                .including(ErrorAttributeOptions.Include.BINDING_ERRORS)
+        )
+
+        // message is added because it's an RSE; everything else outside the
+        // allowlist must be absent regardless of which Include options are on.
+        val allowed = setOf("timestamp", "path", "status", "error", "requestId", "message")
+        val unexpected = result.keys - allowed
+        assertTrue(unexpected.isEmpty()) { "unexpected keys leaked: $unexpected" }
+    }
 }
