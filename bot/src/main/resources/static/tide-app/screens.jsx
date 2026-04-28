@@ -29,7 +29,7 @@ function ApiKeyWarning({ go }) {
 
 // ── DASHBOARD ─────────────────────────────────────────────
 function Dashboard({ user, setActive }) {
-  const portfolio = useAPI(() => TideAPI.portfolio().catch(() => null), [], 10000);
+  const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 5000);
 
   const hasKeys = user?.has_upbit_keys;
@@ -248,7 +248,7 @@ function TradePage({ user, setActive }) {
   const [volume, setVolume] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
-  const portfolio = useAPI(() => TideAPI.portfolio().catch(() => null), [], 10000);
+  const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const prices = useAPI(() => TideAPI.pricesLatest().catch(() => null), [], 3000);
 
   const buy = async () => {
@@ -422,7 +422,7 @@ function BacktestPage({ user, setActive }) {
 
 // ── WALLET ────────────────────────────────────────────────
 function WalletPage({ user, setActive }) {
-  const portfolio = useAPI(() => TideAPI.portfolio().catch(() => null), [], 10000);
+  const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const p = portfolio.data;
 
   return (
@@ -431,6 +431,7 @@ function WalletPage({ user, setActive }) {
            actions={<Button size="sm" icon="refresh" variant="outline" onClick={portfolio.reload}>새로고침</Button>}>
       {!user?.has_upbit_keys ? <ApiKeyWarning go={() => setActive('settings')}/> :
        portfolio.loading ? <div style={{ padding: 40, textAlign: 'center' }}><span className="tide-spinner"/></div> :
+       portfolio.error ? <Card padding={24}><div style={{ color: 'var(--down)', fontSize: 13 }}>{portfolio.error}</div></Card> :
        <>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
           <Card padding={24}><div style={{ fontSize: 12, color: 'var(--ink-500)' }}>총 평가</div><div className="num" style={{ fontSize: 26, fontWeight: 700, marginTop: 8 }}>{fmtKRW(p?.total_eval)}</div></Card>
