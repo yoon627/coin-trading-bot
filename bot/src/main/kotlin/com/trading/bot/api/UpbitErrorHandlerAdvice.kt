@@ -2,23 +2,35 @@ package com.trading.bot.api
 
 import com.trading.bot.client.UpbitApiException
 import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
-import org.springframework.web.server.ResponseStatusException
 
 /**
- * Translates UpbitApiException into ResponseStatusException so that
- * SafeErrorAttributes can surface a clean reason to the SPA. Any raw 401
- * from Upbit is remapped to 400 because the frontend auto-redirects on 401
- * (treating it as our own session expiry), which would log the user out.
+ * Translates UpbitApiException into an explicit ResponseEntity. Returning the
+ * response (rather than throwing ResponseStatusException) is required under
+ * WebFlux: a throw inside `@ExceptionHandler` does not re-enter the framework's
+ * global error pipeline, so the original exception bubbles up as a generic 500.
+ *
+ * Critically, raw 401 from Upbit is remapped to 400 because the SPA's api.js
+ * auto-redirects on 401 to /login.html (treating it as our own session expiry),
+ * which would silently log the user out on any Upbit auth glitch.
+ *
+ * Body shape mirrors SafeErrorAttributes so the SPA can read `message` uniformly.
  */
 @RestControllerAdvice
 class UpbitErrorHandlerAdvice {
 
     @ExceptionHandler(UpbitApiException::class)
-    fun handle(ex: UpbitApiException): Nothing {
+    fun handle(ex: UpbitApiException): ResponseEntity<Map<String, Any?>> {
         val (status, reason) = mapException(ex)
-        throw ResponseStatusException(status, reason)
+        return ResponseEntity.status(status).body(
+            mapOf(
+                "status" to status.value(),
+                "error" to status.reasonPhrase,
+                "message" to reason,
+            )
+        )
     }
 
     private fun mapException(ex: UpbitApiException): Pair<HttpStatus, String> = when {
