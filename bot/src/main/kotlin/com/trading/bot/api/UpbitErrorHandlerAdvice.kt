@@ -1,0 +1,38 @@
+package com.trading.bot.api
+
+import com.trading.bot.client.UpbitApiException
+import org.springframework.http.HttpStatus
+import org.springframework.web.bind.annotation.ExceptionHandler
+import org.springframework.web.bind.annotation.RestControllerAdvice
+import org.springframework.web.server.ResponseStatusException
+
+/**
+ * Translates UpbitApiException into ResponseStatusException so that
+ * SafeErrorAttributes can surface a clean reason to the SPA. Any raw 401
+ * from Upbit is remapped to 400 because the frontend auto-redirects on 401
+ * (treating it as our own session expiry), which would log the user out.
+ */
+@RestControllerAdvice
+class UpbitErrorHandlerAdvice {
+
+    @ExceptionHandler(UpbitApiException::class)
+    fun handle(ex: UpbitApiException): Nothing {
+        val (status, reason) = mapException(ex)
+        throw ResponseStatusException(status, reason)
+    }
+
+    private fun mapException(ex: UpbitApiException): Pair<HttpStatus, String> = when {
+        ex.statusCode == 401 && ex.errorName == "no_authorization_ip" ->
+            HttpStatus.BAD_REQUEST to
+                "Upbit API 키의 허용 IP에 서버 주소가 등록되어 있지 않습니다. " +
+                "Upbit Open API 페이지에서 허용 IP 목록을 확인해주세요."
+        ex.statusCode == 401 ->
+            HttpStatus.BAD_REQUEST to "Upbit API 인증에 실패했습니다 (${ex.errorName ?: "unauthorized"})."
+        ex.statusCode == 429 ->
+            HttpStatus.TOO_MANY_REQUESTS to "Upbit API 호출 한도를 초과했습니다. 잠시 후 다시 시도해주세요."
+        ex.statusCode in 400..499 ->
+            HttpStatus.BAD_REQUEST to "Upbit가 요청을 거부했습니다 (${ex.errorName ?: "error ${ex.statusCode}"})."
+        else ->
+            HttpStatus.BAD_GATEWAY to "Upbit API 호출에 일시적인 문제가 있습니다. 잠시 후 다시 시도해주세요."
+    }
+}

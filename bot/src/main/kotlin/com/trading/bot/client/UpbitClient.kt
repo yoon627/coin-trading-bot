@@ -1,5 +1,6 @@
 package com.trading.bot.client
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
@@ -107,19 +108,40 @@ class UpbitClient(
     }
 
     private fun handleError(response: ClientResponse): Mono<Throwable> {
+        val statusValue = response.statusCode().value()
         return response.bodyToMono<String>().defaultIfEmpty("(no body)").map { body ->
             log.error("Upbit API error: {} - {}", response.statusCode(), body)
-            UpbitApiException("Upbit API error: ${response.statusCode()} - $body")
+            val (errorName, errorMessage) = parseUpbitErrorBody(body)
+            UpbitApiException(statusValue, errorName, errorMessage, body)
+        }
+    }
+
+    private fun parseUpbitErrorBody(body: String): Pair<String?, String?> {
+        return try {
+            val root = ERROR_BODY_MAPPER.readTree(body)
+            val error = root.get("error") ?: return null to null
+            error.get("name")?.asText() to error.get("message")?.asText()
+        } catch (_: Exception) {
+            null to null
         }
     }
 
     private fun <T> Mono<T>.retryOnRateLimit(): Mono<T> {
         return this.retryWhen(
             Retry.backoff(2, Duration.ofSeconds(1))
-                .filter { it is UpbitApiException && "429" in it.message.orEmpty() }
+                .filter { it is UpbitApiException && it.statusCode == 429 }
                 .doBeforeRetry { log.warn("Retrying Upbit API call (rate limit): attempt {}", it.totalRetries() + 1) }
         )
     }
+
+    companion object {
+        private val ERROR_BODY_MAPPER = ObjectMapper()
+    }
 }
 
-class UpbitApiException(message: String) : RuntimeException(message)
+class UpbitApiException(
+    val statusCode: Int,
+    val errorName: String?,
+    val errorMessage: String?,
+    val rawBody: String,
+) : RuntimeException("Upbit API error: $statusCode - $rawBody")
