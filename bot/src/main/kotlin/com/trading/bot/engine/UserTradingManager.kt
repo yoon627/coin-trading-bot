@@ -107,12 +107,15 @@ class UserTradingManager(
 
     fun getStatus(userId: Long): Map<String, Any> {
         val engine = engines[userId]
-        val states = engine?.getStates()
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
             "strategy" to (engine?.getActiveStrategyName() ?: userStrategies[userId] ?: tradingProperties.strategy),
-            "tickers" to (states?.keys?.toList() ?: emptyList<String>()),
-            "positions" to (states?.map { (ticker, state) ->
+            // engine.getActiveTickers() is set synchronously by start();
+            // states keys only populate once the background loop initializes
+            // them, so reading from states here would briefly return [] right
+            // after /api/bot/start.
+            "tickers" to (engine?.getActiveTickers() ?: emptyList<String>()),
+            "positions" to (engine?.getStates()?.map { (ticker, state) ->
                 mapOf(
                     "ticker" to ticker,
                     "position" to state.position,

@@ -47,8 +47,11 @@ function Auth() {
       if (mode === 'login') {
         await TideAPI.login(username, password);
       } else {
+        // /api/auth/register sets the auth cookie and returns AuthResponse,
+        // so we're already logged in. A second login() here would fail
+        // (e.g. rate limit, transient error) and make a successful
+        // registration look like a failure to the user.
         await TideAPI.register(username, password, accessKey || undefined, secretKey || undefined);
-        await TideAPI.login(username, password);
       }
       location.href = '/app.html';
     } catch (e) {
