@@ -107,10 +107,12 @@ class UserTradingManager(
 
     fun getStatus(userId: Long): Map<String, Any> {
         val engine = engines[userId]
+        val states = engine?.getStates()
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
             "strategy" to (engine?.getActiveStrategyName() ?: userStrategies[userId] ?: tradingProperties.strategy),
-            "positions" to (engine?.getStates()?.map { (ticker, state) ->
+            "tickers" to (states?.keys?.toList() ?: emptyList<String>()),
+            "positions" to (states?.map { (ticker, state) ->
                 mapOf(
                     "ticker" to ticker,
                     "position" to state.position,
