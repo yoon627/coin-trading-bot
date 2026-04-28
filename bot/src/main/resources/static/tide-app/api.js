@@ -10,8 +10,11 @@ const TideAPI = {
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts,
     });
-    if (res.status === 401) {
-      // Session expired — bounce to login
+    // Treat 401 as session expiry only for non-auth requests. /api/auth/*
+    // returning 401 means the credentials are wrong, not that we have a
+    // stale session — fall through so the !res.ok branch can surface the
+    // backend's reason (e.g. "Invalid credentials") to the login form.
+    if (res.status === 401 && !path.startsWith('/api/auth/')) {
       if (!location.pathname.endsWith('login.html')) {
         location.href = '/login.html';
       }
