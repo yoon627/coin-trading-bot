@@ -13,9 +13,12 @@
 
 ## 모듈 구조
 
-- `app` — Spring Boot 메인 애플리케이션 (실거래 봇)
-- `common` — 공용 도메인 모델
-- `research` — 백테스트/walk-forward/리서치 프레임워크
+`settings.gradle.kts`: `include("common", "collector", "bot", "research")`
+
+- `bot` — Spring Boot 메인 애플리케이션 (실거래 봇 + REST API + SPA, port 8080)
+- `collector` — Spring Boot 데이터 수집 서비스 (Upbit/Binance/KIS → Kafka, port 8081)
+- `common` — 공용 도메인 모델, Kafka 이벤트 스키마, 인디케이터, 레거시 스윙 전략
+- `research` — 백테스트/walk-forward/리서치 프레임워크 (`:common`만 의존)
 
 ## 스펙 문서
 
