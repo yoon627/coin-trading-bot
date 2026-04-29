@@ -131,6 +131,10 @@ class UpbitClient(
             Retry.backoff(2, Duration.ofSeconds(1))
                 .filter { it is UpbitApiException && it.statusCode == 429 }
                 .doBeforeRetry { log.warn("Retrying Upbit API call (rate limit): attempt {}", it.totalRetries() + 1) }
+                // Reactor's default wraps the last failure in a retry-exhausted
+                // exception; rethrow the original UpbitApiException so the
+                // controller advice can map it to a 429 response instead of a 500.
+                .onRetryExhaustedThrow { _, signal -> signal.failure() }
         )
     }
 
