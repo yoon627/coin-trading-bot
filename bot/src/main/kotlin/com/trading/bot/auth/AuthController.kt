@@ -6,6 +6,8 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import org.springframework.core.env.Environment
+import org.springframework.core.env.Profiles
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseCookie
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -26,6 +28,7 @@ class AuthController(
     private val jwtProvider: JwtProvider,
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
+    private val environment: Environment,
 ) {
     @PostMapping("/register")
     suspend fun register(@RequestBody req: AuthRequest, request: ServerHttpRequest, response: ServerHttpResponse): AuthResponse {
@@ -76,7 +79,7 @@ class AuthController(
         response.addCookie(
             ResponseCookie.from("token", "")
                 .httpOnly(true)
-                .secure(isHttps(request))
+                .secure(shouldMarkSecure(request))
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(Duration.ZERO)
@@ -89,7 +92,7 @@ class AuthController(
         response.addCookie(
             ResponseCookie.from("token", token)
                 .httpOnly(true)
-                .secure(isHttps(request))
+                .secure(shouldMarkSecure(request))
                 .path("/")
                 .sameSite("Lax")
                 .maxAge(Duration.ofDays(1))
@@ -97,11 +100,14 @@ class AuthController(
         )
     }
 
-    // Mark the cookie Secure only when the request actually arrived over HTTPS,
-    // either directly or via a TLS-terminating reverse proxy. Tying this to the
-    // 'prod' profile broke local prod-mode (HTTP localhost) browsers that refuse
-    // Secure cookies over HTTP.
-    private fun isHttps(request: ServerHttpRequest): Boolean {
+    // In production we always emit Secure cookies so the JWT is never sent over
+    // plain HTTP, even when the request is observed as scheme=http (e.g. behind
+    // a reverse proxy that drops X-Forwarded-Proto, or a misrouted direct
+    // connection). Local prod-mode HTTP testing is unsupported as a result —
+    // use the dev profile for that. In non-prod profiles we still derive Secure
+    // from the request scheme so HTTP localhost works for development.
+    private fun shouldMarkSecure(request: ServerHttpRequest): Boolean {
+        if (environment.acceptsProfiles(Profiles.of("prod"))) return true
         if (request.uri.scheme.equals("https", ignoreCase = true)) return true
         return request.headers.getFirst("X-Forwarded-Proto")
             ?.split(",")?.firstOrNull()?.trim()
