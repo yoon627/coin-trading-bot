@@ -1,210 +1,210 @@
 # Coin Trading Bot
 
-Kotlin/Spring Boot 기반 Upbit 암호화폐 자동매매 봇. 규칙 기반 전략 7개 + ML(Gradient Boosted Trees) 전략을 지원하며, 백테스팅으로 전략을 비교할 수 있습니다.
+Kotlin/Spring Boot 기반의 멀티 거래소(Upbit/Binance/KIS) 자동매매 플랫폼. 데이터 수집(`:collector`) → Kafka → 매매 봇(`:bot`)으로 분리된 이벤트 기반 아키텍처이며, 스윙 전략 8개 + 스캘핑 전략 2개 + ML(Gradient Boosted Trees)을 지원하고, 별도 `:research` 모듈로 walk-forward 백테스팅도 가능합니다.
 
 ## 시스템 아키텍처
 
 ```
-                           ┌─────────────────────────────────────────┐
-                           │              EC2 (t2.micro)             │
-                           │                                         │
-   ┌──────────┐            │  ┌──────────────────────────────────┐   │
-   │  GitHub   │  push     │  │          Docker Compose           │   │
-   │  Actions  ├──────────►│  │                                    │   │
-   │  CI/CD   │  pull img  │  │  ┌─────────┐    ┌────────────┐   │   │
-   └──────────┘            │  │  │   App    │◄──►│ PostgreSQL │   │   │
-                           │  │  │ :8080    │    │   :5432    │   │   │
-   ┌──────────┐            │  │  └────┬─────┘    └────────────┘   │   │
-   │  Upbit   │◄───────────│──│───────┤                            │   │
-   │  API     │  WebSocket │  │       │          ┌────────────┐   │   │
-   └──────────┘  + REST    │  │       ├─────────►│   Redis    │   │   │
-                           │  │       │          │   :6379    │   │   │
-   ┌──────────┐            │  │       │          └────────────┘   │   │
-   │ Discord  │◄───────────│──│───────┤                            │   │
-   │ Webhook  │  알림      │  │       │          ┌────────────┐   │   │
-   └──────────┘            │  │       └─────────►│ Prometheus │   │   │
-                           │  │                  │   :9090    │   │   │
-   ┌──────────┐            │  │  ┌─────────┐    └──────┬─────┘   │   │
-   │ Browser  │◄───────────│──│──│ Grafana  │◄──────────┘         │   │
-   │          │  :3000     │  │  │  :3000   │◄──┐                 │   │
-   └──────────┘            │  │  └─────────┘   │  ┌──────────┐   │   │
-                           │  │                 └──│   Loki   │   │   │
-                           │  │  ┌──────────┐     │  :3100   │   │   │
-                           │  │  │ Promtail │────►└──────────┘   │   │
-                           │  │  │ (log)    │                     │   │
-                           │  │  └──────────┘                     │   │
-                           │  └──────────────────────────────────┘   │
-                           └─────────────────────────────────────────┘
+                           ┌────────────────────────────────────────────────┐
+                           │                EC2 (t2.micro)                  │
+                           │                                                │
+   ┌──────────┐            │  ┌────────────────────────────────────────┐    │
+   │  GitHub   │  push     │  │             Docker Compose              │    │
+   │  Actions  ├──────────►│  │                                          │    │
+   │  CI/CD   │  pull img  │  │  ┌─────────────┐    ┌──────────────┐  │    │
+   └──────────┘            │  │  │  collector  │───►│    Kafka     │  │    │
+                           │  │  │   :8081     │    │   :9092      │  │    │
+   ┌──────────┐            │  │  └─────────────┘    └──────┬───────┘  │    │
+   │  Upbit   │◄───────────│──┤                             │           │    │
+   │ Binance  │  WS+REST   │  │  ┌─────────────┐            ▼           │    │
+   │   KIS    │            │  │  │  bot/app    │◄──── consumes events  │    │
+   └──────────┘            │  │  │   :8080     │                        │    │
+                           │  │  │ (REST+SPA)  │◄──►┌──────────────┐  │    │
+   ┌──────────┐            │  │  └──────┬──────┘    │  PostgreSQL   │  │    │
+   │ Discord  │◄───────────│──┤         │           │    :5432      │  │    │
+   │ Webhook  │  알림      │  │         │           └──────────────┘  │    │
+   └──────────┘            │  │         │           ┌──────────────┐  │    │
+                           │  │         └──────────►│    Redis     │  │    │
+   ┌──────────┐            │  │                     │    :6379     │  │    │
+   │ Browser  │◄───────────│──┤                     └──────────────┘  │    │
+   │  (SPA)   │            │  │                                         │    │
+   └──────────┘            │  │  [모니터링 profile, optional]            │    │
+                           │  │  Prometheus:9090 → Grafana:3000          │    │
+                           │  │  Promtail → Loki:3100                    │    │
+                           │  └────────────────────────────────────────┘    │
+                           └────────────────────────────────────────────────┘
 ```
 
 ### 컨테이너 구성
 
+기본 profile (실거래 운영 최소셋):
+
 | 서비스 | 이미지 | 역할 |
 |--------|--------|------|
-| `app` | `ghcr.io/yoon627/coin-trading-bot` | Spring Boot 앱 |
+| `bot` (app) | `ghcr.io/yoon627/coin-trading-bot` | Spring Boot 메인 앱 (REST API + SPA + 매매 엔진) |
+| `collector` | 로컬 빌드 (`collector/Dockerfile`) | Upbit/Binance/KIS → Kafka 정규화 수집기 (:8081) |
+| `kafka` | `apache/kafka:3.9.0` | 이벤트 백본 (KRaft 모드, ZooKeeper 불필요) |
+| `kafka-init` | `apache/kafka:3.9.0` | 시작 시 토픽 생성 후 종료 |
 | `postgres` | `postgres:17-alpine` | 메인 데이터베이스 |
-| `redis` | `redis:7-alpine` | 가격 캐시, Rate Limiting |
-| `prometheus` | `prom/prometheus` | 메트릭 수집 |
-| `loki` | `grafana/loki:2.9.0` | 로그 수집 |
+| `redis` | `redis:7-alpine` | 가격/지표 캐시, Rate Limiting |
+
+`monitoring` profile (옵션, `--profile monitoring`):
+
+| 서비스 | 이미지 | 역할 |
+|--------|--------|------|
+| `prometheus` | `prom/prometheus` | 메트릭 수집 (:9090) |
+| `loki` | `grafana/loki:2.9.0` | 로그 수집 (:3100) |
 | `promtail` | `grafana/promtail:2.9.0` | 컨테이너 로그 전송 |
-| `grafana` | `grafana/grafana` | 대시보드 (메트릭 + 로그) |
+| `grafana` | `grafana/grafana` | 대시보드 (:3000, admin/admin) |
 
 ## 기술 스택
 
 | 레이어 | 기술 | 용도 |
 |--------|------|------|
 | Language | Kotlin 2.1, JDK 21 | 코루틴 기반 비동기 처리 |
+| Build | Gradle 8.12 (Kotlin DSL), 멀티모듈 (`bot`/`collector`/`common`/`research`) | 모듈 격리 |
 | Framework | Spring Boot 3.4, WebFlux | 리액티브 웹 서버 |
+| Frontend | React 18 + Babel-standalone (in-browser JSX), 빌드 단계 없음 | Tide SPA (`bot/src/main/resources/static/tide-app/`) |
+| Messaging | Apache Kafka 3.9 (KRaft) | 거래소 이벤트 백본 (`market.ticker`, `market.candle`, `trade.execution`, `notification`) |
 | HTTP | Spring WebClient | Upbit API / Discord 논블로킹 호출 |
-| WebSocket | Upbit WebSocket | 실시간 가격 스트리밍 |
-| Auth | Spring Security + JWT (jjwt) | 유저 인증, API 보호 |
-| Database | PostgreSQL 17 | 유저, 거래 이력, 봇 상태 저장 |
-| Cache | Redis 7 | 가격 캐시, API Rate Limiting |
+| WebSocket | Upbit/Binance WebSocket | 실시간 가격 스트리밍 (collector 안) |
+| Auth | Spring Security + JWT (jjwt, HS256), httpOnly+Secure 쿠키 | 유저 인증, API 보호 |
+| 암호화 | AES-GCM 256-bit | 사용자별 거래소 API 키 저장 (`SecretsCrypto`) |
+| Database | PostgreSQL 17 | 유저, 거래 이력, 봇 상태, 시장 데이터 |
+| Cache | Redis 7 | 가격/지표 캐시, API Rate Limiting |
 | ORM | Spring Data R2DBC | 비동기 DB 접근 |
-| Migration | Flyway | DB 스키마 버전 관리 (9 migrations) |
+| Migration | Flyway | DB 스키마 버전 관리 (V1~V13) |
 | ML | Smile 3.1 (GBM) | 매수 시그널 예측 모델 |
+| AI 분석 | Anthropic Claude API (옵션) | `CoinAnalysisScheduler` 시장 코멘트 — `CLAUDE_ANALYSIS_ENABLED=true` 시 |
 | Resilience | Resilience4j | Circuit Breaker (Upbit API) |
-| Monitoring | Prometheus + Grafana + Loki | 메트릭, 대시보드, 로그 |
+| Monitoring | Prometheus + Grafana + Loki | 메트릭, 대시보드, 로그 (옵션 profile) |
 | Container | Docker + Docker Compose | 전체 서비스 컨테이너화 |
 | Deploy | AWS EC2 t2.micro | 프리티어 배포 |
 | CI/CD | GitHub Actions + GHCR | Docker 이미지 빌드/배포 |
 
 ## 프로젝트 구조
 
+멀티모듈 Gradle 프로젝트 (`settings.gradle.kts`: `include("common", "collector", "bot", "research")`).
+
 ```
 coin-trading-bot/
-├── src/main/kotlin/com/trading/bot/
-│   ├── CoinTradingBotApplication.kt      # 앱 진입점
-│   │
-│   ├── api/                               # REST API 컨트롤러
-│   │   ├── TradingController.kt          #   봇 시작/중지/상태, 유저 키 관리
-│   │   ├── PortfolioController.kt        #   보유 코인 + 수익률 조회
-│   │   ├── ManualTradeController.kt      #   수동 매수/매도
-│   │   ├── StrategyController.kt         #   전략 목록, 성과 집계, 백테스트
-│   │   ├── TradeHistoryController.kt     #   거래 이력 조회
-│   │   ├── LeaderboardController.kt      #   리더보드, 유저 프로필
-│   │   ├── PriceStreamController.kt      #   실시간 가격 SSE 스트림
-│   │   ├── WatchlistController.kt        #   관심 코인 목록
-│   │   ├── MlController.kt              #   ML 모델 학습/예측/튜닝
-│   │   └── RequestValidators.kt         #   입력값 검증
-│   │
-│   ├── auth/                              # 인증 레이어
-│   │   ├── AuthController.kt             #   회원가입/로그인/로그아웃 API
-│   │   ├── JwtProvider.kt                #   JWT 토큰 생성/검증
-│   │   ├── JwtAuthFilter.kt              #   요청별 JWT 인증 WebFilter
-│   │   ├── SecurityConfig.kt             #   Spring Security + CORS 설정
-│   │   └── UserUtils.kt                  #   현재 유저 ID 추출 유틸
-│   │
-│   ├── config/                            # 설정
-│   │   ├── AppConfig.kt                  #   @ConfigurationProperties
-│   │   ├── MlProperties.kt              #   ML 모델 설정 (auto-retrain 등)
-│   │   ├── WebClientConfig.kt            #   Upbit/Discord WebClient 빈
-│   │   ├── SchedulerConfig.kt            #   스케줄러 스레드풀 설정
-│   │   ├── ResilienceConfig.kt           #   Resilience4j Circuit Breaker
-│   │   ├── RateLimitFilter.kt            #   Redis 기반 Rate Limiting
-│   │   └── RedisConfig.kt               #   Redis 조건부 활성화
-│   │
-│   ├── domain/                            # 도메인 모델 (순수 데이터)
-│   │   ├── Candle.kt                     #   OHLCV 캔들 데이터
-│   │   ├── Account.kt                    #   Upbit 계좌 잔고
-│   │   ├── Order.kt                      #   주문 요청/응답, 현재가(Ticker)
-│   │   ├── RealtimePrice.kt             #   WebSocket 실시간 가격
-│   │   ├── TradeRecord.kt                #   거래 기록 + TradeSide/SellReason enum
-│   │   └── TradingState.kt               #   봇 포지션 상태
-│   │
-│   ├── engine/                            # 트레이딩 핵심 엔진
-│   │   ├── TradingEngine.kt              #   메인 트레이딩 루프 (코루틴)
-│   │   ├── TradeExecutionService.kt      #   매수/매도 주문 실행
-│   │   ├── PositionManager.kt            #   포지션 동기화 + 리스크 관리
-│   │   ├── DailyResetManager.kt          #   09:00 KST 일일 리셋
-│   │   ├── UserTradingManager.kt         #   유저별 엔진 관리 + 상태 영속화
-│   │   ├── BacktestEngine.kt             #   과거 데이터 시뮬레이션
-│   │   ├── PriceCollector.kt             #   가격 스냅샷 수집
-│   │   └── CoinAnalysisScheduler.kt      #   Claude AI 분석 스케줄러
-│   │
-│   ├── strategy/                          # 트레이딩 전략 (8개)
-│   │   ├── TradingStrategy.kt            #   전략 인터페이스
-│   │   ├── Indicators.kt                 #   기술적 지표 (RSI, MACD, BB, MA, EMA)
-│   │   ├── VolatilityBreakout.kt         #   변동성 돌파
-│   │   ├── RsiBounce.kt                  #   RSI 과매도 반등
-│   │   ├── GoldenCross.kt                #   골든크로스
-│   │   ├── CombinedStrategy.kt           #   복합 전략
-│   │   ├── BollingerBounce.kt            #   볼린저밴드 반등
-│   │   ├── MacdCross.kt                  #   MACD 크로스
-│   │   ├── MeanReversion.kt              #   평균 회귀
-│   │   └── MlStrategy.kt                #   ML 모델 기반
-│   │
-│   ├── ml/                                # 머신러닝
-│   │   ├── FeatureExtractor.kt           #   캔들 → 20개 피처 벡터
-│   │   ├── MlModelService.kt             #   GBM 학습/예측/평가/영속화
-│   │   ├── HyperparameterTuner.kt        #   하이퍼파라미터 자동 튜닝
-│   │   └── MlRetrainScheduler.kt         #   자동 재학습 스케줄러
-│   │
-│   ├── client/                            # 외부 API 클라이언트
-│   │   ├── UpbitClient.kt                #   Upbit REST API (코루틴 + 재시도)
-│   │   ├── UpbitAuthProvider.kt          #   Upbit JWT 인증 (HS256 + SHA-512)
-│   │   └── UpbitWebSocketClient.kt       #   Upbit WebSocket 실시간 가격
-│   │
-│   ├── cache/
-│   │   └── PriceCacheService.kt          #   Redis 가격 캐시 (5초 TTL)
-│   │
-│   ├── persistence/                       # 데이터 접근
-│   │   ├── UserRepository.kt
-│   │   ├── BotStateRepository.kt
-│   │   ├── TradeRecordRepository.kt
-│   │   ├── PriceSnapshotRepository.kt
-│   │   └── entity/                        #   R2DBC 엔티티
-│   │
-│   ├── security/                          # API 키 암호화
-│   │   ├── SecretsCrypto.kt              #   AES-GCM 암호화
-│   │   ├── UserSecretsService.kt
-│   │   └── SecretKeyMaterialProvider.kt
-│   │
-│   └── notification/
-│       └── DiscordNotifier.kt             #   Discord Webhook (Embed 알림)
+├── common/                                # 공유 도메인 + Kafka 이벤트 + 인디케이터
+│   └── src/main/kotlin/com/trading/common/
+│       ├── domain/                        #   NormalizedCandle, NormalizedTicker, OrderBook, Exchange
+│       ├── event/                         #   MarketDataEvent (Kafka 스키마)
+│       ├── indicator/                     #   Indicators (RSI, MACD, BB, MA, EMA)
+│       └── strategy/                      #   레거시 스윙 전략 7개 (`:research`에서 어댑터로 재사용)
 │
-├── src/main/resources/
-│   ├── application.yml                    # 기본 설정 (로컬 개발)
-│   ├── application-prod.yml               # 프로덕션 오버라이드
-│   ├── static/                            # 프론트엔드 (HTML/CSS/JS)
-│   └── db/migration/                      # Flyway 마이그레이션 (V1~V9)
+├── collector/                             # 데이터 수집 서비스 (별도 Spring Boot 앱, :8081)
+│   └── src/main/kotlin/com/trading/collector/
+│       ├── exchange/                      #   ExchangeClient 인터페이스
+│       │   ├── upbit/                     #     UpbitCollector (WS + REST)
+│       │   ├── binance/                   #     BinanceCollector (WS + REST)
+│       │   └── kis/                       #     KisCollector (REST 폴링, 미국주식)
+│       └── service/                       #   MarketDataCollectorService → Kafka 발행
 │
-├── monitoring/                            # 모니터링 설정
-│   ├── prometheus.yml                     # Prometheus 스크래핑 설정
-│   ├── loki.yml                           # Loki 로그 수집 설정
-│   ├── promtail.yml                       # Promtail 컨테이너 로그 수집
-│   └── grafana/provisioning/              # Grafana 자동 프로비저닝
-│       ├── datasources/                   #   Prometheus + Loki 데이터소스
-│       └── dashboards/json/               #   사전 구성 대시보드
+├── bot/                                   # 메인 앱 (REST + 매매 엔진 + SPA, :8080)
+│   └── src/main/kotlin/com/trading/bot/
+│       ├── CoinTradingBotApplication.kt
+│       │
+│       ├── api/                           # REST 컨트롤러
+│       │   ├── TradingController.kt       #   /api/bot/{start,stop,status,strategy}, /api/account, /api/user/{me,keys}
+│       │   ├── BotConfigController.kt     #   /api/bot/{configs, config, config/{id}} (사용자별 종목/전략 설정)
+│       │   ├── PortfolioController.kt     #   /api/portfolio (보유 코인 + 수익률)
+│       │   ├── ManualTradeController.kt   #   /api/trade/{buy,sell}
+│       │   ├── StrategyController.kt      #   /api/strategies/{,performance,backtest}
+│       │   ├── ChartController.kt         #   /api/chart/{candles,indicators,tickers,compare}
+│       │   ├── TradeHistoryController.kt  #   /api/trades
+│       │   ├── LeaderboardController.kt   #   /api/leaderboard, /api/user/{id}/profile, /api/user/settings
+│       │   ├── PriceStreamController.kt   #   /api/prices/{stream,latest,status} (SSE)
+│       │   ├── WatchlistController.kt     #   /api/watchlist
+│       │   ├── MlController.kt            #   /api/ml/{train,tune,predict,status}
+│       │   ├── UpbitErrorHandlerAdvice.kt #   Upbit 401/429/5xx → 사용자 친화 4xx 응답
+│       │   └── RequestValidators.kt
+│       │
+│       ├── auth/                          #   AuthController (회원가입/로그인/로그아웃),
+│       │                                  #   JwtProvider, JwtAuthFilter, SecurityConfig
+│       │
+│       ├── config/                        #   AppConfig, MlProperties, WebClientConfig,
+│       │                                  #   SchedulerConfig, ResilienceConfig, RateLimitFilter,
+│       │                                  #   RedisConfig, SafeErrorAttributes
+│       │
+│       ├── domain/                        #   Account, Order, Ticker, RealtimePrice, TradeRecord,
+│       │                                  #   TradingState (그 외 공유 도메인은 `:common`)
+│       │
+│       ├── engine/                        # 트레이딩 핵심
+│       │   ├── TradingEngine.kt           #   매매 루프 (코루틴)
+│       │   ├── TradeExecutionService.kt   #   주문 실행 + Kafka(trade.execution)
+│       │   ├── PositionManager.kt         #   포지션 동기화 + 리스크
+│       │   ├── DailyResetManager.kt       #   09:00 KST 일일 리셋
+│       │   ├── UserTradingManager.kt      #   유저별 엔진 관리 + 상태 영속화
+│       │   ├── BacktestEngine.kt          #   과거 데이터 시뮬레이션
+│       │   ├── PriceCollector.kt          #   가격 스냅샷 수집
+│       │   └── CoinAnalysisScheduler.kt   #   Claude API 시장 코멘트 (옵션)
+│       │
+│       ├── strategy/                      # 봇 전략 (스캘핑 2개 + ML 1개)
+│       │   ├── scalp/                     #   SpreadScalp, MomentumScalp
+│       │   └── MlStrategy.kt              #   GBM 예측 + MA50 필터
+│       │   # (스윙 전략 7개는 `:common`에서 LegacyStrategyAdapter로 재사용)
+│       │
+│       ├── ml/                            #   FeatureExtractor, MlModelService, HyperparameterTuner,
+│       │                                  #   MlRetrainScheduler
+│       │
+│       ├── client/                        #   UpbitClient (REST 주문), UpbitAuthProvider,
+│       │                                  #   UpbitWebSocketClient (legacy, 신규 수집은 collector)
+│       │
+│       ├── kafka/                         #   MarketDataConsumer, TradeEventProducer
+│       ├── stream/                        #   CandleAggregator, MarketDataPersistenceConsumer,
+│       │                                  #   IndicatorComputeService
+│       ├── cache/PriceCacheService.kt     #   Redis 가격 캐시
+│       ├── persistence/                   #   R2DBC 엔티티 + Repository
+│       ├── security/                      #   SecretsCrypto (AES-GCM), UserSecretsService,
+│       │                                  #   SecretKeyMaterialProvider
+│       └── notification/DiscordNotifier.kt
 │
-├── perf/                                  # 성능 테스트 (k6)
-│   └── load-test.js                       # 부하 테스트 시나리오
+│   └── src/main/resources/
+│       ├── application.yml                # 기본 설정 (로컬 dev)
+│       ├── application-prod.yml           # prod 오버라이드
+│       ├── static/                        # SPA 정적 자산 (Tide React, babel-standalone)
+│       │   ├── login.html app.html index.html
+│       │   └── tide-app/                  #   api.js, ui.jsx, screens.jsx, tokens.css
+│       └── db/migration/                  # Flyway V1~V13
 │
-├── deploy/aws/                            # AWS 배포 스크립트
-│   └── deploy.sh                          # setup/deploy/ssh/status/logs/destroy
-│
-├── research/                              # 리서치·백테스트·리포트 전용 모듈 (:common만 의존)
+├── research/                              # 리서치·백테스트 (:common만 의존, Spring 미사용)
 │   └── src/main/kotlin/com/trading/research/
 │       ├── engine/                        #   이벤트 드리븐 시뮬레이터
 │       ├── strategy/                      #   ResearchStrategy + LegacyStrategyAdapter
 │       ├── data/                          #   DataLoader (PG JDBC + HikariCP)
 │       ├── execution/                     #   OrderBook, FillSimulator, CostModel
-│       ├── portfolio/                     #   Position, Portfolio 회계
-│       ├── risk/                          #   RiskManager + KillSwitch
-│       ├── sizing/                        #   SizingCalculator
+│       ├── portfolio/ risk/ sizing/       #   회계, 킬 스위치, 사이징
 │       ├── walkforward/                   #   WalkForwardRunner + ParameterGrid
 │       ├── metrics/                       #   Sharpe/Sortino/Calmar/MaxDD/VaR
 │       ├── report/                        #   JSON/CSV/Markdown 리포트
 │       └── cli/                           #   Clikt 기반 CLI 러너
 │
-├── docker-compose.yml                     # 전체 서비스 정의
-├── Dockerfile                             # 멀티스테이지 빌드
-└── .github/workflows/deploy.yml           # CI/CD 파이프라인
+├── monitoring/                            # Prometheus/Loki/Promtail/Grafana 설정
+├── perf/                                  # k6 부하 테스트
+├── deploy/aws/                            # AWS 배포 스크립트
+├── docs/superpowers/specs/                # 설계 스펙 문서 (날짜별)
+├── docker-compose.yml                     # 전체 서비스 정의 (default + monitoring profile)
+├── Dockerfile                             # bot 이미지 빌드
+└── collector/Dockerfile                   # collector 이미지 빌드
 ```
+
+## 프론트엔드 (Tide SPA)
+
+`bot/src/main/resources/static/` 의 정적 자산. **별도 빌드 단계 없음** — `app.html`이 babel-standalone을 통해 브라우저에서 JSX를 직접 트랜스파일.
+
+- 진입: `/login.html` → 로그인/회원가입 → `/app.html`
+- 라우팅: 해시 기반 (`#dashboard`, `#bot`, `#trade`, `#orders`, `#backtest`, `#wallet`, `#settings`)
+- 통신: `api.js` (`TideAPI._fetch`)이 httpOnly JWT 쿠키 + CSRF 면제 fetch로 모든 `/api/*` 호출. 401 → 자동 `/login.html` redirect (단 `/api/auth/*` 응답은 예외 — invalid credential 메시지 노출).
+- 응답 형식: 백엔드는 Jackson `SnakeCaseStrategy` — 프론트에서 보내는 JSON도 snake_case (`access_key`, `upbit_access_key` 등).
 
 ## 트레이딩 전략
 
-### 규칙 기반 (7개)
+봇은 **SWING 모드** (시간/일봉 + 기술적 지표)와 **SCALP 모드** (호가창 + 틱) 두 가지를 지원합니다. 사용자별 종목/전략 설정은 `bot_configs` 테이블에 저장되며, `/api/bot/config*` 로 관리합니다.
+
+### SWING 전략 (스윙 7개 + ML 1개)
 
 | 전략 | 매수 조건 | 특징 |
 |------|----------|------|
@@ -215,12 +215,18 @@ coin-trading-bot/
 | `bollinger_bounce` | 가격이 볼린저 하단밴드 반등 + RSI 25~45 | 밴드 활용 |
 | `macd_cross` | MACD > Signal 교차 + 히스토그램 양수 | 모멘텀 전환 |
 | `mean_reversion` | MA20 대비 -3% 이탈 + 낮은 변동성 + RSI 회복 | 평균 회귀 |
+| `ml_model` | GBM (100 trees, depth 4) 매수 확률 ≥ 0.6 + MA50 필터 | 20-피처 머신러닝 |
 
-### ML 기반 (1개)
+> 스윙 전략 7개는 `:common`에 거주하며 `:research` 모듈에서 `LegacyStrategyAdapter`로 백테스트에도 그대로 사용됩니다.
 
-| 전략 | 모델 | 피처 |
-|------|------|------|
-| `ml_model` | Gradient Boosted Trees (100 trees, depth 4) | RSI, MACD, BB, MA, 거래량, 변동성 등 20개 |
+### SCALP 전략 (2개)
+
+| 전략 | 진입 조건 | 특징 |
+|------|----------|------|
+| `spread_scalp` | 호가 스프레드가 넓고 매수벽이 두꺼울 때 | 스프레드 차익 |
+| `momentum_scalp` | 단기 가격 급등 + 거래량 폭증 | 추세 편승 |
+
+호가창(`NormalizedOrderBook`) + 최근 100개 틱 히스토리 기반.
 
 **ML 파이프라인:**
 ```
@@ -290,29 +296,53 @@ JAVA_HOME=... ./gradlew :research:test -Dtest.docker=true
 
 ## API 엔드포인트
 
+요청/응답은 모두 JSON snake_case (Jackson `SnakeCaseStrategy`). 인증된 엔드포인트는 httpOnly JWT 쿠키로 호출. Upbit 호출 실패는 `UpbitErrorHandlerAdvice`가 잡아 사용자 친화적 4xx로 변환 (raw 401은 절대 노출 X — FE 자동 logout 회피).
+
 ### 인증 (Public)
 | Method | Path | 설명 |
 |--------|------|------|
-| POST | `/api/auth/register` | 회원가입 |
-| POST | `/api/auth/login` | 로그인 (JWT 발급) |
-| POST | `/api/auth/logout` | 로그아웃 |
+| POST | `/api/auth/register` | 회원가입 (가입 시 Upbit 키 동시 등록 가능, prod 프로필이면 Secure 쿠키 강제) |
+| POST | `/api/auth/login` | 로그인 (JWT 쿠키 발급) |
+| POST | `/api/auth/logout` | 로그아웃 (쿠키 클리어) |
 
 ### 봇 제어 (Authenticated)
 | Method | Path | 설명 |
 |--------|------|------|
 | POST | `/api/bot/start` | 봇 시작 (전략/티커 지정 가능) |
 | POST | `/api/bot/stop` | 봇 중지 |
-| GET | `/api/bot/status` | 봇 상태 (실행 여부, 전략, 포지션) |
+| GET | `/api/bot/status` | 봇 상태 (running, strategy, tickers, positions) |
 | POST | `/api/bot/strategy` | 전략 변경 |
+
+### 봇 설정 (Authenticated, 사용자별 종목/전략 매핑)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/bot/configs` | 사용자의 모든 봇 설정 |
+| POST | `/api/bot/config` | 종목별 설정 생성 (exchange, market, strategy, trade_mode=SWING\|SCALP) |
+| DELETE | `/api/bot/config/{id}` | 설정 삭제 |
+
+### 사용자 (Authenticated)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/user/me` | 현재 유저 (id, username, has_upbit_keys, public_profile, has_discord_webhook) |
+| POST | `/api/user/keys` | Upbit API 키 등록/갱신 (AES-GCM 암호화 저장) |
+| POST | `/api/user/settings` | 프로필/디스코드 웹훅 등 부분 갱신 (보낸 필드만 반영) |
 
 ### 트레이딩 (Authenticated)
 | Method | Path | 설명 |
 |--------|------|------|
-| GET | `/api/portfolio` | 보유 코인, 평가금액, 수익률 |
+| GET | `/api/portfolio` | 보유 코인 + 평가금액 + 수익률 (Upbit `/v1/accounts` + `/v1/ticker` 결합) |
 | GET | `/api/account` | Upbit 계좌 원본 데이터 |
 | POST | `/api/trade/buy` | 수동 매수 |
 | POST | `/api/trade/sell` | 수동 매도 |
-| GET | `/api/trades` | 거래 이력 |
+| GET | `/api/trades` | 거래 이력 (envelope: `{total, limit, offset, records}`) |
+
+### 차트/지표 (Authenticated)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/chart/candles?exchange=&market=&interval=&count=` | 멀티 타임프레임 캔들 (1m/5m/15m/1h/4h/1d/1w/1M) |
+| GET | `/api/chart/indicators` | 종목별 지표 (RSI, MACD, BB, MA, EMA) |
+| GET | `/api/chart/tickers` | 실시간 시세 전체 |
+| GET | `/api/chart/compare?markets=UPBIT:BTC/KRW,BINANCE:BTC/USDT` | 거래소 간 비교 (김치 프리미엄) |
 
 ### 전략/백테스트 (Authenticated)
 | Method | Path | 설명 |
@@ -320,6 +350,11 @@ JAVA_HOME=... ./gradlew :research:test -Dtest.docker=true
 | GET | `/api/strategies` | 전략 목록 |
 | GET | `/api/strategies/performance` | 실거래 전략별 성과 |
 | POST | `/api/strategies/backtest` | 백테스트 실행 (전체 전략 비교) |
+
+### 관심종목 (Authenticated)
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/watchlist` | 사용자 관심 코인 목록 |
 
 ### ML (Authenticated)
 | Method | Path | 설명 |
@@ -333,7 +368,7 @@ JAVA_HOME=... ./gradlew :research:test -Dtest.docker=true
 | Method | Path | 설명 |
 |--------|------|------|
 | GET | `/api/prices/stream` | SSE 실시간 가격 스트림 |
-| GET | `/api/prices/latest` | 최신 가격 스냅샷 |
+| GET | `/api/prices/latest` | 최신 가격 스냅샷 (`Map<market, RealtimePrice>`) |
 | GET | `/api/prices/status` | WebSocket 연결 상태 |
 
 ### 리더보드 (Public)
@@ -346,44 +381,65 @@ JAVA_HOME=... ./gradlew :research:test -Dtest.docker=true
 
 ### 사전 요구사항
 
-- JDK 21
+- JDK 21 — 이 프로젝트는 `JAVA_HOME`이 21을 가리켜야 빌드됩니다. 예시:
+  ```bash
+  export JAVA_HOME=/Users/jongyoonlee/Library/Java/JavaVirtualMachines/jbr-21.0.9/Contents/Home
+  ```
+  (이하 모든 `./gradlew` 명령은 21이 잡힌 JAVA_HOME 전제)
 - Docker & Docker Compose
 
-### 실행
+### 빠른 dev 실행 (인프라만 컨테이너, bot은 로컬 Gradle)
 
 ```bash
-# 1. PostgreSQL + Redis 컨테이너 실행
-docker compose up -d postgres redis
+# 인프라 띄우기 (kafka + collector 포함). bot 매매 흐름은 collector→kafka→bot이라 둘 다 필수.
+docker compose up -d postgres redis kafka kafka-init collector
 
-# 2. 앱 실행 (Gradle)
-./gradlew bootRun
+# bot 로컬 실행 (dev profile)
+./gradlew :bot:bootRun
 
-# 3. http://localhost:8080 접속
+# 접속
+open http://localhost:8080         # SPA → /app.html (해시 라우팅)
 ```
 
-### 전체 스택 실행 (모니터링 포함)
+### 전체 스택 실행 (운영과 동일)
 
 ```bash
-# 앱 이미지 빌드 + 코어 서비스 실행
+# bot 이미지 빌드 + 핵심 서비스 (postgres, redis, kafka, collector, bot)
 docker compose up -d --build
 
-# 모니터링 포함 실행
+# 모니터링 추가 (prometheus, loki, promtail, grafana)
 docker compose --profile monitoring up -d --build
 
 # 접속
-# App:       http://localhost:8080
-# Grafana:   http://localhost:3000 (admin/admin)
+# bot/app:    http://localhost:8080
+# collector:  http://localhost:8081  (수집 상태/health)
+# kafka:      localhost:19092         (외부 클라이언트용)
+# Grafana:    http://localhost:3000   (admin / $GRAFANA_PASSWORD, 기본 admin)
 # Prometheus: http://localhost:9090
 ```
 
-### 테스트
+### 빌드 / 테스트 / 타입 체크
 
 ```bash
-# 전체 테스트 (217 test cases)
+# 빌드 (전 모듈)
+./gradlew build
+
+# 단위 테스트
 ./gradlew test
 
+# 모듈별 테스트
+./gradlew :bot:test
+./gradlew :research:test
+./gradlew :collector:test
+
+# 타입 체크만 (빠른 피드백)
+./gradlew :bot:compileKotlin
+
 # 특정 테스트
-./gradlew test --tests "com.trading.bot.engine.TradingEngineTest"
+./gradlew :bot:test --tests "com.trading.bot.engine.TradingEngineTest"
+
+# research 통합 테스트 (Testcontainers, opt-in)
+./gradlew :research:test -Dtest.docker=true
 ```
 
 ### 성능 테스트
@@ -475,17 +531,42 @@ Grafana > Explore > Loki 데이터소스에서 컨테이너 로그 검색:
 
 ## 환경변수
 
+### 🔴 Prod에서 반드시 설정 (미설정 시 기동 실패 또는 보안 위반)
+
+| 변수 | 설명 |
+|------|------|
+| `JWT_SECRET` | JWT 서명 키. 설정 안 하면 prod 프로필에서 기동 실패. 재시작 시 키가 바뀌면 모든 세션이 무효화됨. |
+| `APP_ENCRYPTION_SECRET` | 사용자별 거래소 API 키를 AES-GCM 256으로 암호화할 때 쓰는 마스터 키. **재시작 시 다른 값으로 바꾸면 기존에 저장된 모든 사용자 키가 복호화 불가**. |
+
+### 운영 환경
+
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `UPBIT_ACCESS_KEY` | - | Upbit API Access Key |
-| `UPBIT_SECRET_KEY` | - | Upbit API Secret Key |
+| `DB_PASSWORD` | `trading` | PostgreSQL 비밀번호 |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | container 기본 | DB 접속 정보 (docker-compose 자동 주입) |
+| `KAFKA_BOOTSTRAP_SERVERS` | `kafka:9092` | Kafka 부트스트랩 |
+| `REDIS_HOST` / `REDIS_ENABLED` | `redis` / `true` (compose) | Redis 활성화 |
+| `GRAFANA_PASSWORD` | `admin` | Grafana 관리자 비밀번호 |
+
+### 거래/분석
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `UPBIT_ACCESS_KEY` / `UPBIT_SECRET_KEY` | - | (옵션) 글로벌 fallback Upbit 키. 보통은 사용자별 키를 `/api/user/keys` 로 등록. |
 | `TRADING_TICKERS` | `KRW-BTC` | 거래 대상 (쉼표 구분) |
 | `TRADING_STRATEGY` | `volatility_breakout` | 기본 전략 |
 | `TRADING_AUTO_START` | `false` | 서버 시작 시 자동 매매 시작 |
-| `DB_PASSWORD` | `trading` | PostgreSQL 비밀번호 |
-| `JWT_SECRET` | - | JWT 서명 키 |
-| `APP_ENCRYPTION_SECRET` | - | API 키 암호화 키 |
-| `DISCORD_WEBHOOK_URL` | - | Discord 알림 웹훅 |
-| `CLAUDE_API_KEY` | - | Claude AI 분석 (선택) |
-| `REDIS_ENABLED` | `false` | Redis 활성화 |
-| `GRAFANA_PASSWORD` | `admin` | Grafana 관리자 비밀번호 |
+| `ML_AUTO_RETRAIN` | `true` | ML 모델 자동 재학습 |
+| `ML_MODEL_DIR` | `/app/ml-models` | ML 모델 영속화 경로 |
+| `DISCORD_WEBHOOK_URL` | - | Discord 알림 웹훅 (사용자별 등록도 가능) |
+| `CLAUDE_API_KEY` | - | Claude API 키 (시장 코멘트용) |
+| `CLAUDE_ANALYSIS_ENABLED` | `false` | `CoinAnalysisScheduler` 활성화 여부 |
+
+### Collector
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `COLLECTOR_UPBIT_ENABLED` | `true` | Upbit 수집 on/off |
+| `COLLECTOR_UPBIT_MARKETS` | `KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL` | 수집 대상 |
+| `COLLECTOR_BINANCE_ENABLED` | `true` | Binance 수집 on/off |
+| `COLLECTOR_BINANCE_MARKETS` | `BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT` | 수집 대상 |
