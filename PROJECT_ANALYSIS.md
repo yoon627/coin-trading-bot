@@ -56,7 +56,7 @@ coin-trading-bot/
 │       ├── domain/                  # NormalizedCandle, NormalizedTicker, OrderBook 등
 │       ├── event/                   # MarketDataEvent, Topics (Kafka 이벤트 스키마 + 토픽 상수)
 │       ├── indicator/               # Indicators (기술적 지표 계산)
-│       └── strategy/                # 스윙 전략 7개 + TradingStrategy (framework-free, @Bean 등록은 :bot/config/StrategyConfig)
+│       └── strategy/                # 스윙 전략 7개 + TradingStrategy (@Component 미사용. @Bean 등록은 :bot/config/StrategyConfig)
 │
 ├── collector/                       # 데이터 수집 서비스 (별도 Spring Boot 앱)
 │   └── src/main/kotlin/com/trading/collector/
