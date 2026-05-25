@@ -2,9 +2,7 @@ package com.trading.common.strategy
 
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
-import org.springframework.stereotype.Component
 
-@Component
 class RsiBounce : TradingStrategy {
     override val name = "rsi_bounce"
 

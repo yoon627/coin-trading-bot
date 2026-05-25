@@ -14,7 +14,7 @@ dependencies {
     implementation("com.fasterxml.jackson.datatype:jackson-datatype-jsr310")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
 
-    // Spring Boot context (for @ConfigurationProperties on TradingProperties)
+    // Spring Boot context (for @ConfigurationProperties on TradingProperties).
+    // spring-boot-autoconfigure 는 common 코드에서 사용하지 않아 제거.
     implementation("org.springframework.boot:spring-boot")
-    implementation("org.springframework.boot:spring-boot-autoconfigure")
 }

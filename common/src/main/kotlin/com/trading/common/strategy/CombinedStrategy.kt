@@ -2,9 +2,7 @@ package com.trading.common.strategy
 
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
-import org.springframework.stereotype.Component
 
-@Component
 class CombinedStrategy : TradingStrategy {
     override val name = "combined"
 
