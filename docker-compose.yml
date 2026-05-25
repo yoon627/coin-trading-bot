@@ -122,6 +122,7 @@ services:
     restart: unless-stopped
 
   collector:
+    image: ghcr.io/yoon627/coin-trading-bot-collector:${APP_VERSION:-latest}
     build:
       context: .
       dockerfile: collector/Dockerfile
