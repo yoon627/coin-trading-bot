@@ -218,14 +218,15 @@ class TradeExecutionService(
         discordWebhookUrl: String?,
         orderUuid: String,
     ): TradeExecutionResult {
-        tradeRecordRepository.save(record)
-        val krwBalance = try {
-            client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
-        } catch (_: Exception) {
-            null
+        // 수동·엔진 주문 모두 동일 audit 경로 (trade_executions + Kafka publish) 를 거치도록 통합.
+        // execution save 실패는 failure 반환으로 호출자에게 가시화.
+        return try {
+            saveAndNotify(record, client, username, discordWebhookUrl)
+            TradeExecutionResult.success(orderUuid)
+        } catch (e: Exception) {
+            log.error("Failed to save and notify trade execution: orderUuid={}, market={}", orderUuid, record.ticker, e)
+            TradeExecutionResult.failure(e.message ?: "save failed")
         }
-        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
-        return TradeExecutionResult.success(orderUuid)
     }
 }
 
