@@ -28,6 +28,8 @@ jobs:
       - name: Test
         run: ./gradlew test --parallel
 
+      - uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -35,7 +37,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
+      - name: Build and push app image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -44,8 +46,17 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+      - name: Build and push collector image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: collector/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-collector:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-collector:${{ github.sha }}
+
       - name: Deploy to EC2
-        if: github.ref == 'refs/heads/main'
         env:
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           EC2_HOST: ${{ secrets.EC2_HOST }}
@@ -53,21 +64,21 @@ jobs:
           echo "$EC2_SSH_KEY" > /tmp/key.pem
           chmod 600 /tmp/key.pem
 
+          ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST \
+            "mkdir -p /opt/app && rm -rf /opt/app/monitoring"
+
           scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
             docker-compose.yml ec2-user@$EC2_HOST:/opt/app/docker-compose.yml
 
           scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
-            -r monitoring ec2-user@$EC2_HOST:/opt/app/monitoring
+            -r monitoring ec2-user@$EC2_HOST:/opt/app/
 
           ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST bash <<'EOF'
           cd /opt/app
 
-          # Stop old JAR process if still running
-          pkill -f 'java.*app.jar' 2>/dev/null || true
-
-          # Login to GHCR and pull latest image
+          # Login to GHCR and pull latest images
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker compose pull app
+          docker compose pull app collector
 
           # Rolling restart: bring up new containers
           docker compose up -d --remove-orphans
