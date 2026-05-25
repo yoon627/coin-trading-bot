@@ -3,6 +3,7 @@ package com.trading.bot.kafka
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
+import com.trading.common.event.Topics
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
@@ -15,7 +16,7 @@ class MarketDataConsumer(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    @KafkaListener(topics = ["market.ticker"], groupId = "trading-bot")
+    @KafkaListener(topics = [Topics.MARKET_TICKER], groupId = "trading-bot")
     fun onTicker(record: ConsumerRecord<String, String>) {
         try {
             val ticker = objectMapper.readValue(record.value(), NormalizedTicker::class.java)
@@ -25,7 +26,7 @@ class MarketDataConsumer(
         }
     }
 
-    @KafkaListener(topics = ["market.candle"], groupId = "trading-bot")
+    @KafkaListener(topics = [Topics.MARKET_CANDLE], groupId = "trading-bot")
     fun onCandle(record: ConsumerRecord<String, String>) {
         try {
             val candle = objectMapper.readValue(record.value(), NormalizedCandle::class.java)
