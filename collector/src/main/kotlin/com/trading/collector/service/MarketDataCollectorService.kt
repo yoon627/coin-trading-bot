@@ -8,6 +8,7 @@ import com.trading.common.domain.AssetType
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
+import com.trading.common.event.Topics
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.CoroutineScope
@@ -33,8 +34,6 @@ class MarketDataCollectorService(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
-        private const val TOPIC_TICKER = "market.ticker"
-        private const val TOPIC_CANDLE = "market.candle"
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
     }
 
@@ -66,7 +65,7 @@ class MarketDataCollectorService(
             client.tickerFlow(markets).collect { ticker ->
                 val key = "${ticker.exchange}:${ticker.market}"
                 val value = objectMapper.writeValueAsString(ticker)
-                kafkaTemplate.send(TOPIC_TICKER, key, value)
+                kafkaTemplate.send(Topics.MARKET_TICKER, key, value)
             }
         } catch (e: Exception) {
             log.error("[{}] Ticker collection failed: {}", client.exchange, e.message)
@@ -83,7 +82,7 @@ class MarketDataCollectorService(
                     for (candle in candles) {
                         val key = "${candle.exchange}:${candle.market}:${candle.interval.label}"
                         val value = objectMapper.writeValueAsString(candle)
-                        kafkaTemplate.send(TOPIC_CANDLE, key, value)
+                        kafkaTemplate.send(Topics.MARKET_CANDLE, key, value)
                     }
                 } catch (e: Exception) {
                     log.warn("[{}] Candle collection failed for {}: {}", client.exchange, market, e.message)
