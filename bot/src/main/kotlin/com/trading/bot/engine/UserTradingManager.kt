@@ -2,6 +2,7 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.kafka.MarketDataStore
@@ -102,6 +103,9 @@ class UserTradingManager(
         val engine = engines[userId] ?: return mapOf("status" to "not_running")
         engine.stop()
         saveState(userId, false, engine.getActiveStrategyName(), emptyList())
+        // value-match remove: reloadUserRuntime 가 그 사이 새 engine 을 꽂았다면 evict 안 함
+        engines.remove(userId, engine)
+        userStrategies.remove(userId)
         return mapOf("status" to "stopped")
     }
 
@@ -146,7 +150,7 @@ class UserTradingManager(
             secretKey = user.upbitSecretKey ?: "",
         )
         val authProvider = UpbitAuthProvider(props)
-        return UpbitClient(upbitWebClient, authProvider)
+        return UpbitClientImpl(upbitWebClient, authProvider)
     }
 
     suspend fun reloadUserRuntime(userId: Long) {
@@ -159,7 +163,10 @@ class UserTradingManager(
         existing.stop()
         val replacement = createEngine(decryptedUser)
         replacement.setStrategy(strategy)
-        engines[userId] = replacement
+        if (!engines.replace(userId, existing, replacement)) {
+            log.warn("reloadUserRuntime: existing engine evicted (user {}); not installing replacement", userId)
+            return
+        }
         userStrategies[userId] = strategy
         if (wasRunning) {
             replacement.start(tickers.ifEmpty { tradingProperties.tickerList() })
