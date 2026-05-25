@@ -74,6 +74,7 @@ jobs:
             -r monitoring ec2-user@$EC2_HOST:/opt/app/
 
           ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST bash <<'EOF'
+          set -e
           cd /opt/app
 
           # Login to GHCR and pull latest images
@@ -83,15 +84,23 @@ jobs:
           # Rolling restart: bring up new containers
           docker compose up -d --remove-orphans
 
-          # Wait for health check
+          # Wait for health check; fail deploy if never healthy
           echo "Waiting for app to be healthy..."
+          healthy=false
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
               echo "App is healthy!"
+              healthy=true
               break
             fi
             sleep 5
           done
+          if [ "$healthy" = "false" ]; then
+            echo "ERROR: App failed health check after 150s"
+            docker compose ps
+            docker compose logs --tail=100 app collector || true
+            exit 1
+          fi
 
           # Cleanup old images
           docker image prune -f
