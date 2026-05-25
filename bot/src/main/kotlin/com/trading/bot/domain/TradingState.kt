@@ -15,6 +15,10 @@ data class TradingState(
     var boughtToday: Boolean = false,
     var lastTradeTime: LocalDateTime? = null,
 ) {
+    companion object {
+        private val KST: ZoneId = ZoneId.of("Asia/Seoul")
+    }
+
     fun pnlPercent(currentPrice: Double): Double {
         if (avgBuyPrice <= 0) return 0.0
         return ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0
@@ -33,7 +37,7 @@ data class TradingState(
         boughtToday = false
     }
 
-    fun markBought(price: Double, volume: Double) {
+    fun markBought(price: Double, volume: Double, now: LocalDateTime = LocalDateTime.now(KST)) {
         if (position) {
             // 추가 매수: 평균 단가 계산
             val totalCost = avgBuyPrice * holdVolume + price * volume
@@ -44,18 +48,18 @@ data class TradingState(
             position = true
             avgBuyPrice = price
             holdVolume = volume
-            buyDate = LocalDate.now(ZoneId.of("Asia/Seoul"))
+            buyDate = now.toLocalDate()
         }
         peakPrice = max(peakPrice, price)
-        lastTradeTime = LocalDateTime.now(ZoneId.of("Asia/Seoul"))
+        lastTradeTime = now
     }
 
-    fun markSold() {
+    fun markSold(now: LocalDateTime = LocalDateTime.now(KST)) {
         position = false
         avgBuyPrice = 0.0
         holdVolume = 0.0
         peakPrice = 0.0
         buyDate = null
-        lastTradeTime = LocalDateTime.now(ZoneId.of("Asia/Seoul"))
+        lastTradeTime = now
     }
 }
