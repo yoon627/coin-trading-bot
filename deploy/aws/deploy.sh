@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Git Bash (MSYS2) 가 '/dev/xvda' 같은 단일 슬래시 경로를 Windows path 로 자동 변환하는
+# 동작 차단. macOS/Linux 에선 이 변수가 무시되므로 영향 없음.
+export MSYS_NO_PATHCONV=1
+
 # ============================================================
 # Coin Trading Bot - AWS CLI 배포 스크립트 (프리티어)
 #
@@ -35,7 +39,7 @@ KEY_NAME="${APP_NAME}-key"
 KEY_PEM="$SCRIPT_DIR/${KEY_NAME}.pem"
 
 save_state() { echo "$1=$2" >> "$STATE_FILE"; }
-load_state() { [[ -f "$STATE_FILE" ]] && source "$STATE_FILE"; }
+load_state() { if [[ -f "$STATE_FILE" ]]; then source "$STATE_FILE"; fi; }
 load_state
 log() { echo -e "\n=== $1 ==="; }
 
