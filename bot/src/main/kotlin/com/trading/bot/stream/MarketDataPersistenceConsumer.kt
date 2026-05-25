@@ -7,6 +7,7 @@ import com.trading.bot.persistence.entity.MarketCandleEntity
 import com.trading.bot.persistence.entity.MarketTickerEntity
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
+import com.trading.common.event.Topics
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
@@ -27,7 +28,7 @@ class MarketDataPersistenceConsumer(
         private const val TICKER_SAVE_INTERVAL = 10L
     }
 
-    @KafkaListener(topics = ["market.ticker"], groupId = "market-data-persistence")
+    @KafkaListener(topics = [Topics.MARKET_TICKER], groupId = "market-data-persistence")
     fun onTicker(record: ConsumerRecord<String, String>) {
         try {
             val ticker = objectMapper.readValue(record.value(), NormalizedTicker::class.java)
@@ -54,7 +55,7 @@ class MarketDataPersistenceConsumer(
         }
     }
 
-    @KafkaListener(topics = ["market.candle"], groupId = "market-data-persistence")
+    @KafkaListener(topics = [Topics.MARKET_CANDLE], groupId = "market-data-persistence")
     fun onCandle(record: ConsumerRecord<String, String>) {
         try {
             val candle = objectMapper.readValue(record.value(), NormalizedCandle::class.java)
