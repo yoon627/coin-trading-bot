@@ -8,11 +8,14 @@ import com.trading.bot.kafka.TradeEventProducer
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeRecordRepository
+import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeRecordEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -33,6 +36,10 @@ class TradeExecutionServiceTest {
         discordNotifier = mockk(relaxed = true)
         tradeEventProducer = mockk(relaxed = true)
         client = mockk()
+        // manual trade (executeBuy/SellAll/SellVolume) 가 통합 saveAndNotify 를 거치도록 변경되어
+        // tradeExecutionRepository.save 도 호출됨. 명시 stub 이 없으면 relaxed mockk 의 Mono 가
+        // emit 안 해 awaitSingle 가 무한 대기 → UncompletedCoroutinesError.
+        every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
         service = TradeExecutionService(tradeRecordRepository, tradeExecutionRepository, discordNotifier, tradeEventProducer)
     }
 
