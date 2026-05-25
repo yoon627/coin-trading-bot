@@ -156,18 +156,26 @@ do_deploy() {
 
     log "컨테이너 배포"
     ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" bash <<'REMOTE'
+set -e
 cd /opt/app
 docker compose pull app collector
 docker compose up -d --remove-orphans
 echo "Waiting for health check..."
+healthy=false
 for i in $(seq 1 30); do
     if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
         echo "App is healthy!"
+        healthy=true
         break
     fi
     sleep 5
 done
 docker compose ps
+if [ "$healthy" = "false" ]; then
+    echo "ERROR: App failed health check after 150s"
+    docker compose logs --tail=100 app collector || true
+    exit 1
+fi
 docker image prune -f
 REMOTE
 
