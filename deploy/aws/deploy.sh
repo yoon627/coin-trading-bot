@@ -137,22 +137,27 @@ do_deploy() {
     load_state
     [[ -z "${EC2_PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
 
-    log "Docker 이미지 빌드 & 푸시"
+    log "Docker 이미지 빌드 & 푸시 (app)"
     cd "$PROJECT_DIR"
-    ./gradlew bootJar -x test
     docker build -t ghcr.io/yoon627/coin-trading-bot:latest .
     docker push ghcr.io/yoon627/coin-trading-bot:latest
 
+    log "Docker 이미지 빌드 & 푸시 (collector)"
+    docker build -f collector/Dockerfile -t ghcr.io/yoon627/coin-trading-bot-collector:latest .
+    docker push ghcr.io/yoon627/coin-trading-bot-collector:latest
+
     log "설정 파일 업로드"
+    ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" \
+        "mkdir -p /opt/app && rm -rf /opt/app/monitoring"
     scp -o StrictHostKeyChecking=no -i "$KEY_PEM" \
         docker-compose.yml ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
     scp -o StrictHostKeyChecking=no -i "$KEY_PEM" \
-        -r monitoring ec2-user@"$EC2_PUBLIC_IP":/opt/app/monitoring
+        -r monitoring ec2-user@"$EC2_PUBLIC_IP":/opt/app/
 
     log "컨테이너 배포"
     ssh -o StrictHostKeyChecking=no -i "$KEY_PEM" ec2-user@"$EC2_PUBLIC_IP" bash <<'REMOTE'
 cd /opt/app
-docker compose pull app
+docker compose pull app collector
 docker compose up -d --remove-orphans
 echo "Waiting for health check..."
 for i in $(seq 1 30); do
