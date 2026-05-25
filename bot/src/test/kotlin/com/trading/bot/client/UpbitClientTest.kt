@@ -29,7 +29,7 @@ class UpbitClientTest {
         val webClient = WebClient.builder()
             .baseUrl(properties.baseUrl)
             .build()
-        client = UpbitClient(webClient, authProvider)
+        client = UpbitClientImpl(webClient, authProvider)
     }
 
     @AfterEach

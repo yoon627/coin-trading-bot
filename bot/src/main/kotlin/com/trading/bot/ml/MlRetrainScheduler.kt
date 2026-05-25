@@ -1,6 +1,6 @@
 package com.trading.bot.ml
 
-import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.config.MlProperties
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
@@ -22,7 +22,7 @@ class MlRetrainScheduler(
         log.info("Starting scheduled ML model retraining...")
 
         // Create unauthenticated client for public candle data
-        val publicClient = UpbitClient(upbitWebClient, null)
+        val publicClient = UpbitClientImpl(upbitWebClient, null)
 
         val tickersToRetrain = mlModelService.getTrainedTickers()
         if (tickersToRetrain.isEmpty()) {
