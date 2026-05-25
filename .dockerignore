@@ -1,0 +1,34 @@
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# Build outputs (host)
+.gradle/
+build/
+*/build/
+*/.gradle/
+
+# Local config / state
+.env
+.env.*
+.claude/
+
+# Project meta — not used inside images
+.github/
+docs/
+perf/
+deploy/
+monitoring/
+scripts/
+*.md
+
+# Logs / tmp
+*.log
