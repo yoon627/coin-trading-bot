@@ -5,10 +5,10 @@
 
 ## Build & Test
 
-- JDK 21 필수: `JAVA_HOME=/Users/jongyoonlee/Library/Java/JavaVirtualMachines/jbr-21.0.9/Contents/Home`
-- 빌드: `JAVA_HOME=... ./gradlew build`
-- 테스트: `JAVA_HOME=... ./gradlew test`
-- 타입체크: `JAVA_HOME=... ./gradlew compileKotlin`
+- JDK 21 필요. Gradle toolchain + Foojay resolver가 설정되어 있어, 로컬에 JDK 21이 없으면 첫 빌드 시 자동 다운로드됨 (`~/.gradle/jdks`에 캐시). `JAVA_HOME`을 수동으로 잡을 필요 없음.
+- 빌드: `./gradlew build` (Windows cmd는 `gradlew.bat build`)
+- 테스트: `./gradlew test`
+- 타입체크: `./gradlew compileKotlin`
 - 코드 수정 후 커밋 전 최소 `compileKotlin` 통과 확인.
 
 ## 모듈 구조
