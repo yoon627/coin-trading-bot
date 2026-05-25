@@ -22,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
@@ -42,7 +44,13 @@ class UserTradingManager(
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
     private val userStrategies = ConcurrentHashMap<Long, String>()
+    // userId 별 Mutex 로 start/stop/reload/setStrategy 의 engines mutate 를 직렬화.
+    // CAS (remove(k,v) / replace(k,old,new)) 만으로는 computeIfAbsent 직후 start() 호출 전에
+    // stop 이 끼어드는 race window 를 닫지 못함.
+    private val userLocks = ConcurrentHashMap<Long, Mutex>()
     private val scope = CoroutineScope(Dispatchers.Default)
+
+    private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { Mutex() }
 
     @PostConstruct
     fun restoreOnStartup() {
@@ -78,12 +86,12 @@ class UserTradingManager(
 
     fun getEngine(userId: Long): TradingEngine? = engines[userId]
 
-    suspend fun startBot(userId: Long, tickers: List<String>?, strategyName: String?): Map<String, Any> {
+    suspend fun startBot(userId: Long, tickers: List<String>?, strategyName: String?): Map<String, Any> = lockFor(userId).withLock {
         val user = userRepository.findById(userId).awaitSingleOrNull()
-            ?: return mapOf("error" to "User not found")
+            ?: return@withLock mapOf("error" to "User not found")
 
         if (user.upbitAccessKey.isNullOrBlank() || user.upbitSecretKey.isNullOrBlank()) {
-            return mapOf("error" to "Upbit API keys not configured. Set them via /api/user/keys")
+            return@withLock mapOf("error" to "Upbit API keys not configured. Set them via /api/user/keys")
         }
 
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
@@ -96,17 +104,16 @@ class UserTradingManager(
         engine.start(tickerList)
 
         saveState(userId, true, engine.getActiveStrategyName(), tickerList)
-        return mapOf("status" to "started", "strategy" to engine.getActiveStrategyName())
+        mapOf("status" to "started", "strategy" to engine.getActiveStrategyName())
     }
 
-    suspend fun stopBot(userId: Long): Map<String, Any> {
-        val engine = engines[userId] ?: return mapOf("status" to "not_running")
+    suspend fun stopBot(userId: Long): Map<String, Any> = lockFor(userId).withLock {
+        val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
         engine.stop()
         saveState(userId, false, engine.getActiveStrategyName(), emptyList())
-        // value-match remove: reloadUserRuntime 가 그 사이 새 engine 을 꽂았다면 evict 안 함
-        engines.remove(userId, engine)
+        engines.remove(userId)
         userStrategies.remove(userId)
-        return mapOf("status" to "stopped")
+        mapOf("status" to "stopped")
     }
 
     fun getStatus(userId: Long): Map<String, Any> {
@@ -131,9 +138,9 @@ class UserTradingManager(
         )
     }
 
-    suspend fun setStrategy(userId: Long, strategyName: String): Boolean {
+    suspend fun setStrategy(userId: Long, strategyName: String): Boolean = lockFor(userId).withLock {
         val valid = strategies.any { it.name == strategyName }
-        if (!valid) return false
+        if (!valid) return@withLock false
         userStrategies[userId] = strategyName
         engines[userId]?.setStrategy(strategyName)
 
@@ -141,7 +148,7 @@ class UserTradingManager(
         if (existing != null) {
             botStateRepository.save(existing.copy(strategy = strategyName, updatedAt = LocalDateTime.now())).awaitSingle()
         }
-        return true
+        true
     }
 
     fun createUpbitClient(user: UserEntity): UpbitClient {
@@ -153,9 +160,9 @@ class UserTradingManager(
         return UpbitClientImpl(upbitWebClient, authProvider)
     }
 
-    suspend fun reloadUserRuntime(userId: Long) {
-        val existing = engines[userId] ?: return
-        val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
+    suspend fun reloadUserRuntime(userId: Long) = lockFor(userId).withLock {
+        val existing = engines[userId] ?: return@withLock
+        val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val wasRunning = existing.isRunning()
         val tickers = existing.getActiveTickers()
@@ -163,10 +170,7 @@ class UserTradingManager(
         existing.stop()
         val replacement = createEngine(decryptedUser)
         replacement.setStrategy(strategy)
-        if (!engines.replace(userId, existing, replacement)) {
-            log.warn("reloadUserRuntime: existing engine evicted (user {}); not installing replacement", userId)
-            return
-        }
+        engines[userId] = replacement
         userStrategies[userId] = strategy
         if (wasRunning) {
             replacement.start(tickers.ifEmpty { tradingProperties.tickerList() })
