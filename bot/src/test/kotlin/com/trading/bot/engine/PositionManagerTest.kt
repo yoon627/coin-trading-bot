@@ -1,7 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitAuthProvider
-import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.TradingState
 import com.trading.common.config.TradingProperties
@@ -15,7 +15,7 @@ class PositionManagerTest {
     private val config = TradingProperties(takeProfitPct = 2.0, maxLossPct = 5.0)
 
     // Dummy client - checkTakeProfit/checkStopLoss don't call API
-    private val dummyClient = UpbitClient(
+    private val dummyClient = UpbitClientImpl(
         WebClient.builder().build(),
         UpbitAuthProvider(UpbitProperties(accessKey = "x", secretKey = "x")),
     )
