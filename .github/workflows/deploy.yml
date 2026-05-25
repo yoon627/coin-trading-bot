@@ -1,8 +1,9 @@
 name: Build & Deploy to EC2
 
 on:
-  push:
-    branches: [main]
+  # EC2 t2.micro/t3.small 의 RAM 으로 모든 컨테이너 (app+collector+kafka+
+  # postgres+redis) 를 띄우지 못해 (OOM-killed exit 137) EC2 배포 경로를
+  # 보류. 다른 target 으로 옮기면 push trigger 재추가 예정.
   workflow_dispatch:
 
 env:
