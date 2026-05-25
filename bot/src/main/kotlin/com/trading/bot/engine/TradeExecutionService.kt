@@ -10,6 +10,7 @@ import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
+import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import kotlin.math.floor
@@ -175,9 +176,18 @@ class TradeExecutionService(
             reason = record.reason,
             strategy = record.strategy,
         )
-        tradeExecutionRepository.save(executionEntity).subscribe { saved ->
-            tradeEventProducer.publishTradeExecution(saved)
+        // trade_executions 저장 + Kafka publish. tradeRecordRepository.save 와는 별도 트랜잭션이므로
+        // 실패해도 record 는 남는다. 운영 가시성을 위해 명시적으로 error 로깅하고 호출자가 인지하도록 throw 한다.
+        val saved = try {
+            tradeExecutionRepository.save(executionEntity).awaitSingle()
+        } catch (e: Exception) {
+            log.error(
+                "Failed to persist trade execution (record saved but execution row missing): userId={}, market={}, side={}",
+                record.userId, record.ticker, record.side, e,
+            )
+            throw e
         }
+        tradeEventProducer.publishTradeExecution(saved)
 
         val krwBalance = try {
             client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
