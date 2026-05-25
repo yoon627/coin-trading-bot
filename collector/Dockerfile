@@ -5,6 +5,7 @@ COPY gradle ./gradle
 COPY common/build.gradle.kts ./common/
 COPY bot/build.gradle.kts ./bot/
 COPY collector/build.gradle.kts ./collector/
+COPY research/build.gradle.kts ./research/
 RUN gradle dependencies --no-daemon || true
 COPY common ./common
 COPY collector ./collector
