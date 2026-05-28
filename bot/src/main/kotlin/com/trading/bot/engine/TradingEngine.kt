@@ -5,7 +5,7 @@ import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
-import com.trading.bot.kafka.MarketDataStore
+import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
@@ -108,10 +108,10 @@ class TradingEngine(
     }
 
     private fun getRealtimePrice(ticker: String): Double? {
-        // Prefer Kafka-backed MarketDataStore
+        // Prefer the in-process MarketDataStore
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
-        val kafkaPrice = marketDataStore?.getLatestPrice(exchange, normalizedMarket)
-        if (kafkaPrice != null) return kafkaPrice
+        val storePrice = marketDataStore?.getLatestPrice(exchange, normalizedMarket)
+        if (storePrice != null) return storePrice
 
         // Fallback to WebSocket
         val wsPrice = webSocketClient?.latestPrice(ticker)
@@ -150,9 +150,9 @@ class TradingEngine(
             }
 
             val normalizedMarket = MarketPair.normalize(exchange, ticker)
-            val kafkaCandles = marketDataStore?.getCandles(exchange, normalizedMarket, CandleInterval.D1, 30)
-            val shouldBuy = if (kafkaCandles != null && kafkaCandles.size >= 2) {
-                strategy.shouldBuyNormalized(kafkaCandles, currentPrice, tradingProperties)
+            val storeCandles = marketDataStore?.getCandles(exchange, normalizedMarket, CandleInterval.D1, 30)
+            val shouldBuy = if (storeCandles != null && storeCandles.size >= 2) {
+                strategy.shouldBuyNormalized(storeCandles, currentPrice, tradingProperties)
             } else {
                 val candles = upbitClient.getDayCandles(ticker, 30)
                 strategy.shouldBuy(candles, currentPrice, tradingProperties)
