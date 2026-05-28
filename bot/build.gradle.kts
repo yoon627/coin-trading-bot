@@ -17,7 +17,6 @@ dependencies {
 
     // Kotlin
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
-    implementation("io.projectreactor.kotlin:reactor-kotlin-extensions")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
@@ -35,22 +34,8 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
 
-    // ML - Smile (Statistical Machine Intelligence and Learning Engine)
-    implementation("com.github.haifengl:smile-core:3.1.1")
-    implementation("com.github.haifengl:smile-kotlin:3.1.1")
-
-    // Kafka
-    implementation("org.springframework.kafka:spring-kafka")
-
     // Redis
     implementation("org.springframework.boot:spring-boot-starter-data-redis-reactive")
-
-    // Resilience
-    implementation("io.github.resilience4j:resilience4j-reactor:2.2.0")
-    implementation("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
-
-    // Monitoring
-    implementation("io.micrometer:micrometer-registry-prometheus")
 
     // Test
     testImplementation("org.springframework.boot:spring-boot-starter-test")

@@ -1,7 +1,7 @@
 package com.trading.bot.api
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.trading.bot.kafka.MarketDataStore
+import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.persistence.MarketCandleRepository
 import com.trading.bot.persistence.entity.MarketCandleEntity
 import com.trading.common.domain.CandleInterval
