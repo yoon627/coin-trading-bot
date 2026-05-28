@@ -1,6 +1,6 @@
 package com.trading.bot.api
 
-import com.trading.bot.kafka.MarketDataStore
+import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.persistence.MarketCandleRepository
 import com.trading.common.domain.Exchange
 import io.mockk.every

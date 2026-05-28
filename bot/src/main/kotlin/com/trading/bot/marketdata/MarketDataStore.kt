@@ -1,4 +1,4 @@
-package com.trading.bot.kafka
+package com.trading.bot.marketdata
 
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange

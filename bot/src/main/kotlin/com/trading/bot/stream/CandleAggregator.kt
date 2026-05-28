@@ -1,6 +1,6 @@
 package com.trading.bot.stream
 
-import com.trading.bot.kafka.MarketDataStore
+import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
