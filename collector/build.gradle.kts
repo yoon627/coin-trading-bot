@@ -19,10 +19,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
 
-    // Resilience
-    implementation("io.github.resilience4j:resilience4j-reactor:2.2.0")
-    implementation("io.github.resilience4j:resilience4j-circuitbreaker:2.2.0")
-
     // Monitoring
     implementation("io.micrometer:micrometer-registry-prometheus")
 

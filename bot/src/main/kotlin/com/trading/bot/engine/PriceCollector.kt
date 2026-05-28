@@ -3,7 +3,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.config.ClaudeProperties
+import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.persistence.PriceSnapshotRepository
 import com.trading.bot.persistence.entity.PriceSnapshotEntity
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +20,7 @@ import java.time.ZoneId
 class PriceCollector(
     private val upbitClient: UpbitClient,
     private val priceSnapshotRepository: PriceSnapshotRepository,
-    private val claudeProperties: ClaudeProperties,
+    private val watchlistProperties: WatchlistProperties,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val kst = ZoneId.of("Asia/Seoul")
@@ -44,7 +44,7 @@ class PriceCollector(
 
     @Scheduled(fixedRate = 300_000, initialDelay = 10_000)
     fun collectPrices() {
-        val tickers = claudeProperties.tickerList()
+        val tickers = watchlistProperties.tickerList()
         if (tickers.isEmpty()) return
 
         scope.launch {
