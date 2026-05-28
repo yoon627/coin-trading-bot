@@ -16,12 +16,8 @@ data class UpbitProperties(
     val baseUrl: String = "https://api.upbit.com",
 )
 
-@ConfigurationProperties(prefix = "claude")
-data class ClaudeProperties(
-    val apiKey: String = "",
-    val analysisEnabled: Boolean = false,
-    val sleepStartHour: Int = 23,
-    val sleepEndHour: Int = 7,
+@ConfigurationProperties(prefix = "watchlist")
+data class WatchlistProperties(
     val tickers: String = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL",
 ) {
     fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }

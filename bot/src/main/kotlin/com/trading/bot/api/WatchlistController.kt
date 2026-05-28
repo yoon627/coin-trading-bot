@@ -1,6 +1,6 @@
 package com.trading.bot.api
 
-import com.trading.bot.config.ClaudeProperties
+import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.persistence.PriceSnapshotRepository
 import kotlinx.coroutines.reactor.awaitSingle
 import org.springframework.web.bind.annotation.GetMapping
@@ -13,13 +13,13 @@ import java.time.ZoneId
 @RequestMapping("/api/watchlist")
 class WatchlistController(
     private val priceSnapshotRepository: PriceSnapshotRepository,
-    private val claudeProperties: ClaudeProperties,
+    private val watchlistProperties: WatchlistProperties,
 ) {
     private val kst = ZoneId.of("Asia/Seoul")
 
     @GetMapping
     suspend fun getWatchlist(): Map<String, Any> {
-        val tickers = claudeProperties.tickerList()
+        val tickers = watchlistProperties.tickerList()
         val now = LocalDateTime.now(kst)
         val oneHourAgo = now.minusHours(1)
 
