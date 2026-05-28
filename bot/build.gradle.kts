@@ -34,9 +34,6 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
 
-    // Kafka
-    implementation("org.springframework.kafka:spring-kafka")
-
     // Redis
     implementation("org.springframework.boot:spring-boot-starter-data-redis-reactive")
 

@@ -4,7 +4,6 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.Ticker
-import com.trading.bot.kafka.TradeEventProducer
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeRecordRepository
@@ -25,7 +24,6 @@ class TradeExecutionServiceTest {
     private lateinit var tradeRecordRepository: TradeRecordRepository
     private lateinit var tradeExecutionRepository: TradeExecutionRepository
     private lateinit var discordNotifier: DiscordNotifier
-    private lateinit var tradeEventProducer: TradeEventProducer
     private lateinit var service: TradeExecutionService
     private lateinit var client: UpbitClient
 
@@ -34,13 +32,12 @@ class TradeExecutionServiceTest {
         tradeRecordRepository = mockk(relaxed = true)
         tradeExecutionRepository = mockk(relaxed = true)
         discordNotifier = mockk(relaxed = true)
-        tradeEventProducer = mockk(relaxed = true)
         client = mockk()
         // manual trade (executeBuy/SellAll/SellVolume) 가 통합 saveAndNotify 를 거치도록 변경되어
         // tradeExecutionRepository.save 도 호출됨. 명시 stub 이 없으면 relaxed mockk 의 Mono 가
         // emit 안 해 awaitSingle 가 무한 대기 → UncompletedCoroutinesError.
         every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
-        service = TradeExecutionService(tradeRecordRepository, tradeExecutionRepository, discordNotifier, tradeEventProducer)
+        service = TradeExecutionService(tradeRecordRepository, tradeExecutionRepository, discordNotifier)
     }
 
     @Test
