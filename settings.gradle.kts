@@ -3,4 +3,4 @@ plugins {
 }
 
 rootProject.name = "coin-trading-bot"
-include("common", "collector", "bot", "research")
+include("common", "collector", "bot")
