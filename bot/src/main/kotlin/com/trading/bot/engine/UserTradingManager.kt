@@ -5,7 +5,7 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.config.UpbitProperties
-import com.trading.bot.kafka.MarketDataStore
+import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
 import com.trading.bot.persistence.UserRepository

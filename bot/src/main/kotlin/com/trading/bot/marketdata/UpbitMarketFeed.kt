@@ -1,9 +1,7 @@
-package com.trading.collector.exchange.upbit
+package com.trading.bot.marketdata
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.trading.collector.exchange.ExchangeClient
-import com.trading.common.domain.AssetType
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
@@ -17,6 +15,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
+import reactor.core.Disposable
 import reactor.netty.http.client.HttpClient
 import reactor.netty.http.client.WebsocketClientSpec
 import java.net.URI
@@ -28,17 +27,18 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
+/**
+ * Upbit 시세/캔들 수집 (in-process). 구 collector 모듈의 UpbitCollectorClient 를 흡수.
+ * ticker 는 WebSocket, 캔들은 REST 폴링으로 가져와 NormalizedTicker/NormalizedCandle 로 정규화한다.
+ */
 @Component
-class UpbitCollectorClient(
+class UpbitMarketFeed(
     private val upbitWebClient: WebClient,
     private val objectMapper: ObjectMapper,
-) : ExchangeClient {
-
+) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    override val exchange: Exchange = Exchange.UPBIT
-    override val assetType: AssetType = AssetType.CRYPTO
 
     companion object {
         private const val WS_URL = "wss://api.upbit.com/websocket/v1"
@@ -46,16 +46,17 @@ class UpbitCollectorClient(
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
     }
 
-    override fun tickerFlow(markets: List<String>): Flow<NormalizedTicker> = callbackFlow {
+    fun tickerFlow(markets: List<String>): Flow<NormalizedTicker> = callbackFlow {
         val connected = AtomicBoolean(false)
         val reconnectAttempts = AtomicInteger(0)
         val running = AtomicBoolean(true)
+        val disposable = AtomicReference<Disposable?>(null)
 
         fun connect() {
             if (!running.get()) return
 
             val httpClient = HttpClient.create()
-            httpClient
+            val subscription = httpClient
                 .websocket(WebsocketClientSpec.builder().maxFramePayloadLength(65536).build())
                 .uri(URI.create(WS_URL))
                 .handle { inbound, outbound ->
@@ -86,24 +87,33 @@ class UpbitCollectorClient(
                         val delay = (BASE_RECONNECT_DELAY_MS * (1L shl minOf(attempt - 1, 5)))
                             .coerceAtMost(MAX_RECONNECT_DELAY_MS)
                         log.info("Upbit WS reconnecting in {}ms (attempt {})", delay, attempt)
-                        Thread.sleep(delay)
-                        connect()
+                        // 재연결 대기를 netty 신호 스레드에서 Thread.sleep 하면 이벤트 루프를 점유한다.
+                        // 별도 daemon 스레드로 분리 (bot UpbitWebSocketClient 와 동일 패턴).
+                        Thread {
+                            try {
+                                Thread.sleep(delay)
+                                connect()
+                            } catch (_: InterruptedException) {
+                                // shutdown
+                            }
+                        }.apply { isDaemon = true; start() }
                     }
                 }
                 .subscribe()
+            disposable.set(subscription)
         }
 
         connect()
 
         awaitClose {
             running.set(false)
+            disposable.get()?.dispose()
             log.info("Upbit ticker flow closed")
         }
     }
 
-    override suspend fun getCandles(market: String, interval: CandleInterval, count: Int): List<NormalizedCandle> {
+    suspend fun getCandles(market: String, interval: CandleInterval, count: Int): List<NormalizedCandle> {
         val upbitMarket = MarketPair.toUpbitFormat(market)
-        val normalized = market
 
         val candles: List<JsonNode> = when {
             interval.minutes >= CandleInterval.D1.minutes -> {
@@ -130,7 +140,7 @@ class UpbitCollectorClient(
 
             NormalizedCandle(
                 exchange = Exchange.UPBIT,
-                market = normalized,
+                market = market,
                 openPrice = node["opening_price"].asDouble(),
                 highPrice = node["high_price"].asDouble(),
                 lowPrice = node["low_price"].asDouble(),

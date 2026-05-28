@@ -5,7 +5,6 @@ import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
-import com.trading.bot.kafka.TradeEventProducer
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradeExecutionRepository
@@ -20,7 +19,6 @@ class TradeExecutionService(
     private val tradeRecordRepository: TradeRecordRepository,
     private val tradeExecutionRepository: TradeExecutionRepository,
     private val discordNotifier: DiscordNotifier,
-    private val tradeEventProducer: TradeEventProducer,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -153,7 +151,7 @@ class TradeExecutionService(
     }
 
     /**
-     * TradingEngine에서 사용 - 이미 만들어진 TradeRecord를 저장 + 알림 + Kafka 발행
+     * TradingEngine에서 사용 - 이미 만들어진 TradeRecord를 저장 + Discord 알림
      */
     suspend fun saveAndNotify(
         record: TradeRecord,
@@ -163,7 +161,6 @@ class TradeExecutionService(
     ) {
         tradeRecordRepository.save(record)
 
-        // Publish to new trade_executions table + Kafka
         val executionEntity = TradeExecutionEntity(
             userId = record.userId ?: 0,
             exchange = "UPBIT",
@@ -176,9 +173,9 @@ class TradeExecutionService(
             reason = record.reason,
             strategy = record.strategy,
         )
-        // trade_executions 저장 + Kafka publish. tradeRecordRepository.save 와는 별도 트랜잭션이므로
+        // trade_executions 저장. tradeRecordRepository.save 와는 별도 트랜잭션이므로
         // 실패해도 record 는 남는다. 운영 가시성을 위해 명시적으로 error 로깅하고 호출자가 인지하도록 throw 한다.
-        val saved = try {
+        try {
             tradeExecutionRepository.save(executionEntity).awaitSingle()
         } catch (e: Exception) {
             log.error(
@@ -187,7 +184,6 @@ class TradeExecutionService(
             )
             throw e
         }
-        tradeEventProducer.publishTradeExecution(saved)
 
         val krwBalance = try {
             client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
@@ -195,19 +191,6 @@ class TradeExecutionService(
             null
         }
 
-        // Publish notification to Kafka
-        tradeEventProducer.publishNotification(
-            userId = record.userId ?: 0,
-            notification = mapOf(
-                "type" to "trade",
-                "record" to record,
-                "krwBalance" to (krwBalance ?: 0.0),
-                "webhookUrl" to (discordWebhookUrl ?: ""),
-                "username" to (username ?: ""),
-            ),
-        )
-
-        // Also send directly (for backward compatibility)
         discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
     }
 
@@ -218,7 +201,7 @@ class TradeExecutionService(
         discordWebhookUrl: String?,
         orderUuid: String,
     ): TradeExecutionResult {
-        // 수동·엔진 주문 모두 동일 audit 경로 (trade_executions + Kafka publish) 를 거치도록 통합.
+        // 수동·엔진 주문 모두 동일 audit 경로 (trade_executions) 를 거치도록 통합.
         // execution save 실패는 failure 반환으로 호출자에게 가시화.
         return try {
             saveAndNotify(record, client, username, discordWebhookUrl)
