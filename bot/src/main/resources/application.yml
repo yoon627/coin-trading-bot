@@ -13,17 +13,6 @@ spring:
     exclude:
       - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
       - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
-    consumer:
-      group-id: trading-bot
-      auto-offset-reset: latest
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      acks: all
   flyway:
     enabled: true
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:trading}
@@ -35,10 +24,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,metrics
-  metrics:
-    tags:
-      application: ${spring.application.name}
+        include: health,info
 
 upbit:
   access-key: ${UPBIT_ACCESS_KEY:}
@@ -61,17 +47,8 @@ app:
   jwt-expiration-ms: 86400000
   encryption-secret: ${APP_ENCRYPTION_SECRET:}
 
-claude:
-  api-key: ${CLAUDE_API_KEY:}
-  analysis-enabled: ${CLAUDE_ANALYSIS_ENABLED:false}
-  sleep-start-hour: ${CLAUDE_SLEEP_START:23}
-  sleep-end-hour: ${CLAUDE_SLEEP_END:7}
-  tickers: ${CLAUDE_ANALYSIS_TICKERS:KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR}
-
-ml:
-  model-dir: ${ML_MODEL_DIR:./ml-models}
-  auto-load-on-startup: ${ML_AUTO_LOAD:true}
-  auto-retrain-enabled: ${ML_AUTO_RETRAIN:false}
+watchlist:
+  tickers: ${WATCHLIST_TICKERS:KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR}
 
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}
