@@ -1,9 +1,11 @@
-name: Build & Push (GHCR, multi-arch)
+name: CI (test + GHCR multi-arch)
 
-# 커밋된 bot 모듈만 multi-arch(amd64+arm64) 이미지로 빌드해 GHCR 에 push.
+# PR/푸시에서 테스트를 게이트하고, main 푸시·수동 dispatch 시에만 multi-arch 이미지를 GHCR 에 push.
 # 배포는 deploy/aws/deploy.sh 로 수동 실행 (인스턴스가 이 이미지를 pull).
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -12,34 +14,36 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test
+        run: ./gradlew test --parallel
+
   build-and-push:
+    needs: test
+    # PR 에선 빌드/푸시하지 않음 (테스트만 게이트). main 푸시·수동 실행에서만 이미지 생성.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: Test
-        run: ./gradlew test --parallel
-
       - uses: docker/setup-qemu-action@v3      # arm64 크로스 빌드용 에뮬레이션
       - uses: docker/setup-buildx-action@v3
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push app image (amd64 + arm64)
         uses: docker/build-push-action@v5
         with:
