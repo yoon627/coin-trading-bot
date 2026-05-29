@@ -58,6 +58,10 @@ class ManualTradeController(
         if (user.upbitAccessKey.isNullOrBlank()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys not configured")
         }
+        // 모순 입력 거부: 전량 매도와 수량 지정을 동시에 보내면 의도가 모호 → 자금 사고 방지.
+        if (req.sellAll == true && req.volume != null) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Specify either sell_all or volume, not both")
+        }
         val market = requestValidators.normalizeMarket(req.market)
 
         val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))

@@ -1,0 +1,107 @@
+# Slim production stack for a single EC2 (t4g.medium, 4GB).
+# Only what the committed `bot` module actually needs: app + Postgres + Redis.
+# No Kafka / collector / monitoring (those modules are not committed and would OOM a 4GB box).
+#
+# The app image is built+pushed by GitHub Actions (multi-arch) to GHCR; this file only pulls it.
+# Postgres/Redis are NOT published to the host — only the app reaches them over the compose network.
+#
+# Memory budget (4GB box): app 1280m + postgres 512m + redis 192m ≈ 2.0GB, leaving ~2GB for OS/page-cache.
+
+services:
+  app:
+    image: ghcr.io/yoon627/coin-trading-bot:${APP_VERSION:-latest}
+    pull_policy: always
+    ports:
+      - "8080:8080"            # dashboard + REST API; the EC2 security group restricts who can reach it
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=70.0"
+      UPBIT_ACCESS_KEY: ${UPBIT_ACCESS_KEY:-}
+      UPBIT_SECRET_KEY: ${UPBIT_SECRET_KEY:-}
+      TRADING_TICKERS: ${TRADING_TICKERS:-KRW-BTC}
+      TRADING_STRATEGY: ${TRADING_STRATEGY:-volatility_breakout}
+      TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      REDIS_HOST: redis
+      REDIS_ENABLED: "true"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: trading
+      DB_USER: trading
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (prod fails to start without it)}
+      APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:?APP_ENCRYPTION_SECRET is required and must stay stable}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 1280m
+    mem_reservation: 1024m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    expose:
+      - "5432"                 # internal only — never published to the host
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=50
+      - -c
+      - effective_cache_size=512MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    expose:
+      - "6379"                 # internal only — never published to the host
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 192m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  redisdata:

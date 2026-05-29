@@ -28,6 +28,7 @@ class StrategyController(
     private val userTradingManager: UserTradingManager,
     private val userRepository: UserRepository,
     private val userSecretsService: UserSecretsService,
+    private val requestValidators: RequestValidators,
 ) {
     private val backtestEngine = BacktestEngine(strategies, tradingProperties)
 
@@ -73,16 +74,17 @@ class StrategyController(
         }
 
         val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
-        val ticker = req.ticker ?: "KRW-BTC"
+        val ticker = requestValidators.normalizeMarket(req.ticker ?: "KRW-BTC")
         val days = (req.days ?: 200).coerceIn(30, 200)
         val candles = client.getDayCandles(ticker, days)
 
+        // NaN/Infinity/음수/거대값이 BacktestConfig 로 흘러들어 비정상 시뮬/산술예외(500)를 내지 않도록 검증.
         val config = BacktestConfig(
-            takeProfitPct = req.takeProfitPct ?: 5.0,
-            maxLossPct = req.maxLossPct ?: 3.0,
-            kValue = req.kValue ?: tradingProperties.kValue,
-            trailingStopPct = req.trailingStopPct ?: 2.0,
-            maxHoldDays = req.maxHoldDays ?: 7,
+            takeProfitPct = requireInRange(req.takeProfitPct ?: 5.0, "takeProfitPct", 0.0, 100.0),
+            maxLossPct = requireInRange(req.maxLossPct ?: 3.0, "maxLossPct", 0.0, 100.0),
+            kValue = requireInRange(req.kValue ?: tradingProperties.kValue, "kValue", 0.0, 2.0),
+            trailingStopPct = requireInRange(req.trailingStopPct ?: 2.0, "trailingStopPct", 0.0, 100.0),
+            maxHoldDays = (req.maxHoldDays ?: 7).coerceIn(1, 365),
             useMarketFilter = req.useMarketFilter ?: true,
         )
 
@@ -92,6 +94,13 @@ class StrategyController(
         } else {
             mapOf("results" to backtestEngine.compareAll(candles, ticker, config))
         }
+    }
+
+    private fun requireInRange(value: Double, name: String, min: Double, max: Double): Double {
+        if (!value.isFinite() || value < min || value > max) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$name must be a finite number in [$min, $max]")
+        }
+        return value
     }
 }
 

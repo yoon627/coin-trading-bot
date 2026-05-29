@@ -79,12 +79,16 @@ class BacktestEngine(
 
         for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
-            val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
 
             if (state.position) {
                 processExit(state, i, currentPrice, config)
             } else {
-                processEntry(state, strategy, i, currentPrice, window, config)
+                // look-ahead 방지: 신호는 봉 i 종가까지의 정보로 판단하고, 체결은 다음 봉(i+1) 시가로.
+                val fillIndex = i + 1
+                if (fillIndex >= chronological.size) continue
+                val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
+                val fillPrice = chronological[fillIndex].openingPrice
+                processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config)
             }
         }
 
@@ -118,20 +122,23 @@ class BacktestEngine(
     private suspend fun processEntry(
         state: SimulationState,
         strategy: TradingStrategy,
-        index: Int,
-        currentPrice: Double,
+        fillIndex: Int,
+        signalPrice: Double,
+        fillPrice: Double,
         window: List<Candle>,
         config: BacktestConfig,
     ) {
+        if (fillPrice <= 0) return
         if (config.useMarketFilter) {
             val ma50 = Indicators.calculateMa(window, min(MIN_CANDLES, window.size))
-            if (ma50 > 0 && currentPrice < ma50) return
+            if (ma50 > 0 && signalPrice < ma50) return
         }
 
-        if (strategy.shouldBuy(window, currentPrice, tradingProperties)) {
-            state.buyPrice = currentPrice
-            state.peakPrice = currentPrice
-            state.buyIndex = index
+        // 신호는 봉 i 종가(signalPrice)로 판단, 체결가는 다음 봉 시가(fillPrice).
+        if (strategy.shouldBuy(window, signalPrice, tradingProperties)) {
+            state.buyPrice = fillPrice
+            state.peakPrice = fillPrice
+            state.buyIndex = fillIndex
             state.position = true
         }
     }

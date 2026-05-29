@@ -14,7 +14,7 @@ class ChartControllerTest {
 
     private val store = mockk<MarketDataStore>()
     private val repo = mockk<MarketCandleRepository>(relaxed = true)
-    private val controller = ChartController(store, repo)
+    private val controller = ChartController(store, repo, RequestValidators())
     private val client = WebTestClient.bindToController(controller).build()
 
     @Test

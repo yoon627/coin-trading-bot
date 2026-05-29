@@ -50,28 +50,34 @@ class RequestValidatorsExtendedTest {
     // --- validatePassword ---
 
     @Test
-    fun `validatePassword accepts 8+ characters`() {
-        assertDoesNotThrow { validators.validatePassword("12345678") }
+    fun `validatePassword accepts passwords within length bounds`() {
+        assertDoesNotThrow { validators.validatePassword("1234567890") } // 10 chars (min)
         assertDoesNotThrow { validators.validatePassword("a very long password with spaces") }
     }
 
     @Test
     fun `validatePassword rejects short passwords`() {
-        assertThrows<ResponseStatusException> { validators.validatePassword("1234567") }
+        assertThrows<ResponseStatusException> { validators.validatePassword("123456789") } // 9 < min 10
         assertThrows<ResponseStatusException> { validators.validatePassword("") }
+    }
+
+    @Test
+    fun `validatePassword rejects overly long passwords`() {
+        assertThrows<ResponseStatusException> { validators.validatePassword("a".repeat(73)) } // > 72 (bcrypt limit)
     }
 
     // --- normalizeApiKey ---
 
     @Test
     fun `normalizeApiKey accepts valid keys`() {
-        val key = "ABCDEFGHIJKLMNOPq" // 17 chars
+        val key = "ABCDEFGHIJKLMNOPqrstuvwxyz0123456789" // 36 chars (>= 32, Upbit 실제 키 길이대)
         assertEquals(key, validators.normalizeApiKey(key, "test"))
     }
 
     @Test
     fun `normalizeApiKey rejects too short keys`() {
         assertThrows<ResponseStatusException> { validators.normalizeApiKey("short", "test") }
+        assertThrows<ResponseStatusException> { validators.normalizeApiKey("ABCDEFGHIJKLMNOPq", "test") } // 17 < 32
     }
 
     @Test
