@@ -144,7 +144,10 @@ class UpbitWebSocketClient {
 
             latestPrices[price.market] = price
             val result = sink.tryEmitNext(price)
-            if (result.isFailure) {
+            // FAIL_ZERO_SUBSCRIBER 는 SSE 구독자가 없을 때 multicast sink 가 정상적으로 drop 하는 케이스 —
+            // 가격은 latestPrices map 에 저장되므로 운영 영향 없음. 로깅에서 제외해 noise 차단.
+            // FAIL_OVERFLOW 등 실제 backpressure/overflow 만 가시화.
+            if (result.isFailure && result != Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER) {
                 log.warn("Dropped realtime price for {} (sink emit {})", price.market, result)
             }
         } catch (e: com.fasterxml.jackson.core.JacksonException) {
