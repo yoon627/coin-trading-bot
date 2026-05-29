@@ -50,6 +50,8 @@ data class TradingState(
             holdVolume = volume
             buyDate = now.toLocalDate()
         }
+        // 당일 1회 진입 게이트가 동작하도록 매수 시점에 반드시 set. resetDaily()에서만 해제됨.
+        boughtToday = true
         peakPrice = max(peakPrice, price)
         lastTradeTime = now
     }

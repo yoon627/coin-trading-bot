@@ -1,12 +1,12 @@
+# Builds the :bot module only (the committed app). When the collector/research
+# modules are added, re-add their build.gradle.kts COPY lines for dep caching.
 FROM gradle:8.12-jdk21 AS build
 WORKDIR /app
 COPY build.gradle.kts settings.gradle.kts ./
 COPY gradle ./gradle
 COPY common/build.gradle.kts ./common/
 COPY bot/build.gradle.kts ./bot/
-COPY collector/build.gradle.kts ./collector/
-COPY research/build.gradle.kts ./research/
-RUN gradle dependencies --no-daemon || true
+RUN gradle :bot:dependencies --no-daemon || true
 COPY common ./common
 COPY bot ./bot
 RUN gradle :bot:bootJar --no-daemon -x test

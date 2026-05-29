@@ -1,9 +1,12 @@
-name: Build & Deploy to EC2
+name: CI (test + GHCR multi-arch)
 
+# PR/푸시에서 테스트를 게이트하고, main 푸시·수동 dispatch 시에만 multi-arch 이미지를 GHCR 에 push.
+# 배포는 deploy/aws/deploy.sh 로 수동 실행 (인스턴스가 이 이미지를 pull).
 on:
-  # EC2 t2.micro/t3.small 의 RAM 으로 모든 컨테이너 (app+collector+kafka+
-  # postgres+redis) 를 띄우지 못해 (OOM-killed exit 137) EC2 배포 경로를
-  # 보류. 다른 target 으로 옮기면 push trigger 재추가 예정.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -11,100 +14,44 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-deploy:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test
+        run: ./gradlew test --parallel
+
+  build-and-push:
+    needs: test
+    # PR 에선 빌드/푸시하지 않음 (테스트만 게이트). main 푸시·수동 실행에서만 이미지 생성.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: Test
-        run: ./gradlew test --parallel
-
+      - uses: docker/setup-qemu-action@v3      # arm64 크로스 빌드용 에뮬레이션
       - uses: docker/setup-buildx-action@v3
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push app image
+      - name: Build and push app image (amd64 + arm64)
         uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-      - name: Build and push collector image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: collector/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-collector:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-collector:${{ github.sha }}
-
-      - name: Deploy to EC2
-        env:
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-        run: |
-          echo "$EC2_SSH_KEY" > /tmp/key.pem
-          chmod 600 /tmp/key.pem
-
-          ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST \
-            "mkdir -p /opt/app && rm -rf /opt/app/monitoring"
-
-          scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
-            docker-compose.yml ec2-user@$EC2_HOST:/opt/app/docker-compose.yml
-
-          scp -o StrictHostKeyChecking=no -i /tmp/key.pem \
-            -r monitoring ec2-user@$EC2_HOST:/opt/app/
-
-          ssh -o StrictHostKeyChecking=no -i /tmp/key.pem ec2-user@$EC2_HOST bash <<'EOF'
-          set -e
-          cd /opt/app
-
-          # Login to GHCR and pull latest images
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker compose pull app collector
-
-          # Rolling restart: bring up new containers
-          docker compose up -d --remove-orphans
-
-          # Wait for health check; fail deploy if never healthy
-          echo "Waiting for app to be healthy..."
-          healthy=false
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
-              echo "App is healthy!"
-              healthy=true
-              break
-            fi
-            sleep 5
-          done
-          if [ "$healthy" = "false" ]; then
-            echo "ERROR: App failed health check after 150s"
-            docker compose ps
-            docker compose logs --tail=100 app collector || true
-            exit 1
-          fi
-
-          # Cleanup old images
-          docker image prune -f
-          EOF
-
-          rm -f /tmp/key.pem
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
