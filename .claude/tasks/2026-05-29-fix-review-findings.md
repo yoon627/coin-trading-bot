@@ -27,7 +27,7 @@ updated: 2026-05-29T22:50:01+0900
 - [x] Wave 3 — 영속성/동시성: TradeExecutionService tx(TransactionalOperator), candle upsert, leaderboard GROUP BY, candle retention, WS reconnect shutdown 게이트+직렬화, activeStrategy @Volatile — 완료, 전체 테스트 통과
 - [ ] Wave 4 — API 검증: ChartController, BotConfigController, ManualTradeController, RequestValidators, UpbitErrorHandlerAdvice, StrategyController
 - [x] Wave 5 — 품질/low: RSI Wilder 복원(strategy+indicator 양쪽), API key min 32(HS256), PriceCollector cron KST, TradingEngine loopJob 취소 — 완료. 나머지 low 는 위험/ROI 사유로 보류(아래 Decisions)
-- [ ] Wave 6 — 최종 전체 빌드+테스트, 문서 동기화, 커밋 정리
+- [x] Wave 6 — `./gradlew build` 전체 통과 + arm64 docker 빌드 확인. 6 commits.
 
 # Progress log
 ## 2026-05-29T22:50 — Started
@@ -49,9 +49,23 @@ updated: 2026-05-29T22:50:01+0900
 - 전체 :bot:test 통과(BUILD SUCCESSFUL).
 - 미검증: reactive tx 전파/ON CONFLICT/GROUP BY 는 단위테스트 mock 으로 로직만 확인, 실제 동작은 Postgres 통합 필요(런타임/배포 시 확인).
 
+## 2026-05-29T24:?? — Wave 4+5 완료, Wave 6 검증
+- Wave4: ChartController count/market/indicator 검증, BotConfig 입력검증+상한, password 10~72, ManualTrade 모순거부, Strategy 백테스트 param 검증, UpbitErrorHandler 418/주문거부 매핑.
+- Wave5: RSI Wilder 복원(양쪽 Indicators), API key min32, PriceCollector KST cron, TradingEngine loopJob 취소.
+- 각 wave 커밋 완료(b9000eb deploy, ac97c71 engine, 4dc72ef security, 45e4e51 persistence, 004bbca api, 862dd6d quality).
+- `./gradlew build` 전체 통과 + arm64 docker 빌드 확인.
+
+## 보류(low) — 사유 명시
+- query_hash percent-encoding 불일치: ASCII 주문 파라미터에선 정상 동작, Upbit 해시 스펙 미검증 상태에서 실거래 인증을 바꾸는 위험 > ROI. 스펙 확인 후 별도 처리.
+- jacoco 커버리지 게이트: 현재 커버리지 미측정 — 임계값 잘못 잡으면 빌드 파손. 측정 후 보정 필요.
+- 금액 컬럼 DOUBLE→NUMERIC: 대규모 마이그레이션, source of truth 는 거래소라 즉시 손실 아님. 별도 작업.
+- Indicators 2벌 완전 통합: Candle/NormalizedCandle 타입 차이로 공통 추상화 필요한 리팩토링. 이번엔 공유 RSI 버그만 양쪽 수정.
+- JWT 쿠키+body, admin scaffolding, idempotency/CSRF 헤더: 아키텍처/트레이드오프(리뷰 ⚠️추정). 별도 검토.
+- h2 고아 의존성/Spring 버전 이중관리, TradingEngineTest delay(3000): ROI 낮음.
+
 # Resume context
-- **Branch**: fix/review-findings
-- **Uncommitted files**: Wave 2+3 코드/테스트 (커밋 예정)
-- **Next concrete action**: Wave 4(API 검증) — ChartController count coerceIn+market normalize(high), BotConfigController 입력검증(medium), ManualTradeController sellAll+volume 모순(medium), RequestValidators 약한 PW(low), UpbitErrorHandlerAdvice 4xx 매핑(low), StrategyController. 먼저 해당 컨트롤러들 + 기존 테스트 정독.
+- **Branch**: fix/review-findings (6 commits, main 미push)
+- **Uncommitted files**: (Wave 6 plan 업데이트만)
+- **Next concrete action**: 최종 리포트 작성 + (사용자 요청 시) push/PR. 보류 항목은 위 참조. — ChartController count coerceIn+market normalize(high), BotConfigController 입력검증(medium), ManualTradeController sellAll+volume 모순(medium), RequestValidators 약한 PW(low), UpbitErrorHandlerAdvice 4xx 매핑(low), StrategyController. 먼저 해당 컨트롤러들 + 기존 테스트 정독.
 - **Open questions**: (1) 평단 물타기(averaging-up) 허용? 기본은 "포지션 보유 중 추가매수 금지"로 구현. (2) investRatio 적용식 = krwBalance*investRatio (상한 maxInvestAmount)로 구현.
 - **Gotchas**: 로컬 빌드 `export JAVA_HOME=/Users/jongyoonlee/Library/Java/JavaVirtualMachines/jbr-21.0.9/Contents/Home` 필수. `./gradlew|tail` 는 exit code 마스킹됨 — 리다이렉트 후 $? 확인.
