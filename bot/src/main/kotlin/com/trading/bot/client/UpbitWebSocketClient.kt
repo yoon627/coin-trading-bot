@@ -25,8 +25,12 @@ class UpbitWebSocketClient {
     private val sink = Sinks.many().multicast().onBackpressureBuffer<RealtimePrice>(256)
     private val latestPrices = ConcurrentHashMap<String, RealtimePrice>()
     private val connected = AtomicBoolean(false)
+    private val shuttingDown = AtomicBoolean(false)
     private val reconnectAttempts = AtomicInteger(0)
     private val subscribedTickers = ConcurrentHashMap.newKeySet<String>()
+
+    // subscribe/reconnect/connect 직렬화 — 동시 호출이 다중 연결을 만들지 않도록.
+    private val connectionLock = Any()
 
     @Volatile
     private var disposable: reactor.core.Disposable? = null
@@ -45,11 +49,14 @@ class UpbitWebSocketClient {
 
     @PreDestroy
     fun destroy() {
+        // 먼저 shutdown 플래그를 세워 doFinally→scheduleReconnect 가 재연결하지 못하게 한다.
+        shuttingDown.set(true)
         connected.set(false)
         disposable?.dispose()
     }
 
     fun subscribe(tickers: List<String>) {
+        if (shuttingDown.get()) return
         val newTickers = tickers.filter { subscribedTickers.add(it) }
         if (newTickers.isNotEmpty()) {
             log.info("Subscribing to tickers: {}", newTickers)
@@ -66,12 +73,15 @@ class UpbitWebSocketClient {
     fun isConnected(): Boolean = connected.get()
 
     private fun reconnect() {
-        disposable?.dispose()
-        connect()
+        synchronized(connectionLock) {
+            if (shuttingDown.get()) return
+            disposable?.dispose()
+            connect()
+        }
     }
 
     private fun connect() {
-        if (subscribedTickers.isEmpty()) return
+        if (shuttingDown.get() || subscribedTickers.isEmpty()) return
 
         val uri = URI.create(WS_URL)
         val httpClient = HttpClient.create()
@@ -133,32 +143,42 @@ class UpbitWebSocketClient {
             )
 
             latestPrices[price.market] = price
-            sink.tryEmitNext(price)
+            val result = sink.tryEmitNext(price)
+            if (result.isFailure) {
+                log.warn("Dropped realtime price for {} (sink emit {})", price.market, result)
+            }
+        } catch (e: com.fasterxml.jackson.core.JacksonException) {
+            // 비-ticker/연결 ACK 등 파싱 불가 프레임 — 흔하므로 debug 로만.
+            log.debug("Skipped non-parsable WS frame: {}", e.message)
         } catch (e: Exception) {
-            // Ignore parse errors for non-ticker messages (e.g., connection ACK)
+            // 스키마 변경·예상치 못한 구조는 가시화해야 디버깅 가능.
+            log.warn("Failed to process WS message: {}", e.message)
         }
     }
 
     private fun scheduleReconnect() {
-        if (!connected.get() && subscribedTickers.isNotEmpty()) {
-            val attempt = reconnectAttempts.incrementAndGet()
-            val delay = (BASE_RECONNECT_DELAY_MS * (1L shl minOf(attempt - 1, 5)))
-                .coerceAtMost(MAX_RECONNECT_DELAY_MS)
-            log.info("Scheduling WebSocket reconnect in {}ms (attempt {})", delay, attempt)
+        // shutdown 중이면 재연결하지 않음 (@PreDestroy 후 좀비 연결 방지).
+        if (shuttingDown.get() || connected.get() || subscribedTickers.isEmpty()) return
 
-            Thread {
-                try {
-                    Thread.sleep(delay)
-                    if (!connected.get()) {
+        val attempt = reconnectAttempts.incrementAndGet()
+        val delay = (BASE_RECONNECT_DELAY_MS * (1L shl minOf(attempt - 1, 5)))
+            .coerceAtMost(MAX_RECONNECT_DELAY_MS)
+        log.info("Scheduling WebSocket reconnect in {}ms (attempt {})", delay, attempt)
+
+        Thread {
+            try {
+                Thread.sleep(delay)
+                synchronized(connectionLock) {
+                    if (!connected.get() && !shuttingDown.get()) {
                         connect()
                     }
-                } catch (_: InterruptedException) {
-                    // shutdown
                 }
-            }.apply {
-                isDaemon = true
-                start()
+            } catch (_: InterruptedException) {
+                // shutdown
             }
+        }.apply {
+            isDaemon = true
+            start()
         }
     }
 }

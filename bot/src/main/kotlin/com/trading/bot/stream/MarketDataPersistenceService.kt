@@ -2,7 +2,6 @@ package com.trading.bot.stream
 
 import com.trading.bot.persistence.MarketCandleRepository
 import com.trading.bot.persistence.MarketTickerRepository
-import com.trading.bot.persistence.entity.MarketCandleEntity
 import com.trading.bot.persistence.entity.MarketTickerEntity
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
@@ -45,7 +44,8 @@ class MarketDataPersistenceService(
     }
 
     fun persistCandle(candle: NormalizedCandle) {
-        val entity = MarketCandleEntity(
+        // 멱등 upsert — 폴링 drift 로 같은 봉이 재전송돼도 UNIQUE 위반 없이 최신값 반영.
+        marketCandleRepository.upsert(
             exchange = candle.exchange.name,
             market = candle.market,
             intervalMinutes = candle.interval.minutes,
@@ -57,9 +57,7 @@ class MarketDataPersistenceService(
             quoteVolume = candle.quoteVolume,
             openTime = candle.openTime,
             closeTime = candle.closeTime,
-        )
-        marketCandleRepository.save(entity)
-            .subscribe({}, { e -> log.warn("Failed to persist candle: {}", e.message) })
+        ).subscribe({}, { e -> log.warn("Failed to upsert candle: {}", e.message) })
 
         // Trigger aggregation for higher timeframes
         candleAggregator.onMinuteCandle(candle)

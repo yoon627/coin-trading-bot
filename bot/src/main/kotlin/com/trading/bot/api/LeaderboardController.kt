@@ -28,16 +28,15 @@ class LeaderboardController(
         val publicUsers = userRepository.findByPublicProfileTrue().collectList().awaitSingle()
         if (publicUsers.isEmpty()) return mapOf("rankings" to emptyList<Any>())
 
-        val allSells = tradeRecordRepository.findAllSells()
-        val sellsByUser = allSells.groupBy { it.userId }
+        val statsByUser = tradeRecordRepository.aggregateSellStatsByUser()
 
         val rankings = publicUsers.mapNotNull { user ->
             val userId = user.id ?: return@mapNotNull null
-            val sells = sellsByUser[userId] ?: emptyList()
-            val totalTrades = sells.size
-            val wins = sells.count { (it.pnlPercent ?: 0.0) > 0 }
-            val totalPnl = sells.sumOf { it.pnlPercent ?: 0.0 }
-            val avgPnl = if (sells.isNotEmpty()) totalPnl / sells.size else 0.0
+            val stats = statsByUser[userId]
+            val totalTrades = stats?.totalTrades?.toInt() ?: 0
+            val wins = stats?.winTrades?.toInt() ?: 0
+            val totalPnl = stats?.totalPnl ?: 0.0
+            val avgPnl = if (totalTrades > 0) totalPnl / totalTrades else 0.0
             val botStatus = userTradingManager.getStatus(userId)
 
             val strategyInfo = if (user.publicStrategy) {
