@@ -10,8 +10,10 @@ import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import kotlinx.coroutines.reactor.awaitSingle
+import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import org.springframework.transaction.reactive.TransactionalOperator
 import kotlin.math.floor
 
 @Service
@@ -19,6 +21,7 @@ class TradeExecutionService(
     private val tradeRecordRepository: TradeRecordRepository,
     private val tradeExecutionRepository: TradeExecutionRepository,
     private val discordNotifier: DiscordNotifier,
+    private val transactionalOperator: TransactionalOperator,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -159,8 +162,6 @@ class TradeExecutionService(
         username: String?,
         discordWebhookUrl: String?,
     ) {
-        tradeRecordRepository.save(record)
-
         val executionEntity = TradeExecutionEntity(
             userId = record.userId ?: 0,
             exchange = "UPBIT",
@@ -173,13 +174,18 @@ class TradeExecutionService(
             reason = record.reason,
             strategy = record.strategy,
         )
-        // trade_executions 저장. tradeRecordRepository.save 와는 별도 트랜잭션이므로
-        // 실패해도 record 는 남는다. 운영 가시성을 위해 명시적으로 error 로깅하고 호출자가 인지하도록 throw 한다.
+        // trade_records 와 trade_executions 를 한 트랜잭션으로 묶어 한쪽만 남는 audit 불일치를 방지.
+        // (R2DBC suspend 에선 @Transactional 대신 TransactionalOperator 사용)
         try {
-            tradeExecutionRepository.save(executionEntity).awaitSingle()
+            transactionalOperator.transactional(
+                mono {
+                    tradeRecordRepository.save(record)
+                    tradeExecutionRepository.save(executionEntity).awaitSingle()
+                }
+            ).awaitSingle()
         } catch (e: Exception) {
             log.error(
-                "Failed to persist trade execution (record saved but execution row missing): userId={}, market={}, side={}",
+                "Failed to persist trade atomically (rolled back): userId={}, market={}, side={}",
                 record.userId, record.ticker, record.side, e,
             )
             throw e

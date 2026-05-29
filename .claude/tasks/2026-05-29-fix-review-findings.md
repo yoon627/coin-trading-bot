@@ -23,8 +23,8 @@ updated: 2026-05-29T22:50:01+0900
 # Plan
 - [x] Wave 0 — 배포 차단 (Dockerfile collector COPY, CI collector 빌드) — 완료, 커밋됨
 - [x] Wave 1 — 핵심 거래 로직 (TDD): crit#1 재매수가드, crit#2 체결량/수수료, crit#3 fire-and-forget, crit#5 429 멱등, high investRatio, high 백테스트 look-ahead — 완료, 테스트 통과
-- [ ] Wave 2 — 보안: crit#4 키 분리(SecretKeyMaterialProvider), crit#6 SSE 인증/캡(PriceStreamController), high rate-limit fail-open(RateLimitFilter), prod ssl 외부화
-- [ ] Wave 3 — 영속성/동시성: TradeExecutionService tx, MarketDataPersistenceService upsert, TradeRecordRepository GROUP BY, DataRetentionService candles, MarketDataRepository, UpbitWebSocketClient reconnect/catch
+- [x] Wave 2 — 보안: crit#4 키 분리, crit#6 SSE allowlist/캡, high rate-limit in-memory fallback, prod ssl 외부화 — 완료, 테스트 통과
+- [x] Wave 3 — 영속성/동시성: TradeExecutionService tx(TransactionalOperator), candle upsert, leaderboard GROUP BY, candle retention, WS reconnect shutdown 게이트+직렬화, activeStrategy @Volatile — 완료, 전체 테스트 통과
 - [ ] Wave 4 — API 검증: ChartController, BotConfigController, ManualTradeController, RequestValidators, UpbitErrorHandlerAdvice, StrategyController
 - [ ] Wave 5 — 품질/low: Indicators 중복통합, RSI Wilder, query_hash, TZ, syncPosition, catch 로깅, scope.cancel, jacoco gate, 약한 PW, 테스트 sleep, h2 의존성 등
 - [ ] Wave 6 — 최종 전체 빌드+테스트, 문서 동기화, 커밋 정리
@@ -43,9 +43,15 @@ updated: 2026-05-29T22:50:01+0900
 - high: investRatio 적용(krwBalance*ratio cap maxInvest), BacktestEngine next-bar-open 체결로 look-ahead 제거.
 - 테스트: PositionManagerExtendedTest buy/sell 전면 재작성 + TradingStateTest boughtToday. engine/domain/client 패키지 통과(BUILD SUCCESSFUL).
 
+## 2026-05-29T23:?? — Wave 2+3 완료
+- Wave2: SecretKeyMaterialProvider 폴백 제거+도메인 라벨, PriceStreamController watchlist allowlist+30개 상한, RateLimitFilter in-memory fixed-window fallback, application-prod sslMode 외부화(DB_SSL_MODE).
+- Wave3: TradeExecutionService 를 TransactionalOperator 로 원자화(PersistenceConfig bean 신규), MarketCandleRepository.upsert(ON CONFLICT)+persistCandle 교체, TradeRecordRepository.aggregateSellStatsByUser(GROUP BY)+LeaderboardController 교체, DataRetentionService candle 정리+KST cron, UpbitWebSocketClient shuttingDown 게이트+connectionLock 직렬화+processMessage 로깅, TradingEngine activeStrategy/Tickers @Volatile.
+- 전체 :bot:test 통과(BUILD SUCCESSFUL).
+- 미검증: reactive tx 전파/ON CONFLICT/GROUP BY 는 단위테스트 mock 으로 로직만 확인, 실제 동작은 Postgres 통합 필요(런타임/배포 시 확인).
+
 # Resume context
 - **Branch**: fix/review-findings
-- **Uncommitted files**: Wave 1 코드/테스트 (커밋 예정) + .claude/tasks/*
-- **Next concrete action**: Wave 2(보안) — SecretKeyMaterialProvider 키 분리(crit#4), PriceStreamController SSE 인증/구독 캡(crit#6), RateLimitFilter fail-open(high), application-prod ssl 외부화. 먼저 PriceStreamController.kt/SecurityConfig.kt/RateLimitFilter.kt/PriceCacheService.kt 정독.
+- **Uncommitted files**: Wave 2+3 코드/테스트 (커밋 예정)
+- **Next concrete action**: Wave 4(API 검증) — ChartController count coerceIn+market normalize(high), BotConfigController 입력검증(medium), ManualTradeController sellAll+volume 모순(medium), RequestValidators 약한 PW(low), UpbitErrorHandlerAdvice 4xx 매핑(low), StrategyController. 먼저 해당 컨트롤러들 + 기존 테스트 정독.
 - **Open questions**: (1) 평단 물타기(averaging-up) 허용? 기본은 "포지션 보유 중 추가매수 금지"로 구현. (2) investRatio 적용식 = krwBalance*investRatio (상한 maxInvestAmount)로 구현.
 - **Gotchas**: 로컬 빌드 `export JAVA_HOME=/Users/jongyoonlee/Library/Java/JavaVirtualMachines/jbr-21.0.9/Contents/Home` 필수. `./gradlew|tail` 는 exit code 마스킹됨 — 리다이렉트 후 $? 확인.

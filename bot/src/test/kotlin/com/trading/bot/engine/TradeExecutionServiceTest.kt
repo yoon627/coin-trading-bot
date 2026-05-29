@@ -18,12 +18,14 @@ import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.springframework.transaction.reactive.TransactionalOperator
 
 class TradeExecutionServiceTest {
 
     private lateinit var tradeRecordRepository: TradeRecordRepository
     private lateinit var tradeExecutionRepository: TradeExecutionRepository
     private lateinit var discordNotifier: DiscordNotifier
+    private lateinit var transactionalOperator: TransactionalOperator
     private lateinit var service: TradeExecutionService
     private lateinit var client: UpbitClient
 
@@ -37,7 +39,12 @@ class TradeExecutionServiceTest {
         // tradeExecutionRepository.save 도 호출됨. 명시 stub 이 없으면 relaxed mockk 의 Mono 가
         // emit 안 해 awaitSingle 가 무한 대기 → UncompletedCoroutinesError.
         every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
-        service = TradeExecutionService(tradeRecordRepository, tradeExecutionRepository, discordNotifier)
+        // 트랜잭션 래핑은 통과(pass-through)시켜 내부 mono 가 그대로 실행되게 함.
+        transactionalOperator = mockk()
+        every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
+        service = TradeExecutionService(
+            tradeRecordRepository, tradeExecutionRepository, discordNotifier, transactionalOperator,
+        )
     }
 
     @Test

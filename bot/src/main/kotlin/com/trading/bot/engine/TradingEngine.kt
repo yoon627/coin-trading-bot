@@ -44,7 +44,10 @@ class TradingEngine(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
     private val states = ConcurrentHashMap<String, TradingState>()
+    // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
+    @Volatile
     private var activeStrategy: TradingStrategy? = null
+    @Volatile
     private var activeTickers: List<String> = emptyList()
 
     init {
