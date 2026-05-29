@@ -1,6 +1,7 @@
 package com.trading.bot.api
 
 import com.trading.bot.client.UpbitWebSocketClient
+import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.domain.RealtimePrice
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
@@ -15,17 +16,33 @@ import java.time.Duration
 @RequestMapping("/api/prices")
 class PriceStreamController(
     private val webSocketClient: UpbitWebSocketClient,
+    private val watchlistProperties: WatchlistProperties,
 ) {
+    companion object {
+        private const val MAX_STREAM_TICKERS = 30
+    }
+
+    // 미인증 공개 엔드포인트가 전역 WS 구독을 임의로 늘리지 못하도록 watchlist 로만 제한.
+    private val allowedTickers: Set<String> by lazy {
+        watchlistProperties.tickerList().map { it.uppercase() }.toSet()
+    }
 
     @GetMapping("/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamPrices(
         @RequestParam(required = false) tickers: List<String>?,
     ): Flux<ServerSentEvent<RealtimePrice>> {
-        val tickerSet = tickers?.map { it.uppercase() }?.toSet()
+        // 요청 ticker 를 정규화 + allowlist 교집합 + 개수 상한 → 자원 고갈/임의 구독 주입 차단.
+        val requested = tickers
+            ?.asSequence()
+            ?.map { it.trim().uppercase() }
+            ?.filter { it in allowedTickers }
+            ?.distinct()
+            ?.take(MAX_STREAM_TICKERS)
+            ?.toList()
+        val tickerSet = requested?.toSet()
 
-        // Ensure these tickers are subscribed in WebSocket
-        if (tickerSet != null) {
-            webSocketClient.subscribe(tickerSet.toList())
+        if (!requested.isNullOrEmpty()) {
+            webSocketClient.subscribe(requested)
         }
 
         return webSocketClient.priceFlow()
