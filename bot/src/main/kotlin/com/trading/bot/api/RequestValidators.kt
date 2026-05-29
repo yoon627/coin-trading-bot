@@ -34,7 +34,9 @@ class RequestValidators {
         if (normalized.isBlank()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$fieldName is required")
         }
-        if (normalized.length !in 16..128 || !API_KEY_REGEX.matches(normalized)) {
+        // 최소 32자 — Upbit secret 으로 HS256 서명 시 256비트(32바이트) 이상이 필요.
+        // 짧은 키는 등록 시 400 으로 막아 거래 시점의 WeakKeyException(500)을 예방.
+        if (normalized.length !in 32..128 || !API_KEY_REGEX.matches(normalized)) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid $fieldName format")
         }
         return normalized

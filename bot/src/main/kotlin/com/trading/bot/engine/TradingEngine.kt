@@ -15,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -43,6 +44,8 @@ class TradingEngine(
     }
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
+    @Volatile
+    private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
     // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
     @Volatile
@@ -59,13 +62,16 @@ class TradingEngine(
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
-            scope.launch { runLoop() }
+            loopJob = scope.launch { runLoop() }
         }
     }
 
     fun stop() {
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
+            // 실행 중인 루프 코루틴을 즉시 취소해 delay 대기/리소스 잔존 방지 (scope 는 재시작 위해 유지).
+            loopJob?.cancel()
+            loopJob = null
         }
     }
 

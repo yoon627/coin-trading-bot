@@ -26,7 +26,7 @@ class PriceCollector(
     private val kst = ZoneId.of("Asia/Seoul")
     private val scope = CoroutineScope(Dispatchers.IO)
 
-    @Scheduled(cron = "0 0 3 * * *") // 매일 새벽 3시 - 7일 이전 스냅샷 정리
+    @Scheduled(cron = "0 0 3 * * *", zone = "Asia/Seoul") // 매일 KST 새벽 3시 - 7일 이전 스냅샷 정리
     fun cleanupOldSnapshots() {
         scope.launch {
             try {

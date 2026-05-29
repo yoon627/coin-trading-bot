@@ -70,13 +70,14 @@ class RequestValidatorsExtendedTest {
 
     @Test
     fun `normalizeApiKey accepts valid keys`() {
-        val key = "ABCDEFGHIJKLMNOPq" // 17 chars
+        val key = "ABCDEFGHIJKLMNOPqrstuvwxyz0123456789" // 36 chars (>= 32, Upbit 실제 키 길이대)
         assertEquals(key, validators.normalizeApiKey(key, "test"))
     }
 
     @Test
     fun `normalizeApiKey rejects too short keys`() {
         assertThrows<ResponseStatusException> { validators.normalizeApiKey("short", "test") }
+        assertThrows<ResponseStatusException> { validators.normalizeApiKey("ABCDEFGHIJKLMNOPq", "test") } // 17 < 32
     }
 
     @Test

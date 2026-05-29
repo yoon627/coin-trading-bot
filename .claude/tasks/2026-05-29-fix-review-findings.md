@@ -26,7 +26,7 @@ updated: 2026-05-29T22:50:01+0900
 - [x] Wave 2 — 보안: crit#4 키 분리, crit#6 SSE allowlist/캡, high rate-limit in-memory fallback, prod ssl 외부화 — 완료, 테스트 통과
 - [x] Wave 3 — 영속성/동시성: TradeExecutionService tx(TransactionalOperator), candle upsert, leaderboard GROUP BY, candle retention, WS reconnect shutdown 게이트+직렬화, activeStrategy @Volatile — 완료, 전체 테스트 통과
 - [ ] Wave 4 — API 검증: ChartController, BotConfigController, ManualTradeController, RequestValidators, UpbitErrorHandlerAdvice, StrategyController
-- [ ] Wave 5 — 품질/low: Indicators 중복통합, RSI Wilder, query_hash, TZ, syncPosition, catch 로깅, scope.cancel, jacoco gate, 약한 PW, 테스트 sleep, h2 의존성 등
+- [x] Wave 5 — 품질/low: RSI Wilder 복원(strategy+indicator 양쪽), API key min 32(HS256), PriceCollector cron KST, TradingEngine loopJob 취소 — 완료. 나머지 low 는 위험/ROI 사유로 보류(아래 Decisions)
 - [ ] Wave 6 — 최종 전체 빌드+테스트, 문서 동기화, 커밋 정리
 
 # Progress log
