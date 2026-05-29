@@ -1,6 +1,7 @@
 package com.trading.bot.api
 
 import com.trading.bot.client.UpbitWebSocketClient
+import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.domain.RealtimePrice
 import io.mockk.every
 import io.mockk.mockk
@@ -18,7 +19,7 @@ class PriceStreamControllerTest {
     @BeforeEach
     fun setup() {
         webSocketClient = mockk(relaxed = true)
-        controller = PriceStreamController(webSocketClient)
+        controller = PriceStreamController(webSocketClient, WatchlistProperties())
     }
 
     @Test
@@ -79,6 +80,25 @@ class PriceStreamControllerTest {
         controller.streamPrices(listOf("KRW-BTC", "KRW-ETH"))
 
         verify { webSocketClient.subscribe(listOf("KRW-BTC", "KRW-ETH")) }
+    }
+
+    @Test
+    fun `streamPrices ignores tickers outside the watchlist allowlist`() {
+        every { webSocketClient.priceFlow() } returns Flux.empty()
+
+        // KRW-EVIL 은 allowlist 밖 → 구독은 허용된 KRW-BTC 만
+        controller.streamPrices(listOf("KRW-BTC", "KRW-EVIL"))
+
+        verify { webSocketClient.subscribe(listOf("KRW-BTC")) }
+    }
+
+    @Test
+    fun `streamPrices does not subscribe when no requested ticker is allowed`() {
+        every { webSocketClient.priceFlow() } returns Flux.empty()
+
+        controller.streamPrices(listOf("KRW-UNKNOWN", "KRW-EVIL"))
+
+        verify(exactly = 0) { webSocketClient.subscribe(any()) }
     }
 
     @Test

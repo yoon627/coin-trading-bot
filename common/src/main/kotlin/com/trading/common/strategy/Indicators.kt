@@ -17,7 +17,9 @@ object Indicators {
     fun calculateRsi(candles: List<Candle>, period: Int = 14): Double {
         if (candles.size < period + 1) return 50.0
 
-        val closes = candles.take(period + 1).map { it.tradePrice }.reversed()
+        // 전체 구간 사용 — take(period+1) 로 자르면 gains.size==period 라 아래 Wilder 루프가
+        // 항상 비어 SMA-RSI 로만 계산되던 버그. 전체를 써야 Wilder smoothing 이 실제 적용된다.
+        val closes = candles.map { it.tradePrice }.reversed()
         val gains = mutableListOf<Double>()
         val losses = mutableListOf<Double>()
 

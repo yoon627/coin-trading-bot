@@ -21,12 +21,12 @@ class SecretKeyMaterialProvider(
             .let { Base64.getEncoder().encodeToString(it) }
     }
 
-    fun jwtKeyBytes(): ByteArray = deriveKey(resolveSecret(appProperties.jwtSecret, "app.jwt-secret"))
+    fun jwtKeyBytes(): ByteArray = deriveKey(resolveSecret(appProperties.jwtSecret, "app.jwt-secret"), "jwt")
 
-    fun encryptionKeyBytes(): ByteArray {
-        val configured = appProperties.encryptionSecret.ifBlank { appProperties.jwtSecret }
-        return deriveKey(resolveSecret(configured, "app.encryption-secret or app.jwt-secret"))
-    }
+    // 암호화 키는 JWT 키와 반드시 분리. 폴백(jwtSecret) 제거 — secret 1개 유출로
+    // 토큰 위조 + 사용자 Upbit 키 복호화가 동시에 성립하던 결함 차단.
+    fun encryptionKeyBytes(): ByteArray =
+        deriveKey(resolveSecret(appProperties.encryptionSecret, "app.encryption-secret"), "encryption")
 
     fun jwtExpirationMs(): Long = appProperties.jwtExpirationMs
 
@@ -41,8 +41,9 @@ class SecretKeyMaterialProvider(
         return runtimeFallbackSecret
     }
 
-    private fun deriveKey(secret: String): ByteArray {
+    // label 로 도메인 분리: 같은 secret 이라도 용도별 키가 달라지도록 prefix 후 해시.
+    private fun deriveKey(secret: String, label: String): ByteArray {
         return MessageDigest.getInstance("SHA-256")
-            .digest(secret.toByteArray(StandardCharsets.UTF_8))
+            .digest("$label:$secret".toByteArray(StandardCharsets.UTF_8))
     }
 }

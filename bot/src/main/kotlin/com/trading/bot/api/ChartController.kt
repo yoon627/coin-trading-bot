@@ -22,7 +22,14 @@ import org.springframework.web.server.ResponseStatusException
 class ChartController(
     private val marketDataStore: MarketDataStore,
     private val marketCandleRepository: MarketCandleRepository,
+    private val requestValidators: RequestValidators,
 ) {
+    companion object {
+        private const val MAX_COMPARE_MARKETS = 20
+        // 거래소별 market 포맷이 다르므로(KRW-BTC vs BTCUSDT) 엄격 정규화 대신 경량 sanity 검증.
+        private val CHART_MARKET_REGEX = Regex("^[A-Za-z0-9/_-]{1,40}$")
+        private val ALLOWED_INDICATORS = setOf("rsi", "macd", "bb", "ma", "ema")
+    }
 
     @GetMapping("/candles")
     suspend fun getCandles(
@@ -33,16 +40,18 @@ class ChartController(
     ): List<CandleResponse> {
         val ex = parseExchange(exchange)
         val ci = parseInterval(interval)
+        val safeMarket = sanitizeMarket(market)
+        val safeCount = requestValidators.sanitizeTradeLimit(count) // 1..500 클램프
 
         // Try in-memory first
-        val memoryCandles = marketDataStore.getCandles(ex, market, ci, count)
-        if (memoryCandles.size >= count) {
+        val memoryCandles = marketDataStore.getCandles(ex, safeMarket, ci, safeCount)
+        if (memoryCandles.size >= safeCount) {
             return memoryCandles.map { it.toResponse() }
         }
 
         // Fallback to DB
         val dbCandles = marketCandleRepository
-            .findRecent(ex.name, market, ci.minutes, count)
+            .findRecent(ex.name, safeMarket, ci.minutes, safeCount)
             .collectList()
             .awaitSingle()
         return dbCandles.map { it.toResponse() }
@@ -58,10 +67,16 @@ class ChartController(
     ): IndicatorResponse {
         val ex = parseExchange(exchange)
         val ci = parseInterval(interval)
-        val candles = marketDataStore.getCandles(ex, market, ci, count)
+        val safeMarket = sanitizeMarket(market)
+        val safeCount = requestValidators.sanitizeTradeLimit(count)
+        val candles = marketDataStore.getCandles(ex, safeMarket, ci, safeCount)
 
         val result = mutableMapOf<String, Any?>()
-        val requestedIndicators = indicators.split(",").map { it.trim() }
+        val requestedIndicators = indicators.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val unknown = requestedIndicators.filterNot { it in ALLOWED_INDICATORS }
+        if (unknown.isNotEmpty()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown indicators: ${unknown.joinToString(",")}")
+        }
 
         if ("rsi" in requestedIndicators) {
             result["rsi"] = Indicators.calculateRsi(candles)
@@ -81,7 +96,7 @@ class ChartController(
             result["ema26"] = Indicators.calculateEma(candles, 26)
         }
 
-        return IndicatorResponse(exchange = ex.name, market = market, interval = interval, indicators = result)
+        return IndicatorResponse(exchange = ex.name, market = safeMarket, interval = interval, indicators = result)
     }
 
     @GetMapping("/tickers")
@@ -97,14 +112,22 @@ class ChartController(
 
     @GetMapping("/compare")
     suspend fun compareMarkets(@RequestParam markets: String): List<TickerResponse> {
-        // markets format: "UPBIT:BTC/KRW,BINANCE:BTC/USDT"
-        return markets.split(",").mapNotNull { spec ->
+        // markets format: "UPBIT:BTC/KRW,BINANCE:BTC/USDT" — 개수 상한으로 남용 방지
+        return markets.split(",").take(MAX_COMPARE_MARKETS).mapNotNull { spec ->
             val parts = spec.trim().split(":")
             if (parts.size != 2) return@mapNotNull null
             val ex = parseExchange(parts[0])
-            val market = parts[1]
+            val market = sanitizeMarket(parts[1])
             marketDataStore.getLatestTicker(ex, market)?.toResponse()
         }
+    }
+
+    private fun sanitizeMarket(market: String): String {
+        val trimmed = market.trim()
+        if (!CHART_MARKET_REGEX.matches(trimmed)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid market: $market")
+        }
+        return trimmed
     }
 
     private fun parseExchange(value: String): Exchange =

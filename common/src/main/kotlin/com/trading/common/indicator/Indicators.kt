@@ -17,7 +17,8 @@ object Indicators {
     fun calculateRsi(candles: List<NormalizedCandle>, period: Int = 14): Double {
         if (candles.size < period + 1) return 50.0
 
-        val closes = candles.take(period + 1).map { it.closePrice }.reversed()
+        // 전체 구간 사용 — take(period+1) 면 Wilder smoothing 루프가 비어 SMA-RSI 가 되던 버그.
+        val closes = candles.map { it.closePrice }.reversed()
         val gains = mutableListOf<Double>()
         val losses = mutableListOf<Double>()
 

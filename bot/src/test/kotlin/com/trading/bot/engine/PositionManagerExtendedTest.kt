@@ -4,7 +4,9 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.*
 import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -69,45 +71,83 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `buy returns null when insufficient funds`() = runTest {
+        // investRatio 0.1 * 1000 = 100 < MIN_ORDER(5000)
         coEvery { upbitClient.getAccounts() } returns listOf(
-            Account(currency = "KRW", balance = "1000") // too low
+            Account(currency = "KRW", balance = "1000")
         )
         val state = TradingState("KRW-BTC")
 
         val result = manager.buy("KRW-BTC", state, 50000000.0, "test_strategy")
         assertNull(result)
+        assertFalse(state.position)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
     @Test
-    fun `buy returns TradeRecord on success`() = runTest {
-        coEvery { upbitClient.getAccounts() } returns listOf(
-            Account(currency = "KRW", balance = "200000")
+    fun `buy reconciles volume and avg price from exchange and sets boughtToday`() = runTest {
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),                          // invest sizing
+            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")), // post-fill truth
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-123")
+        coEvery { upbitClient.getOrder("buy-123") } returns
+            Order(uuid = "buy-123", state = "done", executedVolume = "0.00038")
 
         val state = TradingState("KRW-BTC")
         val result = manager.buy("KRW-BTC", state, 50000000.0, "volatility_breakout")
 
         assertNotNull(result)
-        assertEquals("KRW-BTC", result!!.ticker)
-        assertEquals(TradeSide.BUY, result.side)
-        assertEquals(50000000.0, result.price)
+        assertEquals(TradeSide.BUY, result!!.side)
+        assertEquals(52000000.0, result.price)   // 거래소 평단 (currentPrice 아님)
+        assertEquals(0.00038, result.volume)     // 거래소 실잔고 (investAmount/price 아님)
         assertEquals("volatility_breakout", result.strategy)
         assertTrue(state.position)
+        assertTrue(state.boughtToday)
+        assertEquals(0.00038, state.holdVolume)
+        assertEquals(52000000.0, state.avgBuyPrice)
     }
 
     @Test
-    fun `buy uses max invest amount when balance exceeds it`() = runTest {
-        coEvery { upbitClient.getAccounts() } returns listOf(
-            Account(currency = "KRW", balance = "5000000") // 5M KRW
+    fun `buy applies investRatio and caps at maxInvestAmount`() = runTest {
+        // 5,000,000 * 0.1 = 500,000 → capped at maxInvestAmount 100,000
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "5000000")),
+            listOf(Account(currency = "BTC", balance = "0.0019", avgBuyPrice = "52000000")),
         )
-        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-456")
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "buy-456")
+        coEvery { upbitClient.getOrder("buy-456") } returns
+            Order(uuid = "buy-456", state = "done", executedVolume = "0.0019")
+
+        val state = TradingState("KRW-BTC")
+        manager.buy("KRW-BTC", state, 52000000.0, "test")
+
+        assertEquals("100000", orderSlot.captured.price) // 상한 적용된 투자금
+    }
+
+    @Test
+    fun `buy returns null and keeps state when order not filled`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "200000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-x")
+        coEvery { upbitClient.getOrder("buy-x") } returns Order(uuid = "buy-x", state = "cancel", executedVolume = "0")
 
         val state = TradingState("KRW-BTC")
         val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
 
-        assertNotNull(result)
-        assertEquals(100000.0, result!!.totalAmount) // capped at maxInvestAmount
+        assertNull(result)
+        assertFalse(state.position)
+        assertFalse(state.boughtToday)
+    }
+
+    @Test
+    fun `buy is suppressed while already holding a position`() = runTest {
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001) // 보유 중
+
+        val result = manager.buy("KRW-BTC", state, 51000000.0, "test")
+
+        assertNull(result)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
     // --- sell tests ---
@@ -120,8 +160,13 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `sell returns TradeRecord with PnL on success`() = runTest {
-        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-789")
+    fun `sell uses real exchange balance and confirms fill`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "sell-789")
+        coEvery { upbitClient.getOrder("sell-789") } returns Order(uuid = "sell-789", state = "done")
 
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
@@ -131,12 +176,61 @@ class PositionManagerExtendedTest {
         assertNotNull(result)
         assertEquals(TradeSide.SELL, result!!.side)
         assertEquals("TAKE_PROFIT", result.reason)
-        assertTrue(result.pnlPercent!! > 0) // profit
-        assertFalse(state.position) // position closed
+        assertTrue(result.pnlPercent!! > 0)
+        assertEquals(0.001, result.volume)
+        assertEquals("0.001", orderSlot.captured.volume) // 거래소 원본 잔고 문자열
+        assertFalse(state.position)
+    }
+
+    @Test
+    fun `sell submits actual balance not the recorded holdVolume`() = runTest {
+        // state 는 1.0 보유로 알지만 거래소 실잔고는 0.5
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "100")
+        )
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "s2")
+        coEvery { upbitClient.getOrder("s2") } returns Order(uuid = "s2", state = "done")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 1.0)
+        val result = manager.sell("KRW-BTC", state, 110.0, SellReason.MANUAL)
+
+        assertEquals("0.5", orderSlot.captured.volume)
+        assertEquals(0.5, result!!.volume)
+    }
+
+    @Test
+    fun `sell clears phantom position when exchange balance is zero`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.STOP_LOSS)
+
+        assertNull(result)
+        assertFalse(state.position) // phantom 청산
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+    }
+
+    @Test
+    fun `sell keeps position when fill is not confirmed`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.001"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "s3")
+        coEvery { upbitClient.getOrder("s3") } returns Order(uuid = "s3", state = "wait") // 끝까지 미체결
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.MANUAL)
+
+        assertNull(result)
+        assertTrue(state.position) // 재시도 위해 유지
     }
 
     @Test
     fun `sell handles API error gracefully`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.001"))
         coEvery { upbitClient.placeOrder(any()) } throws RuntimeException("Network error")
 
         val state = TradingState("KRW-BTC")
