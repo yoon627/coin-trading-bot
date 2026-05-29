@@ -70,15 +70,16 @@ class UpbitClientImpl(
         val queryString = params.entries.joinToString("&") {
             "${URLEncoder.encode(it.key, StandardCharsets.UTF_8)}=${URLEncoder.encode(it.value, StandardCharsets.UTF_8)}"
         }
-        return Mono.defer {
-            upbitWebClient.post()
-                .uri("/v1/orders")
-                .header("Authorization", authProvider!!.authorizationHeader(queryString))
-                .bodyValue(params)
-                .retrieve()
-                .onStatus(HttpStatusCode::isError) { handleError(it) }
-                .bodyToMono<Order>()
-        }.retryOnRateLimit().awaitSingle()
+        // 주문 생성은 비멱등 — 429 등에서 재시도하면 중복 주문이 체결될 수 있어 재시도 금지.
+        // 실패는 그대로 전파해 호출부가 해당 tick 을 건너뛰게 한다.
+        return upbitWebClient.post()
+            .uri("/v1/orders")
+            .header("Authorization", authProvider!!.authorizationHeader(queryString))
+            .bodyValue(params)
+            .retrieve()
+            .onStatus(HttpStatusCode::isError) { handleError(it) }
+            .bodyToMono<Order>()
+            .awaitSingle()
     }
 
     override suspend fun getOrder(uuid: String): Order {

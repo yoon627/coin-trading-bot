@@ -65,6 +65,16 @@ class TradingStateTest {
     }
 
     @Test
+    fun `markBought sets boughtToday so daily entry gate engages`() {
+        val state = TradingState("KRW-BTC")
+        assertFalse(state.boughtToday)
+
+        state.markBought(50000000.0, 0.001)
+
+        assertTrue(state.boughtToday)
+    }
+
+    @Test
     fun `markBought calculates weighted average for additional buys`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001) // 50K spent

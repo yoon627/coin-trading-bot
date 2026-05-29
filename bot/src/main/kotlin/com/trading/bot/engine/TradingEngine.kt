@@ -149,6 +149,9 @@ class TradingEngine(
                 }
             }
 
+            // 당일 1회 진입: 이미 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
+            if (state.position || state.boughtToday) return
+
             val normalizedMarket = MarketPair.normalize(exchange, ticker)
             val storeCandles = marketDataStore?.getCandles(exchange, normalizedMarket, CandleInterval.D1, 30)
             val shouldBuy = if (storeCandles != null && storeCandles.size >= 2) {
