@@ -20,8 +20,12 @@ class RequestValidators {
     }
 
     fun validatePassword(password: String) {
-        if (password.length < 8) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at least 8 characters")
+        if (password.length < MIN_PASSWORD_LENGTH) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at least $MIN_PASSWORD_LENGTH characters")
+        }
+        // bcrypt 는 72바이트 초과를 잘라내므로 상한을 둬 silent truncation/해싱 비용 DoS 를 차단.
+        if (password.length > MAX_PASSWORD_LENGTH) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at most $MAX_PASSWORD_LENGTH characters")
         }
     }
 
@@ -76,10 +80,14 @@ class RequestValidators {
         if (!numeric.isFinite() || numeric <= 0.0) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Volume must be greater than 0")
         }
-        return if (numeric.absoluteValue >= 1e-6) normalized else throw ResponseStatusException(
-            HttpStatus.BAD_REQUEST,
-            "Volume is too small",
-        )
+        if (numeric.absoluteValue < 1e-6) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Volume is too small")
+        }
+        // 상한 — '1e100' 같은 finite 거대값을 컨트롤러 계층에서 차단.
+        if (numeric > MAX_SELL_VOLUME) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Volume is too large")
+        }
+        return normalized
     }
 
     fun normalizeDiscordWebhookUrl(url: String?): String? {
@@ -110,5 +118,8 @@ class RequestValidators {
         private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
         private const val MAX_ORDER_AMOUNT = 10_000_000.0  // 1000만원
+        private const val MIN_PASSWORD_LENGTH = 10
+        private const val MAX_PASSWORD_LENGTH = 72  // bcrypt 입력 한계
+        private const val MAX_SELL_VOLUME = 1_000_000_000.0
     }
 }

@@ -29,22 +29,34 @@ class UpbitErrorHandlerAdvice {
                 "status" to status.value(),
                 "error" to status.reasonPhrase,
                 "message" to reason,
+                // SPA/로그가 권한·잔액·최소주문·IP차단을 HTTP 상태만으로 구분 못 하던 문제 → 원본 errorName 노출.
+                "error_name" to ex.errorName,
             )
         )
     }
 
-    private fun mapException(ex: UpbitApiException): Pair<HttpStatus, String> = when {
-        ex.statusCode == 401 && ex.errorName == "no_authorization_ip" ->
-            HttpStatus.BAD_REQUEST to
-                "Upbit API 키의 허용 IP에 서버 주소가 등록되어 있지 않습니다. " +
-                "Upbit Open API 페이지에서 허용 IP 목록을 확인해주세요."
-        ex.statusCode == 401 ->
-            HttpStatus.BAD_REQUEST to "Upbit API 인증에 실패했습니다 (${ex.errorName ?: "unauthorized"})."
-        ex.statusCode == 429 ->
-            HttpStatus.TOO_MANY_REQUESTS to "Upbit API 호출 한도를 초과했습니다. 잠시 후 다시 시도해주세요."
-        ex.statusCode in 400..499 ->
-            HttpStatus.BAD_REQUEST to "Upbit가 요청을 거부했습니다 (${ex.errorName ?: "error ${ex.statusCode}"})."
-        else ->
-            HttpStatus.BAD_GATEWAY to "Upbit API 호출에 일시적인 문제가 있습니다. 잠시 후 다시 시도해주세요."
+    private fun mapException(ex: UpbitApiException): Pair<HttpStatus, String> {
+        val name = ex.errorName
+        return when {
+            ex.statusCode == 401 && name == "no_authorization_ip" ->
+                HttpStatus.BAD_REQUEST to
+                    "Upbit API 키의 허용 IP에 서버 주소가 등록되어 있지 않습니다. " +
+                    "Upbit Open API 페이지에서 허용 IP 목록을 확인해주세요."
+            ex.statusCode == 401 ->
+                HttpStatus.BAD_REQUEST to "Upbit API 인증에 실패했습니다 (${name ?: "unauthorized"})."
+            ex.statusCode == 429 ->
+                HttpStatus.TOO_MANY_REQUESTS to "Upbit API 호출 한도를 초과했습니다. 잠시 후 다시 시도해주세요."
+            // 418: Upbit IP 차단 — generic 400 과 구분되게 별도 매핑.
+            ex.statusCode == 418 ->
+                HttpStatus.FORBIDDEN to "Upbit가 요청 IP를 차단했습니다(418). 잠시 후 다시 시도하거나 허용 IP 설정을 확인해주세요."
+            name != null && name.startsWith("insufficient_funds") ->
+                HttpStatus.BAD_REQUEST to "주문 가능 잔액이 부족합니다 ($name)."
+            name != null && name.startsWith("under_min_total") ->
+                HttpStatus.BAD_REQUEST to "최소 주문 금액(보통 5,000원) 미만입니다 ($name)."
+            ex.statusCode in 400..499 ->
+                HttpStatus.BAD_REQUEST to "Upbit가 요청을 거부했습니다 (${name ?: "error ${ex.statusCode}"})."
+            else ->
+                HttpStatus.BAD_GATEWAY to "Upbit API 호출에 일시적인 문제가 있습니다. 잠시 후 다시 시도해주세요."
+        }
     }
 }

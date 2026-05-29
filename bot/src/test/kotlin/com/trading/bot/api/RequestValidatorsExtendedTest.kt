@@ -50,15 +50,20 @@ class RequestValidatorsExtendedTest {
     // --- validatePassword ---
 
     @Test
-    fun `validatePassword accepts 8+ characters`() {
-        assertDoesNotThrow { validators.validatePassword("12345678") }
+    fun `validatePassword accepts passwords within length bounds`() {
+        assertDoesNotThrow { validators.validatePassword("1234567890") } // 10 chars (min)
         assertDoesNotThrow { validators.validatePassword("a very long password with spaces") }
     }
 
     @Test
     fun `validatePassword rejects short passwords`() {
-        assertThrows<ResponseStatusException> { validators.validatePassword("1234567") }
+        assertThrows<ResponseStatusException> { validators.validatePassword("123456789") } // 9 < min 10
         assertThrows<ResponseStatusException> { validators.validatePassword("") }
+    }
+
+    @Test
+    fun `validatePassword rejects overly long passwords`() {
+        assertThrows<ResponseStatusException> { validators.validatePassword("a".repeat(73)) } // > 72 (bcrypt limit)
     }
 
     // --- normalizeApiKey ---
