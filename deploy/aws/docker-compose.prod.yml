@@ -31,6 +31,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (prod fails to start without it)}
       APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:?APP_ENCRYPTION_SECRET is required and must stay stable}
+      # TLS 종단(Caddy/Nginx + Let's Encrypt) 없이 HTTP 만으로 prod 를 잠깐 운영할 때 true.
+      # JWT 쿠키가 평문 HTTP 로 전송됨 — 가능한 한 빨리 TLS 도입 후 false 로 되돌리세요.
+      APP_AUTH_COOKIE_FORCE_INSECURE: ${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
     depends_on:
       postgres:
         condition: service_healthy
