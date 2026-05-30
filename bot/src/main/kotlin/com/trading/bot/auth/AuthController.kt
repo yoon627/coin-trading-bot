@@ -106,7 +106,12 @@ class AuthController(
     // connection). Local prod-mode HTTP testing is unsupported as a result —
     // use the dev profile for that. In non-prod profiles we still derive Secure
     // from the request scheme so HTTP localhost works for development.
+    //
+    // Escape hatch: APP_AUTH_COOKIE_FORCE_INSECURE=true forces non-Secure cookies
+    // even under prod. Use ONLY for short-lived HTTP-only test boxes (e.g. EC2 8080
+    // before TLS is set up) — JWT travels in plaintext while this is on.
     private fun shouldMarkSecure(request: ServerHttpRequest): Boolean {
+        if (environment.getProperty("app.auth.cookie-force-insecure", "false").toBoolean()) return false
         if (environment.acceptsProfiles(Profiles.of("prod"))) return true
         if (request.uri.scheme.equals("https", ignoreCase = true)) return true
         return request.headers.getFirst("X-Forwarded-Proto")
