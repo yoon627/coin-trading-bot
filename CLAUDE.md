@@ -13,12 +13,12 @@
 
 ## 모듈 구조
 
-`settings.gradle.kts`: `include("common", "collector", "bot", "research")`
+`settings.gradle.kts`: `include("common", "bot")`
 
-- `bot` — Spring Boot 메인 애플리케이션 (실거래 봇 + REST API + SPA, port 8080)
-- `collector` — Spring Boot 데이터 수집 서비스 (Upbit/Binance/KIS → Kafka, port 8081)
-- `common` — 공용 도메인 모델, Kafka 이벤트 스키마, 인디케이터, 레거시 스윙 전략
-- `research` — 백테스트/walk-forward/리서치 프레임워크 (`:common`만 의존)
+- `bot` — Spring Boot 메인 애플리케이션 (실거래 봇 + REST API + SPA + in-process 시세 수집, port 8080). Upbit WS ticker + REST 캔들 폴링을 `marketdata/` 에서 직접 수집(구 collector/Kafka 흡수).
+- `common` — 공용 도메인 모델(`NormalizedTicker`/`NormalizedCandle` 등), 인디케이터, 스윙 전략 7개.
+
+> 거래소는 Upbit only. 구 `collector`·`research` 모듈, Kafka, ML/스캘핑/Claude 분석은 경량화(rightsizing) 과정에서 제거됨.
 
 ## 스펙 문서
 
