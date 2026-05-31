@@ -5,6 +5,8 @@ import com.trading.bot.config.DiscordProperties
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import io.mockk.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.web.reactive.function.client.WebClient
@@ -127,5 +129,42 @@ class DiscordNotifierTest {
         notifier.sendTradeEmbed(record, webhookUrl = "http://evil.com/steal")
 
         verify(exactly = 0) { webClient.post() }
+    }
+
+    @Test
+    fun `sendErrorAlert sends red error embed to given webhook`() {
+        notifier.sendErrorAlert(
+            loggerName = "com.trading.bot.engine.TradingEngine",
+            message = "boom",
+            stackSummary = "java.lang.RuntimeException: boom\n  at Foo.bar",
+            suppressedSince = 3,
+            webhookUrl = "https://discord.com/api/webhooks/789/errwebhook",
+        )
+
+        verify { requestSpec.uri("https://discord.com/api/webhooks/789/errwebhook") }
+
+        val payloadSlot = slot<Map<String, Any>>()
+        verify { requestBodySpec.bodyValue(capture(payloadSlot)) }
+        val embed = (payloadSlot.captured["embeds"] as List<*>).first() as Map<*, *>
+        val firstField = (embed["fields"] as List<*>).first() as Map<*, *>
+        assertEquals("Logger", firstField["name"]) // error embed 식별 (거래 embed 엔 없는 필드)
+    }
+
+    @Test
+    fun `sendErrorAlert 는 긴 메시지를 Discord field 1024 한도 이내로 자른다`() {
+        notifier.sendErrorAlert(
+            loggerName = "logger",
+            message = "x".repeat(5000),
+            stackSummary = "y".repeat(5000),
+            suppressedSince = 0,
+            webhookUrl = "https://discord.com/api/webhooks/789/errwebhook",
+        )
+
+        val payloadSlot = slot<Map<String, Any>>()
+        verify { requestBodySpec.bodyValue(capture(payloadSlot)) }
+        val embed = (payloadSlot.captured["embeds"] as List<*>).first() as Map<*, *>
+        (embed["fields"] as List<*>).map { it as Map<*, *> }.forEach {
+            assertTrue((it["value"] as String).length <= 1024, "field ${it["name"]} exceeds 1024")
+        }
     }
 }
