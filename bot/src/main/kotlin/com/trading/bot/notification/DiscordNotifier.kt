@@ -62,6 +62,33 @@ class DiscordNotifier(
         sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
     }
 
+    /** ERROR 로그 알림용 Embed. message/stackSummary 는 호출 측에서 마스킹된 상태로 전달. */
+    fun sendErrorAlert(
+        loggerName: String,
+        message: String,
+        stackSummary: String?,
+        suppressedSince: Int,
+        webhookUrl: String,
+    ) {
+        val fields = mutableListOf(
+            mapOf("name" to "Logger", "value" to loggerName.take(256), "inline" to false),
+            // Discord embed field value 한도는 1024자. 초과 시 400 으로 알림이 통째로 유실되므로 마진 두고 truncate.
+            mapOf("name" to "Message", "value" to message.ifBlank { "(no message)" }.take(1000), "inline" to false),
+        )
+        if (!stackSummary.isNullOrBlank()) {
+            fields.add(mapOf("name" to "Stack", "value" to "```\n${stackSummary.take(950)}\n```", "inline" to false))
+        }
+        if (suppressedSince > 0) {
+            fields.add(mapOf("name" to "참고", "value" to "최근 5분간 동일 에러 ${suppressedSince}회 추가 발생", "inline" to false))
+        }
+        val embed = mapOf<String, Any>(
+            "title" to "🚨 서버 에러",
+            "color" to 0xEF4444,
+            "fields" to fields,
+        )
+        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
+    }
+
     private fun sendPayload(payload: Map<String, Any>, webhookUrl: String? = null) {
         val url = try {
             requestValidators.normalizeDiscordWebhookUrl(
