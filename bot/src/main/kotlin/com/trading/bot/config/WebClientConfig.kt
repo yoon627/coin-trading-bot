@@ -33,7 +33,12 @@ class WebClientConfig(private val upbitProperties: UpbitProperties) {
 
     @Bean
     fun discordWebClient(): WebClient {
+        val httpClient = HttpClient.create()
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3000)
+            .responseTimeout(Duration.ofSeconds(5))
+
         return WebClient.builder()
+            .clientConnector(ReactorClientHttpConnector(httpClient))
             .codecs { it.defaultCodecs().maxInMemorySize(256 * 1024) }
             .build()
     }
