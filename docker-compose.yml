@@ -12,8 +12,6 @@ services:
       TRADING_STRATEGY: ${TRADING_STRATEGY:-volatility_breakout}
       TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
-      ML_MODEL_DIR: /app/ml-models
-      ML_AUTO_RETRAIN: ${ML_AUTO_RETRAIN:-true}
       REDIS_HOST: redis
       REDIS_ENABLED: "true"
       DB_HOST: postgres
@@ -23,17 +21,10 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-trading}
       JWT_SECRET: ${JWT_SECRET:-}
       APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:-}
-      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
-      CLAUDE_ANALYSIS_ENABLED: ${CLAUDE_ANALYSIS_ENABLED:-false}
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-    volumes:
-      - ml-models:/app/ml-models
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      kafka:
         condition: service_healthy
     restart: unless-stopped
     logging:
@@ -72,126 +63,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # --- Monitoring (optional, use: docker compose --profile monitoring up -d) ---
-
-  prometheus:
-    image: prom/prometheus:latest
-    profiles: ["monitoring"]
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheusdata:/prometheus
-    restart: unless-stopped
-
-  loki:
-    image: grafana/loki:2.9.0
-    profiles: ["monitoring"]
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./monitoring/loki.yml:/etc/loki/local-config.yaml
-      - lokidata:/loki
-    command: -config.file=/etc/loki/local-config.yaml
-    restart: unless-stopped
-
-  promtail:
-    image: grafana/promtail:2.9.0
-    profiles: ["monitoring"]
-    volumes:
-      - ./monitoring/promtail.yml:/etc/promtail/config.yml
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    command: -config.file=/etc/promtail/config.yml
-    depends_on:
-      - loki
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    profiles: ["monitoring"]
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-    volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-      - grafanadata:/var/lib/grafana
-    depends_on:
-      - prometheus
-      - loki
-    restart: unless-stopped
-
-  collector:
-    image: ghcr.io/yoon627/coin-trading-bot-collector:${APP_VERSION:-latest}
-    build:
-      context: .
-      dockerfile: collector/Dockerfile
-    ports:
-      - "8081:8081"
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      COLLECTOR_UPBIT_ENABLED: "true"
-      COLLECTOR_UPBIT_MARKETS: ${COLLECTOR_UPBIT_MARKETS:-KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL}
-      COLLECTOR_BINANCE_ENABLED: "true"
-      COLLECTOR_BINANCE_MARKETS: ${COLLECTOR_BINANCE_MARKETS:-BTCUSDT,ETHUSDT,XRPUSDT,SOLUSDT}
-    depends_on:
-      kafka:
-        condition: service_healthy
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # --- Kafka (event backbone) ---
-
-  kafka:
-    image: apache/kafka:3.9.0
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:29093,EXTERNAL://:19092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:19092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_LOG_RETENTION_HOURS: 24
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    volumes:
-      - kafkadata:/var/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
-      interval: 10s
-      timeout: 10s
-      retries: 5
-    restart: unless-stopped
-
-  kafka-init:
-    image: apache/kafka:3.9.0
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      "
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic market.ticker --partitions 6 --replication-factor 1 --config retention.ms=86400000
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic market.candle --partitions 6 --replication-factor 1 --config retention.ms=604800000
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic trade.execution --partitions 3 --replication-factor 1 --config retention.ms=2592000000
-      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic notification --partitions 1 --replication-factor 1 --config retention.ms=259200000
-      echo 'Kafka topics created successfully.'
-      "
-    restart: "no"
-
 volumes:
   pgdata:
   redisdata:
-  ml-models:
-  kafkadata:
-  prometheusdata:
-  lokidata:
-  grafanadata:
