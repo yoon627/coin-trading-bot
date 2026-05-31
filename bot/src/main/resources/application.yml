@@ -52,6 +52,9 @@ watchlist:
 
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}
+  error-alert:
+    enabled: ${DISCORD_ERROR_ALERT_ENABLED:false}
+    webhook-url: ${DISCORD_ERROR_WEBHOOK_URL:}
 
 logging:
   level:
