@@ -27,3 +27,9 @@ data class WatchlistProperties(
 data class DiscordProperties(
     val webhookUrl: String = "",
 )
+
+@ConfigurationProperties(prefix = "discord.error-alert")
+data class ErrorAlertProperties(
+    val enabled: Boolean = false,
+    val webhookUrl: String = "",
+)
