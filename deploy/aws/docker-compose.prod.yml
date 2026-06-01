@@ -5,14 +5,41 @@
 # The app image is built+pushed by GitHub Actions (multi-arch) to GHCR; this file only pulls it.
 # Postgres/Redis are NOT published to the host — only the app reaches them over the compose network.
 #
-# Memory budget (4GB box): app 1280m + postgres 512m + redis 192m ≈ 2.0GB, leaving ~2GB for OS/page-cache.
+# Memory budget (4GB box): caddy 128m + app 1280m + postgres 512m + redis 192m ≈ 2.1GB, leaving ~1.9GB for OS/page-cache.
 
 services:
+  # TLS 종단. 80 으로 Let's Encrypt 인증서를 받아 443 에서 HTTPS 를 종단하고
+  # 평문 HTTP 로 내부 app:8080 에 프록시한다. (왜 필요? prod 프로파일이 항상 Secure
+  # 쿠키를 발급하는데 평문 HTTP 에선 브라우저가 저장하지 않아 로그인이 안 되던 문제 해결)
+  caddy:
+    image: caddy:2-alpine
+    pull_policy: always
+    ports:
+      - "80:80"                # ACME HTTP-01 challenge + HTTP→HTTPS 리다이렉트 (전세계 개방 필요)
+      - "443:443"              # HTTPS 대시보드 / REST / SSE
+    environment:
+      # 예: 13-125-170-147.sslip.io. deploy.sh 가 EC2 공인 IP 로 자동 생성해 .env 에 주입.
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required (e.g. 13-125-170-147.sslip.io)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # 발급된 TLS 인증서 영속 — 재시작 시 재발급(LE rate limit) 방지에 필수
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_started   # healthy 대기 안 함 — app 미준비여도 Caddy 는 떠서 ACME·502 처리
+    restart: unless-stopped
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   app:
     image: ghcr.io/yoon627/coin-trading-bot:${APP_VERSION:-latest}
     pull_policy: always
-    ports:
-      - "8080:8080"            # dashboard + REST API; the EC2 security group restricts who can reach it
+    expose:
+      - "8080"                 # Caddy(compose 내부망)만 접근 — 호스트에 직접 노출하지 않음
     environment:
       SPRING_PROFILES_ACTIVE: prod
       JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=70.0"
@@ -36,6 +63,8 @@ services:
       # TLS 종단(Caddy/Nginx + Let's Encrypt) 없이 HTTP 만으로 prod 를 잠깐 운영할 때 true.
       # JWT 쿠키가 평문 HTTP 로 전송됨 — 가능한 한 빨리 TLS 도입 후 false 로 되돌리세요.
       APP_AUTH_COOKIE_FORCE_INSECURE: ${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
+      # SecurityConfig CORS 가 https://$APP_DOMAIN 을 allowedOrigins 에 추가(없으면 prod 도메인 fetch 가 403).
+      APP_DOMAIN: ${APP_DOMAIN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,3 +139,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  caddy_data:
+  caddy_config:
