@@ -84,6 +84,7 @@ ensure_secrets() {
 
 # 서버로 올릴 app 전용 .env 렌더 (AWS/GHCR 토큰 등은 제외).
 render_server_env() {
+    local domain="${APP_DOMAIN:-${EC2_PUBLIC_IP//./-}.sslip.io}"
     cat > "$1" <<EOF
 APP_VERSION=${APP_VERSION:-latest}
 UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY:-}
@@ -98,7 +99,59 @@ DB_PASSWORD=${DB_PASSWORD}
 JWT_SECRET=${JWT_SECRET}
 APP_ENCRYPTION_SECRET=${APP_ENCRYPTION_SECRET}
 APP_AUTH_COOKIE_FORCE_INSECURE=${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
+APP_DOMAIN=${domain}
 EOF
+}
+
+# SG 인바운드 1건 멱등 추가. 이미 있으면(Duplicate) 통과하되, 그 외 에러(권한 부족·잘못된
+# SG_ID·region 등)는 삼키지 않고 실패시킨다 — 규칙이 안 열렸는데 배포가 "성공"으로 끝나
+# Caddy/ACME 가 조용히 실패하는 것을 막는다.
+_authorize_ingress() {
+    local port="$1" cidr="$2" err
+    if err="$(aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp \
+        --port "$port" --cidr "$cidr" --region "$AWS_REGION" 2>&1)"; then
+        echo "  SG +${port}/tcp $cidr"
+    elif printf '%s' "$err" | grep -q 'InvalidPermission.Duplicate'; then
+        echo "  SG ${port}/tcp $cidr (이미 존재)"
+    else
+        echo "ERROR: SG ${port}/tcp $cidr 추가 실패:" >&2; printf '%s\n' "$err" >&2; return 1
+    fi
+}
+
+# TLS 도입에 필요한 SG 인바운드를 멱등 보장. 이미 setup 된 기존 박스는 do_setup 이
+# 조기 return 하므로, deploy 경로에서 이 함수로 80/443 을 보장한다.
+#   80 : Let's Encrypt HTTP-01 challenge + 인증서 자동 갱신 → 전세계 상시 개방 필수.
+#   443: HTTPS 진입점. 어디서든 접속을 위해 기본 전체 허용(APP_ALLOW_CIDR 로 제한 가능)하되,
+#        로그인 brute-force 는 app 의 IP 기반 rate limit(Caddy XFF) 으로 방어한다.
+ensure_sg_rules() {
+    if [[ -z "${SG_ID:-}" ]]; then
+        echo "WARN: SG_ID 미확인 — SG 규칙 스킵 (setup 안 된 상태?)"; return
+    fi
+    local app_cidr="${APP_ALLOW_CIDR:-0.0.0.0/0}"
+    _authorize_ingress 80 "0.0.0.0/0"
+    _authorize_ingress 443 "$app_cidr"
+}
+
+# sslip.io 도메인이 실제 EC2 공인 IP 로 resolve 되는지 확인. 불일치면 ACME 가 엉뚱한
+# 호스트로 가 발급 실패하므로 경고(자동 생성 도메인이면 정의상 항상 일치).
+preflight_domain() {
+    local domain="${APP_DOMAIN:-${EC2_PUBLIC_IP//./-}.sslip.io}"
+    local resolved=""
+    if command -v dig >/dev/null 2>&1; then
+        resolved="$(dig +short A "$domain" 2>/dev/null | tail -1)"
+    elif command -v nslookup >/dev/null 2>&1; then
+        resolved="$(nslookup "$domain" 2>/dev/null | awk '/^Address/{a=$NF} END{print a}')"
+    else
+        echo "  도메인 preflight 스킵: dig/nslookup 없음 — $domain 의 A 레코드가 $EC2_PUBLIC_IP 인지 직접 확인"
+        return
+    fi
+    if [[ -z "$resolved" ]]; then
+        echo "WARN: $domain resolve 실패 (A 레코드 미설정?). ACME 발급 실패 가능."
+    elif [[ "$resolved" != "$EC2_PUBLIC_IP" ]]; then
+        echo "WARN: $domain → $resolved (EC2 IP=$EC2_PUBLIC_IP 와 불일치). ACME 발급 실패 가능."
+    else
+        echo "  도메인 preflight OK: $domain → $resolved"
+    fi
 }
 
 # ── setup ──
@@ -116,8 +169,7 @@ do_setup() {
         local myip; myip="$(curl -s https://checkip.amazonaws.com || true)"
         [[ -n "$myip" ]] && ssh_cidr="${myip}/32" || { echo "ERROR: 공인 IP 감지 실패. .env 에 SSH_ALLOW_CIDR 설정."; exit 1; }
     fi
-    local app_cidr="${APP_ALLOW_CIDR:-$ssh_cidr}"   # 기본: 대시보드도 본인 IP 만
-    log "SSH 허용: $ssh_cidr / 앱(8080) 허용: $app_cidr"
+    log "SSH 허용: $ssh_cidr / 앱(443) 허용: ${APP_ALLOW_CIDR:-0.0.0.0/0}"
 
     log "1/6 Key Pair"
     if aws ec2 describe-key-pairs --key-names "$KEY_NAME" --region "$AWS_REGION" &>/dev/null; then
@@ -149,12 +201,12 @@ do_setup() {
     aws ec2 create-route --route-table-id "$RTB_ID" --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID" --region "$AWS_REGION" > /dev/null
     save_state RTB_ID "$RTB_ID"
 
-    log "4/6 Security Group (SSH/8080 제한, 그 외 비공개)"
+    log "4/6 Security Group (SSH + 80/443)"
     SG_ID=$(aws ec2 create-security-group --group-name "${APP_NAME}-sg" --description "Trading Bot" \
         --vpc-id "$VPC_ID" --region "$AWS_REGION" --query 'GroupId' --output text)
-    aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22   --cidr "$ssh_cidr" --region "$AWS_REGION" > /dev/null
-    aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 8080 --cidr "$app_cidr" --region "$AWS_REGION" > /dev/null
+    aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$ssh_cidr" --region "$AWS_REGION" > /dev/null
     save_state SG_ID "$SG_ID"
+    ensure_sg_rules   # 80(ACME, 0.0.0.0/0) + 443(app_cidr) — deploy 경로와 동일 로직
 
     log "5/6 EC2 ($INSTANCE_TYPE, $AMI_ARCH)"
     AMI_ID=$(aws ec2 describe-images --owners amazon \
@@ -222,18 +274,26 @@ do_deploy() {
     load_state
     [[ -z "${EC2_PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
     ensure_secrets
+    local domain="${APP_DOMAIN:-${EC2_PUBLIC_IP//./-}.sslip.io}"
+    log "SG 규칙 보장(80/443) + 도메인 확인"
+    ensure_sg_rules
+    preflight_domain
     wait_for_docker
 
     log "설정 업로드"
-    local tmp_env; tmp_env="$(mktemp)"; render_server_env "$tmp_env"
+    local tmp_env; tmp_env="$(mktemp)"
+    # tmp_env 엔 시크릿(DB/JWT/암호화 키) 평문이 담긴다. scp 실패로 set -e 종료돼도
+    # 반드시 삭제되도록 EXIT trap 으로 cleanup (정상 완료 시 즉시 삭제 + trap 해제).
+    trap "rm -f '$tmp_env'" EXIT
+    render_server_env "$tmp_env"
     ssh_ec2 'mkdir -p /opt/app'
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$COMPOSE_FILE" ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$tmp_env"     ec2-user@"$EC2_PUBLIC_IP":/opt/app/.env
-    rm -f "$tmp_env"
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$COMPOSE_FILE"         ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/Caddyfile" ec2-user@"$EC2_PUBLIC_IP":/opt/app/Caddyfile
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$tmp_env"              ec2-user@"$EC2_PUBLIC_IP":/opt/app/.env
+    rm -f "$tmp_env"; trap - EXIT
 
     log "컨테이너 배포 (GHCR pull)"
-    GHCR_USERNAME="${GHCR_USERNAME:-}" GHCR_TOKEN="${GHCR_TOKEN:-}" \
-    ssh_ec2 "GHCR_USERNAME='${GHCR_USERNAME:-}' GHCR_TOKEN='${GHCR_TOKEN:-}' bash -s" <<'REMOTE'
+    ssh_ec2 "APP_DOMAIN='$domain' GHCR_USERNAME='${GHCR_USERNAME:-}' GHCR_TOKEN='${GHCR_TOKEN:-}' bash -s" <<'REMOTE'
 set -e
 cd /opt/app
 # private GHCR 패키지면 토큰으로 로그인. public 이면 생략 가능.
@@ -245,7 +305,8 @@ docker compose up -d --remove-orphans
 echo "헬스체크 대기..."
 healthy=false
 for i in $(seq 1 36); do
-    if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
+    # app 은 호스트에 8080 을 노출하지 않으므로(Caddy 경유) 컨테이너 내부에서 확인.
+    if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health > /dev/null 2>&1; then
         echo "App healthy!"; healthy=true; break
     fi
     sleep 5
@@ -256,12 +317,29 @@ if [ "$healthy" = "false" ]; then
     docker compose logs --tail=120 app || true
     exit 1
 fi
+
+# Caddy TLS 종단 e2e: 도메인 SNI 로 로컬 Caddy(127.0.0.1:443)에 HTTPS 요청이 app 까지
+# 닿는지 확인(EIP hairpin 회피 위해 --resolve). 인증서 발급 ~30초 → 재시도. 실패해도
+# 배포는 중단하지 않되(인증서 지연 가능) caddy 로그로 원인을 노출한다.
+tls_ok=false
+for i in $(seq 1 18); do
+    if curl -fsS --max-time 5 --resolve "${APP_DOMAIN}:443:127.0.0.1" \
+        "https://${APP_DOMAIN}/actuator/health" > /dev/null 2>&1; then
+        echo "HTTPS e2e OK: https://${APP_DOMAIN}"; tls_ok=true; break
+    fi
+    sleep 5
+done
+if [ "$tls_ok" = "false" ]; then
+    echo "WARN: HTTPS e2e 미확인 (인증서 발급 지연 가능). caddy 로그:"
+    docker compose logs --tail=60 caddy || true
+fi
 docker image prune -f
 REMOTE
 
     echo ""
     log "배포 완료"
-    echo "  App: http://$EC2_PUBLIC_IP:8080  (security group 가 허용한 IP 에서만 접근)"
+    echo "  App: https://$domain  (Caddy 가 Let's Encrypt 인증서 발급까지 최대 ~30초)"
+    echo "  최초 접속이 인증서 경고면 1~2분 후 재시도 (발급 진행 중)."
 }
 
 # ── utils ──
