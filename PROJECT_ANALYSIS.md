@@ -14,6 +14,7 @@
 | **비동기** | Kotlin Coroutines + Reactor |
 | **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
+| **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
 | **배포** | AWS EC2 t4g.medium (arm64, 4GB) |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
@@ -201,16 +202,17 @@ bot_configs
 ## 10. Docker Compose 인프라
 
 ```
-┌──────────────────────────────────────────────┐
-│                Docker Compose                  │
-├──────────────┬───────────────┬───────────────┤
-│  app :8080   │ postgres :5432 │  redis :6379  │
-│ (수집+매매   │   (PG 17)      │   (캐시)      │
-│  +REST+SPA)  │                │               │
-└──────────────┴───────────────┴───────────────┘
+   Browser ──HTTPS:443──► caddy(TLS 종단) ──reverse_proxy──► app:8080
+
+┌──────────────┬──────────────┬────────────────┬───────────────┐
+│  caddy :443  │   app :8080  │ postgres :5432 │  redis :6379  │
+│  (TLS 종단)  │  (수집+매매  │   (PG 17)      │   (캐시)      │
+│  (LE 자동)   │   +REST+SPA) │                │               │
+└──────────────┴──────────────┴────────────────┴───────────────┘
 ```
 
-배포(`deploy/aws/docker-compose.prod.yml`)는 GHCR 이미지 pull, 로컬(`docker-compose.yml`)은 `build: .` 로컬 빌드.
+- 외부 진입점은 Caddy(:80/:443). `app`은 호스트에 노출되지 않고(`expose` 만) Caddy 가 `app:8080` 으로 리버스 프록시한다(Let's Encrypt 자동 발급).
+- 배포(`deploy/aws/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull, 로컬(`docker-compose.yml`)은 caddy 없이 `build: .` 로컬 빌드(`app:8080` 직접).
 
 ---
 

@@ -2,6 +2,7 @@ package com.trading.bot.config
 
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.springframework.data.redis.core.ReactiveRedisTemplate
@@ -150,5 +151,60 @@ class RateLimitFilterTest {
         filter.filter(exchange, chain).block()
 
         io.mockk.verify { redisTemplate.expire(any(), Duration.ofMinutes(1)) }
+    }
+
+    @Test
+    fun `filter uses X-Forwarded-For client ip for rate limit key`() {
+        // Caddy(reverse proxy) 뒤에선 remoteAddress 가 Caddy 컨테이너 IP 하나로 뭉치므로,
+        // 실제 client 식별은 Caddy 가 부여한 X-Forwarded-For 로 해야 IP별 rate limit 이 동작한다.
+        val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
+        val valueOps = mockk<ReactiveValueOperations<String, String>>()
+        every { redisTemplate.opsForValue() } returns valueOps
+        val keySlot = slot<String>()
+        every { valueOps.increment(capture(keySlot)) } returns Mono.just(1L)
+        every { redisTemplate.expire(any(), any<Duration>()) } returns Mono.just(true)
+
+        val filter = RateLimitFilter(redisTemplate)
+        val exchange = MockServerWebExchange.from(
+            MockServerHttpRequest.post("/api/auth/login")
+                .header("X-Forwarded-For", "203.0.113.5")
+                .build()
+        )
+        val chain = mockk<WebFilterChain>()
+        every { chain.filter(exchange) } returns Mono.empty()
+
+        filter.filter(exchange, chain).block()
+
+        assertTrue(
+            keySlot.captured.contains("203.0.113.5"),
+            "rate limit key 에 XFF client IP 가 반영돼야 함: ${keySlot.captured}",
+        )
+    }
+
+    @Test
+    fun `filter takes first ip from X-Forwarded-For chain`() {
+        // XFF 가 "client, proxy.." 체인일 때 원 client(첫 항목)를 식별자로 사용.
+        val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
+        val valueOps = mockk<ReactiveValueOperations<String, String>>()
+        every { redisTemplate.opsForValue() } returns valueOps
+        val keySlot = slot<String>()
+        every { valueOps.increment(capture(keySlot)) } returns Mono.just(1L)
+        every { redisTemplate.expire(any(), any<Duration>()) } returns Mono.just(true)
+
+        val filter = RateLimitFilter(redisTemplate)
+        val exchange = MockServerWebExchange.from(
+            MockServerHttpRequest.post("/api/auth/login")
+                .header("X-Forwarded-For", "203.0.113.5, 10.0.0.1")
+                .build()
+        )
+        val chain = mockk<WebFilterChain>()
+        every { chain.filter(exchange) } returns Mono.empty()
+
+        filter.filter(exchange, chain).block()
+
+        assertTrue(
+            keySlot.captured.contains("203.0.113.5"),
+            "체인의 첫 IP 를 써야 함: ${keySlot.captured}",
+        )
     }
 }
