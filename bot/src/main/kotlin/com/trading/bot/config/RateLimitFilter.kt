@@ -31,9 +31,9 @@ class RateLimitFilter(
     companion object {
         private const val MAX_REQUESTS_PER_MINUTE = 60
         // Auth flows include register+login pairs (2 calls/success) and natural
-        // retries on validation failure; 10/min was too tight for legitimate SPA
-        // use, especially since all browser traffic shares one client IP behind
-        // Docker NAT. Brute-force defense at 30/min is still meaningful.
+        // retries on validation failure; 10/min was too tight for legitimate SPA use.
+        // Client IP is now resolved from Caddy's X-Forwarded-For (see clientIp()),
+        // so 30/min is a per-client brute-force ceiling rather than a shared bucket.
         private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30
         private const val KEY_PREFIX = "ratelimit:"
         private val WINDOW = Duration.ofMinutes(1)
@@ -43,7 +43,7 @@ class RateLimitFilter(
         val path = exchange.request.path.value()
         if (isExcluded(path)) return chain.filter(exchange)
 
-        val clientIp = exchange.request.remoteAddress?.address?.hostAddress ?: "anonymous"
+        val clientIp = clientIp(exchange)
         val isAuthEndpoint = path.startsWith("/api/auth")
         val limit = if (isAuthEndpoint) MAX_AUTH_REQUESTS_PER_MINUTE else MAX_REQUESTS_PER_MINUTE
 
@@ -66,6 +66,16 @@ class RateLimitFilter(
                     else -> reject(exchange, limit)
                 }
             }
+    }
+
+    // Caddy(reverse proxy)가 X-Forwarded-For 를 자신이 본 실제 peer IP 로 덮어써 전달한다
+    // (Caddyfile: `header_up X-Forwarded-For {remote_host}` — client 위조 방지). app 은
+    // 호스트에 노출되지 않아(expose) 항상 Caddy 를 거치므로 XFF 를 신뢰할 수 있다. 직접
+    // 노출되는 로컬 dev(Caddy 없음)에선 헤더가 없으므로 remoteAddress 로 fallback.
+    private fun clientIp(exchange: ServerWebExchange): String {
+        val forwarded = exchange.request.headers.getFirst("X-Forwarded-For")
+        if (!forwarded.isNullOrBlank()) return forwarded.substringBefore(',').trim()
+        return exchange.request.remoteAddress?.address?.hostAddress ?: "anonymous"
     }
 
     private fun isExcluded(path: String): Boolean =
