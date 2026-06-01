@@ -63,6 +63,8 @@ services:
       # TLS 종단(Caddy/Nginx + Let's Encrypt) 없이 HTTP 만으로 prod 를 잠깐 운영할 때 true.
       # JWT 쿠키가 평문 HTTP 로 전송됨 — 가능한 한 빨리 TLS 도입 후 false 로 되돌리세요.
       APP_AUTH_COOKIE_FORCE_INSECURE: ${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
+      # SecurityConfig CORS 가 https://$APP_DOMAIN 을 allowedOrigins 에 추가(없으면 prod 도메인 fetch 가 403).
+      APP_DOMAIN: ${APP_DOMAIN:-}
     depends_on:
       postgres:
         condition: service_healthy
