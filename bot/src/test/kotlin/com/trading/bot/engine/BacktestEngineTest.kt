@@ -139,4 +139,61 @@ class BacktestEngineTest {
             )
         }
     }
+
+    // 손익% 안전망을 넓게 둬 chartExit(데드크로스)만 트리거되게.
+    private fun wideStopConfig(chartExit: Boolean) = BacktestConfig(
+        maxLossPct = 99.0,
+        takeProfitPct = 99.0,
+        trailingStopPct = 99.0,
+        maxHoldDays = 999,
+        chartExitEnabled = chartExit,
+    )
+
+    private fun alwaysBuyStrategy() = object : TradingStrategy {
+        override val name = "always_buy"
+        override suspend fun shouldBuy(candles: List<Candle>, currentPrice: Double, config: TradingProperties) = true
+        // shouldSell 은 default(데드크로스 5/20)
+    }
+
+    // chronological(과거→최신): 전반 완만 상승(골든) → 후반 급락 → 5/20 데드크로스 교차.
+    private fun buildDeadCrossScenario(count: Int): List<Candle> {
+        val riseEnd = count - 20
+        return (0 until count).map { i ->
+            val chronoIdx = count - 1 - i // 0=과거, count-1=최신 (입력은 최신순)
+            val price = if (chronoIdx < riseEnd) {
+                10000.0 + chronoIdx * 50.0
+            } else {
+                val peak = 10000.0 + (riseEnd - 1) * 50.0
+                peak - (chronoIdx - riseEnd + 1) * 500.0
+            }
+            Candle(
+                market = "KRW-BTC",
+                tradePrice = price.coerceAtLeast(1000.0),
+                openingPrice = price,
+                highPrice = price + 100.0,
+                lowPrice = price - 100.0,
+                candleAccTradeVolume = 100.0,
+            )
+        }
+    }
+
+    @Test
+    fun `backtest triggers CHART_EXIT when enabled and dead cross occurs`() = runTest {
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val result = ce.run("always_buy", buildDeadCrossScenario(120), "KRW-BTC", wideStopConfig(chartExit = true))
+
+        assertNotNull(result)
+        assertTrue(result!!.trades.any { it.reason == "CHART_EXIT" }, "expected a CHART_EXIT trade")
+    }
+
+    @Test
+    fun `backtest has no CHART_EXIT when disabled`() = runTest {
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val result = ce.run("always_buy", buildDeadCrossScenario(120), "KRW-BTC", wideStopConfig(chartExit = false))
+
+        assertNotNull(result)
+        // trade 가 0건이면 none 단언이 공허참이 되므로 진입이 실제로 일어났음을 함께 보장.
+        assertTrue(result!!.totalTrades > 0, "scenario must produce trades")
+        assertTrue(result.trades.none { it.reason == "CHART_EXIT" }, "CHART_EXIT must not occur when disabled")
+    }
 }

@@ -60,6 +60,19 @@ object Indicators {
         return shortMa > longMa && prevShortMa <= prevLongMa
     }
 
+    fun checkDeadCross(candles: List<Candle>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
+        if (candles.size < longPeriod + 1) return false
+        val shortMa = calculateMa(candles, shortPeriod)
+        val longMa = calculateMa(candles, longPeriod)
+        // Previous MAs (shift by 1)
+        val prevCandles = candles.drop(1)
+        val prevShortMa = calculateMa(prevCandles, shortPeriod)
+        val prevLongMa = calculateMa(prevCandles, longPeriod)
+
+        // checkGoldenCross 의 거울: 단기 MA 가 장기 MA 를 하향 교차.
+        return shortMa < longMa && prevShortMa >= prevLongMa
+    }
+
     fun isMaUptrend(candles: List<Candle>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
         if (candles.size < longPeriod) return false
         val shortMa = calculateMa(candles, shortPeriod)

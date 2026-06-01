@@ -14,6 +14,8 @@ data class TradingProperties(
     val trailingStopPct: Double = 2.0,
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
+    // 차트/지표 기반 청산(shouldSell) 활성화. 기본 off — 켜기 전 백테스트 검증 권장.
+    val chartExitEnabled: Boolean = false,
 ) {
     fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 }
