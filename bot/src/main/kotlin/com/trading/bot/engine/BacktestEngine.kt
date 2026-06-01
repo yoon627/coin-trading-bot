@@ -17,6 +17,7 @@ data class BacktestConfig(
     val trailingStopPct: Double = 2.0,
     val maxHoldDays: Int = 7,
     val useMarketFilter: Boolean = true,
+    val chartExitEnabled: Boolean = false,
 )
 
 data class BacktestTrade(
@@ -79,14 +80,15 @@ class BacktestEngine(
 
         for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
+            // 신호는 봉 i 종가까지의 정보로만 판단(look-ahead 방지). 매수/매도(chartExit) 공용 window.
+            val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
 
             if (state.position) {
-                processExit(state, i, currentPrice, config)
+                processExit(state, strategy, i, currentPrice, window, config)
             } else {
-                // look-ahead 방지: 신호는 봉 i 종가까지의 정보로 판단하고, 체결은 다음 봉(i+1) 시가로.
+                // 체결은 다음 봉(i+1) 시가로.
                 val fillIndex = i + 1
                 if (fillIndex >= chronological.size) continue
-                val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
                 val fillPrice = chronological[fillIndex].openingPrice
                 processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config)
             }
@@ -96,16 +98,25 @@ class BacktestEngine(
         return state
     }
 
-    private fun processExit(state: SimulationState, index: Int, currentPrice: Double, config: BacktestConfig) {
+    private suspend fun processExit(
+        state: SimulationState,
+        strategy: TradingStrategy,
+        index: Int,
+        currentPrice: Double,
+        window: List<Candle>,
+        config: BacktestConfig,
+    ) {
         state.peakPrice = max(state.peakPrice, currentPrice)
         val pnl = ((currentPrice - state.buyPrice) / state.buyPrice) * 100.0
         val dropFromPeak = ((state.peakPrice - currentPrice) / state.peakPrice) * 100.0
         val holdDays = index - state.buyIndex
 
+        // 실거래(TradingEngine.decideSell)와 동일 우선순위: 손익% 안전망 > chartExit > 시간청산.
         val reason = when {
             pnl <= -config.maxLossPct -> "STOP_LOSS"
             dropFromPeak >= config.trailingStopPct && pnl > 0 -> "TRAILING_STOP"
             pnl >= config.takeProfitPct -> "TAKE_PROFIT"
+            config.chartExitEnabled && strategy.shouldSell(window, currentPrice, tradingProperties) -> "CHART_EXIT"
             holdDays >= config.maxHoldDays -> "TIME_EXIT"
             else -> null
         } ?: return
