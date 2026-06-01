@@ -41,6 +41,8 @@ trading:
   max-loss-pct: ${TRADING_MAX_LOSS_PCT:5.0}
   interval-seconds: ${TRADING_INTERVAL_SECONDS:10}
   auto-start: ${TRADING_AUTO_START:false}
+  # 차트/지표 기반 청산(데드크로스) 토글. 기본 off — 켜기 전 백테스트 검증 권장.
+  chart-exit-enabled: ${TRADING_CHART_EXIT_ENABLED:false}
 
 app:
   jwt-secret: ${JWT_SECRET:}

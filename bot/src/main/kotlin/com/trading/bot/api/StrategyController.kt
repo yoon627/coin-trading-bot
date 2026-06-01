@@ -86,6 +86,7 @@ class StrategyController(
             trailingStopPct = requireInRange(req.trailingStopPct ?: 2.0, "trailingStopPct", 0.0, 100.0),
             maxHoldDays = (req.maxHoldDays ?: 7).coerceIn(1, 365),
             useMarketFilter = req.useMarketFilter ?: true,
+            chartExitEnabled = req.chartExitEnabled ?: false,
         )
 
         return if (req.strategy != null) {
@@ -114,4 +115,5 @@ data class BacktestRequest(
     val trailingStopPct: Double? = null,
     val maxHoldDays: Int? = null,
     val useMarketFilter: Boolean? = null,
+    val chartExitEnabled: Boolean? = null,
 )
