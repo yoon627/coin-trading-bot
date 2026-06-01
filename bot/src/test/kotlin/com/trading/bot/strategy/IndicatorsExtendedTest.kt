@@ -131,6 +131,51 @@ class IndicatorsExtendedTest {
         assertFalse(Indicators.checkGoldenCross(candles))
     }
 
+    // --- checkDeadCross ---
+
+    @Test
+    fun `checkDeadCross returns false for insufficient data`() {
+        val candles = (0..10).map { Candle(tradePrice = 100.0) }
+        assertFalse(Indicators.checkDeadCross(candles))
+    }
+
+    @Test
+    fun `checkDeadCross returns false for flat prices`() {
+        val candles = (0..25).map { Candle(tradePrice = 100.0) }
+        assertFalse(Indicators.checkDeadCross(candles))
+    }
+
+    @Test
+    fun `checkDeadCross returns false for uptrend`() {
+        // candles[0]=최신. 최신이 높은 단조 상승 -> shortMa > longMa -> 데드크로스 아님
+        val candles = (0..20).map { i -> Candle(tradePrice = 200.0 - i * 2.0) }
+        assertFalse(Indicators.checkDeadCross(candles))
+    }
+
+    @Test
+    fun `checkDeadCross returns true when short MA crosses below long MA`() {
+        // 어제까지 상승추세(prevShort >= prevLong), 최신 봉(c0) 급락으로 shortMa 가 longMa 아래로 하향 교차.
+        // shortMa(166) < longMa(173.5), prevShortMa(194) >= prevLongMa(179) -> 데드크로스.
+        val candles = listOf(Candle(tradePrice = 50.0)) +
+            (1..20).map { i -> Candle(tradePrice = 200.0 - i * 2.0) }
+        assertTrue(Indicators.checkDeadCross(candles))
+    }
+
+    @Test
+    fun `checkDeadCross treats flat-then-drop as cross via equality boundary`() {
+        // 과거 완전 평평(prevShortMa == prevLongMa) + 최신 급락 -> prev 의 등호(>=)로 데드크로스 true.
+        // checkGoldenCross(prev <=) 와 대칭인 의도된 경계 동작을 고정.
+        val candles = listOf(Candle(tradePrice = 10.0)) + (1..20).map { Candle(tradePrice = 100.0) }
+        assertTrue(Indicators.checkDeadCross(candles))
+    }
+
+    @Test
+    fun `checkDeadCross returns false for exactly 20 candles`() {
+        // longPeriod(20) + 1 = 21 미만이면 평가 안 함.
+        val candles = (0..19).map { i -> Candle(tradePrice = 200.0 - i * 2.0) }
+        assertFalse(Indicators.checkDeadCross(candles))
+    }
+
     // --- isMaUptrend ---
 
     @Test

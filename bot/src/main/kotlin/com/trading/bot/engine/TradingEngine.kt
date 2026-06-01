@@ -41,6 +41,9 @@ class TradingEngine(
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
         private const val WS_PRICE_STALE_THRESHOLD_MS = 30_000L
+        // 데드크로스(5/20) 최소 캔들 = longPeriod + 1. store D1 오염(같은 openTime 누적) 대비 lookback 은 넉넉히.
+        private const val MIN_EXIT_CANDLES = 21
+        private const val MAX_EXIT_CANDLE_LOOKBACK = 60
     }
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
@@ -141,20 +144,13 @@ class TradingEngine(
 
             if (state.position) {
                 state.updatePeakPrice(currentPrice)
-                val sellRecord = when {
-                    positionManager.checkStopLoss(state, currentPrice) ->
-                        positionManager.sell(ticker, state, currentPrice, SellReason.STOP_LOSS)
-                    positionManager.checkTrailingStop(state, currentPrice) ->
-                        positionManager.sell(ticker, state, currentPrice, SellReason.TRAILING_STOP)
-                    positionManager.checkTakeProfit(state, currentPrice) ->
-                        positionManager.sell(ticker, state, currentPrice, SellReason.TAKE_PROFIT)
-                    dailyResetManager.shouldSellForDailyReset(state) ->
-                        positionManager.sell(ticker, state, currentPrice, SellReason.DAILY_RESET)
-                    else -> null
-                }
-                if (sellRecord != null) {
-                    onTrade(sellRecord)
-                    return
+                val reason = decideSell(state, currentPrice, ticker, strategy)
+                if (reason != null) {
+                    val sellRecord = positionManager.sell(ticker, state, currentPrice, reason)
+                    if (sellRecord != null) {
+                        onTrade(sellRecord)
+                        return
+                    }
                 }
             }
 
@@ -178,6 +174,62 @@ class TradingEngine(
         } catch (e: Exception) {
             log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
         }
+    }
+
+    // 매도 사유 우선순위: 손익% 안전망(손절>트레일링>익절)이 먼저, 차트청산은 그 뒤(이익실현 보호), 일일리셋은 최후.
+    // when short-circuit 으로 가격 안전망이 트리거되면 chartExit(캔들 조회 포함)는 평가하지 않는다.
+    internal suspend fun decideSell(
+        state: TradingState,
+        currentPrice: Double,
+        ticker: String,
+        strategy: TradingStrategy,
+    ): SellReason? = when {
+        positionManager.checkStopLoss(state, currentPrice) -> SellReason.STOP_LOSS
+        positionManager.checkTrailingStop(state, currentPrice) -> SellReason.TRAILING_STOP
+        positionManager.checkTakeProfit(state, currentPrice) -> SellReason.TAKE_PROFIT
+        chartExitTriggered(ticker, currentPrice, strategy) -> SellReason.CHART_EXIT
+        dailyResetManager.shouldSellForDailyReset(state) -> SellReason.DAILY_RESET
+        else -> null
+    }
+
+    // off 면 즉시 false(캔들 조회 0 → 기존 동작 보존). 데이터 조회(REST 포함) 실패가
+    // 가격 안전망/매수 평가까지 막지 않도록 예외를 격리한다.
+    private suspend fun chartExitTriggered(
+        ticker: String,
+        currentPrice: Double,
+        strategy: TradingStrategy,
+    ): Boolean {
+        if (!tradingProperties.chartExitEnabled) return false
+        return runCatching { evaluateChartExit(ticker, currentPrice, strategy) }
+            .getOrElse {
+                log.debug("chartExit evaluation failed for {}: {}", ticker, it.message)
+                false
+            }
+    }
+
+    /**
+     * 차트청산 신호 평가. store 의 D1 버퍼는 CandleAggregator 가 같은 날 분봉을 반복 ingest 해
+     * openTime 중복이 쌓일 수 있으므로(MarketDataStore.addCandle 은 dedup 없음) distinct 후 충분할 때만 사용,
+     * 부족하면 매수 경로와 동일한 getDayCandles REST 폴백. 그래도 부족하면 skip(false).
+     */
+    internal suspend fun evaluateChartExit(
+        ticker: String,
+        currentPrice: Double,
+        strategy: TradingStrategy,
+    ): Boolean {
+        val normalizedMarket = MarketPair.normalize(exchange, ticker)
+        val storeCandles = marketDataStore
+            ?.getCandles(exchange, normalizedMarket, CandleInterval.D1, MAX_EXIT_CANDLE_LOOKBACK)
+            ?.distinctBy { it.openTime }
+        if (storeCandles != null && storeCandles.size >= MIN_EXIT_CANDLES) {
+            return strategy.shouldSellNormalized(storeCandles, currentPrice, tradingProperties)
+        }
+        val candles = upbitClient.getDayCandles(ticker, 30)
+        if (candles.size < MIN_EXIT_CANDLES) {
+            log.debug("chartExit skipped for {}: insufficient D1 candles ({})", ticker, candles.size)
+            return false
+        }
+        return strategy.shouldSell(candles, currentPrice, tradingProperties)
     }
 
     private suspend fun onTrade(record: TradeRecord) {
