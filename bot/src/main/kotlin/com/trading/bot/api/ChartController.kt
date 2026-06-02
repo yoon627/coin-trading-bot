@@ -8,7 +8,7 @@ import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
-import com.trading.common.indicator.Indicators
+import com.trading.common.strategy.Indicators
 import kotlinx.coroutines.reactor.awaitSingle
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping

@@ -20,4 +20,9 @@ data class Candle(
     val candleAccTradePrice: Double = 0.0,
     @JsonProperty("candle_acc_trade_volume")
     val candleAccTradeVolume: Double = 0.0,
-)
+) : Ohlc {
+    override val open get() = openingPrice
+    override val high get() = highPrice
+    override val low get() = lowPrice
+    override val close get() = tradePrice
+}
