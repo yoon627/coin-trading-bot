@@ -368,15 +368,21 @@ function BacktestPage({ user, setActive }) {
   const [strategy, setStrategy] = React.useState('');
   const [ticker, setTicker] = React.useState('KRW-BTC');
   const [days, setDays] = React.useState(180);
+  const [chartExitEnabled, setChartExitEnabled] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState(null);
+  const [ranWith, setRanWith] = React.useState(null);
   const [toast, setToast] = React.useState(null);
 
   const run = async () => {
     setBusy(true);
+    setResult(null); // 재실행 실패 시 이전(다른 설정) 결과가 새 결과인 양 남지 않도록 비움
     try {
-      const r = await TideAPI.backtest({ strategy: strategy || undefined, ticker, days: parseInt(days) });
+      // Backend uses Jackson SNAKE_CASE — multi-word fields must be snake_case
+      // or they're silently dropped (BacktestRequest.chartExitEnabled defaults to false).
+      const r = await TideAPI.backtest({ strategy: strategy || undefined, ticker, days: parseInt(days), chart_exit_enabled: chartExitEnabled });
       setResult(r);
+      setRanWith({ strategy: strategy || '전체 비교', ticker, days: parseInt(days), chartExit: chartExitEnabled });
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusy(false); }
   };
@@ -402,6 +408,13 @@ function BacktestPage({ user, setActive }) {
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>기간 (일)</div>
             <input className="tide-input" type="number" value={days} onChange={e => setDays(e.target.value)} min="30" max="200"/>
           </div>
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, cursor: 'pointer' }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>차트 청산</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 2 }}>지표 기반 청산(데드크로스 등)을 매도 규칙에 추가</div>
+            </div>
+            <input type="checkbox" checked={chartExitEnabled} onChange={e => setChartExitEnabled(e.target.checked)} style={{ width: 18, height: 18 }}/>
+          </label>
           <Button full size="lg" icon="play" onClick={run} disabled={busy || !user?.has_upbit_keys}>
             {busy ? '실행 중…' : '백테스트 실행'}
           </Button>
@@ -410,9 +423,14 @@ function BacktestPage({ user, setActive }) {
         <Card padding={24}>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>결과</div>
           {!result ? <Empty icon="backtest" title="결과 없음" message="설정 후 실행해보세요"/> :
-            <pre className="mono tide-scroll" style={{ fontSize: 11.5, background: 'var(--ink-50)', padding: 16, borderRadius: 10, maxHeight: 500, overflow: 'auto' }}>
-              {JSON.stringify(result, null, 2)}
-            </pre>}
+            <>
+              {ranWith && <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginBottom: 10 }}>
+                {ranWith.strategy} · {ranWith.ticker} · {ranWith.days}일 · 차트청산 <strong style={{ color: ranWith.chartExit ? 'var(--up)' : 'var(--ink-500)' }}>{ranWith.chartExit ? 'ON' : 'OFF'}</strong>
+              </div>}
+              <pre className="mono tide-scroll" style={{ fontSize: 11.5, background: 'var(--ink-50)', padding: 16, borderRadius: 10, maxHeight: 500, overflow: 'auto' }}>
+                {JSON.stringify(result, null, 2)}
+              </pre>
+            </>}
         </Card>
       </div>
       {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
