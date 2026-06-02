@@ -10,6 +10,8 @@ import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.strategy.TradingStrategy
+import com.trading.common.strategy.GoldenCross
+import com.trading.common.strategy.MacdCross
 import com.trading.common.strategy.VolatilityBreakout
 import io.mockk.*
 import java.time.Instant
@@ -319,5 +321,32 @@ class TradingEngineTest {
             listOf(strategy), tradingProperties,
         )
         assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+    }
+
+    // --- resolveExitStrategy: 청산을 진입 전략으로 (entryStrategy 복원 + 폴백) ---
+
+    @Test
+    fun `resolveExitStrategy uses entryStrategy when present`() {
+        val macd = MacdCross()
+        val golden = GoldenCross()
+        val engine = createEngine(strategies = listOf(macd, golden))
+        val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "macd_cross") }
+        assertEquals("macd_cross", engine.resolveExitStrategy(state, golden).name)
+    }
+
+    @Test
+    fun `resolveExitStrategy falls back to active when entryStrategy null`() {
+        val golden = GoldenCross()
+        val engine = createEngine(strategies = listOf(golden))
+        val state = TradingState("KRW-BTC") // entryStrategy null (재시작 syncPosition 복원 시뮬)
+        assertEquals(golden.name, engine.resolveExitStrategy(state, golden).name)
+    }
+
+    @Test
+    fun `resolveExitStrategy falls back when entryStrategy not in list`() {
+        val golden = GoldenCross()
+        val engine = createEngine(strategies = listOf(golden))
+        val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "removed_strategy") }
+        assertEquals(golden.name, engine.resolveExitStrategy(state, golden).name)
     }
 }

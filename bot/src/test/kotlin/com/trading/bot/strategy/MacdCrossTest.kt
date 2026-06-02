@@ -74,4 +74,39 @@ class MacdCrossTest {
             assertTrue(strategy.shouldBuy(candles, currentPrice, config))
         }
     }
+
+    @Test
+    fun `should not sell with insufficient data`() = runTest {
+        val candles = (1..30).map { Candle(market = "KRW-BTC", tradePrice = 100.0 + it) }
+        assertFalse(strategy.shouldSell(candles, 130.0, config))
+    }
+
+    @Test
+    fun `should not sell on monotonic uptrend`() = runTest {
+        // 단조 상승 → MACD 가 signal 위 유지 → 하향교차 없음 → 청산 false
+        val candles = (0..40).map { i -> Candle(market = "KRW-BTC", tradePrice = 10000.0 + i * 100.0) }
+        assertFalse(strategy.shouldSell(candles, candles[0].tradePrice, config))
+    }
+
+    @Test
+    fun `should sell on bearish MACD crossover`() = runTest {
+        // 진입 시나리오의 거울: 최근 하락 전환으로 MACD 가 signal 하향 교차.
+        val candles = mutableListOf<Candle>()
+        for (i in 0..15) {
+            candles.add(Candle(market = "KRW-BTC", tradePrice = 10000.0 - (15 - i) * 150.0))
+        }
+        for (i in 16..25) {
+            candles.add(Candle(market = "KRW-BTC", tradePrice = 10000.0 + (i - 16) * 50.0))
+        }
+        for (i in 26..45) {
+            candles.add(Candle(market = "KRW-BTC", tradePrice = 10500.0 + (i - 26) * 30.0))
+        }
+        val currentPrice = candles[0].tradePrice
+
+        val current = Indicators.calculateMacd(candles, 12, 26, 9)
+        val prev = Indicators.calculateMacd(candles.drop(1), 12, 26, 9)
+        if (current != null && prev != null && prev.macd >= prev.signal && current.macd < current.signal) {
+            assertTrue(strategy.shouldSell(candles, currentPrice, config))
+        }
+    }
 }

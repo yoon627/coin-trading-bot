@@ -146,7 +146,7 @@ class TradingEngine(
 
             if (state.position) {
                 state.updatePeakPrice(currentPrice)
-                val reason = decideSell(state, currentPrice, ticker, strategy)
+                val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
                 if (reason != null) {
                     val sellRecord = positionManager.sell(ticker, state, currentPrice, reason)
                     if (sellRecord != null) {
@@ -177,6 +177,16 @@ class TradingEngine(
             }
         } catch (e: Exception) {
             log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
+        }
+    }
+
+    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 가 없으면(재시작 syncPosition 복원분 — 메모리 상태라
+    // 재시작 시 유실되는 알려진 한계) 또는 전략 목록에서 사라졌으면 활성 전략으로 폴백. 후자는 청산 기준이 진입과 달라지므로 WARN.
+    internal fun resolveExitStrategy(state: TradingState, fallback: TradingStrategy): TradingStrategy {
+        val entry = state.entryStrategy ?: return fallback
+        return strategies.find { it.name == entry } ?: run {
+            log.warn("entryStrategy '{}' not found for {} — exit falls back to '{}'", entry, state.ticker, fallback.name)
+            fallback
         }
     }
 

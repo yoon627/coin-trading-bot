@@ -14,6 +14,7 @@ data class TradingState(
     var buyDate: LocalDate? = null,
     var boughtToday: Boolean = false,
     var lastTradeTime: LocalDateTime? = null,
+    var entryStrategy: String? = null,
 ) {
     companion object {
         private val KST: ZoneId = ZoneId.of("Asia/Seoul")
@@ -37,9 +38,9 @@ data class TradingState(
         boughtToday = false
     }
 
-    fun markBought(price: Double, volume: Double, now: LocalDateTime = LocalDateTime.now(KST)) {
+    fun markBought(price: Double, volume: Double, strategy: String? = null, now: LocalDateTime = LocalDateTime.now(KST)) {
         if (position) {
-            // 추가 매수: 평균 단가 계산
+            // 추가 매수: 평균 단가 계산. entryStrategy 는 최초 진입 전략 유지(덮어쓰지 않음).
             val totalCost = avgBuyPrice * holdVolume + price * volume
             val totalVolume = holdVolume + volume
             avgBuyPrice = totalCost / totalVolume
@@ -49,6 +50,7 @@ data class TradingState(
             avgBuyPrice = price
             holdVolume = volume
             buyDate = now.toLocalDate()
+            entryStrategy = strategy
         }
         // 당일 1회 진입 게이트가 동작하도록 매수 시점에 반드시 set. resetDaily()에서만 해제됨.
         boughtToday = true
@@ -62,6 +64,7 @@ data class TradingState(
         holdVolume = 0.0
         peakPrice = 0.0
         buyDate = null
+        entryStrategy = null
         lastTradeTime = now
     }
 }
