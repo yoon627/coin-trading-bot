@@ -40,6 +40,8 @@ class MarketDataIngestionService(
 
     companion object {
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
+        // 부팅 시 store D1 버퍼 1회 백필 개수. Upbit /v1/candles/days 최대 200.
+        private const val SEED_DAILY_CANDLE_COUNT = 200
     }
 
     @PostConstruct
@@ -69,6 +71,7 @@ class MarketDataIngestionService(
     }
 
     private suspend fun collectCandlesPeriodically(markets: List<String>) {
+        seedDailyCandles(markets)
         while (true) {
             for (market in markets) {
                 try {
@@ -107,6 +110,22 @@ class MarketDataIngestionService(
             persistenceService.persistCandle(candle)
         } catch (e: Exception) {
             log.warn("persistCandle failed for {}: {}", candle.market, e.message)
+        }
+    }
+
+    // 부팅 직후 store D1 버퍼를 과거 일봉으로 1회 채운다. 미실행 시 매수/청산(TradingEngine.loadStoreDailyCandles)이
+    // store 부족으로 warm-up(D1 은 분봉 집계라 하루 1개씩만 누적 → 최대 ~21일) 동안 매 tick REST 폴백을 탄다.
+    // collectCandlesPeriodically 와 같은 코루틴에서 호출되므로 candle writer 단일성 유지(MarketDataStore trim race 방지).
+    // store.addCandle 직접 — ingestCandle 의 persistCandle→aggregator.onMinuteCandle 은 분봉 전용이라 D1 을 오집계함.
+    internal suspend fun seedDailyCandles(markets: List<String>) {
+        for (market in markets) {
+            try {
+                val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
+                candles.forEach { marketDataStore.addCandle(it) }
+                log.info("Seeded {} D1 candles into store for {}", candles.size, market)
+            } catch (e: Exception) {
+                log.warn("D1 seed failed for {}: {}", market, e.message)
+            }
         }
     }
 }
