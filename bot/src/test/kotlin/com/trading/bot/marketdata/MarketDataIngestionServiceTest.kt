@@ -2,12 +2,15 @@ package com.trading.bot.marketdata
 
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.stream.MarketDataPersistenceService
+import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Test
 
@@ -60,5 +63,27 @@ class MarketDataIngestionServiceTest {
         assertDoesNotThrow { service.ingestCandle(candle) }
 
         verify { persistence.persistCandle(candle) }
+    }
+
+    // 부팅 백필: store D1 버퍼를 과거 일봉으로 채운다(매수/청산 warm-up REST 폴백 방지).
+    @Test
+    fun `seedDailyCandles loads D1 candles into store`() = runBlocking {
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(candle, candle)
+
+        service.seedDailyCandles(listOf("BTC/KRW"))
+
+        verify(exactly = 2) { store.addCandle(candle) }
+    }
+
+    @Test
+    fun `seedDailyCandles isolates fetch failure across markets`() = runBlocking {
+        coEvery { feed.getCandles("BTC/KRW", any(), any()) } throws RuntimeException("rate limit")
+        val eth = candle.copy(market = "ETH/KRW")
+        coEvery { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) } returns listOf(eth)
+
+        // 첫 market 실패가 둘째 market seed 를 막지 않는다.
+        service.seedDailyCandles(listOf("BTC/KRW", "ETH/KRW"))
+
+        verify { store.addCandle(eth) }
     }
 }
