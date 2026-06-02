@@ -117,4 +117,27 @@ class TradingStateTest {
         state.markBought(55000000.0, 0.001) // higher price
         assertEquals(55000000.0, state.peakPrice)
     }
+
+    @Test
+    fun `markBought stores entryStrategy on initial entry`() {
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, "macd_cross")
+        assertEquals("macd_cross", state.entryStrategy)
+    }
+
+    @Test
+    fun `markBought preserves entryStrategy on additional buys`() {
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, "macd_cross")
+        state.markBought(60000000.0, 0.001, "golden_cross") // 추가매수 — 최초 진입 전략 유지
+        assertEquals("macd_cross", state.entryStrategy)
+    }
+
+    @Test
+    fun `markSold clears entryStrategy`() {
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, "macd_cross")
+        state.markSold()
+        assertNull(state.entryStrategy)
+    }
 }
