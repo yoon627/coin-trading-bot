@@ -147,7 +147,7 @@ class TradingEngineTest {
         )
         every { webSocketClient.latestPrice("KRW-BTC") } returns stalePrice
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 51000000.0))
-        coEvery { upbitClient.getDayCandles("KRW-BTC", 30) } returns emptyList()
+        coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
 
         val engine = createEngine()
@@ -272,16 +272,52 @@ class TradingEngineTest {
             NormalizedCandle(Exchange.UPBIT, "KRW-BTC", 100.0, 100.0, 100.0, 100.0, 1.0, openTime = Instant.EPOCH)
         }
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns polluted
-        coEvery { upbitClient.getDayCandles("KRW-BTC", 30) } returns deadCrossLegacy()
+        coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns deadCrossLegacy()
         assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, VolatilityBreakout()))
-        coVerify { upbitClient.getDayCandles("KRW-BTC", 30) }
+        coVerify { upbitClient.getDayCandles("KRW-BTC", 60) }
     }
 
     @Test
     fun `evaluateChartExit returns false when candles insufficient`() = runBlocking {
         val engine = createEngine()
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns emptyList()
-        coEvery { upbitClient.getDayCandles("KRW-BTC", 30) } returns listOf(Candle(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns listOf(Candle(tradePrice = 100.0))
         assertFalse(engine.evaluateChartExit("KRW-BTC", 50.0, VolatilityBreakout()))
+    }
+
+    // --- loadStoreDailyCandles: 매수·청산 공통 D1 게이트 (distinct + size>=MIN_DAILY_CANDLES, 부족 시 null) ---
+
+    @Test
+    fun `loadStoreDailyCandles returns store candles when distinct sufficient`() {
+        val engine = createEngine()
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized()
+        assertEquals(21, engine.loadStoreDailyCandles("KRW-BTC")?.size)
+    }
+
+    @Test
+    fun `loadStoreDailyCandles returns null when polluted below threshold`() {
+        // 같은 openTime 30개 → distinct 후 1개 < 21 → null(호출측 REST 폴백).
+        val engine = createEngine()
+        val polluted = (1..30).map {
+            NormalizedCandle(Exchange.UPBIT, "KRW-BTC", 100.0, 100.0, 100.0, 100.0, 1.0, openTime = Instant.EPOCH)
+        }
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns polluted
+        assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+    }
+
+    @Test
+    fun `loadStoreDailyCandles returns null when store has too few candles`() {
+        val engine = createEngine()
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized().take(10)
+        assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+    }
+
+    @Test
+    fun `loadStoreDailyCandles returns null when store absent`() {
+        val engine = TradingEngine(
+            upbitClient, positionManager, dailyResetManager, tradeExecutionService,
+            listOf(strategy), tradingProperties,
+        )
+        assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
     }
 }
