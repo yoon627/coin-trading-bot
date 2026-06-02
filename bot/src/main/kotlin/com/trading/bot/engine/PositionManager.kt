@@ -80,7 +80,7 @@ class PositionManager(
             val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
             val totalAmount = fillPrice * volume
 
-            state.markBought(fillPrice, volume)
+            state.markBought(fillPrice, volume, strategyName)
             log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
 
             return TradeRecord(
