@@ -25,6 +25,12 @@
 - 아키텍처 변경은 `PROJECT_ANALYSIS.md`에 반영
 - 설계 스펙은 `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 
+## TODO / 백로그 = GitHub Issues
+
+- 이 레포의 할 일·백로그·미룬 항목은 **GitHub Issues** 로 관리한다 (`TODO.md` 등 추적용 파일을 새로 만들지 않는다).
+- 작업 아이디어·버그·후속 작업은 이슈로 생성하고, PR/커밋에서 `Closes #N` 으로 연결.
+- `docs/superpowers/specs/` 의 설계 스펙과 `~/.claude/CLAUDE.md` §10 의 plan 은 **진행 중 작업의 설계·상태 기록 전용** — 백로그 저장소가 아니다.
+
 ## 문서 동기화 대상
 
 글로벌 `~/.claude/CLAUDE.md`의 "문서 동기화(범위 한정)" 기준에 해당할 때 업데이트:
