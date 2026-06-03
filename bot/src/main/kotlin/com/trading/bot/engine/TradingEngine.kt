@@ -144,6 +144,18 @@ class TradingEngine(
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
                 ?: return
 
+            // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
+            // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
+            if (state.pendingBuyUuid != null) {
+                val reconciled = positionManager.reconcilePendingBuy(ticker, state, currentPrice)
+                if (reconciled != null) {
+                    // 매수 확정 tick 은 일반 buy 경로와 동일하게 종료(막 산 포지션에 같은 tick 손절·익절 평가 방지).
+                    onTrade(reconciled)
+                    return
+                }
+                if (state.pendingBuyUuid != null) return // 아직 미해소 — 이 tick 매수/매도 평가 skip
+            }
+
             if (state.position) {
                 state.updatePeakPrice(currentPrice)
                 val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))

@@ -42,21 +42,26 @@ class PositionManager(
     }
 
     suspend fun buy(ticker: String, state: TradingState, currentPrice: Double, strategyName: String): TradeRecord? {
-        // 재매수 가드: 이미 보유 중이면 신규 매수 금지 (신호 유지 시 잔액 소진 방지).
+        // 재매수 가드: 이미 보유 중이거나, 미해소 매수 주문(pending)이 있으면 신규 매수 금지.
         if (state.position) {
             log.debug("Skip buy for {}: already holding position", ticker)
             return null
         }
-        try {
+        if (state.pendingBuyUuid != null) {
+            log.debug("Skip buy for {}: pending order {} awaiting reconcile", ticker, state.pendingBuyUuid)
+            return null
+        }
+
+        // placeOrder 까지: 실패하면 주문이 나가지 않았으므로 그대로 종료(pending 없음 → 다음 tick 정상 재매수).
+        val order = try {
             val krwAccount = getKrwBalance()
             val investAmount = calculateInvestAmount(krwAccount)
             if (investAmount < MIN_ORDER_AMOUNT_KRW) {
                 log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
                 return null
             }
-
             // Upbit market buy: ord_type=price, price=총 투자금액
-            val order = upbitClient.placeOrder(
+            upbitClient.placeOrder(
                 OrderRequest(
                     market = ticker,
                     side = "bid",
@@ -64,40 +69,113 @@ class PositionManager(
                     price = floor(investAmount).toLong().toString(),
                 )
             )
-
-            // 체결 확인 후에만 상태 변경 (fire-and-forget 금지).
-            // C1: 체결 판정은 state 가 아닌 executedVolume 으로 한다. Upbit 시장가 매수는 소액잔량 환불 시
-            // state=cancel + executed_volume>0 으로 종료될 수 있고(부분체결), 이때도 실제 코인을 받았으므로
-            // 매수로 인정해야 phantom holding(손절·익절 영구 미작동)을 막는다. 실수량/평단은 아래 실잔고로 재확인.
-            val filled = awaitFill(order.uuid)
-            val executedVolume = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
-            if (filled == null || executedVolume <= 0.0) {
-                log.warn("Buy not filled for {}: state={}, executedVolume={}", ticker, filled?.state, executedVolume)
-                return null
-            }
-
-            // 실제 체결 수량/평단을 거래소 계좌에서 재조회 (수수료·슬리피지 반영된 진실).
-            val currency = ticker.substringAfter("-")
-            val account = upbitClient.getAccounts().find { it.currency == currency }
-            val volume = account?.balanceDouble()?.takeIf { it > 0.0 } ?: executedVolume
-            val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
-            val totalAmount = fillPrice * volume
-
-            state.markBought(fillPrice, volume, strategyName)
-            log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
-
-            return TradeRecord(
-                ticker = ticker,
-                side = TradeSide.BUY,
-                price = fillPrice,
-                volume = volume,
-                totalAmount = totalAmount,
-                strategy = strategyName,
-            )
         } catch (e: Exception) {
-            log.error("Failed to buy {}: {}", ticker, e.message, e)
+            log.error("Failed to place buy order {}: {}", ticker, e.message, e)
             return null
         }
+
+        // H8: 주문 접수 성공 → uuid 를 pending 으로 보존. 이후 체결 확인이 예외로 실패해도 uuid 를 잃지 않고
+        // 다음 tick reconcilePendingBuy 가 이어받아 position 복구/미체결 확정 → 중복매수(2배 포지션) 방지.
+        state.pendingBuyUuid = order.uuid
+        state.pendingBuyStrategy = strategyName
+        return try {
+            val filled = awaitFill(order.uuid)
+            applyFillOutcome(ticker, state, currentPrice, filled)
+        } catch (e: Exception) {
+            log.error("Buy post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+            null // pending 유지 → 다음 tick reconcile
+        }
+    }
+
+    /**
+     * H8: 미해소 매수 주문(pendingBuyUuid)을 거래소 상태로 확정한다. processTicker 가 매 tick 호출.
+     * getOrder 장애 시 getAccounts 실잔고로 복원(무방비보유 방지). 미해소면 pending 유지(다음 tick 재시도).
+     */
+    suspend fun reconcilePendingBuy(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
+        val uuid = state.pendingBuyUuid ?: return null
+        val filled = try {
+            upbitClient.getOrder(uuid)
+        } catch (e: Exception) {
+            log.warn("reconcile getOrder failed for {} ({}): falling back to balance", ticker, e.message)
+            return recoverFromBalance(ticker, state, currentPrice)
+        }
+        return applyFillOutcome(ticker, state, currentPrice, filled)
+    }
+
+    /**
+     * 체결 판정 후 상태 반영 (buy 후처리·reconcile 공용). C1 과 동일하게 executedVolume>0 을 state 보다 우선 판정.
+     * 전제: Upbit 시장가 매수(ord_type=price)는 즉시 체결 후 소액잔량을 환불하며 종료(done/cancel)되어 wait 로
+     * 장기 잔존하지 않는다. 지정가(limit) 매수 도입 시 wait+부분체결의 잔여주문 취소 확인 로직이 필요하다.
+     */
+    private suspend fun applyFillOutcome(
+        ticker: String,
+        state: TradingState,
+        currentPrice: Double,
+        filled: Order?,
+    ): TradeRecord? {
+        val executed = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
+        return when {
+            executed > 0.0 -> {
+                // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
+                val account = upbitClient.getAccounts().find { it.currency == ticker.substringAfter("-") }
+                completeBuy(ticker, state, currentPrice, executed, account)
+            }
+            filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
+            else -> {
+                // cancel+0 등 미체결 — 주문 무산, pending 해소
+                log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
+                state.pendingBuyUuid = null
+                state.pendingBuyStrategy = null
+                null
+            }
+        }
+    }
+
+    /**
+     * getOrder 장애 시 거래소 실잔고로 체결 여부 추정 복원. 잔고 있으면 확정, 없으면 pending 유지(다음 tick).
+     * 전제: 1 ticker = 1 position, pending 생존 중 position=false(이전 봇 보유분 없음)이므로 해당 통화 잔고는
+     * 이 주문 체결분이다. dust/수동매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
+     */
+    private suspend fun recoverFromBalance(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
+        return try {
+            val account = upbitClient.getAccounts().find { it.currency == ticker.substringAfter("-") }
+            val balance = account?.balanceDouble() ?: 0.0
+            if (balance > 0.0) {
+                completeBuy(ticker, state, currentPrice, balance, account)
+            } else {
+                log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
+                null
+            }
+        } catch (e: Exception) {
+            log.warn("reconcile balance recovery failed for {} ({}) — pending kept", ticker, e.message)
+            null
+        }
+    }
+
+    /** 실잔고/평단으로 markBought + TradeRecord. account==null/잔고0 이면 executedVolume·currentPrice fallback. */
+    private fun completeBuy(
+        ticker: String,
+        state: TradingState,
+        currentPrice: Double,
+        executedVolume: Double,
+        account: Account?,
+    ): TradeRecord {
+        // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
+        // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
+        val strategy = state.pendingBuyStrategy
+        val volume = account?.balanceDouble()?.takeIf { it > 0.0 } ?: executedVolume
+        val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
+        val totalAmount = fillPrice * volume
+        state.markBought(fillPrice, volume, strategy) // markBought 내부에서 pendingBuy* clear
+        log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
+        return TradeRecord(
+            ticker = ticker,
+            side = TradeSide.BUY,
+            price = fillPrice,
+            volume = volume,
+            totalAmount = totalAmount,
+            strategy = strategy,
+        )
     }
 
     suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? {
