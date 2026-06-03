@@ -14,4 +14,9 @@ data class NormalizedCandle(
     val interval: CandleInterval = CandleInterval.D1,
     val openTime: Instant = Instant.now(),
     val closeTime: Instant = Instant.now(),
-)
+) : Ohlc {
+    override val open get() = openPrice
+    override val high get() = highPrice
+    override val low get() = lowPrice
+    override val close get() = closePrice
+}
