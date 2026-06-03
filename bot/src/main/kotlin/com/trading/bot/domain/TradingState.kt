@@ -15,6 +15,9 @@ data class TradingState(
     var boughtToday: Boolean = false,
     var lastTradeTime: LocalDateTime? = null,
     var entryStrategy: String? = null,
+    // H8: placeOrder 성공 후 후처리(awaitFill/getAccounts) 실패 시 주문 uuid 를 보존해 다음 tick reconcile.
+    var pendingBuyUuid: String? = null,
+    var pendingBuyStrategy: String? = null,
 ) {
     companion object {
         private val KST: ZoneId = ZoneId.of("Asia/Seoul")
@@ -35,6 +38,7 @@ data class TradingState(
     }
 
     fun resetDaily() {
+        // H8: pendingBuyUuid 는 건드리지 않는다(끄면 미해소 주문이 다음날 재매수로 이어져 H8 재발).
         boughtToday = false
     }
 
@@ -56,6 +60,9 @@ data class TradingState(
         boughtToday = true
         peakPrice = max(peakPrice, price)
         lastTradeTime = now
+        // H8: 체결 확정 = pending 주문 해소.
+        pendingBuyUuid = null
+        pendingBuyStrategy = null
     }
 
     fun markSold(now: LocalDateTime = LocalDateTime.now(KST)) {
@@ -66,5 +73,8 @@ data class TradingState(
         buyDate = null
         entryStrategy = null
         lastTradeTime = now
+        // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
+        pendingBuyUuid = null
+        pendingBuyStrategy = null
     }
 }

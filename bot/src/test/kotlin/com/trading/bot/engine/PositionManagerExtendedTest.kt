@@ -371,4 +371,120 @@ class PositionManagerExtendedTest {
         // Drop from peak: (55M - 54.5M) / 55M = 0.9% < 2% threshold
         assertFalse(manager.checkTrailingStop(state, 54500000.0))
     }
+
+    // --- H8: pending-reconcile tests ---
+
+    @Test
+    fun `buy keeps pending when post-order processing throws`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "200000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-pending")
+        coEvery { upbitClient.getOrder("buy-pending") } throws RuntimeException("network")
+
+        val state = TradingState("KRW-BTC")
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNull(result)
+        assertEquals("buy-pending", state.pendingBuyUuid) // 주문 uuid 보존 → 다음 tick reconcile
+        assertEquals("test", state.pendingBuyStrategy)
+        assertFalse(state.position)
+        assertFalse(state.boughtToday)
+    }
+
+    @Test
+    fun `buy is blocked while pending order exists`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "200000")) // 잔고 충분
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "prev-order")
+
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNull(result)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) } // 미해소 주문 있으면 신규매수 금지
+    }
+
+    @Test
+    fun `reconcile completes buy when executed positive even while state wait`() = runTest {
+        // 강한우려1: executed>0 을 wait 보다 먼저 판정 (부분체결 방치 금지)
+        coEvery { upbitClient.getOrder("p1") } returns Order(uuid = "p1", state = "wait", executedVolume = "0.0003")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")
+        )
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p1", pendingBuyStrategy = "vb")
+
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertNotNull(result)
+        assertTrue(state.position)
+        assertNull(state.pendingBuyUuid) // 체결 확정 → 해소
+        assertEquals(0.0003, state.holdVolume)
+        assertEquals("vb", state.entryStrategy)
+    }
+
+    @Test
+    fun `reconcile clears pending when order cancelled unfilled`() = runTest {
+        coEvery { upbitClient.getOrder("p2") } returns Order(uuid = "p2", state = "cancel", executedVolume = "0")
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p2", pendingBuyStrategy = "vb")
+
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertNull(result)
+        assertNull(state.pendingBuyUuid) // 주문 무산 → 해소
+        assertFalse(state.position)
+    }
+
+    @Test
+    fun `reconcile keeps pending while order still wait and unfilled`() = runTest {
+        coEvery { upbitClient.getOrder("p3") } returns Order(uuid = "p3", state = "wait", executedVolume = "0")
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p3", pendingBuyStrategy = "vb")
+
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertNull(result)
+        assertEquals("p3", state.pendingBuyUuid) // 진행중 → 유지(다음 tick)
+        assertFalse(state.position)
+    }
+
+    @Test
+    fun `reconcile recovers position from balance when getOrder fails`() = runTest {
+        // 강한우려3: getOrder 장애 시 getAccounts 잔고로 복원(무방비보유 방지)
+        coEvery { upbitClient.getOrder("p4") } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")
+        )
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p4", pendingBuyStrategy = "vb")
+
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertNotNull(result)
+        assertTrue(state.position)
+        assertNull(state.pendingBuyUuid)
+        assertEquals(0.0003, state.holdVolume)
+    }
+
+    @Test
+    fun `reconcile keeps pending when getOrder fails and no balance`() = runTest {
+        coEvery { upbitClient.getOrder("p5") } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p5", pendingBuyStrategy = "vb")
+
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertNull(result)
+        assertEquals("p5", state.pendingBuyUuid) // 복원 실패 → 유지(다음 tick 재시도)
+        assertFalse(state.position)
+    }
+
+    @Test
+    fun `resetDaily keeps pendingBuyUuid`() {
+        val state = TradingState("KRW-BTC", boughtToday = true, pendingBuyUuid = "x")
+        state.resetDaily()
+        assertFalse(state.boughtToday)
+        assertEquals("x", state.pendingBuyUuid) // H8: 끄면 재발 → 불변
+    }
+
+    @Test
+    fun `markSold clears pendingBuyUuid`() {
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "x")
+        state.markSold()
+        assertNull(state.pendingBuyUuid)
+    }
 }
