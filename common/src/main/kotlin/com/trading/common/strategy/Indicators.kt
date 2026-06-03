@@ -1,25 +1,25 @@
 package com.trading.common.strategy
 
-import com.trading.common.domain.Candle
+import com.trading.common.domain.Ohlc
 import kotlin.math.max
 import kotlin.math.sqrt
 
 object Indicators {
 
-    fun calculateTargetPrice(candles: List<Candle>, k: Double = 0.5): Double {
+    fun calculateTargetPrice(candles: List<Ohlc>, k: Double = 0.5): Double {
         if (candles.size < 2) return 0.0
         val today = candles[0]
         val yesterday = candles[1]
-        val range = yesterday.highPrice - yesterday.lowPrice
-        return today.openingPrice + range * k
+        val range = yesterday.high - yesterday.low
+        return today.open + range * k
     }
 
-    fun calculateRsi(candles: List<Candle>, period: Int = 14): Double {
+    fun calculateRsi(candles: List<Ohlc>, period: Int = 14): Double {
         if (candles.size < period + 1) return 50.0
 
         // 전체 구간 사용 — take(period+1) 로 자르면 gains.size==period 라 아래 Wilder 루프가
         // 항상 비어 SMA-RSI 로만 계산되던 버그. 전체를 써야 Wilder smoothing 이 실제 적용된다.
-        val closes = candles.map { it.tradePrice }.reversed()
+        val closes = candles.map { it.close }.reversed()
         val gains = mutableListOf<Double>()
         val losses = mutableListOf<Double>()
 
@@ -43,12 +43,12 @@ object Indicators {
         return 100.0 - (100.0 / (1.0 + rs))
     }
 
-    fun calculateMa(candles: List<Candle>, period: Int): Double {
+    fun calculateMa(candles: List<Ohlc>, period: Int): Double {
         if (candles.size < period) return 0.0
-        return candles.take(period).map { it.tradePrice }.average()
+        return candles.take(period).map { it.close }.average()
     }
 
-    fun checkGoldenCross(candles: List<Candle>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
+    fun checkGoldenCross(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
         if (candles.size < longPeriod + 1) return false
         val shortMa = calculateMa(candles, shortPeriod)
         val longMa = calculateMa(candles, longPeriod)
@@ -60,7 +60,7 @@ object Indicators {
         return shortMa > longMa && prevShortMa <= prevLongMa
     }
 
-    fun checkDeadCross(candles: List<Candle>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
+    fun checkDeadCross(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
         if (candles.size < longPeriod + 1) return false
         val shortMa = calculateMa(candles, shortPeriod)
         val longMa = calculateMa(candles, longPeriod)
@@ -73,7 +73,7 @@ object Indicators {
         return shortMa < longMa && prevShortMa >= prevLongMa
     }
 
-    fun isMaUptrend(candles: List<Candle>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
+    fun isMaUptrend(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
         if (candles.size < longPeriod) return false
         val shortMa = calculateMa(candles, shortPeriod)
         val longMa = calculateMa(candles, longPeriod)
@@ -82,9 +82,9 @@ object Indicators {
 
     data class BollingerBands(val upper: Double, val middle: Double, val lower: Double, val width: Double)
 
-    fun calculateBollingerBands(candles: List<Candle>, period: Int = 20, multiplier: Double = 2.0): BollingerBands? {
+    fun calculateBollingerBands(candles: List<Ohlc>, period: Int = 20, multiplier: Double = 2.0): BollingerBands? {
         if (candles.size < period) return null
-        val closes = candles.take(period).map { it.tradePrice }
+        val closes = candles.take(period).map { it.close }
         val middle = closes.average()
         val variance = closes.map { (it - middle) * (it - middle) }.average()
         val stdDev = sqrt(variance)
@@ -99,14 +99,14 @@ object Indicators {
     data class MacdResult(val macd: Double, val signal: Double, val histogram: Double)
 
     fun calculateMacd(
-        candles: List<Candle>,
+        candles: List<Ohlc>,
         fastPeriod: Int = 12,
         slowPeriod: Int = 26,
         signalPeriod: Int = 9,
     ): MacdResult? {
         val needed = slowPeriod + signalPeriod
         if (candles.size < needed) return null
-        val closes = candles.take(needed).map { it.tradePrice }.reversed()
+        val closes = candles.take(needed).map { it.close }.reversed()
 
         fun ema(data: List<Double>, period: Int): List<Double> {
             val k = 2.0 / (period + 1)
@@ -127,16 +127,16 @@ object Indicators {
         return MacdResult(macd = macd, signal = signal, histogram = macd - signal)
     }
 
-    fun calculateStdDev(candles: List<Candle>, period: Int): Double {
+    fun calculateStdDev(candles: List<Ohlc>, period: Int): Double {
         if (candles.size < period) return 0.0
-        val closes = candles.take(period).map { it.tradePrice }
+        val closes = candles.take(period).map { it.close }
         val mean = closes.average()
         return sqrt(closes.map { (it - mean) * (it - mean) }.average())
     }
 
-    fun calculateEma(candles: List<Candle>, period: Int): Double {
+    fun calculateEma(candles: List<Ohlc>, period: Int): Double {
         if (candles.size < period) return 0.0
-        val closes = candles.take(period).map { it.tradePrice }.reversed()
+        val closes = candles.take(period).map { it.close }.reversed()
         val k = 2.0 / (period + 1)
         var ema = closes.first()
         for (i in 1 until closes.size) {
