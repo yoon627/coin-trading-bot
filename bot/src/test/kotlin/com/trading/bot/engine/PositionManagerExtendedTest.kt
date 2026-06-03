@@ -150,6 +150,48 @@ class PositionManagerExtendedTest {
         coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
+    @Test
+    fun `buy recognizes partial fill when state cancel but executedVolume positive`() = runTest {
+        // C1: Upbit 시장가 매수는 소액잔량 환불 시 state=cancel + executed_volume>0 으로 종료(researcher: faq-order).
+        // 실제 코인을 받았으므로 매수로 인정해야 phantom holding(손절·익절 영구 미작동)을 막는다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),                          // invest sizing
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")), // 부분체결 실잔고
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-partial")
+        coEvery { upbitClient.getOrder("buy-partial") } returns
+            Order(uuid = "buy-partial", state = "cancel", executedVolume = "0.0003")
+
+        val state = TradingState("KRW-BTC")
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNotNull(result)
+        assertEquals(0.0003, result!!.volume)
+        assertEquals(52000000.0, result.price)
+        assertTrue(state.position)
+        assertTrue(state.boughtToday)
+        assertEquals(0.0003, state.holdVolume)
+    }
+
+    @Test
+    fun `buy recognizes fill when awaitFill times out with executedVolume`() = runTest {
+        // 폴링 소진까지 state=wait 이지만 executed_volume>0 → 실제 체결분 존재. 매수 인정(회귀 보호).
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-wait")
+        coEvery { upbitClient.getOrder("buy-wait") } returns
+            Order(uuid = "buy-wait", state = "wait", executedVolume = "0.0003")
+
+        val state = TradingState("KRW-BTC")
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNotNull(result)
+        assertTrue(state.position)
+        assertTrue(state.boughtToday)
+    }
+
     // --- sell tests ---
 
     @Test
@@ -239,6 +281,24 @@ class PositionManagerExtendedTest {
         val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.MANUAL)
         assertNull(result)
         assertTrue(state.position) // state unchanged on failure
+    }
+
+    @Test
+    fun `sell keeps position when free balance zero but locked remains`() = runTest {
+        // M4: balance=0 이지만 locked>0 (매도 주문 진행 중 잔고가 locked 로 이동) → phantom 아님.
+        // markSold 로 상태를 지우면 진행 중 매도가 체결돼도 봇이 추적 불가 → 보류(유지)해야 한다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.STOP_LOSS)
+
+        assertNull(result)
+        assertTrue(state.position) // locked>0 이면 보류, 상태 유지
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
     // --- checkTakeProfit tests ---

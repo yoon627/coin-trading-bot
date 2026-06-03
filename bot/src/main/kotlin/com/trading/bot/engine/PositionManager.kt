@@ -66,9 +66,12 @@ class PositionManager(
             )
 
             // 체결 확인 후에만 상태 변경 (fire-and-forget 금지).
+            // C1: 체결 판정은 state 가 아닌 executedVolume 으로 한다. Upbit 시장가 매수는 소액잔량 환불 시
+            // state=cancel + executed_volume>0 으로 종료될 수 있고(부분체결), 이때도 실제 코인을 받았으므로
+            // 매수로 인정해야 phantom holding(손절·익절 영구 미작동)을 막는다. 실수량/평단은 아래 실잔고로 재확인.
             val filled = awaitFill(order.uuid)
             val executedVolume = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
-            if (filled == null || filled.state == "cancel" || executedVolume <= 0.0) {
+            if (filled == null || executedVolume <= 0.0) {
                 log.warn("Buy not filled for {}: state={}, executedVolume={}", ticker, filled?.state, executedVolume)
                 return null
             }
@@ -106,6 +109,14 @@ class PositionManager(
             val account = upbitClient.getAccounts().find { it.currency == currency }
             val sellable = account?.balanceDouble() ?: 0.0
             if (sellable <= 0.0) {
+                // M4: balance=0 이어도 locked>0 이면 매도 주문이 진행 중(잔고가 locked 로 이동)일 수 있다.
+                // locked>0 이면 phantom 이 아니므로 markSold 하지 않고 보류(다음 tick 재시도). balance+locked 가
+                // 둘 다 0 일 때만 진짜 phantom 으로 청산. (locked 무한상주 시 미체결주문 취소 후 재매도는 M3 별도 PR.)
+                val locked = account?.lockedDouble() ?: 0.0
+                if (locked > 0.0) {
+                    log.warn("Sell deferred for {}: free balance 0 but locked={} (order in flight) — keeping position", ticker, locked)
+                    return null
+                }
                 log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
                 state.markSold()
                 return null
