@@ -97,4 +97,42 @@ class MeanReversionTest {
         }
         assertFalse(strategy.shouldBuy(candles, 7500.0, config))
     }
+
+    @Test
+    fun `should sell when close returns above MA20`() = runTest {
+        // [2..20]=base 10000, [1]=9500(직전 MA 아래), [0]=10500(현재 MA 위 복귀).
+        val candles = buildList {
+            add(Candle(market = "KRW-BTC", tradePrice = 10500.0)) // [0]
+            add(Candle(market = "KRW-BTC", tradePrice = 9500.0)) // [1]
+            for (i in 2..20) add(Candle(market = "KRW-BTC", tradePrice = 10000.0))
+        }
+        assertTrue(strategy.shouldSell(candles, candles[0].tradePrice, config))
+    }
+
+    @Test
+    fun `should not sell when close stays below MA20`() = runTest {
+        val candles = buildList {
+            add(Candle(market = "KRW-BTC", tradePrice = 9500.0)) // [0]
+            add(Candle(market = "KRW-BTC", tradePrice = 9400.0)) // [1]
+            for (i in 2..20) add(Candle(market = "KRW-BTC", tradePrice = 10000.0))
+        }
+        assertFalse(strategy.shouldSell(candles, candles[0].tradePrice, config))
+    }
+
+    @Test
+    fun `should not sell with insufficient data`() = runTest {
+        val candles = (1..15).map { Candle(market = "KRW-BTC", tradePrice = 100.0 + it) }
+        assertFalse(strategy.shouldSell(candles, 110.0, config))
+    }
+
+    @Test
+    fun `should not sell when prev close already above MA20`() = runTest {
+        // 직전 종가가 이미 MA20 위 → 아래→위 교차가 아님(AND 첫 조건 false 분기).
+        val candles = buildList {
+            add(Candle(market = "KRW-BTC", tradePrice = 10500.0)) // [0]
+            add(Candle(market = "KRW-BTC", tradePrice = 10400.0)) // [1] 이미 MA 위
+            for (i in 2..20) add(Candle(market = "KRW-BTC", tradePrice = 10000.0))
+        }
+        assertFalse(strategy.shouldSell(candles, candles[0].tradePrice, config))
+    }
 }
