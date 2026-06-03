@@ -66,6 +66,9 @@ replay_pid*
 # Keep task plans version-controlled so multi-session / multi-machine
 # workflows can resume from them.
 !.claude/tasks/
+# Same for §10 handoff plans — track them so worktree removal doesn't lose
+# the decision record (see CLAUDE.md "plan 버전관리").
+!.claude/plans/
 
 ### Worktrees ###
 .worktrees/
