@@ -9,6 +9,7 @@ import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeRecordEntity
+import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -44,6 +45,7 @@ class TradeExecutionServiceTest {
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
         service = TradeExecutionService(
             tradeRecordRepository, tradeExecutionRepository, discordNotifier, transactionalOperator,
+            TradingProperties(),
         )
     }
 

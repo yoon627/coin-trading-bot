@@ -74,6 +74,32 @@ class BollingerBounceTest {
         }
     }
 
+    @Test
+    fun `should not buy when price is still falling below previous close`() = runTest {
+        // falling knife (이슈 #27): prev 가 하단밴드 아래로 급락, current 는 밴드 확장 탓에 lower 위로
+        // 보이지만 실제로는 prev 보다 더 하락 중 — "반등"이 아니므로 매수 금지.
+        val candles = mutableListOf(
+            Candle(market = "KRW-BTC", tradePrice = 8950.0), // current: prev 보다 낮음 (계속 하락)
+            Candle(market = "KRW-BTC", tradePrice = 9000.0), // prev: prevBb.lower 아래
+        )
+        // 고변동 지그재그 역사 — 밴드를 넓혀 current > bb.lower 를 성립시킨다.
+        for (i in 0 until 20) {
+            candles.add(Candle(market = "KRW-BTC", tradePrice = if (i % 2 == 0) 9600.0 else 10400.0))
+        }
+        val currentPrice = candles[0].tradePrice
+
+        // 사전조건을 고정 — 캔들 구성이 깨지면 guard 가 아니라 여기서 실패한다 (조건부 통과 함정 방지).
+        val bb = Indicators.calculateBollingerBands(candles, 20, 2.0)!!
+        val prevBb = Indicators.calculateBollingerBands(candles.drop(1), 20, 2.0)!!
+        val rsi = Indicators.calculateRsi(candles, 14)
+        assertTrue(candles[1].tradePrice <= prevBb.lower, "precondition: prev below prev lower band")
+        assertTrue(currentPrice > bb.lower, "precondition: current above lower band")
+        assertTrue(rsi in 25.0..45.0, "precondition: RSI in range, was $rsi")
+        assertTrue(currentPrice < candles[1].tradePrice, "precondition: still falling")
+
+        assertFalse(strategy.shouldBuy(candles, currentPrice, config))
+    }
+
     private fun buildBollingerBounceCandles(rsiTarget: Double): List<Candle> {
         // Build candles with monotonically increasing prices to get high RSI
         return (0..25).map { i ->

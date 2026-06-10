@@ -487,4 +487,41 @@ class PositionManagerExtendedTest {
         state.markSold()
         assertNull(state.pendingBuyUuid)
     }
+
+    // --- pnl net 기록 (이슈 #27 — 기록 pnlPercent 는 왕복수수료 차감, 백테스트 feeRate×2 와 통일) ---
+
+    @Test
+    fun `sell records net pnl after round-trip fee`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-net")
+        coEvery { upbitClient.getOrder("sell-net") } returns Order(uuid = "sell-net", state = "done")
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+
+        // gross +4% (50M → 52M), net = 4.0 − roundTripFeeRate(0.001)×100 = 3.9
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT)
+
+        assertEquals(3.9, result!!.pnlPercent!!, 1e-9)
+    }
+
+    @Test
+    fun `exit gates stay gross while record is net`() = runTest {
+        // 이 PR 의 핵심 불변식: 청산 게이트는 gross(행동 불변), 기록만 net.
+        val mgr = PositionManager(upbitClient, TradingProperties()) // takeProfitPct 2.0
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "100000")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-edge")
+        coEvery { upbitClient.getOrder("sell-edge") } returns Order(uuid = "sell-edge", state = "done")
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(100000.0, 0.001)
+
+        assertTrue(mgr.checkTakeProfit(state, 102050.0)) // gross 2.05% ≥ 2.0 — 게이트는 수수료 미차감
+        val result = mgr.sell("KRW-BTC", state, 102050.0, SellReason.TAKE_PROFIT)
+        assertEquals(1.95, result!!.pnlPercent!!, 1e-9) // 기록은 net
+    }
 }

@@ -41,7 +41,8 @@ class TradingEngine(
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
-        private const val WS_PRICE_STALE_THRESHOLD_MS = 30_000L
+        // store/WS 공통 가격 신선도 한계 — 초과분은 다음 폴백(WS→REST)으로.
+        private const val PRICE_STALE_THRESHOLD_MS = 30_000L
         // 일봉 지표 최소 캔들(데드크로스 5/20 = longPeriod+1). 매수·청산 공통 D1 충분 게이트.
         // lookback 은 distinct 방어 여유분 포함(store openTime upsert 후엔 중복 없으나 안전망).
         private const val MIN_DAILY_CANDLES = 21
@@ -121,15 +122,22 @@ class TradingEngine(
         }
     }
 
-    private fun getRealtimePrice(ticker: String): Double? {
-        // Prefer the in-process MarketDataStore
+    internal fun getRealtimePrice(ticker: String): Double? {
+        // Prefer the in-process MarketDataStore — 단 신선한 ticker 만. timestamp 없이 가격만 쓰면
+        // 수집 중단(피드 코루틴 사망/WS 재연결 실패) 시 얼어붙은 가격으로 매매 판단하게 된다 (이슈 #27).
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
-        val storePrice = marketDataStore?.getLatestPrice(exchange, normalizedMarket)
-        if (storePrice != null) return storePrice
+        val storeTicker = marketDataStore?.getLatestTicker(exchange, normalizedMarket)
+        if (storeTicker != null) {
+            val ageMs = System.currentTimeMillis() - storeTicker.timestamp.toEpochMilli()
+            if (ageMs < PRICE_STALE_THRESHOLD_MS) {
+                return storeTicker.price
+            }
+            log.warn("Stale store price for {} (age {}ms) — falling back to WS/REST", ticker, ageMs)
+        }
 
         // Fallback to WebSocket
         val wsPrice = webSocketClient?.latestPrice(ticker)
-        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < WS_PRICE_STALE_THRESHOLD_MS) {
+        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < PRICE_STALE_THRESHOLD_MS) {
             return wsPrice.tradePrice
         }
         return null
