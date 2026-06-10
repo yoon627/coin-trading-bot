@@ -43,6 +43,8 @@ class TradingEngine(
         private const val ERROR_RETRY_DELAY_MS = 60_000L
         // store/WS 공통 가격 신선도 한계 — 초과분은 다음 폴백(WS→REST)으로.
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
+        // stale 폴백 WARN 은 ticker 당 1분 1회 — 피드 장애 시 tick(기본 10s)마다 반복되는 스팸 방지.
+        private const val STALE_WARN_INTERVAL_MS = 60_000L
         // 일봉 지표 최소 캔들(데드크로스 5/20 = longPeriod+1). 매수·청산 공통 D1 충분 게이트.
         // lookback 은 distinct 방어 여유분 포함(store openTime upsert 후엔 중복 없으나 안전망).
         private const val MIN_DAILY_CANDLES = 21
@@ -53,6 +55,7 @@ class TradingEngine(
     @Volatile
     private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
+    private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
     // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
     @Volatile
     private var activeStrategy: TradingStrategy? = null
@@ -128,11 +131,15 @@ class TradingEngine(
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
         val storeTicker = marketDataStore?.getLatestTicker(exchange, normalizedMarket)
         if (storeTicker != null) {
-            val ageMs = System.currentTimeMillis() - storeTicker.timestamp.toEpochMilli()
+            val now = System.currentTimeMillis()
+            val ageMs = now - storeTicker.timestamp.toEpochMilli()
             if (ageMs < PRICE_STALE_THRESHOLD_MS) {
                 return storeTicker.price
             }
-            log.warn("Stale store price for {} (age {}ms) — falling back to WS/REST", ticker, ageMs)
+            if (now - (staleWarnAtMs[ticker] ?: 0L) >= STALE_WARN_INTERVAL_MS) {
+                staleWarnAtMs[ticker] = now
+                log.warn("Stale store price for {} (age {}ms) — falling back to WS/REST", ticker, ageMs)
+            }
         }
 
         // Fallback to WebSocket

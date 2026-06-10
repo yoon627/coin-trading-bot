@@ -524,4 +524,20 @@ class PositionManagerExtendedTest {
         val result = mgr.sell("KRW-BTC", state, 102050.0, SellReason.TAKE_PROFIT)
         assertEquals(1.95, result!!.pnlPercent!!, 1e-9) // 기록은 net
     }
+
+    @Test
+    fun `sell records null pnl when avg buy price unknown`() = runTest {
+        // 외부 입금분(avg_buy_price=0)을 syncPosition 이 복원한 케이스 — 0%−fee 의 가짜 −0.1% 기록 방지.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "0")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-na")
+        coEvery { upbitClient.getOrder("sell-na") } returns Order(uuid = "sell-na", state = "done")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 0.0, holdVolume = 0.001)
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.MANUAL)
+
+        assertNotNull(result)
+        assertNull(result!!.pnlPercent)
+    }
 }

@@ -219,9 +219,17 @@ class PositionManager(
             }
 
             // 기록용 pnl 은 왕복수수료 차감(net) — 백테스트(feeRate×2)와 통일. 청산 게이트(checkTakeProfit 등)는 gross 유지.
-            val pnl = state.pnlPercent(currentPrice) - tradingProperties.roundTripFeeRate * 100
+            // 평단 미상(외부 입금분 syncPosition 복원 등)이면 null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
+            val pnl = if (state.avgBuyPrice > 0) {
+                state.pnlPercent(currentPrice) - tradingProperties.roundTripFeeRate * 100
+            } else {
+                null
+            }
             val totalAmount = currentPrice * sellable
-            log.info("SELL {} filled: price={}, volume={}, net pnl={}%, reason={}", ticker, currentPrice, sellable, "%.2f".format(pnl), reason)
+            log.info(
+                "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
+                ticker, currentPrice, sellable, pnl?.let { "%.2f".format(it) } ?: "-", reason,
+            )
 
             val record = TradeRecord(
                 ticker = ticker,

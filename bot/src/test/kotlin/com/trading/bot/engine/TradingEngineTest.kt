@@ -43,9 +43,8 @@ class TradingEngineTest {
         strategy = mockk()
         webSocketClient = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
-        // store miss 기본값 — relaxed mock 이 non-null(child mock/0.0)을 반환해 store-hit 으로 오작동하는 것 방지
-        // (가격 경로는 ws/REST). staleness 가드가 getLatestTicker 를 쓰므로 둘 다 null 고정.
-        every { marketDataStore.getLatestPrice(any(), any()) } returns null
+        // store miss 기본값 — relaxed mock 이 non-null child mock 을 반환해 store-hit 으로 오작동하는 것 방지
+        // (가격 경로는 ws/REST).
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { dailyResetManager.checkAndReset(any()) } returns false
@@ -381,8 +380,6 @@ class TradingEngineTest {
     @Test
     fun `getRealtimePrice falls back to WS when store ticker stale`() {
         val engine = createEngine()
-        // 구 경로(getLatestPrice)가 남아 있으면 stale 가격 69M 을 그대로 반환한다 — 회귀 가드.
-        every { marketDataStore.getLatestPrice(any(), any()) } returns 69000000.0
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
         every { webSocketClient.latestPrice("KRW-BTC") } returns wsPrice(70500000.0)
 
@@ -392,7 +389,6 @@ class TradingEngineTest {
     @Test
     fun `getRealtimePrice returns null when store and WS both stale`() {
         val engine = createEngine()
-        every { marketDataStore.getLatestPrice(any(), any()) } returns 69000000.0
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
         every { webSocketClient.latestPrice("KRW-BTC") } returns wsPrice(70500000.0, ageMs = 60_000)
 
@@ -402,8 +398,8 @@ class TradingEngineTest {
     @Test
     fun `getRealtimePrice staleness boundary around 30s`() {
         val engine = createEngine()
-        // 28s — threshold(30s) 안쪽 (2s 는 테스트 실행 마진)
-        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 28)
+        // 25s — threshold(30s) 안쪽 (5s 는 느린 CI 대비 테스트 실행 마진)
+        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 25)
         assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
 
         // 32s — threshold 바깥, WS 도 없음 → null

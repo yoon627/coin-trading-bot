@@ -4,6 +4,7 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.Ticker
+import com.trading.bot.domain.TradeRecord
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeRecordRepository
@@ -14,6 +15,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
@@ -97,6 +99,44 @@ class TradeExecutionServiceTest {
         assertTrue(result.success)
         assertEquals("sell-456", result.orderUuid)
         coVerify { tradeRecordRepository.save(any()) }
+    }
+
+    @Test
+    fun `executeSellAll records net pnl after round-trip fee`() = runTest {
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "48000000"),
+        )
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "sell-net")
+        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
+        val recordSlot = slot<TradeRecord>()
+        coEvery { tradeRecordRepository.save(capture(recordSlot)) } returns TradeRecordEntity(
+            id = 4, ticker = "KRW-BTC", side = "SELL", price = 50000000.0,
+            volume = 0.5, totalAmount = 25000000.0, userId = 1L,
+        )
+
+        service.executeSellAll(client, "KRW-BTC", "volatility_breakout", 1L)
+
+        // MANUAL 매도도 net 통일: gross (50M−48M)/48M = +4.1667%p − 왕복수수료 0.1%p
+        assertEquals((50.0 / 48.0 - 1.0) * 100.0 - 0.1, recordSlot.captured.pnlPercent!!, 1e-9)
+    }
+
+    @Test
+    fun `executeSellVolume records null pnl when ticker price unavailable`() = runTest {
+        // getTicker 실패(현재가 미상) 시 −100.1% 가짜 기록 방지 — pnl 은 null 보존.
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "1.0", avgBuyPrice = "48000000"),
+        )
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "sell-noprice")
+        coEvery { client.getTicker("KRW-BTC") } returns emptyList()
+        val recordSlot = slot<TradeRecord>()
+        coEvery { tradeRecordRepository.save(capture(recordSlot)) } returns TradeRecordEntity(
+            id = 5, ticker = "KRW-BTC", side = "SELL", price = 0.0,
+            volume = 0.3, totalAmount = 0.0, userId = 1L,
+        )
+
+        service.executeSellVolume(client, "KRW-BTC", "0.3", "rsi_bounce", 1L)
+
+        assertNull(recordSlot.captured.pnlPercent)
     }
 
     @Test

@@ -27,9 +27,9 @@ class TradeExecutionService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    /** 기록용 net pnl(%) — 왕복수수료 차감, PositionManager.sell 과 동일 기준. 평단 미상이면 null 유지. */
+    /** 기록용 net pnl(%) — 왕복수수료 차감, PositionManager.sell 과 동일 기준. 평단·현재가 미상이면 null(가짜 −100.1% 방지). */
     private fun netPnlPercent(currentPrice: Double, avgBuyPrice: Double): Double? =
-        if (avgBuyPrice > 0) {
+        if (avgBuyPrice > 0 && currentPrice > 0) {
             ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0 - tradingProperties.roundTripFeeRate * 100
         } else {
             null
