@@ -379,7 +379,7 @@ function BacktestPage({ user, setActive }) {
     setResult(null); // 재실행 실패 시 이전(다른 설정) 결과가 새 결과인 양 남지 않도록 비움
     try {
       // Backend uses Jackson SNAKE_CASE — multi-word fields must be snake_case
-      // or they're silently dropped (BacktestRequest.chartExitEnabled defaults to false).
+      // or they're silently dropped (unsent BacktestRequest fields fall back to live trading settings).
       const r = await TideAPI.backtest({ strategy: strategy || undefined, ticker, days: parseInt(days), chart_exit_enabled: chartExitEnabled });
       setResult(r);
       setRanWith({ strategy: strategy || '전체 비교', ticker, days: parseInt(days), chartExit: chartExitEnabled });
