@@ -123,7 +123,7 @@ class BacktestEngine(
             ExitGates.isTrailingStopTriggered(pnl, peakPnl, dropFromPeak, config.trailingStopPct, config.trailingArmPct) -> "TRAILING_STOP"
             pnl >= config.takeProfitPct -> "TAKE_PROFIT"
             config.chartExitEnabled && strategy.shouldSell(window, currentPrice, tradingProperties) -> "CHART_EXIT"
-            holdDays >= config.maxHoldDays.coerceAtLeast(1) -> "TIME_EXIT"
+            holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays) -> "TIME_EXIT"
             else -> null
         } ?: return
 

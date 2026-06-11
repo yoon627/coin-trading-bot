@@ -2,6 +2,7 @@ package com.trading.bot.engine
 
 import com.trading.bot.domain.TradingState
 import com.trading.common.config.TradingProperties
+import com.trading.common.strategy.ExitGates
 import org.slf4j.LoggerFactory
 import java.time.Clock
 import java.time.LocalDate
@@ -11,7 +12,7 @@ import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
 
 class DailyResetManager(
-    private val tradingProperties: TradingProperties = TradingProperties(),
+    private val tradingProperties: TradingProperties,
     private val clock: Clock = Clock.system(KST),
 ) {
     companion object {
@@ -45,8 +46,7 @@ class DailyResetManager(
     fun shouldSellForDailyReset(state: TradingState): Boolean {
         if (!state.position) return false
         val buyDate = state.buyDate ?: return false
-        // coerce: env 오설정(0/음수)이 매수 당일 즉시 청산 루프(일 1회 왕복 수수료 손실)가 되지 않도록.
-        val holdLimit = tradingProperties.maxHoldDays.coerceAtLeast(1)
+        val holdLimit = ExitGates.effectiveMaxHoldDays(tradingProperties.maxHoldDays)
         return ChronoUnit.DAYS.between(buyDate, getTradingDate()) >= holdLimit
     }
 }

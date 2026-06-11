@@ -81,7 +81,7 @@ class TradingEngine(
         val p = tradingProperties
         if (p.takeProfitPct <= p.trailingStopPct || p.takeProfitPct <= p.trailingArmPct) {
             log.warn(
-                "takeProfitPct({}) <= trailingStopPct({}) or trailingArmPct({}) — take-profit 이 항상 선행해 트레일링이 도달 불가(dead)입니다",
+                "takeProfitPct({}) <= trailingStopPct({}) or trailingArmPct({}) — take-profit 이 선행해 트레일링이 사실상 도달 불가(dead)입니다",
                 p.takeProfitPct, p.trailingStopPct, p.trailingArmPct,
             )
         }

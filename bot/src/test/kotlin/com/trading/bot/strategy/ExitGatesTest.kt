@@ -1,6 +1,7 @@
 package com.trading.bot.strategy
 
 import com.trading.common.strategy.ExitGates
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -28,6 +29,12 @@ class ExitGatesTest {
     }
 
     @Test
+    fun `drop exactly at trail fires - inclusive boundary`() {
+        // >= 경계 핀 — > 로 바뀌는 mutation 을 잡는다.
+        assertTrue(ExitGates.isTrailingStopTriggered(0.5, 2.6, 2.0, 2.0, 0.0))
+    }
+
+    @Test
     fun `peak below arm blocks firing`() {
         // arm(5) > trail(2): 현행(arm=0)이면 발동이었을 입력 — arm 게이트가 막는다.
         assertFalse(ExitGates.isTrailingStopTriggered(0.7, 3.0, 2.2, 2.0, 5.0))
@@ -46,5 +53,14 @@ class ExitGatesTest {
         assertFalse(ExitGates.isTrailingStopTriggered(Double.NaN, 6.0, 2.3, 2.0, 0.0))
         assertFalse(ExitGates.isTrailingStopTriggered(1.0, Double.NaN, 2.3, 2.0, 5.0))
         assertFalse(ExitGates.isTrailingStopTriggered(1.0, 6.0, Double.NaN, 2.0, 0.0))
+    }
+
+    @Test
+    fun `effectiveMaxHoldDays coerces non-positive to one`() {
+        // 라이브(DailyResetManager)·백테(BacktestEngine) 공용 해석 — env 오설정 방어.
+        assertEquals(1, ExitGates.effectiveMaxHoldDays(0))
+        assertEquals(1, ExitGates.effectiveMaxHoldDays(-5))
+        assertEquals(1, ExitGates.effectiveMaxHoldDays(1))
+        assertEquals(3, ExitGates.effectiveMaxHoldDays(3))
     }
 }

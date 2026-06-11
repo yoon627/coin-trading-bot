@@ -18,4 +18,10 @@ object ExitGates {
         trailingStopPct: Double,
         trailingArmPct: Double,
     ): Boolean = pnlPct > 0.0 && peakPnlPct >= trailingArmPct && dropFromPeakPct >= trailingStopPct
+
+    /**
+     * maxHoldDays 의 유효값 해석 — 0/음수(env 오설정)는 1로 보정해 "매수 당일 즉시 청산 루프"를 방지.
+     * 라이브(DailyResetManager)·백테(BacktestEngine)가 같은 해석을 쓰도록 공용화.
+     */
+    fun effectiveMaxHoldDays(maxHoldDays: Int): Int = maxHoldDays.coerceAtLeast(1)
 }

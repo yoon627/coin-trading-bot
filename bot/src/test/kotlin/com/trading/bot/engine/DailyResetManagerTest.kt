@@ -11,7 +11,7 @@ import java.time.ZoneId
 
 class DailyResetManagerTest {
 
-    private val manager = DailyResetManager()
+    private val manager = DailyResetManager(TradingProperties())
     private val kst = ZoneId.of("Asia/Seoul")
 
     private fun fixedClock(dateTime: String): Clock =
@@ -89,13 +89,13 @@ class DailyResetManagerTest {
 
     @Test
     fun `getTradingDate uses previous day just before 9am`() {
-        val m = DailyResetManager(clock = fixedClock("2026-06-11T08:59:59"))
+        val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T08:59:59"))
         assertEquals(LocalDate.of(2026, 6, 10), m.getTradingDate())
     }
 
     @Test
     fun `getTradingDate uses same day at 9am boundary`() {
-        val m = DailyResetManager(clock = fixedClock("2026-06-11T09:00:00"))
+        val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T09:00:00"))
         assertEquals(LocalDate.of(2026, 6, 11), m.getTradingDate())
     }
 
@@ -121,7 +121,7 @@ class DailyResetManagerTest {
     @Test
     fun `shouldSellForDailyReset returns false when buyDate is ahead of trading date`() {
         // 00:00~09:00 매수분: buyDate(달력일)=오늘 > tradingDate=어제 — 음수 경과는 미청산.
-        val m = DailyResetManager(clock = fixedClock("2026-06-11T08:30:00"))
+        val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T08:30:00"))
         val state = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 6, 11))
         assertFalse(m.shouldSellForDailyReset(state))
     }

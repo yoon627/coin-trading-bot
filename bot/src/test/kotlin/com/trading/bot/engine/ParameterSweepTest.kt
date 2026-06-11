@@ -4,6 +4,7 @@ import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.strategy.CombinedStrategy
 import java.io.File
+import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
@@ -79,7 +80,7 @@ class ParameterSweepTest {
         report.appendLine("| rank | TP | SL | trail | arm | hold | filter | trades | win% | return% | PF | maxDD% | avgHold | recentHalf return% |")
         report.appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         top.forEachIndexed { i, row ->
-            val recent = runBlocking { engine.run("combined", recentHalf, "KRW-BTC", row.config) }
+            val recent = engine.run("combined", recentHalf, "KRW-BTC", row.config)
             report.appendLine(
                 "| ${i + 1} | ${row.config.takeProfitPct} | ${row.config.maxLossPct} | ${row.config.trailingStopPct} | " +
                     "${row.config.trailingArmPct} | ${row.config.maxHoldDays} | ${row.config.useMarketFilter} | " +
@@ -101,11 +102,14 @@ class ParameterSweepTest {
 
     private fun fetchDayCandles(market: String, count: Int): List<Candle> {
         // 공개 quotation API — 인증 불요. 시세 조회라 시크릿 없음.
-        return WebClient.create("https://api.upbit.com")
+        val candles = WebClient.create("https://api.upbit.com")
             .get()
             .uri("/v1/candles/days?market={market}&count={count}", market, count)
             .retrieve()
             .bodyToMono<List<Candle>>()
-            .block()!!
+            .block(Duration.ofSeconds(30))
+        checkNotNull(candles) { "Upbit 일봉 응답 없음 ($market) — 네트워크/rate limit 확인" }
+        check(candles.isNotEmpty()) { "Upbit 일봉 0건 ($market) — market 코드 확인" }
+        return candles
     }
 }
