@@ -59,10 +59,6 @@ class MarketDataStore {
         return latestTickers["$exchange:$market"]
     }
 
-    fun getLatestPrice(exchange: Exchange, market: String): Double? {
-        return latestTickers["$exchange:$market"]?.price
-    }
-
     fun getAllTickers(): Map<String, NormalizedTicker> = latestTickers.toMap()
 
     fun getTickersByExchange(exchange: Exchange): List<NormalizedTicker> {

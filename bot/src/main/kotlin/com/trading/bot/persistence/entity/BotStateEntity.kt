@@ -10,7 +10,7 @@ data class BotStateEntity(
     val id: Long? = null,
     val userId: Long,
     val running: Boolean = false,
-    val strategy: String = "volatility_breakout",
+    val strategy: String = "combined",
     val tickers: String = "KRW-BTC",
     val updatedAt: LocalDateTime = LocalDateTime.now(),
 )
