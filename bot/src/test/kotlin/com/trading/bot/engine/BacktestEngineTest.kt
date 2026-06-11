@@ -177,6 +177,88 @@ class BacktestEngineTest {
         }
     }
 
+    // --- #27 정합: 디폴트 parity / TIME_EXIT / trailing arm ---
+
+    @Test
+    fun `config defaults match live trading defaults`() {
+        // 백테 디폴트 ≠ 라이브 디폴트가 #27 부정합의 근본 원인 — drift 를 CI 로 가드.
+        // kValue·investRatio 는 엔진이 읽지 않는 dead field 라 제외.
+        val live = TradingProperties()
+        val bt = BacktestConfig()
+        assertEquals(live.takeProfitPct, bt.takeProfitPct)
+        assertEquals(live.maxLossPct, bt.maxLossPct)
+        assertEquals(live.trailingStopPct, bt.trailingStopPct)
+        assertEquals(live.trailingArmPct, bt.trailingArmPct)
+        assertEquals(live.maxHoldDays, bt.maxHoldDays)
+        assertEquals(live.chartExitEnabled, bt.chartExitEnabled)
+        assertEquals(live.roundTripFeeRate, bt.feeRate * 2, 1e-12) // 편도 vs 왕복 표현 차이
+        assertFalse(bt.useMarketFilter) // 라이브 매수 경로에 MA50 필터 없음
+    }
+
+    @Test
+    fun `backtest exits by TIME_EXIT after maxHoldDays 1`() = runTest {
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 99.0, takeProfitPct = 99.0, trailingStopPct = 99.0,
+            maxHoldDays = 1, useMarketFilter = false,
+        )
+        val result = ce.run("always_buy", buildCandles(120), "KRW-BTC", config)
+
+        assertNotNull(result)
+        assertTrue(result!!.totalTrades > 0, "scenario must produce trades")
+        val timeExits = result.trades.filter { it.reason == "TIME_EXIT" }
+        assertTrue(timeExits.isNotEmpty(), "expected TIME_EXIT trades")
+        timeExits.forEach { assertEquals(1, it.holdDays) }
+    }
+
+    // chronological: 50봉 워밍업(10000) → 진입 → +3% 고점 → 2.5% drop(pnl +0.4%) → 횡보.
+    private fun buildArmScenario(count: Int): List<Candle> {
+        return (0 until count).map { i ->
+            val c = count - 1 - i // chronological index (0=과거)
+            val (open, close) = when {
+                c <= 50 -> 10000.0 to 10000.0
+                c == 51 -> 10000.0 to 10300.0 // fill 봉: +3% 고점 형성
+                c == 52 -> 10300.0 to 10040.0 // drop 2.52% from peak, pnl +0.4%
+                else -> 10040.0 to 10040.0
+            }
+            Candle(
+                market = "KRW-BTC",
+                tradePrice = close,
+                openingPrice = open,
+                highPrice = maxOf(open, close),
+                lowPrice = minOf(open, close),
+                candleAccTradeVolume = 100.0,
+            )
+        }
+    }
+
+    @Test
+    fun `backtest trailing stop fires with arm zero`() = runTest {
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 99.0, takeProfitPct = 99.0, trailingStopPct = 2.0, trailingArmPct = 0.0,
+            maxHoldDays = 999, useMarketFilter = false,
+        )
+        val result = ce.run("always_buy", buildArmScenario(120), "KRW-BTC", config)
+
+        assertNotNull(result)
+        assertTrue(result!!.trades.any { it.reason == "TRAILING_STOP" }, "arm=0 must fire trailing stop")
+    }
+
+    @Test
+    fun `backtest trailing stop respects arm threshold`() = runTest {
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 99.0, takeProfitPct = 99.0, trailingStopPct = 2.0, trailingArmPct = 5.0,
+            maxHoldDays = 999, useMarketFilter = false,
+        )
+        val result = ce.run("always_buy", buildArmScenario(120), "KRW-BTC", config)
+
+        assertNotNull(result)
+        assertTrue(result!!.totalTrades > 0, "scenario must produce trades")
+        assertTrue(result.trades.none { it.reason == "TRAILING_STOP" }, "peak +3% < arm 5% must not fire")
+    }
+
     @Test
     fun `backtest triggers CHART_EXIT when enabled and dead cross occurs`() = runTest {
         val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
