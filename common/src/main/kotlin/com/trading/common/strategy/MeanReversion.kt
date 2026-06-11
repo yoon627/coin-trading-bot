@@ -37,4 +37,21 @@ class MeanReversion : TradingStrategy {
 
         return oversold && normalVolatility && rsiRecovering && volumeOk
     }
+
+    // 진입(MA20 -3% 이탈)의 청산: 종가가 MA20 으로 상향 복귀(평균 회귀 완료). candles 종가 기반(currentPrice 미사용).
+    // bb.middle(SMA20)==calculateMa(,20) 라 BollingerBounce 청산과 수치 동일 — 각 전략이 자기 지표 맥락을 유지(진입 신호는 차별).
+    override suspend fun shouldSell(
+        candles: List<Candle>,
+        currentPrice: Double,
+        config: TradingProperties,
+    ): Boolean {
+        if (candles.size < 21) return false
+
+        val ma20 = Indicators.calculateMa(candles, 20)
+        val prevMa20 = Indicators.calculateMa(candles.drop(1), 20)
+        if (ma20 <= 0 || prevMa20 <= 0) return false
+
+        // 직전 종가는 MA20 아래, 현재 종가는 MA20 위로 복귀
+        return candles[1].tradePrice < prevMa20 && candles[0].tradePrice >= ma20
+    }
 }
