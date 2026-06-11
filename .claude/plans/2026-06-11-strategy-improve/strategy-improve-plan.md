@@ -17,7 +17,10 @@ updated: 2026-06-11
 
 # Next
 
-push + PR 생성 → 후속 이슈(백테 신호 live-props 고정+dead field / UI 백테 파라미터 노출 / highPrice peak) 등록 → env 적용(보수안 MAX_HOLD_DAYS=3 등)은 카나리아 전제 사용자 결정.
+**PR #30 머지 대기** (https://github.com/yoon627/coin-trading-bot/pull/30). 머지 후:
+1. plan done 전환 + worktree 정리 (Windows long-path 주의)
+2. env 적용 여부 — **사용자 결정** (보수안 `TRADING_MAX_HOLD_DAYS=3`+`TP=4`+`SL=3` / 공격안 TP8/SL5/trail3/hold999, 카나리아 `TRADING_MAX_INVEST_AMOUNT` 축소 전제, 무포지션 시점 배포)
+3. 후속 이슈 등록 완료: #31(백테 신호 config 분리+dead field), #32(UI 백테 파라미터 노출), #33(highPrice peak)
 
 # Decisions
 
