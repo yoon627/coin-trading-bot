@@ -1,6 +1,6 @@
 ---
 title: strategy-improve — 매도·매수 전략 전체 점검 후 개선/수정 (#27 Structural)
-status: in_progress
+status: done
 started: 2026-06-11
 updated: 2026-06-11
 ---
@@ -14,13 +14,13 @@ updated: 2026-06-11
 - 2026-06-11: worktree `strategy-improve` 생성(base 2223503). dlc 시작 — 규모 structural. Explore 완료: TradingEngine·PositionManager·DailyResetManager·TradingState·CombinedStrategy·BacktestEngine·StrategyController·TradingProperties 코드 확인 — 이슈 #27 진단(trailing dead·보유 1일·백테 부정합) 전부 코드와 일치 검증.
 - 2026-06-11: arch planning(REQUEST CHANGES→반영)·plan-reviewer(CONDITIONAL GO→조건 3건+minor 반영). TDD Red 확인(미구현 API 사유) → 구현 → Green(영향 4클래스 + bot 전체 통과). 커밋 06224fc (코드 16파일: ExitGates 신규·TradingProperties 2필드·DailyResetManager 일반화·BacktestConfig 정합·env 체인 5곳·README·스윕 러너). 커밋 게이트 hook 의 매직넘버 3건 수정 반영.
 - 2026-06-11: 파라미터 스윕 실행(실데이터 200봉, 1,800조합) — 결과는 위 "스윕 결과" 섹션. arch 정밀·code-reviewer(codex 병행) 모두 APPROVE(Critical/Major 0) → fix loop 1회차 커밋 94eea8b. code-simplifier 적용 0건(제안: BacktestConfig dead field 후속 이슈). 최종 검증(격리 runner) `gradlew build` 통과 — 41 스위트 361 테스트 실패 0, 스킵 1(스윕 게이트).
+- 2026-06-11: **PR #30 squash 머지 — `9cd98c0`, 12:48:11 UTC**. 후속 이슈 #31~#33 등록 완료. plan done 전환·worktree 정리. **머지/배포 자체는 봇 행동 무변**(env 미설정 시 전부 현행값) — net pnl 같은 데이터 전환점 없음.
 
 # Next
 
-**PR #30 머지 대기** (https://github.com/yoon627/coin-trading-bot/pull/30). 머지 후:
-1. plan done 전환 + worktree 정리 (Windows long-path 주의)
-2. env 적용 여부 — **사용자 결정** (보수안 `TRADING_MAX_HOLD_DAYS=3`+`TP=4`+`SL=3` / 공격안 TP8/SL5/trail3/hold999, 카나리아 `TRADING_MAX_INVEST_AMOUNT` 축소 전제, 무포지션 시점 배포)
-3. 후속 이슈 등록 완료: #31(백테 신호 config 분리+dead field), #32(UI 백테 파라미터 노출), #33(highPrice peak)
+(완료 — 남은 운영 결정 1건)
+- **env 적용 여부 — 사용자 결정**: 보수안 `TRADING_MAX_HOLD_DAYS=3`+`TRADING_TAKE_PROFIT_PCT=4`+`TRADING_MAX_LOSS_PCT=3` / 공격안 TP8/SL5/trail3/hold999. 카나리아(`TRADING_MAX_INVEST_AMOUNT` 축소) 전제, **무포지션 시점 배포**(재기동 시 buyDate/peakPrice 유실 — maxHoldDays 면제+arm 해제). 적용 시 이 plan 또는 메모리에 적용 시각 기록.
+- 후속 이슈: #31(백테 신호 config 분리+dead field — 진입 스윕 선결), #32(UI 백테 파라미터 노출), #33(highPrice peak).
 
 # Decisions
 
