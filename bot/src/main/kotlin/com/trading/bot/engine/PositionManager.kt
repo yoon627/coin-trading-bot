@@ -9,6 +9,7 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.common.config.TradingProperties
+import com.trading.common.strategy.ExitGates
 import kotlin.math.floor
 import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
@@ -276,11 +277,13 @@ class PositionManager(
         if (!state.position) return false
         // Update peak price
         state.updatePeakPrice(currentPrice)
-        val pnl = state.pnlPercent(currentPrice)
-        // Only activate trailing stop if in profit
-        if (pnl <= 0) return false
-        val dropFromPeak = state.dropFromPeakPercent(currentPrice)
-        return dropFromPeak >= tradingProperties.trailingStopPct
+        return ExitGates.isTrailingStopTriggered(
+            pnlPct = state.pnlPercent(currentPrice),
+            peakPnlPct = state.pnlPercent(state.peakPrice),
+            dropFromPeakPct = state.dropFromPeakPercent(currentPrice),
+            trailingStopPct = tradingProperties.trailingStopPct,
+            trailingArmPct = tradingProperties.trailingArmPct,
+        )
     }
 
     private suspend fun getKrwBalance(): Double = findAccount("KRW")?.balanceDouble() ?: 0.0

@@ -372,6 +372,59 @@ class PositionManagerExtendedTest {
         assertFalse(manager.checkTrailingStop(state, 54500000.0))
     }
 
+    // --- trailingArmPct (#27 trailing dead 해소 경로) ---
+
+    private fun managerWithArm(armPct: Double) = PositionManager(
+        upbitClient,
+        TradingProperties(
+            takeProfitPct = 5.0,
+            maxLossPct = 3.0,
+            trailingStopPct = 2.0,
+            trailingArmPct = armPct,
+            maxInvestAmount = 100000.0,
+        ),
+    )
+
+    @Test
+    fun `checkTrailingStop arm zero preserves current behavior on small profit`() {
+        // 기존 디폴트(arm=0): peak +2.5%, pnl +0.3%, drop 2.15% → 발동 (arm>trail 이면 막혔을 입력의 회귀 핀)
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+        state.updatePeakPrice(51250000.0) // +2.5%
+        assertTrue(manager.checkTrailingStop(state, 50150000.0)) // drop 2.15%, pnl +0.3%
+    }
+
+    @Test
+    fun `checkTrailingStop blocks before peak reaches arm`() {
+        // arm(5%) > trail(2%): peak +3% 는 미arm — 현행(arm=0)이면 매도였을 입력을 막는다.
+        val m = managerWithArm(5.0)
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+        state.updatePeakPrice(51500000.0) // peak +3.0% < arm 5%
+        // drop (51.5M-50.35M)/51.5M = 2.23% >= 2%, pnl +0.7% > 0
+        assertFalse(m.checkTrailingStop(state, 50350000.0))
+    }
+
+    @Test
+    fun `checkTrailingStop fires after peak reached arm`() {
+        val m = managerWithArm(5.0)
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+        state.updatePeakPrice(53000000.0) // peak +6.0% >= arm 5%
+        // drop (53M-51.8M)/53M = 2.26% >= 2%, pnl +3.6% > 0
+        assertTrue(m.checkTrailingStop(state, 51800000.0))
+    }
+
+    @Test
+    fun `checkTrailingStop with arm still requires profit`() {
+        val m = managerWithArm(5.0)
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+        state.updatePeakPrice(53000000.0) // peak +6% >= arm
+        // drop (53M-49.5M)/53M = 6.6% >= 2% 이지만 pnl -1% — 기존 pnl>0 게이트 유지
+        assertFalse(m.checkTrailingStop(state, 49500000.0))
+    }
+
     // --- H8: pending-reconcile tests ---
 
     @Test

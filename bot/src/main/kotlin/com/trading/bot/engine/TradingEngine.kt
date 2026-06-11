@@ -70,8 +70,26 @@ class TradingEngine(
     fun start(tickers: List<String> = tradingProperties.tickerList()) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
+            warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
+        }
+    }
+
+    // 파라미터화는 dead branch 를 설정 가능하게 할 뿐 제거하지 않는다(#27) — 무의미한 조합은 기동 시 경고.
+    private fun warnIfExitConfigInert() {
+        val p = tradingProperties
+        if (p.takeProfitPct <= p.trailingStopPct || p.takeProfitPct <= p.trailingArmPct) {
+            log.warn(
+                "takeProfitPct({}) <= trailingStopPct({}) or trailingArmPct({}) — take-profit 이 선행해 트레일링이 사실상 도달 불가(dead)입니다",
+                p.takeProfitPct, p.trailingStopPct, p.trailingArmPct,
+            )
+        }
+        if (p.trailingArmPct > 0 && p.trailingArmPct <= p.trailingStopPct) {
+            log.warn(
+                "0 < trailingArmPct({}) <= trailingStopPct({}) — arm 임계가 수학적으로 자동 충족되어 효과가 없습니다",
+                p.trailingArmPct, p.trailingStopPct,
+            )
         }
     }
 

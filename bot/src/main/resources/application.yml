@@ -40,6 +40,10 @@ trading:
   take-profit-pct: ${TRADING_TAKE_PROFIT_PCT:2.0}
   max-loss-pct: ${TRADING_MAX_LOSS_PCT:5.0}
   trailing-stop-pct: ${TRADING_TRAILING_STOP_PCT:2.0}
+  # 트레일링 arm 임계(%) — 고점 수익률 도달 후에만 트레일링 평가. 0=수익 중 즉시(현행). trail 보다 클 때만 실효.
+  trailing-arm-pct: ${TRADING_TRAILING_ARM_PCT:0.0}
+  # 보유 상한(거래일, KST 09:00 경계) — 1=현행 일일리셋.
+  max-hold-days: ${TRADING_MAX_HOLD_DAYS:1}
   # 왕복 수수료 비율(기록용 net pnl 차감) — Upbit 0.05%×2.
   round-trip-fee-rate: ${TRADING_ROUND_TRIP_FEE_RATE:0.001}
   interval-seconds: ${TRADING_INTERVAL_SECONDS:10}
