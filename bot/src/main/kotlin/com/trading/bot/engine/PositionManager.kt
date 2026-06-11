@@ -25,11 +25,13 @@ class PositionManager(
         private const val FILL_POLL_DELAY_MS = 300L
     }
 
+    /** 거래소 계좌 목록에서 해당 통화 계좌 조회 (#21 — getAccounts().find 중복 헬퍼화). */
+    private suspend fun findAccount(currency: String): Account? =
+        upbitClient.getAccounts().find { it.currency == currency }
+
     suspend fun syncPosition(ticker: String, state: TradingState) {
         try {
-            val accounts = upbitClient.getAccounts()
-            val currency = ticker.substringAfter("-")
-            val account = accounts.find { it.currency == currency }
+            val account = findAccount(ticker.substringAfter("-"))
             if (account != null && account.balanceDouble() > 0) {
                 state.position = true
                 state.avgBuyPrice = account.avgBuyPriceDouble()
@@ -117,7 +119,7 @@ class PositionManager(
         return when {
             executed > 0.0 -> {
                 // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
-                val account = upbitClient.getAccounts().find { it.currency == ticker.substringAfter("-") }
+                val account = findAccount(ticker.substringAfter("-"))
                 completeBuy(ticker, state, currentPrice, executed, account)
             }
             filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
@@ -138,7 +140,7 @@ class PositionManager(
      */
     private suspend fun recoverFromBalance(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
         return try {
-            val account = upbitClient.getAccounts().find { it.currency == ticker.substringAfter("-") }
+            val account = findAccount(ticker.substringAfter("-"))
             val balance = account?.balanceDouble() ?: 0.0
             if (balance > 0.0) {
                 completeBuy(ticker, state, currentPrice, balance, account)
@@ -183,8 +185,7 @@ class PositionManager(
 
         try {
             // 매도 수량은 state.holdVolume(조작 가능)이 아니라 거래소 실잔고를 사용.
-            val currency = ticker.substringAfter("-")
-            val account = upbitClient.getAccounts().find { it.currency == currency }
+            val account = findAccount(ticker.substringAfter("-"))
             val sellable = account?.balanceDouble() ?: 0.0
             if (sellable <= 0.0) {
                 // M4: balance=0 이어도 locked>0 이면 매도 주문이 진행 중(잔고가 locked 로 이동)일 수 있다.
@@ -217,9 +218,18 @@ class PositionManager(
                 return null
             }
 
-            val pnl = state.pnlPercent(currentPrice)
+            // 기록용 pnl 은 왕복수수료 차감(net) — 백테스트(feeRate×2)와 통일. 청산 게이트(checkTakeProfit 등)는 gross 유지.
+            // 평단 미상(외부 입금분 syncPosition 복원 등)이면 null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
+            val pnl = if (state.avgBuyPrice > 0) {
+                state.pnlPercent(currentPrice) - tradingProperties.roundTripFeeRate * 100
+            } else {
+                null
+            }
             val totalAmount = currentPrice * sellable
-            log.info("SELL {} filled: price={}, volume={}, pnl={}%, reason={}", ticker, currentPrice, sellable, "%.2f".format(pnl), reason)
+            log.info(
+                "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
+                ticker, currentPrice, sellable, pnl?.let { "%.2f".format(it) } ?: "-", reason,
+            )
 
             val record = TradeRecord(
                 ticker = ticker,
@@ -273,11 +283,7 @@ class PositionManager(
         return dropFromPeak >= tradingProperties.trailingStopPct
     }
 
-    private suspend fun getKrwBalance(): Double {
-        val accounts = upbitClient.getAccounts()
-        val krw = accounts.find { it.currency == "KRW" }
-        return krw?.balanceDouble() ?: 0.0
-    }
+    private suspend fun getKrwBalance(): Double = findAccount("KRW")?.balanceDouble() ?: 0.0
 
     private fun calculateInvestAmount(krwBalance: Double): Double {
         // 잔액의 investRatio 비율만 투자하되 maxInvestAmount 로 상한.

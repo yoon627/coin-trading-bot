@@ -79,11 +79,13 @@ class StrategyController(
         val candles = client.getDayCandles(ticker, days)
 
         // NaN/Infinity/음수/거대값이 BacktestConfig 로 흘러들어 비정상 시뮬/산술예외(500)를 내지 않도록 검증.
+        // 폴백은 라이브 설정(tradingProperties)과 동일 — 백테 디폴트가 라이브와 정반대(TP5/SL3 vs TP2/SL5)이던
+        // 정합 결함(이슈 #27) 수정. BacktestConfig 클래스 디폴트는 직접 생성 경로용으로 별개.
         val config = BacktestConfig(
-            takeProfitPct = requireInRange(req.takeProfitPct ?: 5.0, "takeProfitPct", 0.0, 100.0),
-            maxLossPct = requireInRange(req.maxLossPct ?: 3.0, "maxLossPct", 0.0, 100.0),
+            takeProfitPct = requireInRange(req.takeProfitPct ?: tradingProperties.takeProfitPct, "takeProfitPct", 0.0, 100.0),
+            maxLossPct = requireInRange(req.maxLossPct ?: tradingProperties.maxLossPct, "maxLossPct", 0.0, 100.0),
             kValue = requireInRange(req.kValue ?: tradingProperties.kValue, "kValue", 0.0, 2.0),
-            trailingStopPct = requireInRange(req.trailingStopPct ?: 2.0, "trailingStopPct", 0.0, 100.0),
+            trailingStopPct = requireInRange(req.trailingStopPct ?: tradingProperties.trailingStopPct, "trailingStopPct", 0.0, 100.0),
             maxHoldDays = (req.maxHoldDays ?: 7).coerceIn(1, 365),
             useMarketFilter = req.useMarketFilter ?: true,
             chartExitEnabled = req.chartExitEnabled ?: false,

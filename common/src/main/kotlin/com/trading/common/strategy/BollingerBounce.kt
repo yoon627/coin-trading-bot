@@ -17,8 +17,9 @@ class BollingerBounce : TradingStrategy {
         val prevBb = Indicators.calculateBollingerBands(candles.drop(1), 20, 2.0) ?: return false
         val prevPrice = candles[1].tradePrice
 
-        // Price was below lower band and now bouncing back above it
-        val bouncedFromLower = prevPrice <= prevBb.lower && currentPrice > bb.lower
+        // Price was below lower band and now bouncing back above it.
+        // currentPrice > prevPrice: 밴드 확장으로 lower 위에 보여도 하락이 이어지면(falling knife) 반등이 아니다.
+        val bouncedFromLower = prevPrice <= prevBb.lower && currentPrice > bb.lower && currentPrice > prevPrice
 
         // RSI confirmation: not deeply oversold (recovering)
         val rsi = Indicators.calculateRsi(candles, 14)

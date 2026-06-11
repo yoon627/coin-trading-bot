@@ -33,12 +33,15 @@ upbit:
 
 trading:
   tickers: ${TRADING_TICKERS:KRW-BTC}
-  strategy: ${TRADING_STRATEGY:volatility_breakout}
+  strategy: ${TRADING_STRATEGY:combined}
   invest-ratio: ${TRADING_INVEST_RATIO:0.1}
   max-invest-amount: ${TRADING_MAX_INVEST_AMOUNT:100000}
   k-value: ${TRADING_K_VALUE:0.5}
   take-profit-pct: ${TRADING_TAKE_PROFIT_PCT:2.0}
   max-loss-pct: ${TRADING_MAX_LOSS_PCT:5.0}
+  trailing-stop-pct: ${TRADING_TRAILING_STOP_PCT:2.0}
+  # 왕복 수수료 비율(기록용 net pnl 차감) — Upbit 0.05%×2.
+  round-trip-fee-rate: ${TRADING_ROUND_TRIP_FEE_RATE:0.001}
   interval-seconds: ${TRADING_INTERVAL_SECONDS:10}
   auto-start: ${TRADING_AUTO_START:false}
   # 차트/지표 기반 청산(데드크로스) 토글. 기본 off — 켜기 전 백테스트 검증 권장.

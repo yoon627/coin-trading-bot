@@ -9,6 +9,7 @@ import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.common.config.TradingProperties
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
@@ -22,8 +23,17 @@ class TradeExecutionService(
     private val tradeExecutionRepository: TradeExecutionRepository,
     private val discordNotifier: DiscordNotifier,
     private val transactionalOperator: TransactionalOperator,
+    private val tradingProperties: TradingProperties,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    /** 기록용 net pnl(%) — 왕복수수료 차감, PositionManager.sell 과 동일 기준. 평단·현재가 미상이면 null(가짜 −100.1% 방지). */
+    private fun netPnlPercent(currentPrice: Double, avgBuyPrice: Double): Double? =
+        if (avgBuyPrice > 0 && currentPrice > 0) {
+            ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0 - tradingProperties.roundTripFeeRate * 100
+        } else {
+            null
+        }
 
     /**
      * 매수 주문 실행 + 기록 저장 + Discord 알림
@@ -91,8 +101,7 @@ class TradeExecutionService(
         )
 
         val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-        val avgBuyPrice = account.avgBuyPriceDouble()
-        val pnl = if (avgBuyPrice > 0) ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0 else null
+        val pnl = netPnlPercent(currentPrice, account.avgBuyPriceDouble())
         val vol = account.balanceDouble()
 
         val record = TradeRecord(
@@ -126,7 +135,7 @@ class TradeExecutionService(
 
         val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
         val avgBuyPrice = client.getAccounts().find { it.currency == currency }?.avgBuyPriceDouble() ?: 0.0
-        val pnl = if (avgBuyPrice > 0) ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0 else null
+        val pnl = netPnlPercent(currentPrice, avgBuyPrice)
 
         val order = client.placeOrder(
             OrderRequest(

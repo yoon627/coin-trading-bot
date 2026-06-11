@@ -131,14 +131,18 @@ coin-trading-bot/
 
 ### 리스크 관리
 
+라이브 기본값 기준 (`TRADING_*` 환경변수로 조정):
+
 | 메커니즘 | 설명 |
 |----------|------|
-| 손절 (Stop Loss) | 매수가 대비 -3% |
-| 익절 (Take Profit) | 매수가 대비 +5% |
-| 트레일링 스탑 | 고점 대비 -2% 하락 시 수익 보존 매도 |
-| 최대 보유일 | 7일 초과 시 강제 매도 |
-| 시장 필터 | 50일 MA 아래에서는 매수 차단 |
+| 손절 (Stop Loss) | 매수가 대비 -5% (`TRADING_MAX_LOSS_PCT`) |
+| 익절 (Take Profit) | 매수가 대비 +2% (`TRADING_TAKE_PROFIT_PCT`) |
+| 트레일링 스탑 | 수익 중일 때 고점 대비 -2% 하락 시 매도 (`TRADING_TRAILING_STOP_PCT`) |
 | 일일 리셋 | 09:00 KST 기준 매수 플래그 초기화 |
+
+매도 기록의 `pnl_percent` 는 왕복 수수료(`TRADING_ROUND_TRIP_FEE_RATE`, 기본 0.1%p)를 차감한 net 값이다 (청산 판정 자체는 gross).
+
+> 최대 보유일(기본 7일)·50일 MA 시장 필터는 **백테스트 전용** 파라미터로, 라이브 봇에는 적용되지 않는다.
 
 ## API 엔드포인트
 
@@ -293,6 +297,6 @@ main push / PR → GitHub Actions
 | `REDIS_HOST` / `REDIS_ENABLED` | `redis` / prod에서 활성 | Redis 캐시 |
 | `UPBIT_ACCESS_KEY` / `UPBIT_SECRET_KEY` | - | (옵션) 글로벌 fallback Upbit 키. 보통은 사용자별 키를 `/api/user/keys`로 등록 |
 | `TRADING_TICKERS` | `KRW-BTC` | 거래 대상 (쉼표 구분) |
-| `TRADING_STRATEGY` | `volatility_breakout` | 기본 전략 |
+| `TRADING_STRATEGY` | `combined` | 기본 전략 |
 | `TRADING_AUTO_START` | `false` | 서버 시작 시 자동 매매 시작 |
 | `DISCORD_WEBHOOK_URL` | - | Discord 알림 웹훅 (사용자별 등록도 가능) |

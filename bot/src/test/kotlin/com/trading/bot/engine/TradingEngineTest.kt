@@ -9,6 +9,7 @@ import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
+import com.trading.common.domain.NormalizedTicker
 import com.trading.common.strategy.TradingStrategy
 import com.trading.common.strategy.GoldenCross
 import com.trading.common.strategy.MacdCross
@@ -42,8 +43,9 @@ class TradingEngineTest {
         strategy = mockk()
         webSocketClient = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
-        // store miss 기본값 — relaxed mock 의 Double? 0.0 반환으로 인한 store-hit 오작동 방지(가격 경로는 ws/REST).
-        every { marketDataStore.getLatestPrice(any(), any()) } returns null
+        // store miss 기본값 — relaxed mock 이 non-null child mock 을 반환해 store-hit 으로 오작동하는 것 방지
+        // (가격 경로는 ws/REST).
+        every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { dailyResetManager.checkAndReset(any()) } returns false
         every { dailyResetManager.shouldSellForDailyReset(any()) } returns false
@@ -348,5 +350,61 @@ class TradingEngineTest {
         val engine = createEngine(strategies = listOf(golden))
         val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "removed_strategy") }
         assertEquals(golden.name, engine.resolveExitStrategy(state, golden).name)
+    }
+
+    // --- getRealtimePrice: store staleness 가드 (이슈 #27 — 얼어붙은 store 가격으로 매매 판단 방지) ---
+
+    private fun storeTicker(price: Double, ageSeconds: Long) = NormalizedTicker(
+        exchange = Exchange.UPBIT,
+        market = "BTC/KRW",
+        price = price,
+        timestamp = Instant.now().minusSeconds(ageSeconds),
+    )
+
+    private fun wsPrice(price: Double, ageMs: Long = 0) = RealtimePrice(
+        market = "KRW-BTC",
+        tradePrice = price,
+        signedChangeRate = 0.0,
+        accTradePrice24h = 0.0,
+        timestamp = System.currentTimeMillis() - ageMs,
+    )
+
+    @Test
+    fun `getRealtimePrice uses fresh store ticker`() {
+        val engine = createEngine()
+        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 1)
+
+        assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
+    }
+
+    @Test
+    fun `getRealtimePrice falls back to WS when store ticker stale`() {
+        val engine = createEngine()
+        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
+        every { webSocketClient.latestPrice("KRW-BTC") } returns wsPrice(70500000.0)
+
+        assertEquals(70500000.0, engine.getRealtimePrice("KRW-BTC"))
+    }
+
+    @Test
+    fun `getRealtimePrice returns null when store and WS both stale`() {
+        val engine = createEngine()
+        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
+        every { webSocketClient.latestPrice("KRW-BTC") } returns wsPrice(70500000.0, ageMs = 60_000)
+
+        assertNull(engine.getRealtimePrice("KRW-BTC")) // null → processTicker 의 REST 폴백 경로
+    }
+
+    @Test
+    fun `getRealtimePrice staleness boundary around 30s`() {
+        val engine = createEngine()
+        // 25s — threshold(30s) 안쪽 (5s 는 느린 CI 대비 테스트 실행 마진)
+        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 25)
+        assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
+
+        // 32s — threshold 바깥, WS 도 없음 → null
+        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 32)
+        every { webSocketClient.latestPrice("KRW-BTC") } returns null
+        assertNull(engine.getRealtimePrice("KRW-BTC"))
     }
 }
