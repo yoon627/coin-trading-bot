@@ -137,12 +137,12 @@ coin-trading-bot/
 |----------|------|
 | 손절 (Stop Loss) | 매수가 대비 -5% (`TRADING_MAX_LOSS_PCT`) |
 | 익절 (Take Profit) | 매수가 대비 +2% (`TRADING_TAKE_PROFIT_PCT`) |
-| 트레일링 스탑 | 수익 중일 때 고점 대비 -2% 하락 시 매도 (`TRADING_TRAILING_STOP_PCT`) |
-| 일일 리셋 | 09:00 KST 기준 매수 플래그 초기화 |
+| 트레일링 스탑 | 수익 중일 때 고점 대비 -2% 하락 시 매도 (`TRADING_TRAILING_STOP_PCT`). 고점 수익률이 arm 임계(`TRADING_TRAILING_ARM_PCT`, 기본 0=수익 중 즉시) 도달 후에만 평가 — arm 은 트레일 폭보다 클 때만 실효 |
+| 보유 상한 | 매수 후 N 거래일(09:00 KST 경계) 경과 시 강제 청산 (`TRADING_MAX_HOLD_DAYS`, 기본 1=다음 거래일 09:00). 매수 플래그(당일 1회 진입)는 거래일마다 초기화 |
 
 매도 기록의 `pnl_percent` 는 왕복 수수료(`TRADING_ROUND_TRIP_FEE_RATE`, 기본 0.1%p)를 차감한 net 값이다 (청산 판정 자체는 gross).
 
-> 최대 보유일(기본 7일)·50일 MA 시장 필터는 **백테스트 전용** 파라미터로, 라이브 봇에는 적용되지 않는다.
+> 50일 MA 시장 필터는 **백테스트 전용** 파라미터로, 라이브 봇에는 적용되지 않는다. 백테스트 API 의 미전송 파라미터 폴백은 라이브 설정과 동일하다(보유 상한 포함).
 
 ## API 엔드포인트
 

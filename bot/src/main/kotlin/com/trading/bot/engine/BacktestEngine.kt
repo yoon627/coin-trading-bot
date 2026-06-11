@@ -2,21 +2,25 @@ package com.trading.bot.engine
 
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
+import com.trading.common.strategy.ExitGates
 import com.trading.common.strategy.Indicators
 import com.trading.common.strategy.TradingStrategy
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
+// 디폴트는 라이브(TradingProperties)와 정합 — 직접 생성(스윕 등) 베이스라인이 라이브를 대표하도록 (#27).
+// parity 는 BacktestEngineTest 의 `config defaults match live trading defaults` 가 가드한다.
 data class BacktestConfig(
     val investRatio: Double = 1.0,
-    val takeProfitPct: Double = 5.0,
-    val maxLossPct: Double = 3.0,
+    val takeProfitPct: Double = 2.0,
+    val maxLossPct: Double = 5.0,
     val kValue: Double = 0.5,
     val feeRate: Double = 0.0005,
     val trailingStopPct: Double = 2.0,
-    val maxHoldDays: Int = 7,
-    val useMarketFilter: Boolean = true,
+    val trailingArmPct: Double = 0.0,
+    val maxHoldDays: Int = 1,
+    val useMarketFilter: Boolean = false,
     val chartExitEnabled: Boolean = false,
 )
 
@@ -108,16 +112,18 @@ class BacktestEngine(
     ) {
         state.peakPrice = max(state.peakPrice, currentPrice)
         val pnl = ((currentPrice - state.buyPrice) / state.buyPrice) * 100.0
+        val peakPnl = ((state.peakPrice - state.buyPrice) / state.buyPrice) * 100.0
         val dropFromPeak = ((state.peakPrice - currentPrice) / state.peakPrice) * 100.0
         val holdDays = index - state.buyIndex
 
         // 실거래(TradingEngine.decideSell)와 동일 우선순위: 손익% 안전망 > chartExit > 시간청산.
+        // 트레일링은 라이브와 같은 ExitGates 조건식, maxHoldDays coerce 도 라이브(DailyResetManager)와 대칭.
         val reason = when {
             pnl <= -config.maxLossPct -> "STOP_LOSS"
-            dropFromPeak >= config.trailingStopPct && pnl > 0 -> "TRAILING_STOP"
+            ExitGates.isTrailingStopTriggered(pnl, peakPnl, dropFromPeak, config.trailingStopPct, config.trailingArmPct) -> "TRAILING_STOP"
             pnl >= config.takeProfitPct -> "TAKE_PROFIT"
             config.chartExitEnabled && strategy.shouldSell(window, currentPrice, tradingProperties) -> "CHART_EXIT"
-            holdDays >= config.maxHoldDays -> "TIME_EXIT"
+            holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays) -> "TIME_EXIT"
             else -> null
         } ?: return
 

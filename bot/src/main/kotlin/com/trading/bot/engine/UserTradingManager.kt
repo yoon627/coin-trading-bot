@@ -180,7 +180,7 @@ class UserTradingManager(
     private fun createEngine(user: UserEntity): TradingEngine {
         val client = createUpbitClient(user)
         val positionManager = PositionManager(client, tradingProperties)
-        val dailyResetManager = DailyResetManager()
+        val dailyResetManager = DailyResetManager(tradingProperties)
 
         return TradingEngine(
             upbitClient = client,
