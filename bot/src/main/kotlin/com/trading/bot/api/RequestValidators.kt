@@ -60,6 +60,15 @@ class RequestValidators {
         return normalized
     }
 
+    /** KIS 국내주식 종목코드 — 6자리 숫자(PDNO). 해외(알파벳)는 Phase 2. */
+    fun normalizeKisSymbol(value: String): String {
+        val normalized = value.trim()
+        if (!KIS_SYMBOL_REGEX.matches(normalized)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "KIS symbol must be 6 digits")
+        }
+        return normalized
+    }
+
     fun normalizeKisCano(value: String): String {
         val normalized = value.trim()
         if (!KIS_CANO_REGEX.matches(normalized)) {
@@ -153,6 +162,7 @@ class RequestValidators {
         private val API_KEY_REGEX = Regex("^[A-Za-z0-9_-]+$")
         private val KIS_CANO_REGEX = Regex("^\\d{8}$")
         private val KIS_PRDT_REGEX = Regex("^\\d{2}$")
+        private val KIS_SYMBOL_REGEX = Regex("^\\d{6}$")
         private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
         private const val MAX_ORDER_AMOUNT = 10_000_000.0  // 1000만원

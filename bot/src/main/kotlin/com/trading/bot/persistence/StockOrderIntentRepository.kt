@@ -10,6 +10,9 @@ interface StockOrderIntentRepository : R2dbcRepository<StockOrderIntentEntity, L
 
     fun findByClientRef(clientRef: String): Mono<StockOrderIntentEntity>
 
+    @Query("SELECT * FROM stock_order_intent WHERE user_id = :userId ORDER BY created_at DESC LIMIT :limit")
+    fun findByUserId(userId: Long, limit: Int): Flux<StockOrderIntentEntity>
+
     /** (user, exchange, account, symbol) 의 활성(비terminal) 주문 — 신규주문 사전 가드용. */
     @Query(
         """SELECT * FROM stock_order_intent

@@ -23,13 +23,16 @@ updated: 2026-06-14
 - 2026-06-14: 사용자 결정 — **실계정 모의투자 스모크부터**. env-gated `KisPaperSmokeTest`(KIS_SMOKE=true 일 때만) 추가: read 경로(token/현재가/잔고/당일조회) + 선택 주문경로(KIS_SMOKE_PLACE, 1주 지정가). 사용자가 본인 모의 자격증명으로 직접 실행 → 결과(필드/파라미터/tr_id 적합성) 회신 대기.
 - 2026-06-14: 사용자 질문 반영 — (1) **해외주식**: KIS 는 `/uapi/overseas-stock/...`(별도 tr_id/필드, 같은 키)로 지원하나 현재 구현은 국내 전용 → 해외는 별도 작업(D15). (2) **.env 전역 자격증명 자동사용**: Upbit 패턴 미러로 `KisProperties`(appKey/appSecret/cano/acntPrdtCd/paper) + `KisClientFactory.defaultClient()` + application.yml + .env.example×2 + compose×2 + deploy.sh render_server_env 전달(PR#9 footgun 방지) 추가. 스모크도 동일 env(KIS_APP_KEY…)로 통일 — .env 한 곳에 넣으면 앱·스모크 공용. 전역 .env 평문은 self-host 표준(보안 무이슈), DB 경로(멀티유저)는 암호화 유지. **391 테스트 0 실패.**
 - 2026-06-14: 사용자 방향전환 — **유저별 입력이 주 경로**(.env 전역은 operator/dev fallback 으로 유지, Upbit 패턴 동일). 구현: `POST /api/user/kis-keys`(인증·본인만) + getMe `has_kis_keys`/`kis_paper`, `RequestValidators` KIS 검증(ASCII printable·길이·CANO 8/PRDT 2), `UserSecretsService.encryptKisKeys`(**appKey/appSecret 둘 다 AES-GCM**), `KisClientFactory.invalidate`, SPA Settings 폼(api.js/screens.jsx). **code-reviewer(Claude)+codex 병행** → HIGH 1(sanitizer KIS 키 유출)·Major 2(검증 byte/ASCII, stale client race)·minor 수정: LogMessageSanitizer 에 appkey/appsecret/CANO 마스킹, validator ASCII 제약, KisClientFactory fingerprint 캐시, has_kis_keys 4필드. **398 테스트 0 실패.** (미push)
+- 2026-06-14: 사용자 "이어서 진행해" → **vertical slice 2a: 수동 주식주문 엔드포인트**. `KisTradeController`(POST /api/kis/order, GET /api/kis/orders) — 등록된 유저 KIS 키(forUser)로 `StockOrderService`(WAL) 경유 주문 + 주문조회. RequestValidators.normalizeKisSymbol(6자리), StockOrderIntentRepository.findByUserId. live-enabled=false 면 DRY_RUN, keys 4필드 가드(forUser 500 방지). **403 테스트 0 실패.** code-reviewer subagent 도구오류로 미산출 → 메인 자체 보안점검(인가·실주문가드·검증·유출·WAL정합) 통과. (미push)
 
 # Next (Phase 2 — 후속 GitHub Issue 로 분리)
 
-- **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest` 실행 → KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정.
+- **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest` 실행 → KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정. (이제 `POST /api/kis/order` 로도 검증 가능.)
 
-- **D15 해외주식(미국 등)**: `/uapi/overseas-stock/...` 클라이언트 메서드(주문/조회/시세, tr_id·OVRS_EXCG_CD·통화 다름) 추가. 같은 appkey/계좌 사용. 정확 스펙은 공식 문서 대조 후(추측 금지). 잔재 `MarketPair.toKisFormat("AAPL/USD")` 활용 가능.
-- **엔진 배선**: 주식 전략 루프 + UserTradingManager 류 오케스트레이션 + KIS 시세수집(marketdata) 이식. 부팅 reconcile→엔진시작 순서 보장(D10). 엔진은 `KisClientFactory.defaultClient()`(전역 .env) 또는 forUser(멀티유저)로 클라이언트 획득.
+- **2b SPA 주식 화면**: 수동 주문/주문조회 UI(현재 API 만 존재, 화면 미배선).
+- **2c 자율 엔진**: 주식 전략 루프 + KIS 시세수집(marketdata) + UserTradingManager 류 오케스트레이션. 부팅 reconcile→엔진시작 순서 보장(D10). 클라이언트는 forUser(멀티유저)/defaultClient(전역).
+- **D15 해외주식(미국 등)**: `/uapi/overseas-stock/...` 클라이언트 메서드(주문/조회/시세, tr_id·OVRS_EXCG_CD·통화 다름) 추가. 같은 appkey/계좌. 정확 스펙은 공식 문서 대조 후(추측 금지).
+- **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **주문취소 WAL**(D6): CANCEL_REQUESTED/CANCEL_UNKNOWN 상태기계.
 - **NEEDS_REVIEW 수동 해소 API/runbook**(M-c): partial unique index 가 활성 슬롯을 점유하므로 미해결 시 종목 잠김.
