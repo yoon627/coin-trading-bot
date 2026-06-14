@@ -8,17 +8,19 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V14) |
+| **마이그레이션** | Flyway (V1~V15) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
-| **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
+| **암호화** | AES-GCM 256-bit (사용자별 Upbit/KIS API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
 | **배포** | AWS EC2 t4g.medium (arm64, 4GB) |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
+
+> **KIS 주식 봇 (Phase 1 — 기반)**: 기존 Upbit 크립토 봇과 같은 인프라(보안·R2DBC·config·WebClient) 위에 한국투자증권 OpenAPI 연동 기반이 `bot/kis/`(별도 gradle 모듈 아님)에 추가됐다. Phase 1 범위 = 브로커 클라이언트(token 24h 캐싱·주문·조회·시세) + **주문유실 방지 WAL**(`stock_order_intent` 테이블 + `StockOrderService` write-ahead + `StockOrderReconciler` 상태기계). 전략 루프·주식 시세수집·UI 는 Phase 2(미배선). 안전상 기본 dry-run(`KIS_LIVE_ENABLED=false`). 설계·진행 기록: `.claude/plans/2026-06-14-stock-bot-kis/`.
 
 ---
 

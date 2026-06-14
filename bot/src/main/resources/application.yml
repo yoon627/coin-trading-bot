@@ -37,6 +37,20 @@ upbit:
   secret-key: ${UPBIT_SECRET_KEY:}
   base-url: https://api.upbit.com
 
+# KIS(한국투자증권) 주식 봇. 실주문 2축 안전장치:
+#  - live-enabled=false(기본): 주문을 실제로 보내지 않고 WAL 에 DRY_RUN 으로만 기록.
+#  - 사용자별 kis_paper(users): 실전(:9443) vs 모의(:29443) 환경/tr_id 선택.
+kis:
+  real-base-url: ${KIS_REAL_BASE_URL:https://openapi.koreainvestment.com:9443}
+  paper-base-url: ${KIS_PAPER_BASE_URL:https://openapivts.koreainvestment.com:29443}
+  cust-type: ${KIS_CUST_TYPE:P}
+  live-enabled: ${KIS_LIVE_ENABLED:false}
+  max-order-amount: ${KIS_MAX_ORDER_AMOUNT:10000000}
+  token-refresh-skew-seconds: ${KIS_TOKEN_REFRESH_SKEW_SECONDS:600}
+  reconcile-interval-ms: ${KIS_RECONCILE_INTERVAL_MS:15000}
+  reconcile-grace-seconds: ${KIS_RECONCILE_GRACE_SECONDS:120}
+  reconcile-stale-seconds: ${KIS_RECONCILE_STALE_SECONDS:1800}
+
 trading:
   tickers: ${TRADING_TICKERS:KRW-BTC}
   strategy: ${TRADING_STRATEGY:combined}
