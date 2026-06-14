@@ -105,6 +105,17 @@ updated: 2026-06-14
 
 ## (정정) MEDIUM: `Exchange.kt:3` 엔 `KIS`만 존재, `STOCK`은 `AssetType.STOCK`(별도 enum). 잔재 표현 정정.
 
+## D16~D22 — 2c 자율엔진/2b SPA 설계 (design 워크플로 + 적대적 비판 반영, 2026-06-14)
+- **D16 구조**: 크립토 engine/* 상태기계·매도우선순위 재사용하되 "pending 진실원천 = WAL 행"(메모리 아님). 신규 `kis/{marketdata,engine}` 패키지. 전략 7종 무변경(shouldBuyNormalized/Sell on NormalizedCandle). 시세는 `MarketDataStore`(key `KIS:005930:1d`) 재사용. **일봉 only MVP**(분봉은 KIS 당일·30건/호출 한계로 후속).
+- **D17 KIS 캔들 스펙**: 일/주/월 `inquire-daily-itemchartprice`(tr_id FHKST03010100, FID_PERIOD_DIV_CODE D/W/M, output2 OHLCV), 분봉 FHKST03010200(당일한정). 휴장 `chk-holiday`(CTCA0903R, opnd_yn). 정규장 09:00–15:30 KST 하드코딩 게이트. 시세는 실전도메인 권장(모의 가능여부 스모크 미확인).
+- **D18 [C1 fix]** dry-run 에서 DRY_RUN=terminal→활성슬롯 미점유→무한 INSERT 위험. → 엔진/`StockPositionManager.submitBuy` 가 매수 제출 성공 시 **메모리 `StockPosition.boughtToday=true`(+dry-run 은 position=true 시뮬) 즉시 마킹**해 재진입 차단.
+- **D19 [C2 fix]** WAL 활성 불변식에 **`side` 추가**(V16: `uq_stock_order_intent_active` 를 (user,exchange,account,symbol,side) 로 재정의) → 미체결 매수가 손절매도 차단 안 함. `findActiveByKey` 에 side 인자. **MVP 매수=시장가**(미체결창 최소화).
+- **D20 [C3 fix]** reconcile UNKNOWN 매칭에서 **이미 다른 WAL 행에 링크된 ODNO 는 candidates 에서 제외**(자율 반복매매 동일수량 오매칭/종목잠금 방지). ODNO-우선 유지.
+- **D21 [M1/M2/M3 fix]** 부팅순서: reconciler `running` AtomicBoolean→**Mutex** + `reconcileNow()`(완료 await), 매니저가 엔진기동 전 호출(M1). 매도수량=**`ord_psbl_qty`**(KisHolding.orderableQty, 0이면 보류 — locked 미러)(M2). 매수금액=**min(예수금, D+2정산)×보수버퍼**(미수방지)(M3).
+- **D22 [M5/M6 fix]** `bot_state` 에 `exchange` 컬럼(V16) + Upbit `UserTradingManager` 호출부 전수(`findByUserId`×2, `findByRunningTrue`×1)를 `…AndExchange("UPBIT")` 로 좁힘. A묶음(KisClient 캔들 + DTO: KisCandle/KisCandlePeriod, KisHolding.orderableQty) 계약을 **병렬 구현 전 메인이 선확정**.
+- **구현 분담**: 안전핵심(메인 직접) = A(client/DTO 캔들·헬퍼)+V16+StockOrderService side가드+Reconciler mutex/odno제외+BotState/Upbit+KisMarketCalendar+StockPositionManager+KisStockTradingEngine+StockUserTradingManager. 워크플로 병렬 = KisMarketDataService·StockCandleAdapter·properties·StockBotController·SPA·각 테스트.
+- **code-reviewer 위임 예정(비판 지적)**: tick(호가단위) 보정, 상하한가/거래정지/VI 주문거부 분류, 매수 시장가 슬리피지 버퍼 충분성.
+
 # Key Files
 
 ## 재사용/참조 (Upbit 패턴 템플릿)

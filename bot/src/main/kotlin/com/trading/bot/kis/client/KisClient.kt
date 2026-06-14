@@ -1,5 +1,7 @@
 package com.trading.bot.kis.client
 
+import com.trading.bot.kis.domain.KisCandle
+import com.trading.bot.kis.domain.KisCandlePeriod
 import com.trading.bot.kis.domain.KisCcldRow
 import com.trading.bot.kis.domain.KisHolding
 import com.trading.bot.kis.domain.KisOrderAck
@@ -25,6 +27,18 @@ interface KisClient {
 
     /** 현재가(원). */
     suspend fun getCurrentPrice(symbol: String): Long
+
+    /** 일/주/월봉. from/to=YYYYMMDD. 시세는 실전도메인 권장(모의 가능여부 스모크 확인). */
+    suspend fun getDailyCandles(
+        symbol: String,
+        from: String,
+        to: String,
+        period: KisCandlePeriod = KisCandlePeriod.D,
+        adjusted: Boolean = false,
+    ): List<KisCandle>
+
+    /** 당일 분봉(1분, 호출당 30건). baseTime=HHMMSS 기준 과거로 회수. */
+    suspend fun getMinuteCandles(symbol: String, baseTime: String): List<KisCandle>
 }
 
 /**

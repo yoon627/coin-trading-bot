@@ -39,7 +39,7 @@ class StockOrderServiceTest {
         repository = mockk()
         client = mockk()
         // 활성 주문 없음 (사전 가드 통과).
-        every { repository.findActiveByKey(any(), any(), any(), any(), any()) } returns Mono.empty()
+        every { repository.findActiveByKey(any(), any(), any(), any(), any(), any()) } returns Mono.empty()
         // save 는 id 부여된 SUBMITTING/DRY_RUN 엔티티 반환.
         every { repository.save(any()) } answers { Mono.just((firstArg() as StockOrderIntentEntity).copy(id = 100L)) }
         every { repository.transition(any(), any(), any(), any(), any(), any(), any()) } returns Mono.just(1L)
@@ -148,7 +148,7 @@ class StockOrderServiceTest {
 
     @Test
     fun `existing active order is rejected`() = runTest {
-        every { repository.findActiveByKey(any(), any(), any(), any(), any()) } returns
+        every { repository.findActiveByKey(any(), any(), any(), any(), any(), any()) } returns
             Mono.just(StockOrderIntentEntity(id = 7, userId = 1, clientRef = "x", accountNo = "12345678-01", symbol = "005930", side = "BUY", orderType = "LIMIT", qty = 10, status = StockOrderStatus.PLACED.name, orderDate = "20260614"))
 
         assertThrows(StockOrderValidationException::class.java) {

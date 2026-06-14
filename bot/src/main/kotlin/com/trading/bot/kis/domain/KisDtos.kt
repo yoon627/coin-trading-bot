@@ -113,6 +113,8 @@ data class KisHolding(
     @JsonProperty("pchs_avg_pric") val pchsAvgPric: String = "0",
 ) {
     fun heldQty(): Long = hldgQty.toLongOrNull() ?: 0
+    /** 매도가능수량 — 당일매수 결제전·매도주문중 수량은 제외된다(보유수량과 다름). 매도는 이 값 사용(plan D21/M2). */
+    fun orderableQty(): Long = ordPsblQty.toLongOrNull() ?: 0
     fun avgBuyPrice(): Double = pchsAvgPric.toDoubleOrNull() ?: 0.0
 }
 
@@ -121,6 +123,8 @@ data class KisAccountSummary(
     @JsonProperty("prvs_rcdl_excc_amt") val prvsRcdlExccAmt: String = "0", // 가수도정산금액(D+2)
 ) {
     fun depositTotal(): Long = dncaTotAmt.toLongOrNull() ?: 0
+    /** 가수도정산금액(D+2 예수금). 매수 가용현금 보수추정에 depositTotal 과 함께 min 으로 사용(plan D21/M3). */
+    fun settledD2(): Long = prvsRcdlExccAmt.toLongOrNull() ?: 0
 }
 
 // ---- 현재가 (inquire-price) ----
@@ -146,3 +150,72 @@ data class KisTokenResponse(
     @JsonProperty("expires_in") val expiresIn: Long = 0,
     @JsonProperty("access_token_token_expired") val accessTokenExpired: String? = null,
 )
+
+// ---- 캔들(OHLC) — 일/주/월 inquire-daily-itemchartprice(FHKST03010100), 분봉 inquire-time-itemchartprice(FHKST03010200) ----
+
+enum class KisCandlePeriod(val code: String) { D("D"), W("W"), M("M") }
+
+/** 엔진/store 가 NormalizedCandle 로 변환해 쓰는 내부 캔들. 수량/금액은 정수(원). */
+data class KisCandle(
+    val date: String,        // stck_bsop_date YYYYMMDD
+    val time: String? = null, // stck_cntg_hour HHMMSS (분봉만)
+    val open: Long,
+    val high: Long,
+    val low: Long,
+    val close: Long,
+    val volume: Long,
+)
+
+data class KisDailyCandleResponse(
+    @JsonProperty("rt_cd") val rtCd: String = "",
+    @JsonProperty("msg_cd") val msgCd: String? = null,
+    @JsonProperty("msg1") val msg1: String? = null,
+    @JsonProperty("output2") val output2: List<KisDailyCandleRow> = emptyList(),
+) {
+    fun isSuccess(): Boolean = rtCd == "0"
+}
+
+data class KisDailyCandleRow(
+    @JsonProperty("stck_bsop_date") val date: String = "",
+    @JsonProperty("stck_oprc") val open: String = "0",
+    @JsonProperty("stck_hgpr") val high: String = "0",
+    @JsonProperty("stck_lwpr") val low: String = "0",
+    @JsonProperty("stck_clpr") val close: String = "0",
+    @JsonProperty("acml_vol") val volume: String = "0",
+) {
+    fun toCandle(): KisCandle = KisCandle(
+        date = date,
+        open = open.toLongOrNull() ?: 0,
+        high = high.toLongOrNull() ?: 0,
+        low = low.toLongOrNull() ?: 0,
+        close = close.toLongOrNull() ?: 0,
+        volume = volume.toLongOrNull() ?: 0,
+    )
+}
+
+data class KisMinuteCandleResponse(
+    @JsonProperty("rt_cd") val rtCd: String = "",
+    @JsonProperty("output2") val output2: List<KisMinuteCandleRow> = emptyList(),
+) {
+    fun isSuccess(): Boolean = rtCd == "0"
+}
+
+data class KisMinuteCandleRow(
+    @JsonProperty("stck_bsop_date") val date: String = "",
+    @JsonProperty("stck_cntg_hour") val time: String = "",
+    @JsonProperty("stck_oprc") val open: String = "0",
+    @JsonProperty("stck_hgpr") val high: String = "0",
+    @JsonProperty("stck_lwpr") val low: String = "0",
+    @JsonProperty("stck_prpr") val close: String = "0", // 분봉은 현재가=해당 봉 종가
+    @JsonProperty("cntg_vol") val volume: String = "0", // 봉 거래량(acml_vol 은 누적이라 쓰지 말 것)
+) {
+    fun toCandle(): KisCandle = KisCandle(
+        date = date,
+        time = time,
+        open = open.toLongOrNull() ?: 0,
+        high = high.toLongOrNull() ?: 0,
+        low = low.toLongOrNull() ?: 0,
+        close = close.toLongOrNull() ?: 0,
+        volume = volume.toLongOrNull() ?: 0,
+    )
+}

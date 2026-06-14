@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.reactor.mono
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.event.EventListener
@@ -24,7 +26,6 @@ import org.springframework.transaction.reactive.TransactionalOperator
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * WAL 주문 reconcile (주문유실 방지의 확정측). 비terminal 주문을 KIS 당일조회로 확정한다(plan D7~D10).
@@ -45,27 +46,36 @@ class StockOrderReconciler(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val running = AtomicBoolean(false)
+    // Mutex: 부팅(reconcileNow)은 완료까지 대기, 주기(scheduled)는 진행중이면 skip — 엔진기동 전 reconcile 완료 보장(M1/D21).
+    private val reconcileMutex = Mutex()
 
     @EventListener(ApplicationReadyEvent::class)
     fun onApplicationReady() {
         scope.launch {
             log.info("stock reconcile: boot pass starting")
-            reconcileOnce()
+            reconcileNow()
         }
     }
 
     @Scheduled(fixedDelayString = "\${kis.reconcile-interval-ms:15000}")
     fun scheduled() {
-        scope.launch { reconcileOnce() }
+        scope.launch {
+            if (reconcileMutex.tryLock()) {
+                try {
+                    runPass()
+                } finally {
+                    reconcileMutex.unlock()
+                }
+            } else {
+                log.debug("stock reconcile already in progress — skip periodic")
+            }
+        }
     }
 
-    /** 한 번의 reconcile 패스. 패스 중복은 in-process 가드로 방지. */
-    suspend fun reconcileOnce() {
-        if (!running.compareAndSet(false, true)) {
-            log.debug("stock reconcile already in progress — skip")
-            return
-        }
+    /** 완료까지 대기하는 reconcile 1패스 — 부팅/엔진기동 전 호출(진행중이면 끝날 때까지 대기 후 자기 패스 실행). */
+    suspend fun reconcileNow() = reconcileMutex.withLock { runPass() }
+
+    private suspend fun runPass() {
         try {
             val active = repository.findActive(StockOrderStatus.NON_TERMINAL_NAMES, BATCH_LIMIT)
                 .collectList().awaitSingle()
@@ -74,8 +84,6 @@ class StockOrderReconciler(
             active.groupBy { it.userId }.forEach { (userId, rows) -> reconcileUser(userId, rows) }
         } catch (e: Exception) {
             log.error("stock reconcile pass failed", e)
-        } finally {
-            running.set(false)
         }
     }
 
@@ -99,7 +107,9 @@ class StockOrderReconciler(
                 return@forEach
             }
             val byOdno = conclusions.filter { it.odno.isNotBlank() }.associateBy { it.odno }
-            dateRows.forEach { reconcileRow(it, conclusions, byOdno) }
+            // 이미 우리 WAL 의 다른 행에 링크된 ODNO 는 no-odno 매칭에서 제외(동일수량 반복매매 오매칭 방지 — C3/D20).
+            val knownOdnos = repository.findKnownOdnos(userId, date).collectList().awaitSingle().toSet()
+            dateRows.forEach { reconcileRow(it, conclusions, byOdno, knownOdnos) }
         }
     }
 
@@ -107,6 +117,7 @@ class StockOrderReconciler(
         row: StockOrderIntentEntity,
         conclusions: List<KisCcldRow>,
         byOdno: Map<String, KisCcldRow>,
+        knownOdnos: Set<String>,
     ) {
         if (!row.odno.isNullOrBlank()) {
             val match = byOdno[row.odno]
@@ -117,9 +128,10 @@ class StockOrderReconciler(
             }
             return
         }
-        // ODNO 미상(SUBMITTING/UNKNOWN) — symbol+side+qty 로 매칭.
+        // ODNO 미상(SUBMITTING/UNKNOWN) — symbol+side+qty 로 매칭. 이미 링크된 ODNO 는 제외.
         val candidates = conclusions.filter {
-            it.pdno == row.symbol && it.side()?.name == row.side && it.orderQty() == row.qty
+            it.pdno == row.symbol && it.side()?.name == row.side && it.orderQty() == row.qty &&
+                it.odno !in knownOdnos
         }
         when (candidates.size) {
             1 -> applyConclusion(row, candidates[0], linkOdno = candidates[0].odno)

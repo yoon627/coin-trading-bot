@@ -52,6 +52,7 @@ class StockOrderReconcilerTest {
         every { clientFactory.forUser(any()) } returns client
         every { repository.transition(any(), any(), any(), any(), any(), any(), any()) } returns Mono.just(1L)
         every { repository.claimAudit(any()) } returns Mono.just(1L)
+        every { repository.findKnownOdnos(any(), any()) } returns Flux.empty()
         every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
 
         reconciler = StockOrderReconciler(
@@ -88,7 +89,7 @@ class StockOrderReconcilerTest {
         val exec = slot<TradeExecutionEntity>()
         every { tradeExecutionRepository.save(capture(exec)) } returns Mono.just(mockk(relaxed = true))
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify { repository.transition(100L, "PLACED", "FILLED", null, null, 10, null) }
         coVerify(exactly = 1) { repository.claimAudit(100L) }
@@ -102,7 +103,7 @@ class StockOrderReconcilerTest {
     fun `PLACED partial fill stays PARTIAL without audit`() = runTest {
         activate(row(StockOrderStatus.PLACED, odno = "0000117057"), listOf(ccld(totCcld = "4", rmn = "6")))
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify { repository.transition(100L, "PLACED", "PARTIAL", null, null, 4, null) }
         coVerify(exactly = 0) { repository.claimAudit(any()) }
@@ -113,7 +114,7 @@ class StockOrderReconcilerTest {
     fun `UNKNOWN with single match links ODNO and becomes PLACED`() = runTest {
         activate(row(StockOrderStatus.UNKNOWN, odno = null), listOf(ccld(odno = "0000117057", totCcld = "0", rmn = "10")))
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify { repository.transition(100L, "UNKNOWN", "PLACED", "0000117057", null, 0, null) }
     }
@@ -123,7 +124,7 @@ class StockOrderReconcilerTest {
         val old = now.minusSeconds(300) // grace=120s 초과
         activate(row(StockOrderStatus.UNKNOWN, odno = null, createdAt = old), emptyList())
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify { repository.transition(100L, "UNKNOWN", "NEEDS_REVIEW", null, null, 0, any()) }
         coVerify(exactly = 0) { repository.transition(any(), any(), "FAILED", any(), any(), any(), any()) }
@@ -134,7 +135,7 @@ class StockOrderReconcilerTest {
         val recent = now.minusSeconds(30) // grace=120s 이내
         activate(row(StockOrderStatus.UNKNOWN, odno = null, createdAt = recent), emptyList())
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify(exactly = 0) { repository.transition(any(), any(), any(), any(), any(), any(), any()) }
     }
@@ -146,7 +147,7 @@ class StockOrderReconcilerTest {
             listOf(ccld(odno = "A"), ccld(odno = "B")),
         )
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify { repository.transition(100L, "UNKNOWN", "NEEDS_REVIEW", null, null, 0, any()) }
     }
@@ -155,7 +156,7 @@ class StockOrderReconcilerTest {
     fun `cancelled with partial fill becomes CANCELLED and records the fill`() = runTest {
         activate(row(StockOrderStatus.PLACED, odno = "0000117057"), listOf(ccld(totCcld = "3", rmn = "7", cncl = "Y")))
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify { repository.transition(100L, "PLACED", "CANCELLED", null, null, 3, null) }
         coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
@@ -166,7 +167,7 @@ class StockOrderReconcilerTest {
         activate(row(StockOrderStatus.PLACED, odno = "0000117057"), listOf(ccld(totCcld = "10", rmn = "0")))
         every { repository.claimAudit(100L) } returns Mono.just(0L) // 이미 다른 패스가 audit 기록
 
-        reconciler.reconcileOnce()
+        reconciler.reconcileNow()
 
         coVerify(exactly = 0) { tradeExecutionRepository.save(any()) }
     }

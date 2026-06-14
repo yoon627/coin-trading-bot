@@ -13,19 +13,24 @@ interface StockOrderIntentRepository : R2dbcRepository<StockOrderIntentEntity, L
     @Query("SELECT * FROM stock_order_intent WHERE user_id = :userId ORDER BY created_at DESC LIMIT :limit")
     fun findByUserId(userId: Long, limit: Int): Flux<StockOrderIntentEntity>
 
-    /** (user, exchange, account, symbol) 의 활성(비terminal) 주문 — 신규주문 사전 가드용. */
+    /** (user, exchange, account, symbol, side) 의 활성(비terminal) 주문 — 신규주문 사전 가드용. side 포함(D19/C2). */
     @Query(
         """SELECT * FROM stock_order_intent
            WHERE user_id = :userId AND exchange = :exchange AND account_no = :accountNo
-                 AND symbol = :symbol AND status IN (:statuses) LIMIT 1""",
+                 AND symbol = :symbol AND side = :side AND status IN (:statuses) LIMIT 1""",
     )
     fun findActiveByKey(
         userId: Long,
         exchange: String,
         accountNo: String,
         symbol: String,
+        side: String,
         statuses: Collection<String>,
     ): Mono<StockOrderIntentEntity>
+
+    /** 당일 우리 WAL 에 이미 링크된 ODNO 들 — reconcile UNKNOWN 매칭에서 제외용(D20/C3). */
+    @Query("SELECT odno FROM stock_order_intent WHERE user_id = :userId AND order_date = :orderDate AND odno IS NOT NULL")
+    fun findKnownOdnos(userId: Long, orderDate: String): Flux<String>
 
     /** reconcile 대상(비terminal) — 오래된 것부터. */
     @Query(

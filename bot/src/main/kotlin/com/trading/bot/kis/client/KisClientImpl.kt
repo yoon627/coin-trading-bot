@@ -1,7 +1,11 @@
 package com.trading.bot.kis.client
 
 import com.trading.bot.kis.domain.KisBalanceResponse
+import com.trading.bot.kis.domain.KisCandle
+import com.trading.bot.kis.domain.KisCandlePeriod
 import com.trading.bot.kis.domain.KisCcldRow
+import com.trading.bot.kis.domain.KisDailyCandleResponse
+import com.trading.bot.kis.domain.KisMinuteCandleResponse
 import com.trading.bot.kis.domain.KisDailyCcldResponse
 import com.trading.bot.kis.domain.KisHolding
 import com.trading.bot.kis.domain.KisOrderAck
@@ -166,6 +170,60 @@ class KisClientImpl(
             throw KisApiException(definitiveReject = false, rtCd = resp.rtCd, msg = "invalid current price for $symbol (rt_cd=${resp.rtCd}, price=$price)")
         }
         return price
+    }
+
+    override suspend fun getDailyCandles(
+        symbol: String,
+        from: String,
+        to: String,
+        period: KisCandlePeriod,
+        adjusted: Boolean,
+    ): List<KisCandle> {
+        val token = tokenProvider.token()
+        val resp = webClient.get()
+            .uri { b ->
+                b.path("/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice")
+                    .queryParam("FID_COND_MRKT_DIV_CODE", "J")
+                    .queryParam("FID_INPUT_ISCD", symbol)
+                    .queryParam("FID_INPUT_DATE_1", from)
+                    .queryParam("FID_INPUT_DATE_2", to)
+                    .queryParam("FID_PERIOD_DIV_CODE", period.code)
+                    .queryParam("FID_ORG_ADJ_PRC", if (adjusted) "0" else "1")
+                    .build()
+            }
+            .headers(authHeaders(token, "FHKST03010100"))
+            .retrieve()
+            .onStatus(HttpStatusCode::isError) { transportError(it) }
+            .bodyToMono<KisDailyCandleResponse>()
+            .awaitSingle()
+        if (!resp.isSuccess()) {
+            throw KisApiException(definitiveReject = false, rtCd = resp.rtCd, msg = resp.msg1 ?: "daily candle query failed")
+        }
+        // 오래된→최신 순으로 정렬(KIS 는 최신순 반환) — 지표 계산 편의.
+        return resp.output2.map { it.toCandle() }.sortedBy { it.date }
+    }
+
+    override suspend fun getMinuteCandles(symbol: String, baseTime: String): List<KisCandle> {
+        val token = tokenProvider.token()
+        val resp = webClient.get()
+            .uri { b ->
+                b.path("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice")
+                    .queryParam("FID_COND_MRKT_DIV_CODE", "J")
+                    .queryParam("FID_INPUT_ISCD", symbol)
+                    .queryParam("FID_INPUT_HOUR_1", baseTime)
+                    .queryParam("FID_PW_DATA_INCU_YN", "N")
+                    .queryParam("FID_ETC_CLS_CODE", "")
+                    .build()
+            }
+            .headers(authHeaders(token, "FHKST03010200"))
+            .retrieve()
+            .onStatus(HttpStatusCode::isError) { transportError(it) }
+            .bodyToMono<KisMinuteCandleResponse>()
+            .awaitSingle()
+        if (!resp.isSuccess()) {
+            throw KisApiException(definitiveReject = false, rtCd = resp.rtCd, msg = "minute candle query failed")
+        }
+        return resp.output2.map { it.toCandle() }.sortedWith(compareBy({ it.date }, { it.time }))
     }
 
     private fun authHeaders(token: String, trId: String): (HttpHeaders) -> Unit = { h ->

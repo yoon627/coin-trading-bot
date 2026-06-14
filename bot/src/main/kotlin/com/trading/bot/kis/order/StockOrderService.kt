@@ -51,13 +51,14 @@ class StockOrderService(
         validate(client, cmd)
         val accountNo = "${cmd.cano}-${cmd.acntPrdtCd}"
 
-        // 사전 가드(흔한 경우). 경합은 DB partial unique index 가 최종 차단.
+        // 사전 가드(흔한 경우, 같은 종목·같은 side). 경합은 DB partial unique index 가 최종 차단.
+        // side 포함이라 미체결 매수가 손절매도를 막지 않는다(D19/C2).
         val existing = repository.findActiveByKey(
-            cmd.userId, EXCHANGE, accountNo, cmd.symbol, StockOrderStatus.NON_TERMINAL_NAMES,
+            cmd.userId, EXCHANGE, accountNo, cmd.symbol, cmd.side.name, StockOrderStatus.NON_TERMINAL_NAMES,
         ).awaitSingleOrNull()
         if (existing != null) {
             throw StockOrderValidationException(
-                "active order exists for ${cmd.symbol} (id=${existing.id}, status=${existing.status})",
+                "active ${cmd.side} order exists for ${cmd.symbol} (id=${existing.id}, status=${existing.status})",
             )
         }
 
