@@ -19,9 +19,12 @@ updated: 2026-06-14
 - 2026-06-14: plan-reviewer(Claude)+codex 병행 리뷰 → CRITICAL 2 / HIGH 6 / MEDIUM 5. 전부 수용해 plan 전면 보강(D4 트랜잭션 3분리, D5 폐기·dry-run 신설, D7~D13 추가, Phase 1a~1e 재분할). `# Review Disposition` 기록.
 - 2026-06-14: 사용자 승인("진행해"). **1a [researcher] KIS 스펙 확정 완료** → D14 추가. D11 해소(`user_exchange_keys` 미배선 잔재 확인 grep 0건 → `users.kis_*` 컬럼). 구현(1b~) 착수.
 - 2026-06-14: **1b~1e 구현 완료**. migration V14(WAL)/V15(키), KisProperties/Config, KisDtos, KisClient/Impl/TokenProvider/Factory, StockOrderStatus/Service/Reconciler, StockOrderIntent 엔티티/repo, UserEntity+UserSecretsService KIS 확장. application.yml/.env.example×2/README/PROJECT_ANALYSIS 동기화. **테스트 26개(KIS) / 전체 387개 통과, 0 실패** (JDK 21 로 빌드 — 로컬 default JDK25 가 Gradle8.12 Kotlin DSL 비호환이라 `JAVA_HOME=jbr-21.0.9` 지정 필요).
-- 2026-06-14: **code-reviewer(Claude) 완료 — Critical 1 + Major 5 + minor. codex 병행은 환경(MCP/sandbox) 오류로 결론 미산출.** 수정: C1 연속조회 페이징, M1/M4 시장가 price 가드(0/실패 시 예외+버퍼), M-a 미사용 프로퍼티 제거, getHoldings 테스트 추가. 범위조정: M2 positions 반영 Phase2 이관(D6/D9 정정). 후속 defer: M3/M5/M-b/M-c/M-f.
+- 2026-06-14: **code-reviewer(Claude) 완료 — Critical 1 + Major 5 + minor. codex 병행은 환경(MCP/sandbox) 오류로 결론 미산출.** 수정: C1 연속조회 페이징, M1/M4 시장가 price 가드(0/실패 시 예외+버퍼), M-a 미사용 프로퍼티 제거, getHoldings 테스트 추가. 범위조정: M2 positions 반영 Phase2 이관(D6/D9 정정). 후속 defer: M3/M5/M-b/M-c/M-f. (feat 0d9e409, chore(plan) e1bdf24 — 미push)
+- 2026-06-14: 사용자 결정 — **실계정 모의투자 스모크부터**. env-gated `KisPaperSmokeTest`(KIS_SMOKE=true 일 때만, 모의 :29443 고정) 추가: read 경로(token/현재가/잔고/당일조회) + 선택 주문경로(KIS_SMOKE_PLACE, 1주 지정가). 사용자가 본인 모의 자격증명으로 직접 실행 → 결과(필드/파라미터/tr_id 적합성) 회신 대기.
 
 # Next (Phase 2 — 후속 GitHub Issue 로 분리)
+
+- **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest` 실행 → KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정.
 
 - **엔진 배선**: 주식 전략 루프 + UserTradingManager 류 오케스트레이션 + KIS 시세수집(marketdata) 이식. 부팅 reconcile→엔진시작 순서 보장(D10).
 - **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
