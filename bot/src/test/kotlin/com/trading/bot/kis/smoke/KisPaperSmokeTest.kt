@@ -20,16 +20,16 @@ import java.time.format.DateTimeFormatter
  * 모의 도메인(:29443) 고정. 코드/단위테스트로 검증 불가한 항목(실 응답 필드·필수 query 파라미터·tr_id·
  * 토큰 발급)을 실 API 로 확인한다.
  *
- * 실행(자격증명이 대화/로그에 남지 않도록 **본인 터미널에서** 직접):
- *   export KIS_SMOKE=true
- *   export KIS_SMOKE_APPKEY=...        # KIS Developers 모의투자 appkey
- *   export KIS_SMOKE_APPSECRET=...     # 모의투자 appsecret
- *   export KIS_SMOKE_CANO=12345678     # 모의 종합계좌번호(앞 8자리)
- *   export KIS_SMOKE_PRDT=01           # 계좌상품코드(뒤 2자리)
- *   export KIS_SMOKE_SYMBOL=005930     # (선택) 조회 종목, 기본 삼성전자
+ * 자격증명은 앱과 **같은 .env 변수**(KIS_APP_KEY/…)를 쓴다 — .env 에 한 번 넣으면 앱·스모크 공용.
+ * 실행(시크릿이 대화/로그에 남지 않도록 **본인 터미널에서**; gradle 은 .env 를 자동 로드 안 하므로 source):
+ *   set -a; source .env; set +a       # .env 의 KIS_APP_KEY 등을 셸 env 로
+ *   export KIS_SMOKE=true              # 스모크 게이트(.env 에 안 넣었으면)
  *   JAVA_HOME=<jdk21> ./gradlew :bot:test --tests "*KisPaperSmokeTest*" -i
  *
- * 주문까지 검증(1주 지정가 매수, 모의계좌) — 추가로:
+ * 필요 .env 값: KIS_APP_KEY, KIS_APP_SECRET, KIS_CANO(앞 8자리), KIS_ACNT_PRDT_CD(뒤 2자리),
+ *   KIS_PAPER=true(모의), (선택) KIS_SMOKE_SYMBOL(기본 005930).
+ *
+ * 주문까지 검증(1주 지정가 매수) — 추가로:
  *   export KIS_SMOKE_PLACE=true
  *   export KIS_SMOKE_LIMIT_PRICE=50000 # 체결 안 되게 시장가보다 충분히 낮은 유효 호가 권장
  * 남은 미체결 주문은 모의 HTS/앱에서 취소하거나 장 마감 시 자동 실효.
@@ -42,20 +42,26 @@ class KisPaperSmokeTest {
     private fun env(key: String): String =
         requireNotNull(System.getenv(key)?.takeIf { it.isNotBlank() }) { "$key 환경변수 필요" }
 
+    private val paper = System.getenv("KIS_PAPER")?.lowercase() != "false" // 기본 true(모의)
+
     private fun client(): KisClient {
-        val baseUrl = System.getenv("KIS_PAPER_BASE_URL")?.takeIf { it.isNotBlank() }
-            ?: "https://openapivts.koreainvestment.com:29443"
+        val baseUrl = if (paper) {
+            System.getenv("KIS_PAPER_BASE_URL")?.takeIf { it.isNotBlank() } ?: "https://openapivts.koreainvestment.com:29443"
+        } else {
+            System.getenv("KIS_REAL_BASE_URL")?.takeIf { it.isNotBlank() } ?: "https://openapi.koreainvestment.com:9443"
+        }
         val webClient = WebClient.builder()
             .baseUrl(baseUrl)
             .codecs { it.defaultCodecs().maxInMemorySize(1024 * 1024) }
             .build()
-        val appKey = env("KIS_SMOKE_APPKEY")
-        val appSecret = env("KIS_SMOKE_APPSECRET")
+        val appKey = env("KIS_APP_KEY")
+        val appSecret = env("KIS_APP_SECRET")
         val tokenProvider = KisTokenProvider(webClient, appKey, appSecret, refreshSkewSeconds = 600)
+        println("[KIS smoke] target=${if (paper) "PAPER(모의)" else "REAL(실전)"} $baseUrl")
         return KisClientImpl(
             webClient, tokenProvider, appKey, appSecret,
-            cano = env("KIS_SMOKE_CANO"), acntPrdtCd = env("KIS_SMOKE_PRDT"),
-            paper = true, custType = "P",
+            cano = env("KIS_CANO"), acntPrdtCd = env("KIS_ACNT_PRDT_CD"),
+            paper = paper, custType = "P",
         )
     }
 
@@ -87,7 +93,7 @@ class KisPaperSmokeTest {
         val c = client()
         val ack = c.placeOrder(
             KisOrderRequest(
-                cano = env("KIS_SMOKE_CANO"), acntPrdtCd = env("KIS_SMOKE_PRDT"),
+                cano = env("KIS_CANO"), acntPrdtCd = env("KIS_ACNT_PRDT_CD"),
                 symbol = symbol, side = KisSide.BUY, orderType = KisOrderType.LIMIT,
                 qty = 1, price = limitPrice,
             ),

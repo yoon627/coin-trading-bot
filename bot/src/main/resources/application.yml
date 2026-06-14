@@ -44,6 +44,12 @@ kis:
   real-base-url: ${KIS_REAL_BASE_URL:https://openapi.koreainvestment.com:9443}
   paper-base-url: ${KIS_PAPER_BASE_URL:https://openapivts.koreainvestment.com:29443}
   cust-type: ${KIS_CUST_TYPE:P}
+  # 전역(단일 계정) 자격증명 — .env 로 주입. 비우면 미설정. 같은 키로 국내/해외 공용.
+  app-key: ${KIS_APP_KEY:}
+  app-secret: ${KIS_APP_SECRET:}
+  cano: ${KIS_CANO:}
+  acnt-prdt-cd: ${KIS_ACNT_PRDT_CD:}
+  paper: ${KIS_PAPER:true}
   live-enabled: ${KIS_LIVE_ENABLED:false}
   max-order-amount: ${KIS_MAX_ORDER_AMOUNT:10000000}
   token-refresh-skew-seconds: ${KIS_TOKEN_REFRESH_SKEW_SECONDS:600}

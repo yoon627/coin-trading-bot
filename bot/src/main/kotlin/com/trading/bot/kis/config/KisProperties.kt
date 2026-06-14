@@ -15,6 +15,13 @@ data class KisProperties(
     val realBaseUrl: String = "https://openapi.koreainvestment.com:9443",
     val paperBaseUrl: String = "https://openapivts.koreainvestment.com:29443",
     val custType: String = "P", // 개인 P / 법인 B
+    // 전역(단일 계정) 자격증명 — .env 로 주입(Upbit 패턴 미러). 비우면 전역 계정 미설정.
+    // 멀티유저는 users.kis_* (암호화 DB) 경로를 별도로 쓴다. 같은 키로 국내/해외 공용.
+    val appKey: String = "",
+    val appSecret: String = "",
+    val cano: String = "",          // 종합계좌번호(앞 8자리)
+    val acntPrdtCd: String = "",    // 계좌상품코드(뒤 2자리)
+    val paper: Boolean = true,      // 모의(:29443) 여부. 기본 안전쪽.
     val connectTimeoutMs: Int = 5000,
     val responseTimeoutSeconds: Long = 10,
     /** 실주문 송신 게이트. false 면 dry-run(주문 미송신). */
