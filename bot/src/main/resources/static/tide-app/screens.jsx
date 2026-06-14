@@ -480,6 +480,12 @@ function WalletPage({ user, setActive }) {
 function SettingsPage({ user, setActive, refreshUser }) {
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
+  const [kisAppKey, setKisAppKey] = React.useState('');
+  const [kisAppSecret, setKisAppSecret] = React.useState('');
+  const [kisCano, setKisCano] = React.useState('');
+  const [kisPrdt, setKisPrdt] = React.useState('01');
+  const [kisPaper, setKisPaper] = React.useState(user?.kis_paper !== false);
+  const [busyKis, setBusyKis] = React.useState(false);
   const [publicProfile, setPublicProfile] = React.useState(!!user?.public_profile);
   const [publicStrategy, setPublicStrategy] = React.useState(!!user?.public_strategy);
   const [discordUrl, setDiscordUrl] = React.useState('');
@@ -498,6 +504,18 @@ function SettingsPage({ user, setActive, refreshUser }) {
       await refreshUser();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusyKeys(false); }
+  };
+
+  const saveKisKeys = async () => {
+    if (!kisAppKey || !kisAppSecret || !kisCano || !kisPrdt) return;
+    setBusyKis(true);
+    try {
+      await TideAPI.saveKisKeys(kisAppKey, kisAppSecret, kisCano, kisPrdt, kisPaper);
+      setToast({ msg: 'KIS 키가 저장되었습니다', tone: 'up' });
+      setKisAppKey(''); setKisAppSecret('');
+      await refreshUser();
+    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
+    finally { setBusyKis(false); }
   };
 
   const saveProfile = async () => {
@@ -545,6 +563,47 @@ function SettingsPage({ user, setActive, refreshUser }) {
 
         <div style={{ marginTop: 24, padding: 16, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 12.5, color: 'var(--tide-primary-ink)' }}>
           🛡 API 키는 AES-GCM으로 암호화되어 저장됩니다. <strong>출금 권한은 절대 부여하지 마세요.</strong>
+        </div>
+      </Card>
+
+      <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>KIS (한국투자증권) API 키 · 주식</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-500)', marginBottom: 20 }}>
+          현재 상태: {user?.has_kis_keys ?
+            <Badge tone="live" dot>등록됨 ({user?.kis_paper === false ? '실전' : '모의'})</Badge> :
+            <Badge tone="warn">미등록</Badge>}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>App Key</div>
+          <input className="tide-input mono" value={kisAppKey} onChange={e => setKisAppKey(e.target.value)} placeholder="••••••••••••••••"/>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>App Secret</div>
+          <input className="tide-input mono" type="password" value={kisAppSecret} onChange={e => setKisAppSecret(e.target.value)} placeholder="••••••••••••••••"/>
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
+          <div style={{ flex: 2 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>계좌번호 앞 8자리 (CANO)</div>
+            <input className="tide-input mono" value={kisCano} onChange={e => setKisCano(e.target.value)} placeholder="12345678"/>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>상품코드 (2자리)</div>
+            <input className="tide-input mono" value={kisPrdt} onChange={e => setKisPrdt(e.target.value)} placeholder="01"/>
+          </div>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, cursor: 'pointer' }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>모의투자(paper) 계좌</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginTop: 2 }}>켜짐=모의(:29443), 꺼짐=실전(:9443). 모의로 먼저 검증 권장</div>
+          </div>
+          <input type="checkbox" checked={kisPaper} onChange={e => setKisPaper(e.target.checked)} style={{ width: 18, height: 18 }}/>
+        </label>
+
+        <Button onClick={saveKisKeys} disabled={busyKis || !kisAppKey || !kisAppSecret || !kisCano || !kisPrdt} size="lg">{busyKis ? '저장 중…' : 'KIS 키 저장'}</Button>
+
+        <div style={{ marginTop: 24, padding: 16, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 12.5, color: 'var(--tide-primary-ink)' }}>
+          🛡 App Secret 은 AES-GCM으로 암호화되어 저장됩니다. 같은 키로 국내·해외주식 사용. 실전 매매는 서버 KIS_LIVE_ENABLED=true 도 필요.
         </div>
       </Card>
 

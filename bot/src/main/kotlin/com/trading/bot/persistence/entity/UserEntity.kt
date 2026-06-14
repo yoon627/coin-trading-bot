@@ -12,7 +12,7 @@ data class UserEntity(
     val password: String,
     val upbitAccessKey: String? = null,
     val upbitSecretKey: String? = null,
-    // KIS(한국투자증권) 자격증명 — kisAppSecret 은 암호화 저장(SecretsCrypto). (V15)
+    // KIS(한국투자증권) 자격증명 — kisAppKey/kisAppSecret 은 암호화 저장(SecretsCrypto). (V15)
     val kisAppKey: String? = null,
     val kisAppSecret: String? = null,
     val kisCano: String? = null,          // 종합계좌번호

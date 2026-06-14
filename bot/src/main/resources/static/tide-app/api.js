@@ -73,6 +73,16 @@ const TideAPI = {
       secret_key: secretKey,
     }) }),
 
+  // KIS(한국투자) 주식 키. SNAKE_CASE 와이어 포맷(KisKeysRequest.appKey → app_key).
+  saveKisKeys: (appKey, appSecret, cano, acntPrdtCd, paper) =>
+    TideAPI._fetch('/api/user/kis-keys', { method: 'POST', body: JSON.stringify({
+      app_key: appKey,
+      app_secret: appSecret,
+      cano: cano,
+      acnt_prdt_cd: acntPrdtCd,
+      paper: paper,
+    }) }),
+
   // Profile + notifications. Server preserves any field omitted from the body
   // (snake_case wire format matches Jackson SNAKE_CASE strategy).
   updateSettings: (patch) =>
