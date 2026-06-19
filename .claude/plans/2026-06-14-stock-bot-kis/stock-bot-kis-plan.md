@@ -2,7 +2,7 @@
 title: stock-bot-kis — KIS(한국투자) 주식 자동매매 봇 기반 + 주문유실 방지(WAL reconcile)
 status: in_progress
 started: 2026-06-14
-updated: 2026-06-14
+updated: 2026-06-19
 ---
 
 # Goal
