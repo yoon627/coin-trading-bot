@@ -56,6 +56,11 @@ kis:
   reconcile-interval-ms: ${KIS_RECONCILE_INTERVAL_MS:15000}
   reconcile-grace-seconds: ${KIS_RECONCILE_GRACE_SECONDS:120}
   reconcile-stale-seconds: ${KIS_RECONCILE_STALE_SECONDS:1800}
+  # 주식 시세수집(전역 .env 계정으로 watchlist 폴링 → store). 비우면 비활성(엔진 REST 폴백).
+  marketdata:
+    symbols: ${KIS_MARKETDATA_SYMBOLS:}
+    price-poll-seconds: ${KIS_MARKETDATA_PRICE_POLL_SECONDS:3}
+    candle-refresh-seconds: ${KIS_MARKETDATA_CANDLE_REFRESH_SECONDS:300}
 
 trading:
   tickers: ${TRADING_TICKERS:KRW-BTC}

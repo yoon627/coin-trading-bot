@@ -83,6 +83,21 @@ const TideAPI = {
       paper: paper,
     }) }),
 
+  // KIS 주식 봇 제어 + 수동주문/조회
+  stockBotStatus: () => TideAPI._fetch('/api/stock/bot/status'),
+  stockBotStart: (symbols, strategy) =>
+    TideAPI._fetch('/api/stock/bot/start', { method: 'POST', body: JSON.stringify({ symbols, strategy }) }),
+  stockBotStop: () => TideAPI._fetch('/api/stock/bot/stop', { method: 'POST' }),
+  stockBotStrategy: (strategy) =>
+    TideAPI._fetch('/api/stock/bot/strategy', { method: 'POST', body: JSON.stringify({ strategy }) }),
+  stockAccount: () => TideAPI._fetch('/api/stock/account'),
+  // 수동주문. orderType 은 Jackson SNAKE_CASE 로 order_type 와이어.
+  kisOrder: (symbol, side, orderType, qty, price) =>
+    TideAPI._fetch('/api/kis/order', { method: 'POST', body: JSON.stringify({
+      symbol, side, order_type: orderType, qty, price,
+    }) }),
+  kisOrders: () => TideAPI._fetch('/api/kis/orders'),
+
   // Profile + notifications. Server preserves any field omitted from the body
   // (snake_case wire format matches Jackson SNAKE_CASE strategy).
   updateSettings: (patch) =>

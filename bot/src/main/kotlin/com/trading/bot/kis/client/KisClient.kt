@@ -1,5 +1,6 @@
 package com.trading.bot.kis.client
 
+import com.trading.bot.kis.domain.KisBalanceResponse
 import com.trading.bot.kis.domain.KisCandle
 import com.trading.bot.kis.domain.KisCandlePeriod
 import com.trading.bot.kis.domain.KisCcldRow
@@ -22,7 +23,10 @@ interface KisClient {
     /** 당일 주문체결 조회(reconcile 데이터원). date=YYYYMMDD(KST). */
     suspend fun inquireDailyConclusions(date: String): List<KisCcldRow>
 
-    /** 보유종목 잔고. */
+    /** 잔고 전체(보유종목 output1 + 계좌요약 output2). */
+    suspend fun getBalance(): KisBalanceResponse
+
+    /** 보유종목 잔고(getBalance().holdings 위임). */
     suspend fun getHoldings(): List<KisHolding>
 
     /** 현재가(원). */

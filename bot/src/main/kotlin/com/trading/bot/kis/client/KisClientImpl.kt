@@ -123,7 +123,9 @@ class KisClientImpl(
         return all
     }
 
-    override suspend fun getHoldings(): List<KisHolding> {
+    override suspend fun getHoldings(): List<KisHolding> = getBalance().holdings
+
+    override suspend fun getBalance(): KisBalanceResponse {
         val trId = if (paper) "VTTC8434R" else "TTTC8434R"
         val token = tokenProvider.token()
         val resp = webClient.get()
@@ -147,7 +149,7 @@ class KisClientImpl(
             .onStatus(HttpStatusCode::isError) { transportError(it) }
             .bodyToMono<KisBalanceResponse>()
             .awaitSingle()
-        return resp.holdings
+        return resp
     }
 
     override suspend fun getCurrentPrice(symbol: String): Long {
