@@ -113,6 +113,10 @@ class KisClientImpl(
                 .toEntity(KisDailyCcldResponse::class.java)
                 .awaitSingle()
             val body = entity.body ?: break
+            // rt_cd 미검증 시 200+업무오류가 "조회 0건"으로 오인돼 reconciler 가 정상주문을 NEEDS_REVIEW 격상 — 예외화.
+            if (!body.isSuccess()) {
+                throw KisApiException(definitiveReject = false, rtCd = body.rtCd, msg = body.msg1 ?: "daily ccld query failed")
+            }
             all += body.output1
             val trCont = entity.headers.getFirst("tr_cont") ?: ""
             if (trCont != "F" && trCont != "M") break // D/E/빈값 = 마지막 페이지
@@ -149,6 +153,10 @@ class KisClientImpl(
             .onStatus(HttpStatusCode::isError) { transportError(it) }
             .bodyToMono<KisBalanceResponse>()
             .awaitSingle()
+        // rt_cd 미검증 시 200+업무오류가 빈 holdings 로 흘러 손절 누락 — 예외화(호출부가 패스 skip).
+        if (!resp.isSuccess()) {
+            throw KisApiException(definitiveReject = false, rtCd = resp.rtCd, msg = "balance query failed")
+        }
         return resp
     }
 

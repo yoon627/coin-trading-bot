@@ -87,6 +87,15 @@ class StockUserTradingManager(
             return@withLock mapOf("error" to "KIS API keys not configured. Set them via /api/user/kis-keys")
         }
         if (symbols.isEmpty()) return@withLock mapOf("error" to "No symbols provided")
+        if (strategyName != null && strategies.none { it.name == strategyName }) {
+            return@withLock mapOf("error" to "Unknown strategy: $strategyName")
+        }
+        // 엔진 기동 전 미확정 WAL 주문 확정(M1/M-C) — reconcileMutex 가 부팅 패스와 직렬화.
+        try {
+            stockOrderReconciler.reconcileNow()
+        } catch (e: Exception) {
+            log.warn("pre-start reconcile failed: {}", e.message)
+        }
 
         val engine = engines.computeIfAbsent(userId) { createEngine(user) }
         strategyName?.let { engine.setStrategy(it) }

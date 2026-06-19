@@ -2,6 +2,7 @@ package com.trading.bot.kis.engine
 
 import com.trading.bot.domain.SellReason
 import com.trading.bot.kis.client.KisClient
+import com.trading.bot.kis.domain.KisHolding
 import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.marketdata.StockCandleAdapter
 import com.trading.bot.marketdata.MarketDataStore
@@ -70,13 +71,20 @@ class KisStockTradingEngine(
         return true
     }
 
+    private var lastTradingDay: LocalDate? = null
+
     private suspend fun runLoop() {
         while (scope.isActive) {
             try {
                 if (marketCalendar.isTradingNow()) {
-                    val holdings = if (liveEnabled) runCatching { client.getHoldings() }.getOrDefault(emptyList()) else emptyList()
-                    for (symbol in activeSymbols) {
-                        processSymbol(symbol, holdings)
+                    resetDailyIfNeeded()
+                    // live: 잔고조회 실패면 빈 holdings 로 sync 하지 말고 패스 skip(손절 누락 방지).
+                    val holdings: List<KisHolding>? =
+                        if (liveEnabled) runCatching { client.getHoldings() }.getOrNull() else emptyList()
+                    if (holdings == null) {
+                        log.warn("KIS engine user={}: holdings fetch failed — skip pass", userId)
+                    } else {
+                        for (symbol in activeSymbols) processSymbol(symbol, holdings)
                     }
                 }
             } catch (e: Exception) {
@@ -86,7 +94,16 @@ class KisStockTradingEngine(
         }
     }
 
-    private suspend fun processSymbol(symbol: String, holdings: List<com.trading.bot.kis.domain.KisHolding>) {
+    /** 거래일(KST) 경계에서 boughtToday 리셋 — 전일 매수/매도 후 당일 정상 재평가(M-A). */
+    internal fun resetDailyIfNeeded() {
+        val today = LocalDate.now(KST)
+        if (today != lastTradingDay) {
+            positions.values.forEach { it.boughtToday = false }
+            lastTradingDay = today
+        }
+    }
+
+    private suspend fun processSymbol(symbol: String, holdings: List<KisHolding>) {
         val pos = positions.computeIfAbsent(symbol) { StockPosition(it) }
         if (liveEnabled) {
             val h = holdings.find { it.pdno == symbol }

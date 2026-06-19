@@ -25,13 +25,14 @@ updated: 2026-06-14
 - 2026-06-14: 사용자 방향전환 — **유저별 입력이 주 경로**(.env 전역은 operator/dev fallback 으로 유지, Upbit 패턴 동일). 구현: `POST /api/user/kis-keys`(인증·본인만) + getMe `has_kis_keys`/`kis_paper`, `RequestValidators` KIS 검증(ASCII printable·길이·CANO 8/PRDT 2), `UserSecretsService.encryptKisKeys`(**appKey/appSecret 둘 다 AES-GCM**), `KisClientFactory.invalidate`, SPA Settings 폼(api.js/screens.jsx). **code-reviewer(Claude)+codex 병행** → HIGH 1(sanitizer KIS 키 유출)·Major 2(검증 byte/ASCII, stale client race)·minor 수정: LogMessageSanitizer 에 appkey/appsecret/CANO 마스킹, validator ASCII 제약, KisClientFactory fingerprint 캐시, has_kis_keys 4필드. **398 테스트 0 실패.** (미push)
 - 2026-06-14: 사용자 "이어서 진행해" → **vertical slice 2a: 수동 주식주문 엔드포인트**. `KisTradeController`(POST /api/kis/order, GET /api/kis/orders) — 등록된 유저 KIS 키(forUser)로 `StockOrderService`(WAL) 경유 주문 + 주문조회. RequestValidators.normalizeKisSymbol(6자리), StockOrderIntentRepository.findByUserId. live-enabled=false 면 DRY_RUN, keys 4필드 가드(forUser 500 방지). **403 테스트 0 실패.** code-reviewer subagent 도구오류로 미산출 → 메인 자체 보안점검(인가·실주문가드·검증·유출·WAL정합) 통과. (미push)
 
+- 2026-06-19: **2c 자율엔진 + 2b SPA 구현 완료(MVP, 기본 dry-run)**. design 워크플로(KIS캔들 스펙+크립토매핑+설계+적대적비판) → 안전핵심 메인 직접 작성. marketdata(KisMarketCalendar 장시간게이트·StockCandleAdapter·KisMarketDataService 폴링), engine(StockPosition·StockPositionManager WAL경유 C1/M2/M3·KisStockTradingEngine runLoop·decideSell·StockUserTradingManager 부팅reconcile-후-기동), StockBotController(/api/stock/*), SPA 주식화면. 캔들 API(getDailyCandles FHKST03010100)+getBalance 추가. **425 테스트 0 실패(신규 22).** **code-reviewer(Claude+codex 병행)** → Critical 3/Major 다수. 즉시수정: C-A getBalance rt_cd 검증, C-B inquireDailyConclusions rt_cd 검증, 엔진 잔고조회 실패 시 패스 skip, M-A boughtToday 거래일 리셋, M-C startBot reconcileNow 선행+전략검증. **실거래 전 필수**(Blockers 로 이관): C-C 계좌단위 현금예약(다종목 미수), M-B 수동주문 시장시간 게이트, M-D REST폴백 캐시, M-E 일봉 장중 whipsaw. (미push)
+
 # Next (Phase 2 — 후속 GitHub Issue 로 분리)
 
-- **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest` 실행 → KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정. (이제 `POST /api/kis/order` 로도 검증 가능.)
-
-- **2b SPA 주식 화면**: 수동 주문/주문조회 UI(현재 API 만 존재, 화면 미배선).
-- **2c 자율 엔진**: 주식 전략 루프 + KIS 시세수집(marketdata) + UserTradingManager 류 오케스트레이션. 부팅 reconcile→엔진시작 순서 보장(D10). 클라이언트는 forUser(멀티유저)/defaultClient(전역).
+- **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest`(또는 `/api/kis/order`, 주식화면) 로 KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정.
+- **SPA 수동 UI 검증**: 주식화면(babel-standalone, 빌드검증 없음) 브라우저 동작 확인.
 - **D15 해외주식(미국 등)**: `/uapi/overseas-stock/...` 클라이언트 메서드(주문/조회/시세, tr_id·OVRS_EXCG_CD·통화 다름) 추가. 같은 appkey/계좌. 정확 스펙은 공식 문서 대조 후(추측 금지).
+- **체결→positions 반영**(M2-기존): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **주문취소 WAL**(D6): CANCEL_REQUESTED/CANCEL_UNKNOWN 상태기계.
@@ -175,3 +176,4 @@ updated: 2026-06-14
 - (Phase1 없음 — 머지 가능) 아래는 **실거래 활성화(KIS_LIVE_ENABLED=true) 전 필수 선행**:
   - **실계정 스모크**: KIS inquiry/balance 필수 query 파라미터 집합·tr_cont 연속조회 값·ODNO/org_no 자릿수·토큰 재발급/ rate limit 실값(코드/테스트로 검증 불가 — 실계정 필요).
   - **통합 테스트(M5)**: WAL tx 원자성 + partial unique index 동시성은 단위테스트(mockk passthrough)로 미검증 — Testcontainers-Postgres 또는 수동 Postgres 검증 필요.
+  - **자율엔진 code-review 잔여(2c)**: C-C 계좌단위 현금예약(한 패스 다종목 매수 시 예수금 초과·미수) — 패스 잔고 스냅샷+접수액 차감 or 동시보유 종목수 상한. M-B 수동주문(/api/kis/order) 시장시간 게이트. M-D REST 폴백(현재가/캔들) TTL 캐시·backoff(rate limit). M-E 일봉 장중 미완성봉 whipsaw — 확정봉 신호 or 분봉 전환.
