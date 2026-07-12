@@ -49,4 +49,4 @@ updated: 2026-07-12
 
 # Deferred
 
-- perf/load-test.js:105-109 가 `/actuator/prometheus` 를 기대하나 actuator 는 health,info 만 노출(application.yml:23-27) — k6 스크립트 정비는 open #25 소유(codex 발견, severity: low)
+- perf/load-test.js:105-109 가 `/actuator/prometheus` 를 기대하나 actuator 는 health,info 만 노출(application.yml:23-27) — k6 스크립트 정비는 open #25 소유(codex 발견, severity: low). 같은 뿌리: SecurityConfig.kt:41 의 `/actuator/prometheus` permitAll 도 미노출 엔드포인트에 대한 죽은 규칙(2026-07-12 인라인 보안 점검 발견)
