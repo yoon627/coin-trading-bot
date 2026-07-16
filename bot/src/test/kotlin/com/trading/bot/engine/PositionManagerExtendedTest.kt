@@ -67,6 +67,50 @@ class PositionManagerExtendedTest {
         assertFalse(state.position) // unchanged
     }
 
+    @Test
+    fun `syncPosition marks unsynced on API error`() = runTest {
+        coEvery { upbitClient.getAccounts() } throws RuntimeException("API error")
+        val state = TradingState("KRW-BTC")
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertTrue(state.unsynced) // 동기화 실패 → 매수 차단 플래그
+    }
+
+    @Test
+    fun `syncPosition clears unsynced on success with holding`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "50000000")
+        )
+        val state = TradingState("KRW-BTC", unsynced = true)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertFalse(state.unsynced) // 성공 → 해소
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `syncPosition clears unsynced on success with no holding`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+        val state = TradingState("KRW-BTC", unsynced = true)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertFalse(state.unsynced) // 잔고 없어도 조회 성공이면 해소
+    }
+
+    @Test
+    fun `buy is blocked while position unsynced`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "200000"))
+        val state = TradingState("KRW-BTC", unsynced = true)
+
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNull(result)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) } // 미동기화 시 신규매수 금지(이중포지션 방지)
+    }
+
     // --- buy tests ---
 
     @Test
@@ -576,6 +620,234 @@ class PositionManagerExtendedTest {
         assertTrue(mgr.checkTakeProfit(state, 102050.0)) // gross 2.05% ≥ 2.0 — 게이트는 수수료 미차감
         val result = mgr.sell("KRW-BTC", state, 102050.0, SellReason.TAKE_PROFIT)
         assertEquals(1.95, result!!.pnlPercent!!, 1e-9) // 기록은 net
+    }
+
+    // --- 매도판 H8: pendingSell reconcile tests ---
+
+    @Test
+    fun `sell keeps pendingSell when fill unconfirmed`() = runTest {
+        // 매도 placeOrder 성공했으나 awaitFill 이 done 미확정(wait) — uuid·사유 보존해 다음 tick reconcile.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-pending")
+        coEvery { upbitClient.getOrder("sell-pending") } returns Order(uuid = "sell-pending", state = "wait")
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT)
+
+        assertNull(result)
+        assertEquals("sell-pending", state.pendingSellUuid) // 보존 → 다음 tick reconcile
+        assertEquals(SellReason.TAKE_PROFIT, state.pendingSellReason)
+        assertTrue(state.position) // 체결 확정 전 포지션 유지
+    }
+
+    @Test
+    fun `sell keeps pendingSell when post-order processing throws`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-throw")
+        coEvery { upbitClient.getOrder("sell-throw") } throws RuntimeException("network")
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001)
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.STOP_LOSS)
+
+        assertNull(result)
+        assertEquals("sell-throw", state.pendingSellUuid) // 후처리 예외에도 uuid 보존
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `sell is blocked while pendingSell exists`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.001"))
+        val state = TradingState("KRW-BTC", pendingSellUuid = "prev-sell")
+        state.markBought(50000000.0, 0.001) // position true 이지만 미해소 매도 존재
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.MANUAL)
+
+        assertNull(result)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) } // 미해소 매도 있으면 신규매도 금지(이중매도 방지)
+    }
+
+    @Test
+    fun `reconcilePendingSell records trade and clears position when done`() = runTest {
+        coEvery { upbitClient.getOrder("s-done") } returns
+            Order(uuid = "s-done", state = "done", executedVolume = "0.001")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-done", pendingSellReason = SellReason.TAKE_PROFIT,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNotNull(result)
+        assertEquals(TradeSide.SELL, result!!.side)
+        assertEquals("TAKE_PROFIT", result.reason)
+        assertEquals(0.001, result.volume)
+        assertTrue(result.pnlPercent!! > 0) // net pnl (markSold 이전 avgBuyPrice 로 계산)
+        assertFalse(state.position) // 전량 청산
+        assertNull(state.pendingSellUuid) // 해소
+    }
+
+    @Test
+    fun `reconcilePendingSell records executed and keeps remaining on partial fill`() = runTest {
+        // 부분 체결: state=cancel + executedVolume>0, 잔여 실잔고 있음 → 체결분 기록 + 잔여 포지션 유지 + 잔여분 재매도 대상.
+        coEvery { upbitClient.getOrder("s-partial") } returns
+            Order(uuid = "s-partial", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0004", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-partial", pendingSellReason = SellReason.STOP_LOSS,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNotNull(result)
+        assertEquals(0.0006, result!!.volume) // 체결분만 기록
+        assertTrue(state.position) // 잔여 유지
+        assertEquals(0.0004, state.holdVolume) // 잔여 실잔고로 갱신
+        assertNull(state.pendingSellUuid) // pending 해소(잔여분은 다음 tick 재매도)
+    }
+
+    @Test
+    fun `reconcilePendingSell clears pending and keeps position when cancelled unfilled`() = runTest {
+        // 매도 무산(cancel+0) — 코인 그대로. pending 해소, position 유지 → 다음 tick 재매도 대상.
+        coEvery { upbitClient.getOrder("s-cancel") } returns
+            Order(uuid = "s-cancel", state = "cancel", executedVolume = "0")
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-cancel", pendingSellReason = SellReason.STOP_LOSS,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNull(result)
+        assertNull(state.pendingSellUuid) // 무산 → 해소
+        assertTrue(state.position) // 코인 그대로 → 유지
+    }
+
+    @Test
+    fun `reconcilePendingSell keeps pending while order still wait`() = runTest {
+        coEvery { upbitClient.getOrder("s-wait") } returns
+            Order(uuid = "s-wait", state = "wait", executedVolume = "0")
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-wait", pendingSellReason = SellReason.MANUAL,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNull(result)
+        assertEquals("s-wait", state.pendingSellUuid) // 진행중 → 유지
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `reconcilePendingSell keeps pending when wait with partial executed`() = runTest {
+        // Upbit 부분체결 진행중(wait+executed>0): 미체결 잔량이 locked 로 묶여 free=0 이어도 terminal 이 아니다.
+        // 여기서 확정하면 아직 열린 주문을 청산 오판 → 잔여 체결분 유실. wait 는 executed 무관하게 pending 유지해야 한다.
+        coEvery { upbitClient.getOrder("s-wait-partial") } returns
+            Order(uuid = "s-wait-partial", state = "wait", executedVolume = "0.0006", remainingVolume = "0.0004")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.0004")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-wait-partial", pendingSellReason = SellReason.STOP_LOSS,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNull(result)
+        assertEquals("s-wait-partial", state.pendingSellUuid) // 진행중 → 유지(조기 청산 금지)
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `reconcilePendingSell keeps pending when getOrder fails and balance is locked`() = runTest {
+        // getOrder 장애 + free=0 이지만 locked>0(미체결 잔량 묶임) → 미체결로 간주, pending 유지. free 만 보면 청산 오판.
+        coEvery { upbitClient.getOrder("s-locked") } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-locked", pendingSellReason = SellReason.MANUAL,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNull(result)
+        assertEquals("s-locked", state.pendingSellUuid) // locked = 미체결 → 유지
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `reconcilePendingSell recovers from zero balance when getOrder fails`() = runTest {
+        // getOrder 장애 + 실잔고 0 → 매도 체결된 것으로 간주(코인 나감). markSold 이전 holdVolume 으로 기록 복원.
+        coEvery { upbitClient.getOrder("s-err") } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-err", pendingSellReason = SellReason.TAKE_PROFIT,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNotNull(result)
+        assertEquals(0.001, result!!.volume) // markSold 이전 holdVolume 으로 복원
+        assertFalse(state.position)
+        assertNull(state.pendingSellUuid)
+    }
+
+    @Test
+    fun `reconcilePendingSell keeps pending when getOrder fails and balance remains`() = runTest {
+        // getOrder 장애 + 실잔고 남음 → 미체결로 간주, pending 유지(다음 tick 재시도).
+        coEvery { upbitClient.getOrder("s-err2") } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-err2", pendingSellReason = SellReason.MANUAL,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNull(result)
+        assertEquals("s-err2", state.pendingSellUuid) // 미체결 → 유지
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `reconcilePendingSell returns null when no pending`() = runTest {
+        val state = TradingState("KRW-BTC", position = true, holdVolume = 0.001)
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+        assertNull(result)
+    }
+
+    @Test
+    fun `markSold clears pendingSell`() {
+        val state = TradingState("KRW-BTC", pendingSellUuid = "x", pendingSellReason = SellReason.MANUAL)
+        state.markSold()
+        assertNull(state.pendingSellUuid)
+        assertNull(state.pendingSellReason)
     }
 
     @Test

@@ -39,7 +39,11 @@ class PositionManager(
                 state.holdVolume = account.balanceDouble()
                 log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
             }
+            // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
+            state.unsynced = false
         } catch (e: Exception) {
+            // 동기화 실패 → position 상태 불확실. unsynced 로 표시해 buy() 가 신규 진입을 막고 다음 tick 재시도(processTicker).
+            state.unsynced = true
             log.warn("Failed to sync position for {}: {}", ticker, e.message)
         }
     }
@@ -52,6 +56,11 @@ class PositionManager(
         }
         if (state.pendingBuyUuid != null) {
             log.debug("Skip buy for {}: pending order {} awaiting reconcile", ticker, state.pendingBuyUuid)
+            return null
+        }
+        if (state.unsynced) {
+            // 거래소 동기화 실패로 보유 여부가 불확실 — 신규 매수 시 이미 보유분과 이중 포지션 위험. skip(processTicker 가 재시도).
+            log.debug("Skip buy for {}: position not synced with exchange — avoiding double entry", ticker)
             return null
         }
 
@@ -181,29 +190,55 @@ class PositionManager(
         )
     }
 
+    /**
+     * 매도판 H8: 미해소 매도 주문(pendingSellUuid)을 거래소 상태로 확정. processTicker 가 매 tick 호출.
+     * getOrder 장애 시 실잔고로 체결 추정(잔고 0 = 청산됨). 미해소면 pending 유지(다음 tick 재시도).
+     */
+    suspend fun reconcilePendingSell(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
+        val uuid = state.pendingSellUuid ?: return null
+        val filled = try {
+            upbitClient.getOrder(uuid)
+        } catch (e: Exception) {
+            log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
+            return recoverSellFromBalance(ticker, state, currentPrice)
+        }
+        return applySellFillOutcome(ticker, state, currentPrice, filled)
+    }
+
     suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? {
         if (!state.position) return null
+        // 미해소 매도 주문이 있으면 신규 매도 금지 — reconcile 로 확정될 때까지 이중 매도 방지(매수 pending 가드 미러).
+        if (state.pendingSellUuid != null) {
+            log.debug("Skip sell for {}: pending sell {} awaiting reconcile", ticker, state.pendingSellUuid)
+            return null
+        }
 
-        try {
-            // 매도 수량은 state.holdVolume(조작 가능)이 아니라 거래소 실잔고를 사용.
-            val account = findAccount(ticker.substringAfter("-"))
-            val sellable = account?.balanceDouble() ?: 0.0
-            if (sellable <= 0.0) {
-                // M4: balance=0 이어도 locked>0 이면 매도 주문이 진행 중(잔고가 locked 로 이동)일 수 있다.
-                // locked>0 이면 phantom 이 아니므로 markSold 하지 않고 보류(다음 tick 재시도). balance+locked 가
-                // 둘 다 0 일 때만 진짜 phantom 으로 청산. (locked 무한상주 시 미체결주문 취소 후 재매도는 M3 별도 PR.)
-                val locked = account?.lockedDouble() ?: 0.0
-                if (locked > 0.0) {
-                    log.warn("Sell deferred for {}: free balance 0 but locked={} (order in flight) — keeping position", ticker, locked)
-                    return null
-                }
-                log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
-                state.markSold()
+        // 잔고 조회·phantom 판정·placeOrder 까지: 실패하면 주문이 나가지 않았으므로 pending 없이 종료(포지션 유지 → 다음 tick 재매도).
+        // 매도 수량은 state.holdVolume(조작 가능)이 아니라 거래소 실잔고(sellable)를 사용.
+        val account = try {
+            findAccount(ticker.substringAfter("-"))
+        } catch (e: Exception) {
+            log.error("Failed to fetch balance for sell {}: {}", ticker, e.message, e)
+            return null
+        }
+        val sellable = account?.balanceDouble() ?: 0.0
+        if (sellable <= 0.0) {
+            // M4: balance=0 이어도 locked>0 이면 매도 주문이 진행 중(잔고가 locked 로 이동)일 수 있다.
+            // locked>0 이면 phantom 이 아니므로 markSold 하지 않고 보류(다음 tick 재시도). balance+locked 가
+            // 둘 다 0 일 때만 진짜 phantom 으로 청산. (locked 무한상주 시 미체결주문 취소 후 재매도는 M3 별도 PR.)
+            val locked = account?.lockedDouble() ?: 0.0
+            if (locked > 0.0) {
+                log.warn("Sell deferred for {}: free balance 0 but locked={} (order in flight) — keeping position", ticker, locked)
                 return null
             }
+            log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
+            state.markSold()
+            return null
+        }
 
-            // Upbit market sell: ord_type=market, volume=실보유수량(거래소 원본 문자열)
-            val order = upbitClient.placeOrder(
+        // Upbit market sell: ord_type=market, volume=실보유수량(거래소 원본 문자열)
+        val order = try {
+            upbitClient.placeOrder(
                 OrderRequest(
                     market = ticker,
                     side = "ask",
@@ -211,42 +246,136 @@ class PositionManager(
                     volume = account!!.balance,
                 )
             )
-
-            // 체결 확정 전엔 포지션 유지 (다음 tick 재시도). done 일 때만 청산 기록.
-            val filled = awaitFill(order.uuid)
-            if (filled?.state != "done") {
-                log.warn("Sell not confirmed for {}: state={} — keeping position for retry", ticker, filled?.state)
-                return null
-            }
-
-            // 기록용 pnl 은 왕복수수료 차감(net) — 백테스트(feeRate×2)와 통일. 청산 게이트(checkTakeProfit 등)는 gross 유지.
-            // 평단 미상(외부 입금분 syncPosition 복원 등)이면 null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
-            val pnl = if (state.avgBuyPrice > 0) {
-                state.pnlPercent(currentPrice) - tradingProperties.roundTripFeeRate * 100
-            } else {
-                null
-            }
-            val totalAmount = currentPrice * sellable
-            log.info(
-                "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
-                ticker, currentPrice, sellable, pnl?.let { "%.2f".format(it) } ?: "-", reason,
-            )
-
-            val record = TradeRecord(
-                ticker = ticker,
-                side = TradeSide.SELL,
-                price = currentPrice,
-                volume = sellable,
-                totalAmount = totalAmount,
-                pnlPercent = pnl,
-                reason = reason.name,
-            )
-            state.markSold()
-            return record
         } catch (e: Exception) {
-            log.error("Failed to sell {}: {}", ticker, e.message, e)
+            log.error("Failed to place sell order {}: {}", ticker, e.message, e)
             return null
         }
+
+        // 매도판 H8: 주문 접수 성공 → uuid·사유 보존. 이후 체결확인이 실패/미확정이어도 uuid 를 잃지 않고
+        // 다음 tick reconcilePendingSell 이 이어받아 청산 확정·기록 → 이중매도·감사유실 방지.
+        state.pendingSellUuid = order.uuid
+        state.pendingSellReason = reason
+        return try {
+            val filled = awaitFill(order.uuid)
+            if (filled?.state == "done") {
+                // 즉시 전량 체결 — 주문량(sellable)으로 기록. done 은 upbit 시장가 매도의 정상 종결.
+                completeSellRecord(ticker, state, currentPrice, sellable, reason)
+            } else {
+                // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
+                log.warn("Sell not confirmed for {}: state={} — pending kept for reconcile", ticker, filled?.state)
+                null
+            }
+        } catch (e: Exception) {
+            log.error("Sell post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+            null // pending 유지 → 다음 tick reconcile
+        }
+    }
+
+    /**
+     * 매도 체결 판정 후 상태 반영 (reconcile 전용). done 은 sell() 즉시경로가 처리하므로 여기로 오는 건 wait/cancel.
+     * wait 는 executedVolume>0(부분 진행중)이어도 terminal 이 아니다 — Upbit 는 미체결 잔량을 locked 로 묶어 free
+     * balance=0 일 수 있고, 여기서 확정하면 아직 열린 주문을 markSold 로 오판해 잔여 체결분을 잃고 미정산 포지션에 새 거래를
+     * 허용한다(codex P2). terminal(done/cancel)에서만 체결분을 확정한다.
+     */
+    private suspend fun applySellFillOutcome(
+        ticker: String,
+        state: TradingState,
+        currentPrice: Double,
+        filled: Order?,
+    ): TradeRecord? {
+        if (filled?.state == "wait") return null // 진행중 — pending 유지, 다음 tick 재시도
+        val executed = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
+        return when {
+            executed > 0.0 -> {
+                // terminal(done 전량 또는 cancel 부분) + 체결분. 미체결 잔량은 취소돼 locked 가 free 로 돌아왔으므로 실잔고가 정확.
+                val record = buildSellRecord(ticker, state, currentPrice, executed)
+                val remaining = findAccount(ticker.substringAfter("-"))?.balanceDouble() ?: 0.0
+                if (remaining > 0.0) {
+                    // 부분 체결 — 잔여 실잔고로 갱신, avgBuyPrice 유지. pending 해소(잔여분은 다음 tick 재매도).
+                    state.holdVolume = remaining
+                    state.clearPendingSell()
+                    log.info("SELL {} partial via reconcile: executed={}, remaining={} — position kept", ticker, executed, remaining)
+                } else {
+                    log.info("SELL {} filled via reconcile: volume={}, reason={}", ticker, executed, state.pendingSellReason)
+                    state.markSold()
+                }
+                record
+            }
+            else -> {
+                // cancel+0 미체결 — 매도 무산, pending 해소. 코인 그대로이므로 position 유지(다음 tick 재매도).
+                log.warn("Pending sell unfilled for {}: state={} — order abandoned, position kept", ticker, filled?.state)
+                state.clearPendingSell()
+                null
+            }
+        }
+    }
+
+    /**
+     * getOrder 장애 시 실잔고로 매도 체결 여부 추정 복원. free+locked 합(totalBalance)이 0 = 청산됨(markSold 이전
+     * holdVolume 으로 기록), 남음 = 미체결/진행중(pending 유지, 다음 tick). free 만 보면 미체결 잔량이 locked 로 묶인
+     * 진행중 주문을 청산으로 오판한다(codex P2). 전제: 1 ticker = 1 position, pending 생존 중 잔고 변화는 이 매도 결과.
+     */
+    private suspend fun recoverSellFromBalance(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
+        return try {
+            val total = findAccount(ticker.substringAfter("-"))?.totalBalance() ?: 0.0
+            if (total <= 0.0) {
+                val record = buildSellRecord(ticker, state, currentPrice, state.holdVolume)
+                log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, state.holdVolume)
+                state.markSold()
+                record
+            } else {
+                log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, total)
+                null
+            }
+        } catch (e: Exception) {
+            log.warn("reconcile sell balance recovery failed for {} ({}) — pending kept", ticker, e.message)
+            null
+        }
+    }
+
+    /** 매도 전량 확정 — 기록 생성 후 markSold. sell() 즉시경로(done) 전용. */
+    private fun completeSellRecord(
+        ticker: String,
+        state: TradingState,
+        currentPrice: Double,
+        soldVolume: Double,
+        reason: SellReason,
+    ): TradeRecord {
+        val record = buildSellRecord(ticker, state, currentPrice, soldVolume, reason)
+        log.info(
+            "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
+            ticker, currentPrice, soldVolume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", reason,
+        )
+        state.markSold()
+        return record
+    }
+
+    /**
+     * 매도 TradeRecord 생성 — 기록용 pnl 은 왕복수수료 차감(net, 백테스트 feeRate×2 와 통일). 청산 게이트는 gross 유지.
+     * 평단 미상(외부 입금분 syncPosition 복원 등)이면 pnl null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
+     * markSold 이전에 호출해야 avgBuyPrice 가 살아있어 pnl 복원 가능. reason 미지정 시 state.pendingSellReason 사용.
+     */
+    private fun buildSellRecord(
+        ticker: String,
+        state: TradingState,
+        currentPrice: Double,
+        volume: Double,
+        reason: SellReason? = state.pendingSellReason,
+    ): TradeRecord {
+        val pnl = if (state.avgBuyPrice > 0) {
+            state.pnlPercent(currentPrice) - tradingProperties.roundTripFeeRate * 100
+        } else {
+            null
+        }
+        return TradeRecord(
+            ticker = ticker,
+            side = TradeSide.SELL,
+            price = currentPrice,
+            volume = volume,
+            totalAmount = currentPrice * volume,
+            pnlPercent = pnl,
+            reason = reason?.name,
+        )
     }
 
     /** 주문 체결 폴링. state 가 done/cancel 이면 즉시 반환, 아니면 최대 FILL_POLL_ATTEMPTS 회 폴링. */
