@@ -2,6 +2,7 @@ package com.trading.bot.client
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.domain.RealtimePrice
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
@@ -19,7 +20,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 @Component
-class UpbitWebSocketClient {
+class UpbitWebSocketClient(
+    private val watchlistProperties: WatchlistProperties,
+    // autoConnect=false 는 테스트 seam — 구독 목록만 갱신하고 실제 WS 연결은 열지 않는다. 운영은 항상 true.
+    private val autoConnect: Boolean = true,
+) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val objectMapper = ObjectMapper()
     private val sink = Sinks.many().multicast().onBackpressureBuffer<RealtimePrice>(256)
@@ -43,8 +48,7 @@ class UpbitWebSocketClient {
 
     @PostConstruct
     fun init() {
-        // Default tickers to subscribe on startup
-        subscribe(listOf("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL"))
+        subscribe(watchlistProperties.tickerList())
     }
 
     @PreDestroy
@@ -60,9 +64,11 @@ class UpbitWebSocketClient {
         val newTickers = tickers.filter { subscribedTickers.add(it) }
         if (newTickers.isNotEmpty()) {
             log.info("Subscribing to tickers: {}", newTickers)
-            reconnect()
+            if (autoConnect) reconnect()
         }
     }
+
+    internal fun subscribedMarkets(): Set<String> = subscribedTickers.toSet()
 
     fun priceFlow(): Flux<RealtimePrice> = sink.asFlux()
 
