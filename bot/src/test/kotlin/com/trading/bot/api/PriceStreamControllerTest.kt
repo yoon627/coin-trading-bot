@@ -74,6 +74,28 @@ class PriceStreamControllerTest {
     }
 
     @Test
+    fun `getLatestPrices excludes tickers outside watchlist even without filter`() {
+        // 매매용 폴백 구독이 유입시킨 watchlist 밖 티커(KRW-DOGE)는 미인증 공개 응답에서 제외돼야 한다.
+        every { webSocketClient.allLatestPrices() } returns mapOf(
+            "KRW-BTC" to RealtimePrice("KRW-BTC", 50000000.0, 0.01, 1e12),
+            "KRW-DOGE" to RealtimePrice("KRW-DOGE", 100.0, 0.0, 0.0),
+        )
+
+        assertEquals(setOf("KRW-BTC"), controller.getLatestPrices(null).keys)
+    }
+
+    @Test
+    fun `getConnectionStatus excludes tickers outside watchlist`() {
+        every { webSocketClient.isConnected() } returns true
+        every { webSocketClient.allLatestPrices() } returns mapOf(
+            "KRW-BTC" to RealtimePrice("KRW-BTC", 50000000.0, 0.01, 1e12),
+            "KRW-DOGE" to RealtimePrice("KRW-DOGE", 100.0, 0.0, 0.0),
+        )
+
+        assertEquals(setOf("KRW-BTC"), controller.getConnectionStatus()["tickers"] as Set<*>)
+    }
+
+    @Test
     fun `streamPrices subscribes to requested tickers`() {
         every { webSocketClient.priceFlow() } returns Flux.empty()
 

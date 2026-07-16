@@ -20,7 +20,8 @@ data class UpbitProperties(
 data class WatchlistProperties(
     val tickers: String = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL",
 ) {
-    fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    fun tickerList(): List<String> =
+        tickers.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct()
 }
 
 @ConfigurationProperties(prefix = "discord")

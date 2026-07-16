@@ -70,6 +70,8 @@ class TradingEngine(
     fun start(tickers: List<String> = tradingProperties.tickerList()) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
+            // engine 이 활성화한 티커(watchlist 밖 포함)를 WS 폴백이 커버하도록 구독.
+            webSocketClient?.subscribe(tickers)
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
