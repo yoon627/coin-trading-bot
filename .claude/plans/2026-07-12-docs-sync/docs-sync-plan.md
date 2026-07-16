@@ -56,3 +56,4 @@ updated: 2026-07-16
 # Deferred
 
 - perf/load-test.js:105-109 가 `/actuator/prometheus` 를 기대하나 actuator 는 health,info 만 노출(application.yml:23-27) — k6 스크립트 정비는 open #25 소유(codex 발견, severity: low). 같은 뿌리: SecurityConfig.kt:41 의 `/actuator/prometheus` permitAll 도 미노출 엔드포인트에 대한 죽은 규칙(2026-07-12 인라인 보안 점검 발견)
+- **monitoring/prometheus.yml 죽은 스크레이프 타겟 (2026-07-17 codex pre-push P2, main 기존 파일 — 이 PR 도입 아님)**: (1) `:6` 스크레이프 target `/actuator/prometheus` 는 앱이 미노출(+`micrometer-registry-prometheus` 미의존)이라 404, (2) `:10-13` `market-data-collector`(`collector:8081`) job 은 collector 모듈 제거로 영구 down. monitoring/ 유지 결정(README:77) 하에 남은 **stale config** — 위 #25/actuator 뿌리와 동일. 별도 작업(스크레이프 타겟 정비 또는 monitoring/ 통삭제+README:77 동반 수정)으로. codex block 은 리뷰 base(de9e852=monitoring 삭제커밋) 아티팩트라 CODEX_ACK 로 승인(net-zero vs main 확인).
