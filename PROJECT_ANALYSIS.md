@@ -50,13 +50,12 @@ coin-trading-bot/
 ├── common/                          # 공유 도메인 + 인디케이터 + 스윙 전략
 │   └── src/main/kotlin/com/trading/common/
 │       ├── domain/                  # NormalizedCandle, NormalizedTicker, OrderBook, Exchange, MarketPair
-│       ├── indicator/               # Indicators (RSI, MACD, BB, MA, EMA)
-│       └── strategy/                # TradingStrategy 인터페이스 + 스윙 전략 7개
+│       └── strategy/                # Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + 스윙 전략 7개
 │                                    #   (@Bean 등록은 :bot/config/StrategyConfig)
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
 │   └── src/main/kotlin/com/trading/bot/
-│       ├── api/                     # REST 컨트롤러 12개 + UpbitErrorHandlerAdvice
+│       ├── api/                     # REST 컨트롤러 10개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문), UpbitWebSocketClient
 │       ├── marketdata/              # in-process 시세 수집 (구 collector 흡수)
@@ -102,7 +101,7 @@ coin-trading-bot/
 | MeanReversion | 평균 회귀 (MA20 대비 -3% + 낮은 변동성) |
 | CombinedStrategy | 변동성 돌파 + 추세 + RSI 복합 |
 
-**리스크 관리:** 손절 -3% / 익절 +5% / 트레일링 스탑 고점 대비 -2% / 최대 보유 7일 / 50일 MA 아래 매수 차단 / 09:00 KST 일일 리셋.
+**리스크 관리:** 익절 +2% / 손절 -5% / 트레일링 스탑 고점 대비 -2% / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋. 50일 MA 아래 매수 차단은 **백테스트 전용**(`useMarketFilter` opt-in, 기본 off)이며 라이브 봇 매수 경로에는 적용되지 않는다.
 
 ---
 
