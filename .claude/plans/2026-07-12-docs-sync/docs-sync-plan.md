@@ -1,8 +1,8 @@
 ---
 title: docs-sync — 실거래 안전 관련 문서-코드 모순 4건 해소 (리스크 수치 정반대 등)
-status: in_progress
+status: done
 started: 2026-07-12
-updated: 2026-07-12
+updated: 2026-07-16
 ---
 
 # Goal
@@ -13,6 +13,7 @@ updated: 2026-07-12
 
 - 2026-07-12: 감사 v3(docs finder 완주, 검증 agent 는 쿼터로 실패) 발견 4건을 메인 세션 grep spot-check 로 전건 확인 후 plan 작성. 구현 미착수. 확인 내역: PROJECT_ANALYSIS.md:105 vs TradingProperties.kt(takeProfitPct=2.0·maxLossPct=5.0·maxHoldDays=1), common/ 에 indicator/ 패키지 부재(README:75 는 기재), monitoring/ 6파일 git 추적 잔존(README:5 는 "제거됨"), README 에 DISCORD_ERROR_* 0건(.env.example 에만 존재).
 - 2026-07-12: codex 검토(medium, read-only) 반영 — SellReason 은 6종(TradeRecord.kt:22-28, **MANUAL 포함** — 수동 매도 기록이 사용: TradeExecutionService.kt:107-115)이라 "자동 매도 사유 5종 + MANUAL" 로 정정. monitoring/ 삭제의 compose/스크립트 소비자 없음 재확인. 추가 발견(perf/load-test.js 가 /actuator/prometheus 기대 vs actuator 는 health,info 만 노출)은 #25 소유라 # Deferred 로. 리스크 수치·common 트리 정정은 codex "no objections". Claude plan-reviewer 는 쿼터 소진으로 생략(§9 사유 기록).
+- 2026-07-16: 착수·완료. 재대조: TradingProperties(takeProfit=2.0·maxLoss=5.0·trailing=2.0·maxHoldDays=1), SellReason 6종, MA50 은 BacktestEngine.kt:149-151 `useMarketFilter`(기본 off) 전용·라이브 매수경로 부재(StrategyController.kt:83 주석 근거), 컨트롤러 실제 11개(12→11), Indicators 는 strategy/Indicators.kt(indicator/ 패키지 없음), DISCORD_ERROR_* application.yml:65-66 실소비. 4건 수정 + monitoring/ 6파일 git rm(사용자 AskUserQuestion "삭제" 확정, classifier 범위 게이트 통과). 문서 전용이라 빌드 무영향(diff = md+monitoring). README 리스크표(137-144)와 PROJECT_ANALYSIS 상호 정합 확인.
 
 # Next
 
@@ -37,11 +38,11 @@ updated: 2026-07-12
 
 # Acceptance
 
-- [ ] PROJECT_ANALYSIS 리스크 줄이 코드 기본값(익절 +2%/손절 -5%/트레일링 -2%/보유 1거래일)과 일치, MA50 백테스트 전용 명시
-- [ ] 두 문서의 common 트리에서 indicator/ 제거·Indicators 위치 정정, 컨트롤러 수 정정
-- [ ] `git ls-files monitoring/` 0건 + 문서에서 참조 0건
-- [ ] README 에 매도 사유 6종(자동 5 + MANUAL)·DISCORD_ERROR_* 2행 존재 (`grep` 으로 확인)
-- [ ] 문서 전용 변경이므로 빌드 무영향 — `git diff --stat` 이 md/monitoring 만 포함함을 확인
+- [x] PROJECT_ANALYSIS 리스크 줄이 코드 기본값(익절 +2%/손절 -5%/트레일링 -2%/보유 1거래일)과 일치, MA50 백테스트 전용 명시 — PROJECT_ANALYSIS.md:104
+- [x] 두 문서의 common 트리에서 indicator/ 제거·Indicators 위치 정정, 컨트롤러 수 정정 — `grep -c indicator/` 0/0, 컨트롤러 11개
+- [x] `git ls-files monitoring/` 0건 + 문서에서 참조 0건
+- [x] README 에 매도 사유 6종(자동 5 + MANUAL)·DISCORD_ERROR_* 2행 존재 (`grep` 으로 확인)
+- [x] 문서 전용 변경이므로 빌드 무영향 — `git diff --stat` 이 md/monitoring 만 포함함을 확인
 
 # Blockers
 
