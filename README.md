@@ -72,13 +72,12 @@ coin-trading-bot/
 ├── common/                                # 공유 도메인 + 인디케이터 + 스윙 전략
 │   └── src/main/kotlin/com/trading/common/
 │       ├── domain/                        #   NormalizedCandle, NormalizedTicker, OrderBook, Exchange, MarketPair
-│       ├── indicator/                     #   Indicators (RSI, MACD, BB, MA, EMA)
-│       └── strategy/                      #   TradingStrategy 인터페이스 + 스윙 전략 7개
+│       └── strategy/                      #   Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + 스윙 전략 7개
 │
 ├── bot/                                   # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA, :8080)
 │   └── src/main/kotlin/com/trading/bot/
 │       ├── CoinTradingBotApplication.kt
-│       ├── api/                           #   REST 컨트롤러 12개 + UpbitErrorHandlerAdvice, RequestValidators
+│       ├── api/                           #   REST 컨트롤러 11개 + UpbitErrorHandlerAdvice, RequestValidators
 │       ├── auth/                          #   AuthController, JwtProvider, JwtAuthFilter, SecurityConfig
 │       ├── client/                        #   UpbitClient(REST 주문), UpbitAuthProvider, UpbitWebSocketClient
 │       ├── marketdata/                    #   MarketDataIngestionService, UpbitMarketFeed, MarketDataStore (구 collector 흡수)
@@ -275,7 +274,9 @@ main push / PR → GitHub Actions
 
 ## Discord 알림
 
-매수/매도 시 Embed 형태로 알림: 티커·가격·금액·전략, 매도 시 수익률·사유(TAKE_PROFIT / TRAILING_STOP / STOP_LOSS), 현재 KRW 잔고.
+매수/매도 시 Embed 형태로 알림: 티커·가격·금액·전략, 매도 시 수익률·사유, 현재 KRW 잔고. 매도 사유(`SellReason`)는 자동 5종(TAKE_PROFIT / TRAILING_STOP / STOP_LOSS / CHART_EXIT / DAILY_RESET) + 수동 MANUAL, 총 6종.
+
+ERROR 로그 Discord 알림은 별도 opt-in 기능(`DISCORD_ERROR_ALERT_ENABLED=true` + 전용 웹훅) — 아래 환경변수 참고.
 
 ## 환경변수
 
@@ -299,4 +300,6 @@ main push / PR → GitHub Actions
 | `TRADING_TICKERS` | `KRW-BTC` | 거래 대상 (쉼표 구분) |
 | `TRADING_STRATEGY` | `combined` | 기본 전략 |
 | `TRADING_AUTO_START` | `false` | 서버 시작 시 자동 매매 시작 |
-| `DISCORD_WEBHOOK_URL` | - | Discord 알림 웹훅 (사용자별 등록도 가능) |
+| `DISCORD_WEBHOOK_URL` | - | Discord 매매 알림 웹훅 (사용자별 등록도 가능) |
+| `DISCORD_ERROR_ALERT_ENABLED` | `false` | ERROR 로그 Discord 알림 opt-in. `true` + 아래 웹훅 설정 시에만 root logger 에 appender attach |
+| `DISCORD_ERROR_WEBHOOK_URL` | - | ERROR 알림 전용 웹훅 (매매 알림과 분리 권장) |
