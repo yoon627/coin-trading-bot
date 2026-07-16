@@ -39,14 +39,15 @@ class PriceStreamController(
             ?.distinct()
             ?.take(MAX_STREAM_TICKERS)
             ?.toList()
-        val tickerSet = requested?.toSet()
+        // 요청 미지정 시 watchlist 전체로 제한 — 미인증 공개 스트림이 매매용 폴백 구독을 노출하지 않도록.
+        val tickerSet = requested?.toSet() ?: allowedTickers
 
         if (!requested.isNullOrEmpty()) {
             webSocketClient.subscribe(requested)
         }
 
         return webSocketClient.priceFlow()
-            .filter { price -> tickerSet == null || price.market in tickerSet }
+            .filter { price -> price.market in tickerSet }
             .sample(Duration.ofMillis(500))
             .map { price ->
                 ServerSentEvent.builder(price)
@@ -60,7 +61,8 @@ class PriceStreamController(
     fun getLatestPrices(
         @RequestParam(required = false) tickers: List<String>?,
     ): Map<String, RealtimePrice> {
-        val all = webSocketClient.allLatestPrices()
+        // 미인증 공개 — 항상 watchlist 로만 제한(매매용 폴백이 유입시킨 타 티커 노출 차단).
+        val all = webSocketClient.allLatestPrices().filterKeys { it in allowedTickers }
         if (tickers.isNullOrEmpty()) return all
         val tickerSet = tickers.map { it.uppercase() }.toSet()
         return all.filterKeys { it in tickerSet }
@@ -70,7 +72,7 @@ class PriceStreamController(
     fun getConnectionStatus(): Map<String, Any> {
         return mapOf(
             "connected" to webSocketClient.isConnected(),
-            "tickers" to webSocketClient.allLatestPrices().keys,
+            "tickers" to webSocketClient.allLatestPrices().keys.filter { it in allowedTickers }.toSet(),
         )
     }
 }

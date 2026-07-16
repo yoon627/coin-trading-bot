@@ -99,6 +99,15 @@ class TradingEngineTest {
     }
 
     @Test
+    fun `start subscribes active tickers to WebSocket fallback`() {
+        // watchlist 밖 티커로 startBot 해도 WS 폴백(latestPrice)이 커버하도록 engine.start 가 구독을 건다.
+        val engine = createEngine()
+        engine.start(listOf("KRW-DOGE", "KRW-ADA"))
+        verify { webSocketClient.subscribe(listOf("KRW-DOGE", "KRW-ADA")) }
+        engine.stop()
+    }
+
+    @Test
     fun `getActiveStrategyName returns strategy name`() {
         val engine = createEngine()
         assertEquals("test_strategy", engine.getActiveStrategyName())
