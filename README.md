@@ -77,7 +77,7 @@ coin-trading-bot/
 ├── bot/                                   # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA, :8080)
 │   └── src/main/kotlin/com/trading/bot/
 │       ├── CoinTradingBotApplication.kt
-│       ├── api/                           #   REST 컨트롤러 11개 + UpbitErrorHandlerAdvice, RequestValidators
+│       ├── api/                           #   REST 컨트롤러 10개 + UpbitErrorHandlerAdvice, RequestValidators (AuthController 는 auth/)
 │       ├── auth/                          #   AuthController, JwtProvider, JwtAuthFilter, SecurityConfig
 │       ├── client/                        #   UpbitClient(REST 주문), UpbitAuthProvider, UpbitWebSocketClient
 │       ├── marketdata/                    #   MarketDataIngestionService, UpbitMarketFeed, MarketDataStore (구 collector 흡수)
