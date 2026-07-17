@@ -2,7 +2,7 @@
 title: marketdata-consolidation — Upbit WS 수집 단일화 + half-open 고착 워치독 + 파싱 테스트
 status: in_progress
 started: 2026-07-08
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 
 # Goal
@@ -19,15 +19,31 @@ updated: 2026-07-16
 - 2026-07-16: 1단계 착수 — Explore 완료(UpbitWebSocketClient·TradingEngine·UserTradingManager·UpbitMarketFeed·WatchlistProperties 확인). ①=WS폴백클라이언트 watchlist 주입, ②=engine.start→subscribe. TDD 진행.
 - 2026-07-17: ①② 구현·Green(UpbitWebSocketClientTest 7·TradingEngineTest 31 pass). code-review(Claude+Codex): **공개 API 노출 regression 발견** — 변경②가 미인증 `/api/prices/**`(SecurityConfig:40 permitAll)에 사용자 거래 티커(watchlist 밖) 유입. 사용자 승인 → 이 PR에서 fix(공개 엔드포인트 watchlist 제한 + watchlist 정규화 + subscribedMarkets internal + 회귀 테스트).
 - 2026-07-17(cont): fix 완료·전체 `:bot:test` green(PriceStreamControllerTest 10·WatchlistPropertiesTest 4·UpbitWebSocketClientTest 7·TradingEngineTest 31, 실패 0). 1단계 구현 완료(미커밋). simplify: allowedTickers `.map{uppercase}` redundant(tickerList 정규화) — 이중 방어로 유지(제안만).
+- 2026-07-17(2단계 착수): PR#36(1단계) squash 머지(origin/main a44782a). 사용자 선택 **'신뢰성 먼저 2 PR 분할'** — **PR-a**=주경로 재시작+워치독·폴백 워치독·세대가드(half-open 고착 해소 핵심), **PR-b**=unsubscribe ref-count·파싱 테스트. base=origin/main, 브랜치 `marketdata-consolidation-2`. Explore 완료(collectTickers 재시작 없음·양 WS 세대가드 없음·폴백 lastMessageAt 없음).
+- 2026-07-17(2a plan-review): Claude+Codex 수렴 — 원 설계 **NO-GO**(세대 증가시점 race·connected clobber·워치독 20s 폭주·cancel 이중연결·CancellationException 삼킴). 사용자 '전체 재설계 제대로' 선택 → 아래 재설계 반영.
+- 2026-07-17(2a 구현): UpbitWebSocketClient 세대가드(dispose前 generation++·doFinally/doOnError/scheduleReconnect 세대 게이팅·sleep後 재확인)+폴백 워치독, MarketDataIngestionService 재시작루프(CancellationException rethrow)+워치독(cancelAndJoin·restartMutex·shutdown), MarketDataWatchdogProperties(kill-switch)+application.yml. 전체 `:bot:test` green(Watchdog4·WSClient8·Ingestion6). code-review: subagent 세션한도 중단→메인 직접(결함 없음, plan-review 지적 반영 확인), codex 는 push 게이트로 병행. 원본 로직 diff 보존 확인.
 
 # Next
 
-1단계 구현·리뷰·fix 완료(미커밋). 다음:
-1. 1단계 커밋(chore(plan) 별도 or 작업 커밋 포함) → PR.
-2. 2단계 착수: 양 수집 경로 half-open 무수신 워치독(UpbitMarketFeed store timestamp 감시 재기동 + UpbitWebSocketClient @Scheduled dispose) + 재연결 race 세대 가드 + unsubscribe 경로(Review Disposition defer 흡수) + 파싱 fixture 테스트 5종.
+PR-a(marketdata-consolidation-2) TDD 진행 — half-open 고착 해소 3종:
+1. (3) 세대가드: 양 WS connect 마다 generation++, doFinally 는 자기 세대==현재일 때만 재연결(중복 connect·disposable leak 차단).
+2. (2) 폴백 워치독: UpbitWebSocketClient lastMessageAt @Volatile + @Scheduled → connected&&stale 시 dispose(→scheduleReconnect). isStale 순수함수 분리로 단위테스트.
+3. (1) 주경로 재시작+워치독: MarketDataIngestionService runTickerCollection while 루프(flow 종료/에러 시 backoff 재구독) + @Scheduled(lastTickerAt stale → tickerJob 재기동). markets 필드화.
+그 다음 code-review·머지 → PR-b(unsubscribe ref-count·파싱 fixture 테스트 5종).
 
 # Decisions
 
+- 2026-07-17(2a 설계 상세):
+  - **세대가드**: 양 WS(UpbitWebSocketClient·UpbitMarketFeed.tickerFlow)에 generation AtomicInteger. connect() 진입 시 `myGen=generation.incrementAndGet()`, doFinally/scheduleReconnect 는 `myGen==generation.get() && !shuttingDown` 일 때만 재연결. reconnect/dispose 로 무효화된 이전 연결의 doFinally 가 중복 connect·disposable 덮어쓰기 leak·이중 수신을 못 내게.
+  - **폴백 워치독**: UpbitWebSocketClient `@Volatile lastMessageAt`(processMessage 성공 시 갱신) + `@Scheduled(fixedRate=WATCHDOG_INTERVAL_MS)` → `connected && subscribedTickers 비지않음 && now-lastMessageAt>STALE_MS` 면 warn+dispose()(기존 doFinally→scheduleReconnect 재사용). 판정은 `internal fun isStale(...)` 순수함수로 분리해 단위테스트, dispose 트리거는 통합 성격.
+  - **주경로 재시작**: MarketDataIngestionService — collectTickers→`runTickerCollection`(while isActive: try collect / catch(비-Cancellation) log / delay backoff 재구독) + `@Volatile lastTickerAt`(ingestTicker 시 갱신) + `@Scheduled` 워치독(now-lastTickerAt>STALE_MS 면 tickerJob.cancel→새 launch — half-open 은 flow 재구독=새 연결로만 해소). markets 필드화(@Scheduled 접근).
+  - **임계값(상수, 활발 watchlist 기준)**: STALE_MS=60_000, WATCHDOG_INTERVAL_MS=20_000, RESTART_BACKOFF_MS=1_000. 설정화 보류(과한 옵션 지양, 필요 시 후속). → **plan-review 로 폐기, 아래 재설계에서 property 화**.
+- 2026-07-17(2a **재설계**, plan-review 반영):
+  - **세대가드**: `startConnection()` 단일 진입 — `myGen=generation.incrementAndGet()` **후** 구 `disposable.dispose()`. 구 연결 doFinally 는 myGen<현재라 상태변경·재연결 no-op. `connected.set(false)`·scheduleReconnect 전부 `myGen==generation.get()` 게이팅. `scheduleReconnect(deadGen)` 는 sleep 후 connectionLock 안에서 `deadGen==generation` 재확인. (증가시점을 dispose 이전으로 — connect-진입 증가의 race 제거)
+  - **reset-on-connect grace**: startConnection·restart 시 lastMessageAt/lastTickerAt=now 리셋(워치독 간격<임계 폭주 방지) + @Scheduled initialDelay.
+  - **주경로**: generation 제거(callbackFlow 지역 `running` 으로 충분 — 인스턴스 generation harmful). runTickerCollection `catch(CancellationException){throw e}` 우선. restartTickerCollection = restartMutex + tickerJob.cancelAndJoin(이중 WS 창 제거), @Scheduled 는 scope.launch offload(poolSize=2 블로킹 회피). shutdown 플래그.
+  - **kill-switch+임계값 property**: `MarketDataWatchdogProperties`(enabled/staleMs/intervalMs/initialDelayMs/restartBackoffMs) — 상수 하드코딩 폐기(오판 시 재배포만이 롤백인 리스크). @Scheduled fixedDelayString/initialDelayString.
+  - **관점**: 매매 정확성은 TradingEngine PRICE_STALE_THRESHOLD_MS=30_000 게이팅+REST 폴백이 이미 보호 — 이 워치독은 피드 자동복구용이라 kill-switch 로 보수적.
 - 2026-07-16(1단계 seam): UpbitWebSocketClient 에 `autoConnect`(기본 true) 생성자 seam 추가 — 테스트에서 false 로 실 WS 연결 억제(§7 네트워크 회피), 운영 기본값·동작 불변. 관찰용 `subscribedMarkets()` 노출. 연결 비활성 '구조 교체' 자체는 2단계 재연결 race 리팩토링과 함께.
 
 - **단계 분할 유지하되 2단계 스코프 확장**: 1단계 = 폴백 구독 실효화(S), 2단계 = 무수신 워치독(양 경로)+세대 가드+파싱 테스트(M), 3단계 = 풀 통합(M~L, 별도 PR 가능). "1·2단계만으로 실운영 위험 해소" 주장은 **2단계가 주 경로를 덮을 때만 성립**(plan-review critical 교정).
@@ -52,9 +68,9 @@ updated: 2026-07-16
 - [x] 폴백 구독: 거래 티커(watchlist 밖 포함) 전부 WS 폴백 구독 커버 — TradingEngineTest(start→subscribe KRW-DOGE/ADA)·UpbitWebSocketClientTest(watchlist 주입·추가구독) green
 - [x] (fix) 공개 API 노출 regression 차단: 미인증 /api/prices/** 가 watchlist 밖 티커 미노출 — PriceStreamControllerTest 회귀 green
 - [x] (fix) watchlist 입력 정규화(uppercase·distinct) — WatchlistPropertiesTest green
-- [ ] 주 경로 워치독: store 무수신 임계 초과 → 수집 재기동 테스트 green (+collect 종료 후 자동 재시작)
-- [ ] 폴백 워치독: 무수신 임계 초과 → dispose→재연결 경로 호출 테스트 green
-- [ ] 세대 가드: in-flight 핸드셰이크 중 중복 connect 차단 테스트 green
+- [x] 주 경로 워치독+재시작: runTickerCollection 재구독 루프(CancellationException rethrow) + checkTickerHealth→restartTickerCollection(cancelAndJoin) 구현, MarketDataWatchdogProperties.isStale green. 실제 재기동은 통합 성격(수동 관찰)
+- [x] 폴백 워치독: checkConnectionHealth→dispose(→doFinally 세대가드 재연결) 구현, isStale green. dispose→재연결은 통합 성격
+- [x] 세대 가드: shouldActForGeneration predicate 단위테스트 green(myGen==generation·shuttingDown 케이스). 실제 스레드 race 는 transport seam 없이 결정적 불가 → 수동/통합 관찰(정직 조정)
 - [ ] 파싱 fixture 테스트 5종 green + 파싱 실패 warn 로그 검증
 - [ ] (3단계 진행 시) 상시 WS 연결 1개 — 로컬 실행·관찰(연결 로그/netstat), SSE·엔진 폴백 동등성 확인
 - [ ] `./gradlew test` 전체 green
@@ -68,6 +84,10 @@ updated: 2026-07-16
 - Major unsubscribe 부재(전역 싱글턴 subscribedTickers 단조증가): **defer**→2단계(ref-count/엔진 union registry). 공개노출 fix로 노출 위험 제거, 잔여는 메모리/WS 부하.
 - Major 재연결 race 노출 빈도 증가(subscribe→reconnect): **defer**→2단계(세대 가드 근본해결).
 - Minor autoConnect test seam: **risk-accept** — JVM(jar) 부팅 안전 확인(kotlin-reflect·Spring default-param skip). AOT/native 전환 시 재검토(spring-framework#29820).
+- (2a plan-review, 전 finding **fix** by 재설계): 세대 증가시점·connected clobber·scheduleReconnect 세대재확인·워치독 timestamp reset/grace/initialDelay·주경로 CancellationException/cancelAndJoin/restartMutex/shutdown·kill-switch property.
+- (2a) UpbitMarketFeed 인스턴스 generation: **wontfix**(harmful) — tickerFlow 지역 running 가드로 충분.
+- (2a) 세대가드 결정적 race 테스트용 transport seam: **defer**(acceptance 하향) — predicate 단위테스트 + 수동관찰.
+- (2a) STALE 저유동 false-positive: **fix**(property 조정 가능) + 문서화.
 
 # Deferred
 
