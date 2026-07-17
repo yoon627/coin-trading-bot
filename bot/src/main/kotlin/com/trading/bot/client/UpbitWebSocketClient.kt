@@ -35,7 +35,12 @@ class UpbitWebSocketClient(
     private val connected = AtomicBoolean(false)
     private val shuttingDown = AtomicBoolean(false)
     private val reconnectAttempts = AtomicInteger(0)
-    private val subscribedTickers = ConcurrentHashMap.newKeySet<String>()
+
+    // 구독 대상 = watchlist(항상 구독) ∪ engine 활성 티커(ref-count). 전역 싱글턴이라 여러 engine 이
+    // 같은 티커를 공유할 수 있어 ref-count 로 세고, 마지막 engine 이 stop 할 때만 실제 구독 해제한다.
+    private val baselineTickers = ConcurrentHashMap.newKeySet<String>()
+    private val refCounts = ConcurrentHashMap<String, Int>()
+    private val subscriptionLock = Any()
 
     // 연결 세대: startConnection 이 새 연결을 열 때마다 증가. 무효화된(낡은) 세대의
     // doFinally/scheduleReconnect 는 상태 변경·재연결을 하지 않아 중복 connect·이중 수신을 막는다.
@@ -63,7 +68,8 @@ class UpbitWebSocketClient(
 
     @PostConstruct
     fun init() {
-        subscribe(watchlistProperties.tickerList())
+        baselineTickers.addAll(watchlistProperties.tickerList())
+        if (autoConnect && activeTickers().isNotEmpty()) reconnect()
     }
 
     @PreDestroy
@@ -75,16 +81,55 @@ class UpbitWebSocketClient(
         disposable?.dispose()
     }
 
+    // engine 이 활성화한 티커를 구독한다(ref-count 증가). 새로 추가된 티커가 있으면 재연결로 구독 메시지 갱신.
     fun subscribe(tickers: List<String>) {
         if (shuttingDown.get()) return
-        val newTickers = tickers.filter { subscribedTickers.add(it) }
-        if (newTickers.isNotEmpty()) {
-            log.info("Subscribing to tickers: {}", newTickers)
+        val added = synchronized(subscriptionLock) {
+            var changed = false
+            for (t in tickers) {
+                val before = refCounts.getOrDefault(t, 0)
+                refCounts[t] = before + 1
+                if (before == 0 && t !in baselineTickers) changed = true
+            }
+            changed
+        }
+        if (added) {
+            log.info("Subscribing to tickers: {}", tickers)
             if (autoConnect) reconnect()
         }
     }
 
-    internal fun subscribedMarkets(): Set<String> = subscribedTickers.toSet()
+    // engine stop 시 호출. ref-count 를 낮추고 0 이 된(watchlist 밖) 티커만 실제 구독에서 제거한다.
+    fun unsubscribe(tickers: List<String>) {
+        if (shuttingDown.get()) return
+        val removed = synchronized(subscriptionLock) {
+            var changed = false
+            for (t in tickers) {
+                val before = refCounts.getOrDefault(t, 0)
+                when {
+                    before > 1 -> refCounts[t] = before - 1
+                    before == 1 -> {
+                        refCounts.remove(t)
+                        if (t !in baselineTickers) changed = true
+                    }
+                    // before == 0: 구독 이력 없음 — 무시
+                }
+            }
+            changed
+        }
+        if (removed) {
+            log.info("Unsubscribing idle tickers: {}", tickers)
+            if (autoConnect) reconnect()
+        }
+    }
+
+    internal fun subscribedMarkets(): Set<String> = activeTickers()
+
+    private fun activeTickers(): Set<String> {
+        val result = HashSet(baselineTickers)
+        result.addAll(refCounts.keys)
+        return result
+    }
 
     fun priceFlow(): Flux<RealtimePrice> = sink.asFlux()
 
@@ -103,7 +148,7 @@ class UpbitWebSocketClient(
     )
     fun checkConnectionHealth() {
         if (!watchdogProperties.enabled || shuttingDown.get()) return
-        if (!connected.get() || subscribedTickers.isEmpty()) return
+        if (!connected.get() || activeTickers().isEmpty()) return
         if (watchdogProperties.isStale(System.currentTimeMillis(), lastMessageAt)) {
             log.warn("WS half-open: no frame for >{}ms; forcing reconnect", watchdogProperties.staleMs)
             synchronized(connectionLock) {
@@ -121,7 +166,7 @@ class UpbitWebSocketClient(
 
     // connectionLock 을 보유한 상태에서만 호출. 새 세대를 부여하고 구 연결을 정리한 뒤 연결한다.
     private fun startConnection() {
-        if (shuttingDown.get() || subscribedTickers.isEmpty()) return
+        if (shuttingDown.get() || activeTickers().isEmpty()) return
         val myGen = generation.incrementAndGet() // 구 연결 무효화 (dispose 이전에 증가)
         disposable?.dispose()
         lastMessageAt = System.currentTimeMillis() // reset-on-connect grace (워치독 폭주 방지)
@@ -137,7 +182,7 @@ class UpbitWebSocketClient(
                 if (shouldActForGeneration(myGen, generation.get(), shuttingDown.get())) {
                     connected.set(true)
                     reconnectAttempts.set(0)
-                    log.info("WebSocket connected to Upbit. Subscribing to {} tickers.", subscribedTickers.size)
+                    log.info("WebSocket connected to Upbit. Subscribing to {} tickers.", activeTickers().size)
                 }
                 val subscriptionMessage = buildSubscriptionMessage()
                 val sendMono = outbound.sendString(Flux.just(subscriptionMessage)).then()
@@ -166,7 +211,7 @@ class UpbitWebSocketClient(
         val ticket = mapOf("ticket" to UUID.randomUUID().toString())
         val type = mapOf(
             "type" to "ticker",
-            "codes" to subscribedTickers.toList(),
+            "codes" to activeTickers().toList(),
             "isOnlyRealtime" to true,
         )
         return objectMapper.writeValueAsString(listOf(ticket, type))
@@ -203,7 +248,7 @@ class UpbitWebSocketClient(
     }
 
     private fun scheduleReconnect(deadGen: Int) {
-        if (shuttingDown.get() || subscribedTickers.isEmpty()) return
+        if (shuttingDown.get() || activeTickers().isEmpty()) return
         if (deadGen != generation.get()) return // 이미 새 연결로 대체됨
 
         val attempt = reconnectAttempts.incrementAndGet()
