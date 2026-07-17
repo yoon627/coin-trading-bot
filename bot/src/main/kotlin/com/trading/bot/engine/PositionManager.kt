@@ -44,6 +44,8 @@ class PositionManager(
             }
             // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
             state.unsynced = false
+        } catch (e: CancellationException) {
+            throw e // 취소는 전파(unsynced 로 삼키지 않는다).
         } catch (e: Exception) {
             // 동기화 실패 → position 상태 불확실. unsynced 로 표시해 buy() 가 신규 진입을 막고 다음 tick 재시도(processTicker).
             state.unsynced = true
@@ -84,6 +86,8 @@ class PositionManager(
                     price = floor(investAmount).toLong().toString(),
                 )
             )
+        } catch (e: CancellationException) {
+            throw e // 취소는 오탐 ERROR 로 로깅하지 않고 전파(Discord 스팸 방지).
         } catch (e: Exception) {
             log.error("Failed to place buy order {}: {}", ticker, e.message, e)
             return null
@@ -117,6 +121,8 @@ class PositionManager(
         val uuid = state.pendingBuyUuid ?: return null
         val filled = try {
             upbitClient.getOrder(uuid)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("reconcile getOrder failed for {} ({}): falling back to balance", ticker, e.message)
             return recoverFromBalance(ticker, state, currentPrice)
@@ -168,6 +174,8 @@ class PositionManager(
                 log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
                 null
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("reconcile balance recovery failed for {} ({}) — pending kept", ticker, e.message)
             null
@@ -208,6 +216,8 @@ class PositionManager(
         val uuid = state.pendingSellUuid ?: return null
         val filled = try {
             upbitClient.getOrder(uuid)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
             return recoverSellFromBalance(ticker, state, currentPrice)
@@ -227,6 +237,8 @@ class PositionManager(
         // 매도 수량은 state.holdVolume(조작 가능)이 아니라 거래소 실잔고(sellable)를 사용.
         val account = try {
             findAccount(ticker.substringAfter("-"))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.error("Failed to fetch balance for sell {}: {}", ticker, e.message, e)
             return null
@@ -256,6 +268,8 @@ class PositionManager(
                     volume = account!!.balance,
                 )
             )
+        } catch (e: CancellationException) {
+            throw e // 취소는 오탐 ERROR 로 로깅하지 않고 전파(Discord 스팸 방지).
         } catch (e: Exception) {
             log.error("Failed to place sell order {}: {}", ticker, e.message, e)
             return null
@@ -342,6 +356,8 @@ class PositionManager(
                 log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, total)
                 null
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("reconcile sell balance recovery failed for {} ({}) — pending kept", ticker, e.message)
             null

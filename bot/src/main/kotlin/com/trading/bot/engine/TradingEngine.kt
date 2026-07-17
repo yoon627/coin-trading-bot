@@ -285,11 +285,14 @@ class TradingEngine(
         strategy: TradingStrategy,
     ): Boolean {
         if (!tradingProperties.chartExitEnabled) return false
-        return runCatching { evaluateChartExit(ticker, currentPrice, strategy) }
-            .getOrElse {
-                log.debug("chartExit evaluation failed for {}: {}", ticker, it.message)
-                false
-            }
+        return try {
+            evaluateChartExit(ticker, currentPrice, strategy)
+        } catch (e: CancellationException) {
+            throw e // 취소 전파 — runCatching 은 CE 까지 삼켜 종료 중에도 후속 매수/청산 평가가 계속된다.
+        } catch (e: Exception) {
+            log.debug("chartExit evaluation failed for {}: {}", ticker, e.message)
+            false
+        }
     }
 
     /**

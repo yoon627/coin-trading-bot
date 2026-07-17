@@ -7,6 +7,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -15,6 +16,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 class PositionManagerExtendedTest {
 
@@ -919,5 +921,27 @@ class PositionManagerExtendedTest {
         // 원자 완주 → 청산 확정·pending 해소 (취소로 중단되면 position=true, pendingSell 잔존)
         assertFalse(state.position)
         assertNull(state.pendingSellUuid)
+    }
+
+    // --- 취소 전파: suspend API 를 감싼 broad catch 가 CancellationException 을 삼키면 안 된다 ---
+    // 특히 pre-order placeOrder catch 가 취소를 'Failed to place order' ERROR 로 로깅하면 DiscordErrorLogAppender 를
+    // 통해 매 reload/shutdown 마다 오탐 alert 가 나간다(취소 안전화의 오탐 제거 목표와 정면 충돌).
+
+    @Test
+    fun `buy pre-order propagates cancellation instead of logging it as error`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "200000"))
+        coEvery { upbitClient.placeOrder(any()) } coAnswers { throw CancellationException("cancelled mid-order") }
+        val state = TradingState("KRW-BTC")
+
+        assertThrows<CancellationException> { manager.buy("KRW-BTC", state, 50000000.0, "test") }
+        assertNull(state.pendingBuyUuid) // 주문 접수 전 취소 — pending 없음
+    }
+
+    @Test
+    fun `syncPosition propagates cancellation instead of marking unsynced`() = runTest {
+        coEvery { upbitClient.getAccounts() } coAnswers { throw CancellationException("cancelled") }
+        val state = TradingState("KRW-BTC")
+
+        assertThrows<CancellationException> { manager.syncPosition("KRW-BTC", state) }
     }
 }

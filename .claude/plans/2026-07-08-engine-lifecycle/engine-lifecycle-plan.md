@@ -2,7 +2,7 @@
 title: engine-lifecycle — 엔진 수명주기 안전화 (cancel/reload/부팅복원/graceful shutdown)
 status: in_progress
 started: 2026-07-08
-updated: 2026-07-17
+updated: 2026-07-18
 ---
 
 # Goal
@@ -17,10 +17,12 @@ updated: 2026-07-17
 - 2026-07-17(구현 1/3 — 취소 안전성, task 1·2 done): stop() suspend+cancelAndJoin, PositionManager buy/sell 후처리 `withContext(NonCancellable)`+CE rethrow, TradingEngine runLoop/processTicker CE rethrow. TDD: PositionManagerExtendedTest 2건(NonCancellable 완주 Red→Green 확인), TradingEngineTest 1건(stop join + 오탐 ERROR 없음). 기존 stop() 호출 @Test 4건 runBlocking 래핑. 관련 스위트 green. **가상시간 대신 실측**: TradingEngine 자체 scope(Dispatchers.Default)라 runTest 가상시간 미적용 → PositionManager(순수 suspend)는 runTest, engine 통합은 runBlocking+실측(결과 동일). NonCancellable 이 pending reconcile 안전망과 협력해 유실 0.
 - 2026-07-17(구현 2/3 — restore 재작성, task 3·4 done): restoreOnStartup 을 @PostConstruct → @EventListener(ApplicationReadyEvent)+@Order(LOWEST) 로 이동, DiscordErrorLogAppender 에 @Order(HIGHEST) 부여(attach 선행). per-user restoreOne = lockFor.withLock + lock 후 engines 재확인 skip(유령 엔진 차단 — 구 computeIfAbsent 는 실행 중 엔진에 start 재호출). restoreAllRunningBots 유한 backoff(1·2·4·8·16s, ≤5회) + 최종 실패 '봇 미복원' ERROR alert. createEngine internal seam. 신규 UserTradingManagerTest 3건(skip·재시도·최종alert, 가상시간) green.
 - 2026-07-17(구현 3/3 — graceful shutdown, task 5 done): application.yml server.shutdown:graceful + spring.lifecycle.timeout-per-shutdown-phase:30s, docker-compose.prod.yml app.stop_grace_period:40s, UserTradingManager @PreDestroy shutdownAll(전 engine 병렬 stop, runBlocking 브리지) + @DependsOn("discordErrorLogAppender")로 소멸 순서(engine stop → appender detach) 고정. UserTradingManagerTest +1(shutdown 시 전 engine stop). engine 스위트 green.
+- 2026-07-17(리뷰 — dlc 11): code-reviewer REQUEST CHANGES(codex gpt-5.5 high 병행, 대부분 합의) + architecture-reviewer NEEDS DISCUSSION. 근본 구멍 8건 — C1 placeOrder 취소창 broad catch→pending 미설정→주문유실·이중포지션 / C2 NonCancellable 무한→shutdown SIGKILL / M1 onTrade DB기록 NonCancellable 밖→감사유실 / M2 restore DB 전실패 alert 누락 / M3 chartExit runCatching CE삼킴 / M4 stop 동시호출 no-join / M5 restore 코루틴 lifecycle 미결속→shutdown 후 엔진기동 / M6 suspend broad catch 다수 CE삼킴→pre-order 취소 ERROR로깅→오탐 alert. **arch Major: timeout-per-shutdown-phase(30s)는 @PreDestroy 엔 미적용(SmartLifecycle 전용) → @PreDestroy runBlocking 무한 hang.**
+- 2026-07-18(스코프 결정 — 사용자): durable 근본(C1 주문유실·M1 재시작복구)은 **trading-state-durability(#19+#20, engine-lifecycle 다음 순서로 이미 설계·codex 검토 완료)로 defer**. 이 PR = **SmartLifecycle 전환**(C2) + 국소 fix(M2·M3·M4·M5·M6) + onTrade NonCancellable(M1 프로세스생존중 부분).
 
 # Next
 
-종합 리뷰(dlc 11): architecture-reviewer(DI @DependsOn·lifecycle·2계층) + code-reviewer(동시성·CE·backoff) 병렬(codex owner 1). fix loop → simplify → ./gradlew test 전체 + graceful 로컬 SIGTERM 수동 관찰. 이후 Acceptance 6항목 증거 대조.
+fix loop(dlc 12) — 순서: ① M6/M3 CE rethrow 를 suspend broad catch 전반으로 확대(오탐 alert 제거) → ② M2 restore 전실패 alert + 마지막 backoff 제거 → ③ M4 stop 동시 join 직렬화 → ④ M5 restore lifecycle 결속(restoreJob+shutting-down) → ⑤ C2 SmartLifecycle 전환(@DependsOn·@PreDestroy 대체) + M1 onTrade NonCancellable → ⑥ 테스트 보강(DB 전실패·shutdown 심화). 각 TDD. 이후 code-reviewer 재검토 → simplify → 전체 검증.
 
 # Decisions
 
@@ -31,6 +33,15 @@ updated: 2026-07-17
 - **graceful shutdown 3종 세트**: application.yml `server.shutdown: graceful` + `spring.lifecycle.timeout-per-shutdown-phase: 30s`, UserTradingManager @PreDestroy 전체 engine stop(suspend 브리지), compose `stop_grace_period: 40s`. **@PreDestroy 상호 순서 확인**: DiscordErrorLogAppender.detach(:50-56)가 엔진 stop 보다 먼저 실행되면 종료 중 에러가 Discord 미도달 — 빈 소멸 순서를 확인해 필요 시 의존성/@DependsOn 으로 고정. (이유: 매 배포가 '실행 중 tick 강제 킬' — ops 발견이지만 suspend stop() 과 같은 코드 접점)
 - **전제**: alert 류 log.error 의 Discord 도달은 `DISCORD_ERROR_ALERT_ENABLED=true` 의존(compose 기본 false — ops-safety-net 이 실측 확인).
 - **스코프 경계**: pendingBuyUuid durable 영속화(#20)는 별도 — 프로세스 생존 중 전이의 무결성만.
+
+## 리뷰 반영 (dlc 11 — 2026-07-18)
+- **[C2 → SmartLifecycle 전환]** @PreDestroy shutdownAll 대체: `timeout-per-shutdown-phase(30s)`는 SmartLifecycle/web graceful 에만 적용되고 @PreDestroy 소멸 콜백엔 미적용(arch 웹검증) → runBlocking 상한 없어 awaitFill hang 시 SIGKILL 까지 블록. engine stop 을 SmartLifecycle(web graceful phase 뒤 phase)로 모델링 → 예산 실제 적용 + 모든 SmartLifecycle.stop 이 @PreDestroy 앞이라 appender detach 순서 자동정렬(**@DependsOn magic-string 제거**). stop 은 bounded.
+- **[M6/C1-로깅 → CE rethrow 확대]** suspend 를 감싼 모든 broad catch 에 `catch(CancellationException){throw e}`: placeOrder pre-order catch(현재 취소를 ERROR 로깅→오탐 Discord alert, 이 PR 목표와 정면충돌), syncPosition/reconcilePendingBuy/recoverFromBalance/reconcilePendingSell/sell findAccount/recoverSellFromBalance, chartExitTriggered runCatching(M3). 취소는 전파.
+- **[M2 restore alert]** DB 조회 전실패 시 '봇 미복원' ERROR 보장(lastQueryFailed 추적) + 마지막 attempt 불필요 backoff 제거.
+- **[M4 stop 직렬화]** stop() 동시호출(shutdownAll ↔ reload/stopBot 경합) 시 CAS 실패자도 공통 loopJob 을 join(Mutex 직렬화, 첫 호출만 cancel).
+- **[M5 restore lifecycle 결속]** restore 코루틴을 restoreJob 보관 + shutting-down 플래그로 lifecycle 에 묶어, shutdown 시 restore 먼저 취소·join + 신규 엔진 start 차단(shutdown 후 엔진 기동 방지).
+- **[M1 부분 fix]** onTrade(record 영속화)를 NonCancellable 경계 안으로 — 취소 시 체결·상태는 반영됐는데 record 유실 방지(프로세스 생존 중). **재시작 후 복구는 durable(trading-state-durability) 소관**.
+- **[defer]** C1 주문유실 근본(placeOrder 취소로 uuid 불명 → open-order 복구)·M1 재시작복구(record durable) → trading-state-durability(#20). 이 PR 은 CE rethrow·onTrade NonCancellable 까지만.
 
 # Key Files
 
@@ -43,13 +54,34 @@ updated: 2026-07-17
 
 # Acceptance
 
-- [ ] reload/stop 시 awaitFill 진행 중이면 join 으로 tick 완료 대기 (runTest 가상시간, pending 유실 없음 assert)
-- [ ] buy/sell·runLoop·processTicker 4곳 모두 cancel → CE rethrow + NonCancellable 구간 완주 테스트
-- [ ] restore ↔ stopBot 경합 테스트: 유령 엔진 미발생(engines map 과 실행 루프 일치)
-- [ ] restore 실패 → backoff 재시도 → 최종 실패 시 ERROR 로그 테스트
-- [ ] graceful: 로컬 실행·관찰 — SIGTERM 시 "graceful shutdown" 로그 + 진행 중 tick 완료 후 종료 확인(수동 검증 절차), @PreDestroy 순서(appender detach 가 엔진 stop 이후) 확인
+- [x] reload/stop 시 awaitFill 진행 중이면 join 으로 tick 완료 대기 (TradingEngineTest — stop join + 오탐 ERROR 없음)
+- [x] buy/sell 후처리 cancel → NonCancellable 완주 (PositionManagerExtendedTest 2건) + runLoop/processTicker CE rethrow
+- [x] restore ↔ 개입 경합: 유령 엔진 미발생 (UserTradingManagerTest — skip 시 createEngine·start·setStrategy 0회)
+- [x] restore 실패 → backoff 재시도 → 복원 (UserTradingManagerTest)
+- [ ] **[리뷰]** 취소 시 오탐 ERROR 없음: placeOrder/reconcile/chartExit 취소가 ERROR 로그 미발생(로그 캡처)
+- [ ] **[리뷰]** restore DB 전실패 → '봇 미복원' ERROR + 마지막 backoff 미실행 테스트
+- [ ] **[리뷰]** stop() 동시호출 시 양쪽 loop 완료까지 join 테스트
+- [ ] **[리뷰]** restore 진행 중 shutdown → restore 취소·신규 엔진 미기동 테스트
+- [ ] **[리뷰]** SmartLifecycle: shutdown 이 30s 예산 내 bounded 종료(hang 없음), stop 이 appender detach 앞(로컬 SIGTERM 관찰)
+- [ ] **[리뷰]** onTrade 취소 시 record 유실 없음(NonCancellable) 테스트
 - [ ] `./gradlew test` 전체 green
 
 # Blockers
 
 - ~~order-state-integrity 머지 선행~~ — **해소** (2026-07-17: #39 c61b8ce main 머지 → rebase 완료). pendingBuy/Sell reconcile 구조 위에 취소 안전성을 얹는다(plan-review 권고 순서). test-hardening 과 TradingEngine 겹침은 유효 — 착수 순서로 회피(engine-lifecycle 먼저).
+
+# Review Disposition (dlc 11 리뷰 처분)
+
+- C1 (placeOrder 취소 주문유실): **부분 fix**(CE rethrow → 오탐 제거·취소 전파) + **defer**(durable uuid 복구 → trading-state-durability)
+- C2 (NonCancellable 무한 hang): **fix** — SmartLifecycle 전환 + bounded stop
+- M1 (onTrade 감사유실): **부분 fix**(onTrade NonCancellable, 프로세스생존중) + **defer**(record durable → trading-state-durability)
+- M2 (restore 전실패 alert 누락): **fix**
+- M3 (chartExit runCatching CE): **fix**
+- M4 (stop 동시 no-join): **fix**
+- M5 (restore lifecycle 미결속): **fix**
+- M6 (broad catch CE 삼킴 family): **fix**
+- Minor(테스트 공백·문구): **fix** — DB 전실패·shutdown 심화 테스트, 주석 '30s예산/병렬/리스너순서' 정정(simplify)
+
+# Deferred (범위 밖 — trading-state-durability #20 로 이관)
+
+- **C1 주문유실 근본 / M1 재시작 복구** (Critical/Major): placeOrder 취소로 uuid 불명 시 open-order 조회 복구 + pendingBuyUuid/pendingSellUuid·TradeRecord durable 영속화. 이 PR 은 CE rethrow(오탐 제거)·onTrade NonCancellable(프로세스생존중)까지. 완전 해결은 trading-state-durability(그 plan 이 이미 담당 — Closes #20). 파일: PositionManager.kt buy/sell, TradeExecutionService.saveAndNotify.
