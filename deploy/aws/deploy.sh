@@ -116,6 +116,11 @@ JWT_SECRET=${JWT_SECRET}
 APP_ENCRYPTION_SECRET=${APP_ENCRYPTION_SECRET}
 APP_AUTH_COOKIE_FORCE_INSECURE=${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
 APP_DOMAIN=${domain}
+BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET:-}
+BACKUP_S3_PREFIX=${BACKUP_S3_PREFIX:-db-backups}
+BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
+BACKUP_S3_SSE=${BACKUP_S3_SSE:-AES256}
+AWS_REGION=${AWS_REGION}
 EOF
 }
 
@@ -332,10 +337,12 @@ do_deploy() {
     trap "rm -f '$tmp_env'" EXIT
     render_server_env "$tmp_env"
     ssh_ec2 'mkdir -p /opt/app'
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$COMPOSE_FILE"         ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/Caddyfile" ec2-user@"$EC2_PUBLIC_IP":/opt/app/Caddyfile
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$tmp_env"              ec2-user@"$EC2_PUBLIC_IP":/opt/app/.env
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$COMPOSE_FILE"          ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/Caddyfile"  ec2-user@"$EC2_PUBLIC_IP":/opt/app/Caddyfile
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/backup.sh"  ec2-user@"$EC2_PUBLIC_IP":/opt/app/backup.sh
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$tmp_env"               ec2-user@"$EC2_PUBLIC_IP":/opt/app/.env
     rm -f "$tmp_env"; trap - EXIT
+    ssh_ec2 'chmod +x /opt/app/backup.sh'
 
     log "컨테이너 배포 (GHCR pull, SHA=${target_sha:0:12})"
     local deploy_rc=0
@@ -458,6 +465,15 @@ do_destroy() {
     load_state
     echo "=== 모든 AWS 리소스 삭제 (과금 중단) ==="
     read -rp "'yes' 입력: " confirm; [[ "$confirm" != "yes" ]] && { echo "취소"; exit 0; }
+
+    # 삭제 전 최종 DB 백업 (BACKUP_S3_BUCKET 설정 + 인스턴스 접근 가능할 때만).
+    # 거래이력·암호화 Upbit 키가 볼륨과 함께 영구 소멸하므로 마지막 스냅샷을 S3 로 남긴다.
+    if [[ -n "${EC2_PUBLIC_IP:-}" && -n "${BACKUP_S3_BUCKET:-}" ]]; then
+        log "최종 DB 백업 → S3"
+        ssh_ec2 'cd /opt/app && ./backup.sh' || echo "WARN: 최종 백업 실패 — 삭제는 계속 진행."
+    elif [[ -n "${EC2_PUBLIC_IP:-}" ]]; then
+        echo "WARN: BACKUP_S3_BUCKET 미설정 → 최종 DB 백업 생략. 거래이력·암호화키가 소멸됩니다."
+    fi
 
     [[ -n "${INSTANCE_ID:-}" ]] && {
         log "EC2 종료"
