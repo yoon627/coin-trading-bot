@@ -18,6 +18,13 @@ data class TradingState(
     // H8: placeOrder 성공 후 후처리(awaitFill/getAccounts) 실패 시 주문 uuid 를 보존해 다음 tick reconcile.
     var pendingBuyUuid: String? = null,
     var pendingBuyStrategy: String? = null,
+    // 매도판 H8: 매도 placeOrder 성공 후 체결확인 실패/미확정 시 uuid·사유 보존 → 다음 tick reconcilePendingSell.
+    // 잃으면 뒤늦게 체결된 청산이 기록에서 사라지거나(감사 유실) 재평가로 이중 매도된다.
+    var pendingSellUuid: String? = null,
+    var pendingSellReason: SellReason? = null,
+    // syncPosition 이 거래소 잔고 동기화에 실패하면 true — position 상태가 불확실하므로 매수를 막아
+    // 재시작 직후(429 빈발) 이중 포지션을 방지. processTicker 가 다음 tick 재시도해 성공 시 해소.
+    var unsynced: Boolean = false,
 ) {
     companion object {
         private val KST: ZoneId = ZoneId.of("Asia/Seoul")
@@ -76,5 +83,12 @@ data class TradingState(
         // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
         pendingBuyUuid = null
         pendingBuyStrategy = null
+        // 매도 확정 = 매도 pending 해소.
+        clearPendingSell()
+    }
+
+    fun clearPendingSell() {
+        pendingSellUuid = null
+        pendingSellReason = null
     }
 }

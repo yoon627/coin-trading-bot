@@ -47,6 +47,9 @@ class TradeExecutionService(
         username: String? = null,
         discordWebhookUrl: String? = null,
     ): TradeExecutionResult {
+        // placeOrder 실패(UpbitApiException 등)는 잡지 않고 전파 — UpbitErrorHandlerAdvice 가 429/418/insufficient_funds/
+        // error_name 을 정교하게 매핑한다. 여기서 잡으면 그 매핑을 우회하고 rawBody(e.message)를 노출한다.
+        // 성공 이후 조회/기록 실패만 recordOrder 가 recorded=false 로 흡수(주문은 접수됐으므로 재시도 유발 금지).
         val order = client.placeOrder(
             OrderRequest(
                 market = market,
@@ -56,20 +59,19 @@ class TradeExecutionService(
             )
         )
 
-        val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-        val volume = if (currentPrice > 0) amount / currentPrice else 0.0
-
-        val record = TradeRecord(
-            ticker = market,
-            side = TradeSide.BUY,
-            price = currentPrice,
-            volume = volume,
-            totalAmount = amount,
-            strategy = strategy,
-            userId = userId,
-        )
-
-        return saveAndNotify(client, record, username, discordWebhookUrl, order.uuid)
+        return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
+            val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
+            val volume = if (currentPrice > 0) amount / currentPrice else 0.0
+            TradeRecord(
+                ticker = market,
+                side = TradeSide.BUY,
+                price = currentPrice,
+                volume = volume,
+                totalAmount = amount,
+                strategy = strategy,
+                userId = userId,
+            )
+        }
     }
 
     /**
@@ -84,13 +86,13 @@ class TradeExecutionService(
         discordWebhookUrl: String? = null,
     ): TradeExecutionResult {
         val currency = market.substringAfter("-")
-        val accounts = client.getAccounts()
-        val account = accounts.find { it.currency == currency }
+        val account = client.getAccounts().find { it.currency == currency }
             ?: return TradeExecutionResult.failure("no holdings for $currency")
         if (account.balanceDouble() <= 0) {
             return TradeExecutionResult.failure("no balance for $currency")
         }
 
+        // placeOrder 실패는 전파(UpbitErrorHandlerAdvice 처리) — executeBuy 와 동일 이유.
         val order = client.placeOrder(
             OrderRequest(
                 market = market,
@@ -100,23 +102,21 @@ class TradeExecutionService(
             )
         )
 
-        val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-        val pnl = netPnlPercent(currentPrice, account.avgBuyPriceDouble())
-        val vol = account.balanceDouble()
-
-        val record = TradeRecord(
-            ticker = market,
-            side = TradeSide.SELL,
-            price = currentPrice,
-            volume = vol,
-            totalAmount = currentPrice * vol,
-            pnlPercent = pnl,
-            reason = SellReason.MANUAL.name,
-            strategy = strategy,
-            userId = userId,
-        )
-
-        return saveAndNotify(client, record, username, discordWebhookUrl, order.uuid)
+        return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
+            val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
+            val vol = account.balanceDouble()
+            TradeRecord(
+                ticker = market,
+                side = TradeSide.SELL,
+                price = currentPrice,
+                volume = vol,
+                totalAmount = currentPrice * vol,
+                pnlPercent = netPnlPercent(currentPrice, account.avgBuyPriceDouble()),
+                reason = SellReason.MANUAL.name,
+                strategy = strategy,
+                userId = userId,
+            )
+        }
     }
 
     /**
@@ -133,10 +133,10 @@ class TradeExecutionService(
     ): TradeExecutionResult {
         val currency = market.substringAfter("-")
 
-        val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
+        // pnl 기준가(평단)는 매도 전에 확보 — 전량 매도면 체결 후 통화 잔고가 사라져 avgBuyPrice 를 잃고 pnl 이 null 이 된다(codex P2).
         val avgBuyPrice = client.getAccounts().find { it.currency == currency }?.avgBuyPriceDouble() ?: 0.0
-        val pnl = netPnlPercent(currentPrice, avgBuyPrice)
 
+        // placeOrder 실패는 전파(UpbitErrorHandlerAdvice 처리) — executeBuy 와 동일 이유.
         val order = client.placeOrder(
             OrderRequest(
                 market = market,
@@ -146,20 +146,21 @@ class TradeExecutionService(
             )
         )
 
-        val vol = sellVolume.toDoubleOrNull() ?: 0.0
-        val record = TradeRecord(
-            ticker = market,
-            side = TradeSide.SELL,
-            price = currentPrice,
-            volume = vol,
-            totalAmount = currentPrice * vol,
-            pnlPercent = pnl,
-            reason = SellReason.MANUAL.name,
-            strategy = strategy,
-            userId = userId,
-        )
-
-        return saveAndNotify(client, record, username, discordWebhookUrl, order.uuid)
+        return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
+            val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
+            val vol = sellVolume.toDoubleOrNull() ?: 0.0
+            TradeRecord(
+                ticker = market,
+                side = TradeSide.SELL,
+                price = currentPrice,
+                volume = vol,
+                totalAmount = currentPrice * vol,
+                pnlPercent = netPnlPercent(currentPrice, avgBuyPrice),
+                reason = SellReason.MANUAL.name,
+                strategy = strategy,
+                userId = userId,
+            )
+        }
     }
 
     /**
@@ -209,21 +210,25 @@ class TradeExecutionService(
         discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
     }
 
-    private suspend fun saveAndNotify(
+    /**
+     * placeOrder 성공 이후의 기록/알림 단계. 주문은 이미 접수됐으므로 이 단계 실패는 failure(재시도 유발) 로 되돌리지 않고
+     * success(uuid, recorded=false) 로 알려 사용자가 이중 접수하지 않게 한다. record 생성(getTicker 등)도 이 경계 안에서
+     * 수행해 그 실패까지 흡수한다. 수동·엔진 주문 모두 동일 audit 경로(trade_executions) 를 거친다.
+     */
+    private suspend fun recordOrder(
         client: UpbitClient,
-        record: TradeRecord,
+        orderUuid: String,
+        market: String,
         username: String?,
         discordWebhookUrl: String?,
-        orderUuid: String,
+        buildRecord: suspend () -> TradeRecord,
     ): TradeExecutionResult {
-        // 수동·엔진 주문 모두 동일 audit 경로 (trade_executions) 를 거치도록 통합.
-        // execution save 실패는 failure 반환으로 호출자에게 가시화.
         return try {
-            saveAndNotify(record, client, username, discordWebhookUrl)
+            saveAndNotify(buildRecord(), client, username, discordWebhookUrl)
             TradeExecutionResult.success(orderUuid)
         } catch (e: Exception) {
-            log.error("Failed to save and notify trade execution: orderUuid={}, market={}", orderUuid, record.ticker, e)
-            TradeExecutionResult.failure(e.message ?: "save failed")
+            log.error("Order placed but not recorded: orderUuid={}, market={}", orderUuid, market, e)
+            TradeExecutionResult.success(orderUuid, recorded = false)
         }
     }
 }
@@ -232,9 +237,12 @@ data class TradeExecutionResult(
     val success: Boolean,
     val orderUuid: String? = null,
     val error: String? = null,
+    // 주문은 접수됐으나(success) 기록/알림 후처리가 실패한 경우 false — 호출자가 재시도 대신 경고를 노출하도록.
+    val recorded: Boolean = true,
 ) {
     companion object {
-        fun success(orderUuid: String) = TradeExecutionResult(success = true, orderUuid = orderUuid)
+        fun success(orderUuid: String, recorded: Boolean = true) =
+            TradeExecutionResult(success = true, orderUuid = orderUuid, recorded = recorded)
         fun failure(error: String) = TradeExecutionResult(success = false, error = error)
     }
 }
