@@ -2,11 +2,13 @@ package com.trading.bot.client
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.domain.RealtimePrice
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Sinks
@@ -22,6 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @Component
 class UpbitWebSocketClient(
     private val watchlistProperties: WatchlistProperties,
+    private val watchdogProperties: MarketDataWatchdogProperties,
     // autoConnect=false 는 테스트 seam — 구독 목록만 갱신하고 실제 WS 연결은 열지 않는다. 운영은 항상 true.
     private val autoConnect: Boolean = true,
 ) {
@@ -34,6 +37,14 @@ class UpbitWebSocketClient(
     private val reconnectAttempts = AtomicInteger(0)
     private val subscribedTickers = ConcurrentHashMap.newKeySet<String>()
 
+    // 연결 세대: startConnection 이 새 연결을 열 때마다 증가. 무효화된(낡은) 세대의
+    // doFinally/scheduleReconnect 는 상태 변경·재연결을 하지 않아 중복 connect·이중 수신을 막는다.
+    private val generation = AtomicInteger(0)
+
+    // 마지막 WS 프레임 수신 시각 — half-open(무수신) 워치독 판정용. (re)connect 시 now 로 리셋해 폭주 방지.
+    @Volatile
+    private var lastMessageAt = 0L
+
     // subscribe/reconnect/connect 직렬화 — 동시 호출이 다중 연결을 만들지 않도록.
     private val connectionLock = Any()
 
@@ -44,6 +55,10 @@ class UpbitWebSocketClient(
         private const val WS_URL = "wss://api.upbit.com/websocket/v1"
         private const val MAX_RECONNECT_DELAY_MS = 60_000L
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
+
+        // 이 연결(myGen)이 여전히 최신 세대이고 종료 중이 아닐 때만 doFinally/scheduleReconnect 가 동작한다.
+        internal fun shouldActForGeneration(myGen: Int, currentGen: Int, shuttingDown: Boolean): Boolean =
+            myGen == currentGen && !shuttingDown
     }
 
     @PostConstruct
@@ -53,9 +68,10 @@ class UpbitWebSocketClient(
 
     @PreDestroy
     fun destroy() {
-        // 먼저 shutdown 플래그를 세워 doFinally→scheduleReconnect 가 재연결하지 못하게 한다.
+        // 먼저 shutdown 플래그 + 세대 증가로 진행 중 재연결 경로를 무효화한 뒤 현재 연결 정리.
         shuttingDown.set(true)
         connected.set(false)
+        generation.incrementAndGet()
         disposable?.dispose()
     }
 
@@ -78,47 +94,70 @@ class UpbitWebSocketClient(
 
     fun isConnected(): Boolean = connected.get()
 
-    private fun reconnect() {
-        synchronized(connectionLock) {
-            if (shuttingDown.get()) return
-            disposable?.dispose()
-            connect()
+    // half-open(TCP 살아있으나 무수신) 자동복구: 임계 초과 시 현재 연결을 끊어 doFinally→scheduleReconnect 로
+    // 재연결시킨다. 매매 정확성은 TradingEngine staleness 게이팅이 이미 보호하므로 여기선 재연결 폭주만 막으면 되고,
+    // 오판(저유동 마켓 등) 시 enabled 로 런타임 비활성할 수 있다.
+    @Scheduled(
+        fixedDelayString = "\${marketdata.watchdog.interval-ms:20000}",
+        initialDelayString = "\${marketdata.watchdog.initial-delay-ms:30000}",
+    )
+    fun checkConnectionHealth() {
+        if (!watchdogProperties.enabled || shuttingDown.get()) return
+        if (!connected.get() || subscribedTickers.isEmpty()) return
+        if (watchdogProperties.isStale(System.currentTimeMillis(), lastMessageAt)) {
+            log.warn("WS half-open: no frame for >{}ms; forcing reconnect", watchdogProperties.staleMs)
+            synchronized(connectionLock) {
+                if (!shuttingDown.get()) disposable?.dispose()
+            }
         }
     }
 
-    private fun connect() {
+    private fun reconnect() {
+        synchronized(connectionLock) {
+            if (shuttingDown.get()) return
+            startConnection()
+        }
+    }
+
+    // connectionLock 을 보유한 상태에서만 호출. 새 세대를 부여하고 구 연결을 정리한 뒤 연결한다.
+    private fun startConnection() {
         if (shuttingDown.get() || subscribedTickers.isEmpty()) return
+        val myGen = generation.incrementAndGet() // 구 연결 무효화 (dispose 이전에 증가)
+        disposable?.dispose()
+        lastMessageAt = System.currentTimeMillis() // reset-on-connect grace (워치독 폭주 방지)
+        connect(myGen)
+    }
 
-        val uri = URI.create(WS_URL)
+    private fun connect(myGen: Int) {
         val httpClient = HttpClient.create()
-
         disposable = httpClient
             .websocket(WebsocketClientSpec.builder().maxFramePayloadLength(65536).build())
-            .uri(uri)
+            .uri(URI.create(WS_URL))
             .handle { inbound, outbound ->
-                connected.set(true)
-                reconnectAttempts.set(0)
-                log.info("WebSocket connected to Upbit. Subscribing to {} tickers.", subscribedTickers.size)
-
+                if (shouldActForGeneration(myGen, generation.get(), shuttingDown.get())) {
+                    connected.set(true)
+                    reconnectAttempts.set(0)
+                    log.info("WebSocket connected to Upbit. Subscribing to {} tickers.", subscribedTickers.size)
+                }
                 val subscriptionMessage = buildSubscriptionMessage()
                 val sendMono = outbound.sendString(Flux.just(subscriptionMessage)).then()
-
                 val receiveMono = inbound.receive()
                     .asByteArray()
                     .map { bytes -> String(bytes, StandardCharsets.UTF_8) }
                     .doOnNext { message -> processMessage(message) }
                     .doOnError { e -> log.warn("WebSocket receive error: {}", e.message) }
                     .then()
-
                 sendMono.then(receiveMono)
             }
             .doOnError { e ->
                 log.warn("WebSocket connection error: {}", e.message)
-                connected.set(false)
+                if (shouldActForGeneration(myGen, generation.get(), shuttingDown.get())) connected.set(false)
             }
             .doFinally {
-                connected.set(false)
-                scheduleReconnect()
+                if (shouldActForGeneration(myGen, generation.get(), shuttingDown.get())) {
+                    connected.set(false)
+                    scheduleReconnect(myGen)
+                }
             }
             .subscribe()
     }
@@ -148,26 +187,24 @@ class UpbitWebSocketClient(
                 timestamp = node["timestamp"]?.asLong() ?: System.currentTimeMillis(),
             )
 
+            lastMessageAt = System.currentTimeMillis()
             latestPrices[price.market] = price
             val result = sink.tryEmitNext(price)
-            // FAIL_ZERO_SUBSCRIBER 는 SSE 구독자가 없을 때 multicast sink 가 정상적으로 drop 하는 케이스 —
-            // 가격은 latestPrices map 에 저장되므로 운영 영향 없음. 로깅에서 제외해 noise 차단.
-            // FAIL_OVERFLOW 등 실제 backpressure/overflow 만 가시화.
+            // FAIL_ZERO_SUBSCRIBER 는 SSE 구독자가 없을 때 multicast sink 가 정상 drop 하는 케이스 — 가격은
+            // latestPrices 에 저장되므로 운영 영향 없음. 실제 backpressure/overflow 만 가시화.
             if (result.isFailure && result != Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER) {
                 log.warn("Dropped realtime price for {} (sink emit {})", price.market, result)
             }
         } catch (e: com.fasterxml.jackson.core.JacksonException) {
-            // 비-ticker/연결 ACK 등 파싱 불가 프레임 — 흔하므로 debug 로만.
             log.debug("Skipped non-parsable WS frame: {}", e.message)
         } catch (e: Exception) {
-            // 스키마 변경·예상치 못한 구조는 가시화해야 디버깅 가능.
             log.warn("Failed to process WS message: {}", e.message)
         }
     }
 
-    private fun scheduleReconnect() {
-        // shutdown 중이면 재연결하지 않음 (@PreDestroy 후 좀비 연결 방지).
-        if (shuttingDown.get() || connected.get() || subscribedTickers.isEmpty()) return
+    private fun scheduleReconnect(deadGen: Int) {
+        if (shuttingDown.get() || subscribedTickers.isEmpty()) return
+        if (deadGen != generation.get()) return // 이미 새 연결로 대체됨
 
         val attempt = reconnectAttempts.incrementAndGet()
         val delay = (BASE_RECONNECT_DELAY_MS * (1L shl minOf(attempt - 1, 5)))
@@ -178,8 +215,9 @@ class UpbitWebSocketClient(
             try {
                 Thread.sleep(delay)
                 synchronized(connectionLock) {
-                    if (!connected.get() && !shuttingDown.get()) {
-                        connect()
+                    // sleep 중 새 연결(더 높은 세대)이 떴으면 재연결하지 않는다.
+                    if (!shuttingDown.get() && deadGen == generation.get() && !connected.get()) {
+                        startConnection()
                     }
                 }
             } catch (_: InterruptedException) {
