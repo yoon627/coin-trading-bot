@@ -49,8 +49,20 @@ Caddy 가 Let's Encrypt 인증서를 발급할 때까지 최초 ~30초 걸리며
 
 거래 이력과 (암호화된) Upbit 키는 Postgres 볼륨 하나에 있다. `backup.sh` 가 `pg_dump → gzip → S3`(서버측 암호화)로 스냅샷을 남긴다.
 
+> **⚠️ 필수 선행: EC2 에 S3 접근 IAM 롤.** `backup.sh` 는 EC2 **인스턴스 롤**로 S3 에 접근한다(deploy 는 자격증명을 EC2 에 넣지 않는다). 롤이 없으면 cron·destroy 백업이 `Unable to locate credentials` 로 **전부 실패**한다(backup.sh 가 실행 전 `aws sts get-caller-identity` 로 걸러 명확히 알려준다). 백업 활성화 전 1회:
+
 ```bash
-# 1) 대상 설정 (.env) — 버킷은 미리 생성(퍼블릭 차단·버전닝 권장), EC2 롤에 put/list/delete 권한 부여
+# 0) 백업 버킷 생성(퍼블릭 차단·버전닝 권장) + EC2 인스턴스 롤 생성·첨부 (1회)
+BUCKET=<버킷명>; ROLE=coin-trading-bot-backup; IID=$(./deploy.sh ssh 'curl -s http://169.254.169.254/latest/meta-data/instance-id')
+aws iam create-role --role-name "$ROLE" --assume-role-policy-document \
+  '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+aws iam put-role-policy --role-name "$ROLE" --policy-name s3-backup --policy-document \
+  "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:PutObject\",\"s3:ListBucket\",\"s3:DeleteObject\"],\"Resource\":[\"arn:aws:s3:::$BUCKET\",\"arn:aws:s3:::$BUCKET/*\"]}]}"
+aws iam create-instance-profile --instance-profile-name "$ROLE"
+aws iam add-role-to-instance-profile --instance-profile-name "$ROLE" --role-name "$ROLE"
+aws ec2 associate-iam-instance-profile --instance-id "$IID" --iam-instance-profile Name="$ROLE"
+
+# 1) 대상 설정 (.env)
 BACKUP_S3_BUCKET=<버킷명>            # 비우면 백업 비활성 (destroy 시 경고)
 # BACKUP_S3_PREFIX / BACKUP_RETENTION_DAYS(기본 14) / BACKUP_S3_SSE(기본 AES256) 는 기본값 존재
 ./deploy.sh deploy                  # backup.sh 와 설정을 EC2 /opt/app 에 배치

@@ -120,7 +120,7 @@ BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET:-}
 BACKUP_S3_PREFIX=${BACKUP_S3_PREFIX:-db-backups}
 BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
 BACKUP_S3_SSE=${BACKUP_S3_SSE:-AES256}
-AWS_REGION=${AWS_REGION}
+AWS_REGION=${AWS_REGION:-ap-northeast-2}
 EOF
 }
 
@@ -471,7 +471,9 @@ do_destroy() {
     # 백업을 명시 설정(BACKUP_S3_BUCKET)했는데 실패하면 — 데이터 영구 소멸을 막기 위해 destroy 중단.
     if [[ -n "${EC2_PUBLIC_IP:-}" && -n "${BACKUP_S3_BUCKET:-}" ]]; then
         log "최종 DB 백업 → S3"
-        if ! ssh_ec2 'cd /opt/app && ./backup.sh'; then
+        # BACKUP_S3_BUCKET/AWS_REGION 을 인라인 전달 — 구버전 배포로 /opt/app/.env 에 해당 키가
+        # 없어도 로컬(권위) 값으로 백업이 동작하게 한다(백업 스크립트가 .env 에 있으면 그 값이 우선).
+        if ! ssh_ec2 "cd /opt/app && BACKUP_S3_BUCKET='$BACKUP_S3_BUCKET' AWS_REGION='${AWS_REGION:-ap-northeast-2}' ./backup.sh"; then
             echo "ERROR: 최종 백업 실패 — 데이터 영구 소멸을 막기 위해 destroy 를 중단합니다."
             echo "  원인(backup.sh 부재/권한/DB) 해결 후 재시도하거나,"
             echo "  백업 없이 삭제하려면 deploy/aws/.env 의 BACKUP_S3_BUCKET 를 비우고 다시 실행하세요."

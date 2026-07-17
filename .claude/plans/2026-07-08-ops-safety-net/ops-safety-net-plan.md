@@ -63,7 +63,8 @@ O5(non-root)·O4(배포 롤백) 완료(2026-07-17, 코드+로컬검증). O4 는 
 - SG 0.0.0.0/0 개방·데스크탑 pem 키 미등록 (memory 핸드오프의 미결 — 별도 보안 작업, severity: medium)
 - 운영 헬스 지표(엔진 루프 생존·마지막 tick 시각 노출)와 그 감시 — 외부 감시의 커버리지 한계 보완 (severity: low~medium)
 - O4 리뷰 defer: LAST_GOOD_SHA 가 운영자 로컬 `.state` 에만 존재 → 다중 머신/운영자 배포 시 자동롤백 무력·불일치 가능. 서버측 상태(실행 컨테이너 라벨 등)로 이전 검토 (severity: low, 단일 운영자면 무영향)
-- O4 리뷰 defer: push 직후 CI(deploy.yml) 이미지 빌드 완료 전 `deploy` 실행 시 `docker compose pull` 실패로 클린 exit 1 — 버그 아님이나 운영 footgun. README 운영 섹션에 "CI 빌드 완료 후 배포" 명시 (O3/README 작업 시)
+- O4 리뷰 defer: push 직후 CI(deploy.yml) 이미지 빌드 완료 전 `deploy` 실행 시 `docker compose pull` 실패로 클린 exit 1 — 버그 아님이나 운영 footgun. → deploy/aws/README.md 에 "CI 빌드 완료 후 배포" 명시로 해소.
+- O2 리뷰 defer: **S3 백업 IAM 롤 자동화** — 현재는 preflight 로 실패를 시끄럽게 + README 수동 절차. setup 이 IAM 롤·정책·인스턴스 프로필 생성+associate, destroy 가 정리하도록 자동화하면 핸드오프 제거 (severity: medium, AWS orchestration 추가·미검증 리스크로 별도 작업)
 
 # Review Disposition
 
@@ -81,4 +82,13 @@ O2(b39cac6) codex 리뷰(2026-07-17) — 2건 fix 적용(code-reviewer 결과 �
 - `fix` **High** destroy 최종백업 실패해도 WARN 후 EC2/EBS 삭제 → 데이터 백업 없이 영구 소멸. → 버킷 설정 시 백업 실패면 destroy 중단(opt-out=버킷 비우기).
 - `fix` **Medium** `pg_dump|gzip|aws s3 cp -` 스트리밍이 pg_dump 중간 실패 시 부분 gzip 을 최종 S3 키에 업로드(손상본이 "최신"). → 로컬 temp 파일 덤프 후 성공 시에만 업로드(trap 로 temp 정리). 검증: docker/aws stub 3케이스(성공 rc0 / pg_dump실패 rc1·부분폐기 / 빈덤프 rc1).
 - `fix` **grounding 발견** (내 stub 테스트) 빈 덤프 검출용 `[[ ! -s "$TMP" ]]` 가 무력 — gzip 은 빈 입력도 ~20B 헤더를 써 항상 non-empty. → `gzip -dc | head -c 1 | wc -c` 로 **압축 해제 후 내용** 검사(빈 덤프 케이스 rc1 재확인).
+
+O2 code-reviewer 리뷰(2026-07-17, codex 는 이번엔 exploration timeout·결론 미도출) — 추가 반영:
+- `fix` **Major#1** EC2 에 S3 자격증명(IAM 인스턴스 롤) 미프로비저닝 → cron/destroy 백업 전부 실패(데이터손실 경로). run-instances 에 `--iam-instance-profile` 없음 확증(grep). IAM 자동화는 범위(S3/IAM 핸드오프)라 미채택 → (a) backup.sh 에 `aws sts get-caller-identity` preflight 로 실패를 시끄럽게(명확 에러·즉시 exit, stub 실증 rc1), (b) README 'DB 백업' 에 IAM 롤 생성·첨부 절차 구체화(필수 선행), (c) destroy 는 이미 백업 실패 시 abort(위 High). IAM **자동화**는 # Deferred.
+- `fix` **Major#2** (streaming 부분/빈 백업) = 이미 temp-파일 fix(b4ff230)로 해소(code-reviewer 는 수정 전 커밋 검토).
+- `fix` **Minor** destroy 게이트가 로컬 .env 를 보나 backup.sh 는 /opt/app/.env → 구버전 .env 불일치. → destroy 가 BACKUP_S3_BUCKET/AWS_REGION 인라인 전달.
+- `fix` **Minor** `date -u -d` GNU 전용 → BSD fallback(`date -v`) 추가(로컬 테스트 가능).
+- `fix` **Minor** 보존정리가 `aws s3 rm || true` 후 무조건 "삭제" 로그 → rm 성공 시에만 로그, 실패는 WARN.
+- `fix` **Nit** `AWS_REGION=${AWS_REGION}` bare → `:-ap-northeast-2` 기본값.
+- `pass` (code-reviewer 확인): pg_dump socket trust, 보존 파싱, `</dev/null`(destroy ssh 채널 drain 차단), 보안(.env 미포함·시크릿 미노출·SSE).
 - `false-positive` (codex 확인): pg_dump socket local trust(PGPASSWORD 불요), 보존 정리 pipefail 안전, date GNU(EC2), 백업이 .env(AES키) 미포함·로그 시크릿 미노출·SSE 적용. 단 BACKUP_S3_PREFIX 는 백업 전용 유지 필요(그 prefix 하 오래된 객체 전부 삭제).
