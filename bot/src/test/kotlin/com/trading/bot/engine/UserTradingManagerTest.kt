@@ -1,0 +1,124 @@
+package com.trading.bot.engine
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import com.trading.bot.client.UpbitWebSocketClient
+import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.notification.DiscordNotifier
+import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.UserRepository
+import com.trading.bot.persistence.entity.BotStateEntity
+import com.trading.bot.persistence.entity.UserEntity
+import com.trading.bot.security.UserSecretsService
+import com.trading.common.config.TradingProperties
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.spyk
+import io.mockk.verify
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
+import org.springframework.web.reactive.function.client.WebClient
+import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
+
+class UserTradingManagerTest {
+
+    private lateinit var userRepository: UserRepository
+    private lateinit var botStateRepository: BotStateRepository
+    private lateinit var tradeExecutionService: TradeExecutionService
+    private lateinit var discordNotifier: DiscordNotifier
+    private lateinit var userSecretsService: UserSecretsService
+    private lateinit var upbitWebSocketClient: UpbitWebSocketClient
+    private lateinit var marketDataStore: MarketDataStore
+    private lateinit var upbitWebClient: WebClient
+    private lateinit var manager: UserTradingManager
+    private val mockEngine: TradingEngine = mockk(relaxed = true)
+
+    @BeforeEach
+    fun setup() {
+        userRepository = mockk()
+        botStateRepository = mockk()
+        tradeExecutionService = mockk(relaxed = true)
+        discordNotifier = mockk(relaxed = true)
+        userSecretsService = mockk(relaxed = true)
+        upbitWebSocketClient = mockk(relaxed = true)
+        marketDataStore = mockk(relaxed = true)
+        upbitWebClient = mockk(relaxed = true)
+        manager = spyk(
+            UserTradingManager(
+                userRepository, botStateRepository, tradeExecutionService, discordNotifier,
+                emptyList(), TradingProperties(autoStart = true), upbitWebClient,
+                userSecretsService, upbitWebSocketClient, marketDataStore,
+            ),
+        )
+        // engine.start 의 실코루틴 기동을 피하고 restore 오케스트레이션만 검증하기 위한 seam.
+        every { manager.createEngine(any()) } returns mockEngine
+    }
+
+    private fun engines(): ConcurrentHashMap<Long, TradingEngine> {
+        val f = UserTradingManager::class.java.getDeclaredField("engines").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        return f.get(manager) as ConcurrentHashMap<Long, TradingEngine>
+    }
+
+    private fun runningState(userId: Long) =
+        BotStateEntity(userId = userId, running = true, strategy = "combined", tickers = "KRW-BTC")
+
+    private fun user(userId: Long) =
+        UserEntity(id = userId, username = "u$userId", password = "p", upbitAccessKey = "ak", upbitSecretKey = "sk")
+
+    @Test
+    fun `restore skips a user whose engine already exists`() = runTest {
+        engines()[1L] = mockEngine // 사용자가 이미 start 로 개입한 상태 시뮬
+        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+
+        manager.restoreAllRunningBots()
+
+        // lock 획득 후 engines 재확인으로 skip — 새 엔진 생성도, 기존 엔진 재기동(setStrategy/start)도 없다.
+        // (구 computeIfAbsent 는 createEngine 만 skip 하고 실행 중 엔진에 start 를 다시 걸어 유령 엔진을 만들었다.)
+        verify(exactly = 0) { manager.createEngine(any()) }
+        verify(exactly = 0) { mockEngine.setStrategy(any()) }
+        verify(exactly = 0) { mockEngine.start(any()) }
+    }
+
+    @Test
+    fun `restore retries transient DB failure then succeeds`() = runTest {
+        every { botStateRepository.findByRunningTrue() } returnsMany listOf(
+            Flux.error(RuntimeException("db temporarily down")),
+            Flux.just(runningState(1L)),
+        )
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+
+        manager.restoreAllRunningBots()
+
+        // 첫 조회 실패 후 backoff 재시도로 복원 성공(가상시간이 delay 를 즉시 진행).
+        verify(exactly = 1) { manager.createEngine(any()) }
+    }
+
+    @Test
+    fun `restore logs error after exhausting retries`() = runTest {
+        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.error(RuntimeException("user db down"))
+
+        val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            manager.restoreAllRunningBots()
+
+            val errors = appender.list.filter { it.level == Level.ERROR }
+            assertTrue(
+                errors.any { it.formattedMessage.contains("봇 미복원") },
+                "재시도 소진 후 '봇 미복원' ERROR alert 가 없음: ${errors.map { it.formattedMessage }}",
+            )
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+}

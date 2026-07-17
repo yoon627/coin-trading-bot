@@ -14,17 +14,21 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
-import jakarta.annotation.PostConstruct
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
 
@@ -52,37 +56,70 @@ class UserTradingManager(
 
     private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { Mutex() }
 
-    @PostConstruct
+    // DiscordErrorLogAppender(@Order HIGHEST)가 먼저 attach 된 뒤 실행되도록 낮은 우선순위. 단 restore 는 비동기라
+    // 리스너 순서만으로 alert 도달을 보장하지 못한다 — 실질 보장은 restoreAllRunningBots 의 유한 backoff 재시도
+    // (첫 실패가 attach 이후로 밀림)다. @PostConstruct 는 attach(ApplicationReadyEvent)보다 이르러 초기 에러가 미도달이었다.
+    @EventListener(ApplicationReadyEvent::class)
+    @Order(Ordered.LOWEST_PRECEDENCE)
     fun restoreOnStartup() {
         if (!tradingProperties.autoStart) {
             log.info("Auto-start disabled. Skipping bot restoration.")
             return
         }
-        scope.launch {
-            try {
-                val states = botStateRepository.findByRunningTrue().collectList().awaitSingle()
-                log.info("Restoring {} running bot(s) from DB", states.size)
-                for (state in states) {
-                    try {
-                        val user = userRepository.findById(state.userId).awaitSingleOrNull() ?: continue
-                        if (user.upbitAccessKey.isNullOrBlank()) continue
-                        val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                        userStrategies[state.userId] = state.strategy
-                        val engine = engines.computeIfAbsent(state.userId) {
-                            createEngine(userSecretsService.decryptUserSecrets(user))
-                        }
-                        engine.setStrategy(state.strategy)
-                        engine.start(tickers)
-                        log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, state.strategy, tickers)
-                    } catch (e: Exception) {
-                        log.error("Failed to restore bot for user {}: {}", state.userId, e.message)
-                    }
-                }
+        scope.launch { restoreAllRunningBots() }
+    }
+
+    /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도하고 최종 실패만 ERROR alert(→Discord). */
+    internal suspend fun restoreAllRunningBots() {
+        var pendingUserIds: List<Long> = emptyList()
+        for (attempt in 1..RESTORE_MAX_ATTEMPTS) {
+            val states = try {
+                botStateRepository.findByRunningTrue().collectList().awaitSingle()
             } catch (e: Exception) {
-                log.error("Failed to restore bot states: {}", e.message)
+                log.warn("restore: bot state 조회 실패 (attempt {}/{}): {}", attempt, RESTORE_MAX_ATTEMPTS, e.message)
+                delay(restoreBackoffMs(attempt))
+                continue
             }
+            if (attempt == 1) log.info("Restoring {} running bot(s) from DB", states.size)
+            val failed = mutableListOf<Long>()
+            for (state in states) {
+                if (!restoreOne(state)) failed.add(state.userId)
+            }
+            pendingUserIds = failed
+            if (pendingUserIds.isEmpty()) return
+            if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt))
+        }
+        if (pendingUserIds.isNotEmpty()) {
+            log.error("봇 미복원: {}개 유저 복원 실패 (재시도 {}회 소진) — userIds={}", pendingUserIds.size, RESTORE_MAX_ATTEMPTS, pendingUserIds)
         }
     }
+
+    /**
+     * 한 유저 복원. per-user lock 으로 start/stop 과 직렬화하고, lock 획득 후 engines 를 재확인해 사용자가 이미
+     * 개입(start/stop)했으면 skip — restoreOnStartup 만 lockFor 를 우회하던 유령 엔진 경합을 차단한다.
+     * 반환: true=복원 완료 또는 재시도 무의미(유저/키 없음·이미 개입), false=일시적 실패(재시도 대상).
+     */
+    private suspend fun restoreOne(state: BotStateEntity): Boolean = lockFor(state.userId).withLock {
+        if (engines.containsKey(state.userId)) return@withLock true
+        try {
+            val user = userRepository.findById(state.userId).awaitSingleOrNull() ?: return@withLock true
+            if (user.upbitAccessKey.isNullOrBlank()) return@withLock true
+            val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            userStrategies[state.userId] = state.strategy
+            val engine = engines.computeIfAbsent(state.userId) {
+                createEngine(userSecretsService.decryptUserSecrets(user))
+            }
+            engine.setStrategy(state.strategy)
+            engine.start(tickers)
+            log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, state.strategy, tickers)
+            true
+        } catch (e: Exception) {
+            log.warn("restore: user {} 복원 실패 — 재시도 대상: {}", state.userId, e.message)
+            false
+        }
+    }
+
+    private fun restoreBackoffMs(attempt: Int): Long = minOf(1000L shl (attempt - 1), 30_000L)
 
     fun getEngine(userId: Long): TradingEngine? = engines[userId]
 
@@ -177,7 +214,7 @@ class UserTradingManager(
         }
     }
 
-    private fun createEngine(user: UserEntity): TradingEngine {
+    internal fun createEngine(user: UserEntity): TradingEngine {
         val client = createUpbitClient(user)
         val positionManager = PositionManager(client, tradingProperties)
         val dailyResetManager = DailyResetManager(tradingProperties)
@@ -215,5 +252,9 @@ class UserTradingManager(
         } catch (e: Exception) {
             log.error("Failed to save bot state for user {}: {}", userId, e.message)
         }
+    }
+
+    companion object {
+        private const val RESTORE_MAX_ATTEMPTS = 5
     }
 }
