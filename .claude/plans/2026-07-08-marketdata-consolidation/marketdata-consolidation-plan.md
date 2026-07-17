@@ -22,6 +22,7 @@ updated: 2026-07-17
 - 2026-07-17(2단계 착수): PR#36(1단계) squash 머지(origin/main a44782a). 사용자 선택 **'신뢰성 먼저 2 PR 분할'** — **PR-a**=주경로 재시작+워치독·폴백 워치독·세대가드(half-open 고착 해소 핵심), **PR-b**=unsubscribe ref-count·파싱 테스트. base=origin/main, 브랜치 `marketdata-consolidation-2`. Explore 완료(collectTickers 재시작 없음·양 WS 세대가드 없음·폴백 lastMessageAt 없음).
 - 2026-07-17(2a plan-review): Claude+Codex 수렴 — 원 설계 **NO-GO**(세대 증가시점 race·connected clobber·워치독 20s 폭주·cancel 이중연결·CancellationException 삼킴). 사용자 '전체 재설계 제대로' 선택 → 아래 재설계 반영.
 - 2026-07-17(2a 구현): UpbitWebSocketClient 세대가드(dispose前 generation++·doFinally/doOnError/scheduleReconnect 세대 게이팅·sleep後 재확인)+폴백 워치독, MarketDataIngestionService 재시작루프(CancellationException rethrow)+워치독(cancelAndJoin·restartMutex·shutdown), MarketDataWatchdogProperties(kill-switch)+application.yml. 전체 `:bot:test` green(Watchdog4·WSClient8·Ingestion6). code-review: subagent 세션한도 중단→메인 직접(결함 없음, plan-review 지적 반영 확인), codex 는 push 게이트로 병행. 원본 로직 diff 보존 확인.
+- 2026-07-17(2a codex 게이트 fix): pre-push codex 2건 fix — P3(워치독 restart TOCTOU: mutex 안 isStale 재확인), P2(UpbitMarketFeed 지연 재연결 좀비 이중 WS: awaitClose interrupt + subscribe後 running 재확인). :bot:test green 유지. push 재시도(codex high-reasoning 리뷰 ~10분).
 
 # Next
 
@@ -88,6 +89,8 @@ PR-a(marketdata-consolidation-2) TDD 진행 — half-open 고착 해소 3종:
 - (2a) UpbitMarketFeed 인스턴스 generation: **wontfix**(harmful) — tickerFlow 지역 running 가드로 충분.
 - (2a) 세대가드 결정적 race 테스트용 transport seam: **defer**(acceptance 하향) — predicate 단위테스트 + 수동관찰.
 - (2a) STALE 저유동 false-positive: **fix**(property 조정 가능) + 문서화.
+- (2a codex pre-push P3) 워치독 restart TOCTOU(mutex 대기 중 late-tick): **fix** — restartMutex 안에서 isStale 재확인 후에만 cancelAndJoin.
+- (2a codex pre-push P2) UpbitMarketFeed 지연 재연결 좀비 이중 WS: **fix** — awaitClose 가 재연결 스레드 interrupt + connect 가 subscribe 직후 running 재확인 dispose(close-safe). plan-review 의 'running 지역가드 충분' 판단을 codex 가 교정.
 
 # Deferred
 
