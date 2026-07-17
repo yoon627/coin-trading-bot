@@ -2,7 +2,7 @@
 title: test-hardening — 실돈 경로의 무·죽은 테스트를 프로덕션 게이트 테스트로 교체
 status: in_progress
 started: 2026-07-08
-updated: 2026-07-10
+updated: 2026-07-17
 ---
 
 # Goal
@@ -13,10 +13,11 @@ updated: 2026-07-10
 
 - 2026-07-08: 전방위 감사(멀티에이전트 워크플로 + 메인 세션 grep spot-check) 기반 plan 작성. spot-check: UpbitClientRetryPolicyTest 가 retryWhen 을 테스트 내 재조립(프로덕션 미경유), TradingEngineTest.kt:159 delay(3000), MockWebServer 패턴은 UpbitClientTest 에 기존재.
 - 2026-07-10: plan-review(Claude subagent + codex 병행) 반영 — processTicker 상태 주입 seam 결정 필요(states/activeStrategy 는 private), Key Files 라인 인용 스왑 교정(:68-83=placeOrder, :128-138=retryOnRateLimit), retry 소진 테스트 wall-clock(~3s) 대응, CandleAggregator 관찰 지점(mock 캡처) 결정, TradingEngine 3-plan 겹침으로 착수 순서 조정.
+- 2026-07-17: order-state-integrity(#39) main 머지 확인 → 최신 main 위로 rebase. **슬라이스 1 완료(UpbitClient retry)**: `UpbitClientImpl` 에 `retryBackoffBase: Duration = 1s` 생성자 파라미터 추가(배선 2곳 무변경, 테스트만 1ms 주입) → 소진 시나리오 wall-clock 제거. 신규 `UpbitClientRetryTest`(MockWebServer 프로덕션 경유): getAccounts 429×2→200 재시도(req 3), 소진→UpbitApiException(429) 전파(req 3), placeOrder 429→req 1(비재시도). 복제본 `UpbitClientRetryPolicyTest` 삭제. **mutation 검증 1회**: placeOrder 에 `.retryOnRateLimit()` 부착 시 `placeOrder does not retry` 가 req 3≠1 로 FAILED(:77, hang 아닌 assertion) — 회귀 게이트 확인 후 revert. 6개 client 테스트 green(~7s).
 
 # Next
 
-order-state-integrity·engine-lifecycle 머지 후 rebase 하여 착수(아래 Blockers). 첫 작업: UpbitClientImpl 프로덕션 경유 retry 테스트 — 기존 MockWebServer 패턴으로 (1) getAccounts 429×2 후 200 → 성공+요청 3회, (2) 429 지속 → UpbitApiException(429) 전파, (3) **placeOrder 429 → 요청 정확히 1회(재시도 없음)**. 이 부분은 TradingEngine 과 무관하므로 겹침 해소 전에도 선착수 가능.
+슬라이스 1(UpbitClient retry) 완료 — 코드리뷰·simplify·전체검증 후 별도 커밋. 다음 겹침 없는 슬라이스: **CandleAggregator 단위 테스트**(M1→D1 병합·alignToPeriodStart 정렬 일치·경계+cleanup, addCandle 캡처 방식). processTicker seam 및 죽은 테스트 정리(TradingEngineTest)는 **engine-lifecycle 미머지**라 여전히 대기(Blockers) — order-state 는 머지됨.
 
 # Decisions
 
@@ -37,8 +38,8 @@ order-state-integrity·engine-lifecycle 머지 후 rebase 하여 착수(아래 B
 
 # Acceptance
 
-- [ ] placeOrder 429 → HTTP 요청 정확히 1회 assert green + retryOnRateLimit 부착 mutation 시 fail 확인(수동 1회, 결과 Progress 기록)
-- [ ] getAccounts 계열 429 재시도·소진 시나리오 green — suite 시간 증가 ≤1s(backoff 주입 또는 축소로)
+- [x] placeOrder 429 → HTTP 요청 정확히 1회 assert green + retryOnRateLimit 부착 mutation 시 fail 확인(수동 1회, 결과 Progress 기록) — 2026-07-17
+- [x] getAccounts 계열 429 재시도·소진 시나리오 green — suite 시간 증가 ≤1s(backoff 주입 또는 축소로) — 2026-07-17, backoff base 1ms 주입, 6 client 테스트 ~7s
 - [ ] processTicker 4개 시나리오 runTest green (wall-clock sleep 0)
 - [ ] CandleAggregator 병합·정렬 일치·경계 테스트 green (addCandle 캡처 방식)
 - [ ] TradingEngineTest delay(3000) 제거 — 전체 테스트 시간 단축 확인
