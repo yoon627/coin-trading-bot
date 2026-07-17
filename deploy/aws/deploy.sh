@@ -310,14 +310,13 @@ do_deploy() {
     # migration 포함 배포가 실패하면 신규 스키마가 이미 적용됐을 수 있어 구버전 앱 자동 복귀는 위험 → 제외(수동).
     local last_good="${LAST_GOOD_SHA:-}"
     local migration_gate="rollback-ok"
-    if [[ -z "$last_good" ]]; then
-        migration_gate="blocked"                                   # 최초 배포 — 롤백 대상 없음
-    elif [[ "$last_good" != "$target_sha" ]]; then
-        if ! git -C "$repo_root" cat-file -e "${last_good}^{commit}" 2>/dev/null; then
-            migration_gate="blocked"                               # last_good 커밋 로컬 부재 → 판정 불가 → 안전측
-        elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/ 2>/dev/null)" ]]; then
-            migration_gate="blocked"                               # migration 포함 → 자동 롤백 제외(plan-review)
-        fi
+    if [[ -z "$last_good" || "$last_good" == "$target_sha" ]]; then
+        migration_gate="blocked"                                   # 롤백 대상 없음(최초 배포 또는 동일 SHA 재배포)
+    elif ! git -C "$repo_root" cat-file -e "${last_good}^{commit}" 2>/dev/null \
+      || ! git -C "$repo_root" cat-file -e "${target_sha}^{commit}" 2>/dev/null; then
+        migration_gate="blocked"                                   # 두 커밋 중 하나라도 로컬 부재 → migration 판정 불가 → 안전측
+    elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
+        migration_gate="blocked"                                   # migration 포함 → 자동 롤백 제외(plan-review)
     fi
     log "대상 SHA=${target_sha:0:12}  LAST_GOOD=${last_good:0:12}  자동롤백=$migration_gate"
 
@@ -350,9 +349,12 @@ if [ -n "$GHCR_TOKEN" ]; then
 fi
 
 # app 은 호스트에 8080 을 노출하지 않으므로(Caddy 경유) 컨테이너 내부에서 헬스 확인. 최대 36×5s=180s.
+# `</dev/null` 필수: 이 스크립트는 ssh 가 `bash -s` 의 stdin(파이프)로 흘려보낸다. `exec -T` 는 TTY 만
+# 끄고 stdin 은 attach 하므로, </dev/null 이 없으면 exec 가 파이프에 남은 나머지 스크립트(실패/롤백 처리)를
+# 통째로 drain → 헬스실패 경로가 사라지고 원격 bash 가 exit 0 을 반환(실패를 성공으로 오인).
 health_ok() {
     for _ in $(seq 1 36); do
-        if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health > /dev/null 2>&1; then
+        if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health </dev/null > /dev/null 2>&1; then
             return 0
         fi
         sleep 5
@@ -400,16 +402,19 @@ if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
     echo "--- 수동 개입 필요 ---"
     echo "  1) docker compose logs app  로 원인 확인"
     echo "  2) DB migration 적용 여부 점검, 필요 시 백업 복원(O2)"
-    echo "  3) 수동 롤백: cd /opt/app && APP_VERSION=<이전정상SHA> docker compose up -d --pull never"
+    echo "  3) 수동 롤백: cd /opt/app && APP_VERSION=<이전정상SHA> docker compose up -d --pull missing"
     exit 1
 fi
 
-echo "자동 롤백 → LAST_GOOD_SHA=$LAST_GOOD_SHA (로컬 보존 이미지 사용)"
-if ! APP_VERSION="$LAST_GOOD_SHA" docker compose up -d --remove-orphans --pull never; then
-    echo "ERROR: 롤백 기동 실패 (LAST_GOOD 이미지 부재 가능). 수동 개입 필요."
+echo "자동 롤백 → LAST_GOOD_SHA=$LAST_GOOD_SHA"
+# --pull missing: 로컬 보존 이미지 우선, prune 등으로 없으면 GHCR(CI 가 :<sha> push)에서 재pull.
+if ! APP_VERSION="$LAST_GOOD_SHA" docker compose up -d --remove-orphans --pull missing; then
+    echo "ERROR: 롤백 기동 실패 (LAST_GOOD 이미지 확보 불가). 수동 개입 필요."
     exit 3
 fi
 if health_ok; then
+    # 서버 .env 의 APP_VERSION 도 LAST_GOOD 으로 맞춰 이후 `start`/수동 up 이 실패 SHA 로 안 돌아가게.
+    sed -i "s|^APP_VERSION=.*|APP_VERSION=${LAST_GOOD_SHA}|" .env || true
     echo "롤백 성공: $LAST_GOOD_SHA 로 복구됨. 새 SHA($TARGET_SHA) 배포 실패 원인 조사 필요."
     docker compose ps || true
     exit 2

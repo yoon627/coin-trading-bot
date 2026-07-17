@@ -15,7 +15,8 @@ updated: 2026-07-17
 - 2026-07-08: 전방위 감사(멀티에이전트 워크플로 + 메인 세션 grep spot-check) 기반 plan 작성. spot-check: Dockerfile USER 없음, deploy.sh:89 `APP_VERSION=${APP_VERSION:-latest}`, 백업 자동화 0건, stop_grace_period 없음.
 - 2026-07-10: plan-review(Claude subagent + codex 병행) 반영 — 자동 롤백에 Flyway forward-compat 게이트 추가, 백업 보안(S3 SSE·시크릿 분리 보관) 명시, prune 인과 교정, pg_dump 실행 방식(compose exec), 감시 커버리지 한계 명시, DISCORD_ERROR_ALERT_ENABLED 실측 항목 추가.
 - 2026-07-17: 세션 범위 = **O5 non-root 먼저**(사용자 선택, Acceptance 전건이 실기 EC2/외부 SaaS 검증이라 코딩 세션에선 O5 만 완결·실증 가능). 구현: `Dockerfile` 런타임 스테이지에 `adduser -D -u 1001 app` + `USER app`(ENTRYPOINT 직전). 로컬 Docker 데몬 미기동 → Docker Desktop 기동 후 런타임 유저 로직만 담은 미니 이미지(base+adduser+USER, 앱 컴파일 제외)로 실증: `docker run` → `uid=1001(app) gid=1001(app)` **PASS**. 커밋 15d251d.
-- 2026-07-17: **O4 배포 SHA 고정/자동 롤백** 구현(사용자 선택, O5 다음). `deploy/aws/deploy.sh`: (1) `update_state()` 헬퍼(.state 중복 방지), (2) do_deploy 에 대상 SHA 고정(`git fetch origin main`→`rev-parse`, APP_VERSION=latest 대체) + migration 게이트(`git diff last_good..target -- db/migration/` 비었을 때만 `rollback-ok`), (3) remote 블록을 롤백 상태기계로 재작성 — 헬스OK 시 이전 이미지 정리 후 exit 0, 실패+rollback-ok 시 `APP_VERSION=$LAST_GOOD docker compose up -d --pull never`+재헬스체크(exit 2), 실패+blocked(migration 포함/LAST_GOOD 없음) 시 수동안내 exit 1, (4) 로컬에서 exit code 해석해 성공 시 `update_state LAST_GOOD_SHA`. 검증: `bash -n` 통과. 실deploy·롤백은 EC2 핸드오프(Acceptance). CI 태그=전체 SHA(deploy.yml:53-55), migration 경로 13파일 실존 확인. **리뷰 대기**(code-reviewer+codex). O2/O3 미착수.
+- 2026-07-17: **O4 배포 SHA 고정/자동 롤백** 구현(사용자 선택, O5 다음). `deploy/aws/deploy.sh`: (1) `update_state()` 헬퍼(.state 중복 방지), (2) do_deploy 에 대상 SHA 고정(`git fetch origin main`→`rev-parse`, APP_VERSION=latest 대체) + migration 게이트(`git diff last_good..target -- db/migration/` 비었을 때만 `rollback-ok`), (3) remote 블록을 롤백 상태기계로 재작성 — 헬스OK 시 이전 이미지 정리 후 exit 0, 실패+rollback-ok 시 `APP_VERSION=$LAST_GOOD docker compose up -d --pull never`+재헬스체크(exit 2), 실패+blocked(migration 포함/LAST_GOOD 없음) 시 수동안내 exit 1, (4) 로컬에서 exit code 해석해 성공 시 `update_state LAST_GOOD_SHA`. 검증: `bash -n` 통과. 실deploy·롤백은 EC2 핸드오프(Acceptance). CI 태그=전체 SHA(deploy.yml:53-55), migration 경로 13파일 실존 확인. O2/O3 미착수.
+- 2026-07-17: O4 리뷰(code-reviewer+codex) 반영 — **Critical**(exec stdin drain → 실패를 성공 오인·LAST_GOOD 오염, code-reviewer 실기재현) 포함 6건 fix 적용. Critical 은 파이프-stdin 대조 harness 로 재현·수정 실증(버그 rc=0/PHASE1만 → 수정 rc=3/실패경로 실행). `bash -n` 통과. 상세·처분은 # Review Disposition. defer 2건은 # Deferred.
 
 # Next
 
@@ -59,3 +60,17 @@ O5(non-root)·O4(배포 롤백) 완료(2026-07-17, 코드+로컬검증). O4 는 
 
 - SG 0.0.0.0/0 개방·데스크탑 pem 키 미등록 (memory 핸드오프의 미결 — 별도 보안 작업, severity: medium)
 - 운영 헬스 지표(엔진 루프 생존·마지막 tick 시각 노출)와 그 감시 — 외부 감시의 커버리지 한계 보완 (severity: low~medium)
+- O4 리뷰 defer: LAST_GOOD_SHA 가 운영자 로컬 `.state` 에만 존재 → 다중 머신/운영자 배포 시 자동롤백 무력·불일치 가능. 서버측 상태(실행 컨테이너 라벨 등)로 이전 검토 (severity: low, 단일 운영자면 무영향)
+- O4 리뷰 defer: push 직후 CI(deploy.yml) 이미지 빌드 완료 전 `deploy` 실행 시 `docker compose pull` 실패로 클린 exit 1 — 버그 아님이나 운영 footgun. README 운영 섹션에 "CI 빌드 완료 후 배포" 명시 (O3/README 작업 시)
+
+# Review Disposition
+
+O4(6b33546) 리뷰(2026-07-17) — code-reviewer(Claude) + codex 병행. **전건 fix 적용·재검증 완료**(후속 커밋):
+- `fix` **Critical** (code-reviewer, codex 놓침, 실기 재현) deploy.sh health_ok: `docker compose exec -T` 가 `bash -s` 파이프 stdin 을 drain → 헬스실패 경로(롤백·게이트) 전체 스킵 + 원격 bash exit 0 → 실패를 성공으로 오인하고 **깨진 SHA 를 LAST_GOOD 로 승격**. → exec 에 `</dev/null`. **재현**: 파이프-stdin 대조 harness — 버그=PHASE1만·rc=0, 수정=실패경로 실행·rc=3(scratchpad/stdin-drain-repro.sh).
+- `fix` **Major/Medium** (양쪽 합의) 롤백 후 서버 `/opt/app/.env` 에 실패 SHA 잔존 → 이후 `start`/수동 up 이 실패본 재배포. → 롤백 성공 후 `sed -i` 로 .env APP_VERSION=LAST_GOOD 갱신.
+- `fix` **High** (codex) migration 게이트: target_sha 가 로컬 git 부재 시 `git diff` exit 128·빈출력 → 위험하게 rollback-ok. → target_sha 도 `cat-file -e` 검증, 부재 시 blocked.
+- `fix` **Medium/Low** (codex) 롤백 이미지 부재: `--pull never` → `--pull missing`(GHCR 재pull), exit 3 폴백 유지.
+- `fix` **Minor** (code-reviewer) 동일 SHA 재배포(target==last_good) → 무의미한 자기-롤백. → 게이트에서 blocked 처리.
+- `defer` **Minor** (양쪽) LAST_GOOD 가 운영자 로컬 `.state` 에만 존재 → 다중 머신 배포 시 롤백 불가/불일치. 서버측 상태(컨테이너 라벨 등) 이전은 별도 작업(# Deferred).
+- `defer` **informational** (code-reviewer) push 직후 CI 이미지 빌드 전 배포 시 `docker compose pull` 실패 → 클린 exit 1(버그 아님). CI 완료 대기를 README 운영 섹션에 명시(O3/README 작업 시).
+- `false-positive` (양쪽 확인): `ssh ... <<REMOTE || deploy_rc=$?` exit code 포착 정상, 성공 후 이미지 정리가 다음 롤백 대상을 안 지움, migration pathspec(`-C repo_root` 상대경로) 정확.
