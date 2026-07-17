@@ -13,6 +13,7 @@ import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.spyk
@@ -120,5 +121,19 @@ class UserTradingManagerTest {
         } finally {
             logger.detachAppender(appender)
         }
+    }
+
+    @Test
+    fun `shutdown stops all running engines`() {
+        val engine1 = mockk<TradingEngine>(relaxed = true)
+        val engine2 = mockk<TradingEngine>(relaxed = true)
+        engines()[1L] = engine1
+        engines()[2L] = engine2
+
+        manager.shutdownAll()
+
+        // @PreDestroy 가 모든 엔진을 stop(cancelAndJoin) — 진행 중 tick 완주 후 종료.
+        coVerify { engine1.stop() }
+        coVerify { engine2.stop() }
     }
 }

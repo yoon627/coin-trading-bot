@@ -16,10 +16,11 @@ updated: 2026-07-17
 - 2026-07-17: order-state-integrity(#39 c61b8ce) main 머지 확인 → engine-lifecycle 을 main 에 rebase(코드 충돌 0 — plan 커밋만 재배치). **Blocker 해소.** sync 재진단: #39 가 TradingEngine.kt(pendingSell reconcile +17줄)·PositionManager.kt(pending 구조 +217줄)를 바꿔 Key Files 라인 shift → 아래 갱신. pendingBuy/Sell reconcile 안전망이 이미 존재하므로 취소 안전성은 그 위에 얹는다(plan-review 순서). reload 위험 서술 정밀화: pending 은 state 에 저장되나 reloadUserRuntime(:170-173)이 구 states map 을 통째 교체 → cancel-only stop 이면 구 루프 awaitFill 진행분이 유실 → cancelAndJoin 필요는 유효.
 - 2026-07-17(구현 1/3 — 취소 안전성, task 1·2 done): stop() suspend+cancelAndJoin, PositionManager buy/sell 후처리 `withContext(NonCancellable)`+CE rethrow, TradingEngine runLoop/processTicker CE rethrow. TDD: PositionManagerExtendedTest 2건(NonCancellable 완주 Red→Green 확인), TradingEngineTest 1건(stop join + 오탐 ERROR 없음). 기존 stop() 호출 @Test 4건 runBlocking 래핑. 관련 스위트 green. **가상시간 대신 실측**: TradingEngine 자체 scope(Dispatchers.Default)라 runTest 가상시간 미적용 → PositionManager(순수 suspend)는 runTest, engine 통합은 runBlocking+실측(결과 동일). NonCancellable 이 pending reconcile 안전망과 협력해 유실 0.
 - 2026-07-17(구현 2/3 — restore 재작성, task 3·4 done): restoreOnStartup 을 @PostConstruct → @EventListener(ApplicationReadyEvent)+@Order(LOWEST) 로 이동, DiscordErrorLogAppender 에 @Order(HIGHEST) 부여(attach 선행). per-user restoreOne = lockFor.withLock + lock 후 engines 재확인 skip(유령 엔진 차단 — 구 computeIfAbsent 는 실행 중 엔진에 start 재호출). restoreAllRunningBots 유한 backoff(1·2·4·8·16s, ≤5회) + 최종 실패 '봇 미복원' ERROR alert. createEngine internal seam. 신규 UserTradingManagerTest 3건(skip·재시도·최종alert, 가상시간) green.
+- 2026-07-17(구현 3/3 — graceful shutdown, task 5 done): application.yml server.shutdown:graceful + spring.lifecycle.timeout-per-shutdown-phase:30s, docker-compose.prod.yml app.stop_grace_period:40s, UserTradingManager @PreDestroy shutdownAll(전 engine 병렬 stop, runBlocking 브리지) + @DependsOn("discordErrorLogAppender")로 소멸 순서(engine stop → appender detach) 고정. UserTradingManagerTest +1(shutdown 시 전 engine stop). engine 스위트 green.
 
 # Next
 
-graceful shutdown 3종(task 5): application.yml server.shutdown:graceful + spring.lifecycle.timeout-per-shutdown-phase:30s, UserTradingManager @PreDestroy 전체 engine stop(runBlocking 브리지), compose stop_grace_period:40s. @PreDestroy 순서(appender detach 가 engine stop 이후) 확인. 이후 종합 code-review + simplify + 최종 검증.
+종합 리뷰(dlc 11): architecture-reviewer(DI @DependsOn·lifecycle·2계층) + code-reviewer(동시성·CE·backoff) 병렬(codex owner 1). fix loop → simplify → ./gradlew test 전체 + graceful 로컬 SIGTERM 수동 관찰. 이후 Acceptance 6항목 증거 대조.
 
 # Decisions
 

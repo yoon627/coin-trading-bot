@@ -14,18 +14,23 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
+import jakarta.annotation.PreDestroy
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.annotation.DependsOn
 import org.springframework.context.event.EventListener
 import org.springframework.core.Ordered
 import org.springframework.core.annotation.Order
@@ -33,6 +38,7 @@ import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
 
 @Service
+@DependsOn("discordErrorLogAppender") // @PreDestroy 소멸 순서 고정: appender 가 먼저 생성→나중 detach, 이 매니저가 먼저 stop → 종료 중 에러도 Discord 도달.
 class UserTradingManager(
     private val userRepository: UserRepository,
     private val botStateRepository: BotStateRepository,
@@ -67,6 +73,28 @@ class UserTradingManager(
             return
         }
         scope.launch { restoreAllRunningBots() }
+    }
+
+    /**
+     * graceful shutdown: SIGTERM(@PreDestroy) 시 모든 엔진을 stop(cancelAndJoin)해 진행 중이던 tick 의 주문
+     * 후처리(NonCancellable)가 끝난 뒤 종료한다. 병렬 stop 으로 다중 유저 합산 대기를 timeout-per-shutdown-phase(30s)
+     * 예산 안에 들인다. @DependsOn 으로 DiscordErrorLogAppender detach 는 이 stop 이후로 밀려 종료 중 에러도 도달한다.
+     */
+    @PreDestroy
+    fun shutdownAll() {
+        if (engines.isEmpty()) return
+        log.info("Graceful shutdown: stopping {} running engine(s)", engines.size)
+        runBlocking {
+            engines.values.toList().map { engine ->
+                async {
+                    try {
+                        engine.stop()
+                    } catch (e: Exception) {
+                        log.error("Failed to stop engine during shutdown: {}", e.message, e)
+                    }
+                }
+            }.awaitAll()
+        }
     }
 
     /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도하고 최종 실패만 ERROR alert(→Discord). */
