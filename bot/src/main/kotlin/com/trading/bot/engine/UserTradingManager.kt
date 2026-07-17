@@ -68,9 +68,10 @@ class UserTradingManager(
 
     private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { Mutex() }
 
-    // DiscordErrorLogAppender(@Order HIGHEST)가 먼저 attach 된 뒤 실행되도록 낮은 우선순위. 단 restore 는 비동기라
-    // 리스너 순서만으로 alert 도달을 보장하지 못한다 — 실질 보장은 restoreAllRunningBots 의 유한 backoff 재시도
-    // (첫 실패가 attach 이후로 밀림)다. @PostConstruct 는 attach(ApplicationReadyEvent)보다 이르러 초기 에러가 미도달이었다.
+    // DiscordErrorLogAppender(@Order HIGHEST)가 먼저 attach 된 뒤 restore 가 실행되도록 낮은 우선순위.
+    // ApplicationReadyEvent 리스너는 순차 동기 호출이라 appender.attach 완료 후 이 리스너의 scope.launch 가 돈다
+    // → restore 중 에러도 Discord 도달. backoff 재시도는 순서 보장이 아니라 일시적 DB/API 실패 회복용이다.
+    // (@PostConstruct 는 attach(ApplicationReadyEvent)보다 일러 초기 에러가 미도달이었다 — 그래서 이 이벤트로 이동.)
     @EventListener(ApplicationReadyEvent::class)
     @Order(Ordered.LOWEST_PRECEDENCE)
     fun restoreOnStartup() {
@@ -94,8 +95,9 @@ class UserTradingManager(
     /**
      * graceful shutdown: SmartLifecycle.stop 은 @PreDestroy 와 달리 `timeout-per-shutdown-phase`(30s) 예산을 실제로
      * 받아 무한 hang 을 막는다(@PreDestroy 엔 미적용 — 리뷰 arch Major). 진행 중 restore 를 먼저 취소해(M5) shutdown
-     * 이후 엔진 기동을 막고, 모든 엔진을 병렬 stop(cancelAndJoin)해 tick 후처리 완주를 기다린다. NonCancellable 후처리가
-     * 예산을 넘기면 self-bound(withTimeoutOrNull)로 끊고 잔여는 재시작 후 durable reconcile(#20) 소관으로 남긴다.
+     * 이후 엔진 기동을 막고, 모든 엔진을 동시 stop(cancelAndJoin — runBlocking 이벤트루프의 협조적 동시)해 tick 후처리
+     * 완주를 기다린다. NonCancellable 후처리가 예산을 넘기면 self-bound(withTimeoutOrNull)로 끊고 — 잔여 daemon 코루틴은
+     * JVM 종료로 정리되고 — 미완 pending 은 재시작 후 durable reconcile(#20) 소관으로 남긴다.
      */
     override fun stop() {
         lifecycleRunning = false

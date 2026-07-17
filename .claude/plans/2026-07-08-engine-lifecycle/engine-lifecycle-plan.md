@@ -23,9 +23,11 @@ updated: 2026-07-18
 - 2026-07-18(fix 2 — M2·M4): restore DB 전실패 alert(lastQueryFailed 추적)+마지막 backoff 제거(M2). stop() stopMutex 직렬화, CAS 실패자도 공통 loopJob join(M4). TDD 2건(DB 전실패 alert, 동시 stop 안전). M5 는 SmartLifecycle 과 통합해 다음.
 - 2026-07-18(fix 3 — C2·M5·M1, SmartLifecycle 전환): UserTradingManager 를 SmartLifecycle 로 전환(@PreDestroy shutdownAll·@DependsOn·appender @Order 소멸훅 제거) — stop() 이 timeout-per-shutdown-phase(30s) 예산 실제 수령 + withTimeoutOrNull(25s) self-bound 로 무한 hang 제거(C2). restoreJob 보관 + shuttingDown 으로 restore lifecycle 결속, stop 시 restore 먼저 취소·restoreOne skip(M5). onTrade withContext(NonCancellable)로 취소 시 record 유실 방지(M1 프로세스생존중). TDD 2건(record 완주·shutdown 후 미기동) + shutdown 테스트 stop() 전환. 전체 스위트 green.
 
+- 2026-07-18(재검토·simplify·검증): code-reviewer 재검토 subagent 가 세션 한도(4:10am KST 리셋)로 종료 → 메인 self-review 로 핵심 5 리스크(withTimeoutOrNull self-bound·getPhase 순서·stopMutex↔lockFor 데드락·restore lifecycle race·CE rethrow 누락) 코드 점검 통과. codex 교차검증은 세션 한도로 생략(이전 리뷰서 codex gpt-5.5 high 대부분 합의). simplify: restore/stop 주석 문구 정정(리스너 순서 과보수 서술·'병렬'→'동시'). 전체 test green.
+
 # Next
 
-**dlc 14 재리뷰**: 큰 변경(SmartLifecycle 전환 + 6 fix) code-reviewer 재검토(codex 병행) → simplify(주석 문구 정정: '30s예산/병렬/리스너순서 보장') → 전체 검증 + graceful 로컬 SIGTERM 관찰 → Acceptance 증거 대조.
+push + PR(리뷰 fix 반영·#20 durable defer 명시) 또는 여기서 저장·마무리. 재리뷰 완결 필요 시 세션 리셋(4:10am KST) 후 code-reviewer 재실행. graceful 로컬 SIGTERM 관찰(수동)은 로컬 DB 기동 필요.
 
 # Decisions
 
