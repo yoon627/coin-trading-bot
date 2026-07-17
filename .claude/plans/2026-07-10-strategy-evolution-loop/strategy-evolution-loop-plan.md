@@ -2,7 +2,7 @@
 title: strategy-evolution-loop — 자기 방어를 갖춘 반자동 리서치 파이프라인 (지속 백테스팅→후보 발굴→통계 게이트→승인→카나리아→추적/강등)
 status: in_progress
 started: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-18
 ---
 
 # Goal
@@ -15,10 +15,12 @@ updated: 2026-07-10
 
 - 2026-07-10: 기존 자산 조사(BacktestEngine run/compareAll, ParameterSweepTest 1,800조합 1회성 스윕 이력, StrategyController 백테 API, #31·#32·#33) — "지속 루프"는 미고려 상태임을 확인. 독립 설계 2안(A: 통계 엄밀·사람 승인 / B: champion-challenger 자동화) + 적대 비판 워크플로 실행, 비판 권고(뼈대 A + B 이식 + 공통 결함 보정)로 종합해 plan 작성.
 - 2026-07-10: plan-review(Claude subagent + codex 병행) 반영 — 실행 전제 4건 교정: ① 카나리아 investRatio 1/3 은 maxInvestAmount 캡(PositionManager.kt:291-294 minOf)에 흡수돼 무효 → 캡 동시 스케일, ② SHADOW paper 실행체가 코드에 없음 → 주문 포트 추상화 신설 명시, ③ "daily reset 직후 = 무포지션" 전제 오류(maxHoldDays>1 이면 포지션 존속) → position-free 실검사 게이트, ④ DB 직독 시 ASC↔최신-우선 순서 역행 위험 → parity 테스트. + 완결 D1 일일 증분 적재 컴포넌트 추가(현재 DB 적재는 M1 유일이라 백필만으론 rolling 재평가 불가), 타 plan 3개(engine-lifecycle·dead-path-cleanup·marketdata-consolidation) 파일 충돌·선후 명시, #19/#20 의존 명시. 구현 미착수.
+- 2026-07-18: **Phase 0 #31 착수**. sync 진단 — plan 후 코드 미착수 확인(로컬 커밋=plan 1건, 미머지, PR 없음, worktree clean). 코드 조사: 전략이 `config` 에서 읽는 유일 신호 파라미터는 `kValue`(CombinedStrategy:17·VolatilityBreakout:16 `calculateTargetPrice`), 나머지 전략은 config 미read. BacktestEngine 은 `strategy.shouldBuy/Sell(.., tradingProperties)` 로 **live 0.5 고정** 전달 → `config.kValue`(StrategyController:87 검증·주입) 무영향이 #31 결함. **구현형태: `tradingProperties.copy(kValue=config.kValue)` 최소침습 확정**(신호 read 필드 단일이라 SignalParams 추상화 과잉). `BacktestConfig.investRatio` 는 read 0건 진짜 dead → 제거, `kValue` 는 연결·parity 가드 추가.
+- 2026-07-18: **#31 구현·검증 완료(미push)**. `signalProps = tradingProperties.copy(kValue=config.kValue)` 를 신호(shouldBuy/shouldSell)에 전달, `investRatio` 제거, parity 가드에 `kValue` 추가. 신규 회귀 테스트 2개(`volatility_breakout`·`combined`) green, `:bot:test` 전체 통과(JDK21 prefix). code-review(Claude subagent + codex 0.134.0 medium 병행) **APPROVE — Critical/Major 0**. Minor fix 반영: 테스트 highK `3.0→2.0`(API 상한 경계값), `combined` 회귀 테스트 추가(라이브 기본 전략 경로 가드). ⚠️ Phase 0 나머지(#33 intrabar 청산 모델·M1 replay 편향·engine_version)는 **미착수** — Acceptance Phase 0 항목은 #31 조각만 충족.
 
 # Next
 
-Phase 0 착수: **이슈 #31 수정**(백테 신호가 live tradingProperties 에 고정 — BacktestEngine.kt:125,:155)부터 TDD 로. 구현 형태(BacktestConfig→TradingProperties.copy 최소침습 vs SignalParams 분리)는 BacktestEngineTest 의 live-parity 가드를 놓고 착수 시 결정(#31 부속: BacktestConfig dead field 정리 포함). 착수 전 사용자 확인 1건: 승인 채널(SPA vs Discord 버튼 — Blockers).
+Phase 0 #31 구현 중(copy 최소침습, TDD). 완료 후 Phase 0 나머지: **#33 intrabar 보수 청산 모델** → **M1 replay 편향 실측**(표본수 병기) → **engine_version 기록**. 승인 채널(SPA vs Discord) 확인은 Phase 2 안건이라 Phase 0 진행에 무관.
 
 # Decisions
 
@@ -82,8 +84,17 @@ Phase 0 착수: **이슈 #31 수정**(백테 신호가 live tradingProperties �
 - (선결 — 조율 아님) **포지션 메타 영속화**: entryStrategy·진입 시점 config 스냅샷이 메모리 전용(TradingEngine.kt:228-229) — "보유 포지션은 진입 시점 설정으로 청산" 정책과 Phase 2 재시작 복원의 **선결 조건**. order-state-integrity plan 과 소유권 협의(그 plan 의 TradingState 확장에 편승 권장).
 - (타 plan 충돌 — 선후 명시) **engine-lifecycle**: UserTradingManager reload/stop 경로(:163-178)가 이 plan 의 엔진 스왑 경로와 정면 겹침 — stop join 수정이 스왑 시맨틱을 바꾸므로 **engine-lifecycle 머지 후 Phase 2 착수**. **dead-path-cleanup**: MarketDataRepository(시간범위 쿼리 신설)·DataRetentionService 재편·drop migration 이 이 plan 의 "retention 무간섭·D1 영구 보존" 전제와 접촉 — 착수 시점의 머지 상태 확인. **marketdata-consolidation**: UpbitMarketFeed·MarketDataIngestionService 공유(getCandles `to` 오버로드 추가 지점) — 파일 소유권 조율.
 - (의존 이슈) **#20**(pendingBuyUuid durable): 스왑 실검사 게이트의 "in-flight 주문 없음" 판정 신뢰성이 여기 의존(현재 메모리 전용이라 재시작 직후 오판 가능). **#19**(reconcile halt 상한): 카나리아 서킷브레이커의 halt 시맨틱과 접점. 두 이슈 미해소 상태로도 Phase 0-1 은 진행 가능.
-- ❌미확정(구현 직전 확정): Upbit quotation rate limit 현행 수치(docs.upbit.com), EC2 스윕+부트스트랩 wall-clock(Phase 1 실측), #31 구현 형태.
+- ❌미확정(구현 직전 확정): Upbit quotation rate limit 현행 수치(docs.upbit.com), EC2 스윕+부트스트랩 wall-clock(Phase 1 실측). (#31 구현 형태는 2026-07-18 copy 최소침습으로 확정)
+
+# Review Disposition
+
+## #31 (2026-07-18, code-reviewer Claude + codex 0.134.0 medium, 종합 APPROVE)
+- **fix**: 테스트 highK `kValue 3.0→2.0` — API 상한(`StrategyController` `0.0..2.0`) 경계값, 실제 재현값. range=450 고정이라 동일 성립. 적용.
+- **fix**: `combined` 전략 회귀 테스트 추가 — 라이브 기본 전략(TradingProperties.strategy 기본 `combined`)도 `config.kValue` read, 실사용 경로 가드. 적용·green.
+- **false-positive**: `investRatio` 제거 = 생성자 시그니처 변경(codex Major) — 미publish 단일 앱 모듈, 유일 생성부(StrategyController) named-arg·미참조, BacktestResult JSON 미노출. 외부 계약 영향 0.
+- **wontfix(현 스코프)**: signalProps 화이트리스트(kValue만 덮음) fragility — 향후 신호가 config 의 다른 필드 read 시 재발 소지. 현재 전략셋 무해, 주석(BacktestEngine.kt:83-84)으로 제약 명시. 신호 파라미터 확장 시 매핑 명시화로 대응.
 
 # Deferred
 
 - bot_configs(V12) CRUD 전용 레거시의 정리(strategy_champions 도입 후 의미 중복) — severity: low
+- CLAUDE.md §9 가 참조하는 `docs/codex-review.md` 가 repo 에 부재(코드·문서 모두) — codex 호출 규약(effort·출력 처리) 단일 소스 없음. 이번 리뷰는 `codex exec review --uncommitted`(커스텀 프롬프트 상호배타라 기본 리뷰만) 로 우회. severity: low, 이번 작업 무관 — 별도 이슈화 검토 (2026-07-18 발견)
