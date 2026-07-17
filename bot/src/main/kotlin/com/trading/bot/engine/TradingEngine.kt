@@ -23,6 +23,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 
 class TradingEngine(
@@ -97,13 +99,20 @@ class TradingEngine(
         }
     }
 
-    suspend fun stop() {
+    // stop 동시호출(shutdownAll ↔ reload/stopBot)을 직렬화해 CAS 실패자도 같은 loopJob 을 join 하게 한다(M4).
+    private val stopMutex = Mutex()
+
+    suspend fun stop() = stopMutex.withLock {
+        val job = loopJob
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
             // 취소 후 완료까지 대기(join). 진행 중이던 tick 의 주문 후처리(PositionManager NonCancellable 구간)가
             // 끝난 뒤 반환한다. cancel 만 하고 즉시 새 엔진을 기동하면(reload) 구 루프와 경합해 이중 매매가 된다. scope 는 재시작 위해 유지.
-            loopJob?.cancelAndJoin()
+            job?.cancelAndJoin()
             loopJob = null
+        } else {
+            // 이미 다른 호출자가 stop 수행/완료 중 — 같은 loop 완료를 함께 기다려 조기 반환(미드레이닝)을 막는다.
+            job?.join()
         }
     }
 

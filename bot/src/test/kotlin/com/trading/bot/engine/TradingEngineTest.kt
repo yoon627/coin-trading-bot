@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -132,6 +133,19 @@ class TradingEngineTest {
         } finally {
             logger.detachAppender(appender)
         }
+    }
+
+    @Test
+    fun `concurrent stop calls are safe and halt the loop`() = runBlocking {
+        // stopMutex 직렬화로 동시 stop(shutdownAll ↔ reload/stopBot)이 데드락·예외 없이 완료되고 loop 가 멈춘다(M4).
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"))
+        delay(50)
+        val j1 = launch { engine.stop() }
+        val j2 = launch { engine.stop() }
+        j1.join()
+        j2.join()
+        assertFalse(engine.isRunning())
     }
 
     @Test

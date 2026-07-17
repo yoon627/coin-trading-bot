@@ -19,10 +19,12 @@ updated: 2026-07-18
 - 2026-07-17(구현 3/3 — graceful shutdown, task 5 done): application.yml server.shutdown:graceful + spring.lifecycle.timeout-per-shutdown-phase:30s, docker-compose.prod.yml app.stop_grace_period:40s, UserTradingManager @PreDestroy shutdownAll(전 engine 병렬 stop, runBlocking 브리지) + @DependsOn("discordErrorLogAppender")로 소멸 순서(engine stop → appender detach) 고정. UserTradingManagerTest +1(shutdown 시 전 engine stop). engine 스위트 green.
 - 2026-07-17(리뷰 — dlc 11): code-reviewer REQUEST CHANGES(codex gpt-5.5 high 병행, 대부분 합의) + architecture-reviewer NEEDS DISCUSSION. 근본 구멍 8건 — C1 placeOrder 취소창 broad catch→pending 미설정→주문유실·이중포지션 / C2 NonCancellable 무한→shutdown SIGKILL / M1 onTrade DB기록 NonCancellable 밖→감사유실 / M2 restore DB 전실패 alert 누락 / M3 chartExit runCatching CE삼킴 / M4 stop 동시호출 no-join / M5 restore 코루틴 lifecycle 미결속→shutdown 후 엔진기동 / M6 suspend broad catch 다수 CE삼킴→pre-order 취소 ERROR로깅→오탐 alert. **arch Major: timeout-per-shutdown-phase(30s)는 @PreDestroy 엔 미적용(SmartLifecycle 전용) → @PreDestroy runBlocking 무한 hang.**
 - 2026-07-18(스코프 결정 — 사용자): durable 근본(C1 주문유실·M1 재시작복구)은 **trading-state-durability(#19+#20, engine-lifecycle 다음 순서로 이미 설계·codex 검토 완료)로 defer**. 이 PR = **SmartLifecycle 전환**(C2) + 국소 fix(M2·M3·M4·M5·M6) + onTrade NonCancellable(M1 프로세스생존중 부분).
+- 2026-07-18(fix 1 — M6/M3, 25a09f6): suspend broad catch 8곳 + chartExit runCatching CE rethrow. 오탐 alert 제거. TDD 2건(pre-order·syncPosition 취소 전파).
+- 2026-07-18(fix 2 — M2·M4): restore DB 전실패 alert(lastQueryFailed 추적)+마지막 backoff 제거(M2). stop() stopMutex 직렬화, CAS 실패자도 공통 loopJob join(M4). TDD 2건(DB 전실패 alert, 동시 stop 안전). M5 는 SmartLifecycle 과 통합해 다음.
 
 # Next
 
-fix loop(dlc 12) — 순서: ① M6/M3 CE rethrow 를 suspend broad catch 전반으로 확대(오탐 alert 제거) → ② M2 restore 전실패 alert + 마지막 backoff 제거 → ③ M4 stop 동시 join 직렬화 → ④ M5 restore lifecycle 결속(restoreJob+shutting-down) → ⑤ C2 SmartLifecycle 전환(@DependsOn·@PreDestroy 대체) + M1 onTrade NonCancellable → ⑥ 테스트 보강(DB 전실패·shutdown 심화). 각 TDD. 이후 code-reviewer 재검토 → simplify → 전체 검증.
+fix loop 남은: **④M5+⑤C2 — SmartLifecycle 전환** (engine stop 을 SmartLifecycle.stop 으로, @PreDestroy shutdownAll·@DependsOn·@Order 소멸훅 제거, restore lifecycle 결속 restoreJob+shutting-down 을 그 stop 에서 cancel) + **M1 onTrade NonCancellable** → ⑥ 테스트 보강 → code-reviewer 재검토 → simplify → 전체 검증.
 
 # Decisions
 

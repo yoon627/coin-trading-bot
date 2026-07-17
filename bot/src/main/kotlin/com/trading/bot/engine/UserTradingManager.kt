@@ -100,14 +100,17 @@ class UserTradingManager(
     /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도하고 최종 실패만 ERROR alert(→Discord). */
     internal suspend fun restoreAllRunningBots() {
         var pendingUserIds: List<Long> = emptyList()
+        var lastQueryFailed = false
         for (attempt in 1..RESTORE_MAX_ATTEMPTS) {
             val states = try {
                 botStateRepository.findByRunningTrue().collectList().awaitSingle()
             } catch (e: Exception) {
                 log.warn("restore: bot state 조회 실패 (attempt {}/{}): {}", attempt, RESTORE_MAX_ATTEMPTS, e.message)
-                delay(restoreBackoffMs(attempt))
+                lastQueryFailed = true
+                if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt))
                 continue
             }
+            lastQueryFailed = false
             if (attempt == 1) log.info("Restoring {} running bot(s) from DB", states.size)
             val failed = mutableListOf<Long>()
             for (state in states) {
@@ -117,7 +120,10 @@ class UserTradingManager(
             if (pendingUserIds.isEmpty()) return
             if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt))
         }
-        if (pendingUserIds.isNotEmpty()) {
+        // 조회가 끝까지 실패하면 pendingUserIds 는 비어 있어도 복원은 0건 — 이 케이스도 alert 해야 한다(M2).
+        if (lastQueryFailed) {
+            log.error("봇 미복원: bot state 조회가 재시도 {}회 모두 실패 — 복원된 봇 없음", RESTORE_MAX_ATTEMPTS)
+        } else if (pendingUserIds.isNotEmpty()) {
             log.error("봇 미복원: {}개 유저 복원 실패 (재시도 {}회 소진) — userIds={}", pendingUserIds.size, RESTORE_MAX_ATTEMPTS, pendingUserIds)
         }
     }

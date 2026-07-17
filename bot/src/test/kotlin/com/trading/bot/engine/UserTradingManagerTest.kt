@@ -136,4 +136,25 @@ class UserTradingManagerTest {
         coVerify { engine1.stop() }
         coVerify { engine2.stop() }
     }
+
+    @Test
+    fun `restore logs error when all DB queries fail`() = runTest {
+        // 모든 attempt 에서 bot state 조회가 실패하면 복원 0건 — pendingUserIds 는 비어 있어도 alert 해야 한다(M2).
+        every { botStateRepository.findByRunningTrue() } returns Flux.error(RuntimeException("db down"))
+
+        val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            manager.restoreAllRunningBots()
+
+            val errors = appender.list.filter { it.level == Level.ERROR }
+            assertTrue(
+                errors.any { it.formattedMessage.contains("봇 미복원") && it.formattedMessage.contains("조회") },
+                "DB 조회 전실패 시 '봇 미복원' 조회실패 ERROR 가 없음: ${errors.map { it.formattedMessage }}",
+            )
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
 }
