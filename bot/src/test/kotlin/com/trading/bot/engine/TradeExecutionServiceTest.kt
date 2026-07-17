@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.client.UpbitApiException
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
@@ -137,6 +138,111 @@ class TradeExecutionServiceTest {
         service.executeSellVolume(client, "KRW-BTC", "0.3", "rsi_bounce", 1L)
 
         assertNull(recordSlot.captured.pnlPercent)
+    }
+
+    // --- 수동주문 unknown-state: placeOrder 성공 후 후처리 실패는 2xx+uuid(recorded=false), placeOrder 실패만 failure ---
+
+    @Test
+    fun `executeBuy returns success recorded false when persistence fails`() = runTest {
+        // placeOrder 접수 성공했으나 DB 저장 실패 — 주문은 나갔으므로 failure(재시도 유발) 대신 success+uuid+recorded=false.
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "order-x")
+        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
+        coEvery { client.getAccounts() } returns listOf(Account(currency = "KRW", balance = "5000000"))
+        coEvery { tradeRecordRepository.save(any()) } throws RuntimeException("db down")
+
+        val result = service.executeBuy(client, "KRW-BTC", 100000.0, "manual", 1L)
+
+        assertTrue(result.success)
+        assertEquals("order-x", result.orderUuid)
+        assertFalse(result.recorded)
+        coVerify(exactly = 1) { client.placeOrder(any()) } // 재시도 없음(단일 접수)
+    }
+
+    @Test
+    fun `executeBuy propagates placeOrder exception to advice`() = runTest {
+        // placeOrder 실패는 삼키지 않고 전파 → UpbitErrorHandlerAdvice 가 429/error_name 을 매핑. 삼키면 그 매핑 우회 + rawBody 노출.
+        coEvery { client.placeOrder(any()) } throws UpbitApiException(429, "too_many_requests", "rate", "raw")
+
+        val ex = runCatching { service.executeBuy(client, "KRW-BTC", 100000.0, "manual", 1L) }.exceptionOrNull()
+
+        assertTrue(ex is UpbitApiException)
+    }
+
+    @Test
+    fun `executeSellAll returns success recorded false when persistence fails`() = runTest {
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "48000000")
+        )
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "sell-x")
+        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
+        coEvery { tradeRecordRepository.save(any()) } throws RuntimeException("db down")
+
+        val result = service.executeSellAll(client, "KRW-BTC", "manual", 1L)
+
+        assertTrue(result.success)
+        assertEquals("sell-x", result.orderUuid)
+        assertFalse(result.recorded)
+    }
+
+    @Test
+    fun `executeSellAll propagates placeOrder exception to advice`() = runTest {
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "48000000")
+        )
+        coEvery { client.placeOrder(any()) } throws UpbitApiException(429, "too_many_requests", "rate", "raw")
+
+        val ex = runCatching { service.executeSellAll(client, "KRW-BTC", "manual", 1L) }.exceptionOrNull()
+
+        assertTrue(ex is UpbitApiException)
+    }
+
+    @Test
+    fun `executeSellVolume returns success recorded false when persistence fails`() = runTest {
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "sv-x")
+        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52000000.0))
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "1.0", avgBuyPrice = "48000000")
+        )
+        coEvery { tradeRecordRepository.save(any()) } throws RuntimeException("db down")
+
+        val result = service.executeSellVolume(client, "KRW-BTC", "0.3", "manual", 1L)
+
+        assertTrue(result.success)
+        assertEquals("sv-x", result.orderUuid)
+        assertFalse(result.recorded)
+    }
+
+    @Test
+    fun `executeSellVolume preserves pnl when volume exhausts holding`() = runTest {
+        // 전량 매도: 평단(avgBuyPrice)을 매도 전에 확보해야 한다. placeOrder 후엔 통화 잔고가 사라져 avgBuyPrice=0 → pnl null.
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.3", avgBuyPrice = "48000000")
+        )
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "sv-full")
+        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
+        val recordSlot = slot<TradeRecord>()
+        coEvery { tradeRecordRepository.save(capture(recordSlot)) } returns TradeRecordEntity(
+            id = 9, ticker = "KRW-BTC", side = "SELL", price = 50000000.0,
+            volume = 0.3, totalAmount = 15000000.0, userId = 1L,
+        )
+
+        service.executeSellVolume(client, "KRW-BTC", "0.3", "manual", 1L)
+
+        // 평단 매도 전 확보 → net pnl = (50/48-1)*100 − 왕복수수료 0.1%p (null 아님)
+        assertEquals((50.0 / 48.0 - 1.0) * 100.0 - 0.1, recordSlot.captured.pnlPercent!!, 1e-9)
+    }
+
+    @Test
+    fun `executeSellVolume propagates placeOrder exception to advice`() = runTest {
+        // avgBuyPrice 조회(getAccounts)는 placeOrder 전에 수행되므로 stub 필요. placeOrder 예외는 전파(advice 매핑).
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.3", avgBuyPrice = "48000000")
+        )
+        coEvery { client.placeOrder(any()) } throws UpbitApiException(429, "too_many_requests", "rate", "raw")
+
+        val ex = runCatching { service.executeSellVolume(client, "KRW-BTC", "0.3", "manual", 1L) }.exceptionOrNull()
+
+        assertTrue(ex is UpbitApiException)
     }
 
     @Test

@@ -179,6 +179,12 @@ class TradingEngine(
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
                 ?: return
 
+            // 시작 시 syncPosition(runLoop) 이 실패했으면(unsynced) 매수 평가 전에 재시도. 성공 시 해소,
+            // 실패 지속 시 buy() 초입 가드가 신규 진입을 막아 이중 포지션을 방지한다.
+            if (state.unsynced) {
+                positionManager.syncPosition(ticker, state)
+            }
+
             // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
             if (state.pendingBuyUuid != null) {
@@ -189,6 +195,17 @@ class TradingEngine(
                     return
                 }
                 if (state.pendingBuyUuid != null) return // 아직 미해소 — 이 tick 매수/매도 평가 skip
+            }
+
+            // 매도판 H8: 미해소 매도 주문(placeOrder 성공 후 체결확인 실패/미확정분)이 있으면 매도/매수 평가 전에 reconcile.
+            // 확정되면 청산 기록 후 종료, 미해소면 이 tick 평가 skip(같은 포지션에 이중 매도 주문 방지).
+            if (state.pendingSellUuid != null) {
+                val reconciled = positionManager.reconcilePendingSell(ticker, state, currentPrice)
+                if (reconciled != null) {
+                    onTrade(reconciled)
+                    return
+                }
+                if (state.pendingSellUuid != null) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
             }
 
             if (state.position) {
