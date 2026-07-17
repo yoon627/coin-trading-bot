@@ -166,9 +166,15 @@ class UpbitWebSocketClient(
 
     // connectionLock 을 보유한 상태에서만 호출. 새 세대를 부여하고 구 연결을 정리한 뒤 연결한다.
     private fun startConnection() {
-        if (shuttingDown.get() || activeTickers().isEmpty()) return
+        if (shuttingDown.get()) return
         val myGen = generation.incrementAndGet() // 구 연결 무효화 (dispose 이전에 증가)
         disposable?.dispose()
+        // 구독 대상이 모두 빠졌으면(마지막 unsubscribe·watchlist 공백) 구 소켓만 정리하고 새로 연결하지 않는다.
+        // 구 소켓 doFinally 는 세대 게이팅으로 no-op 이므로 connected 를 여기서 직접 내린다(status 오표기 방지).
+        if (activeTickers().isEmpty()) {
+            connected.set(false)
+            return
+        }
         lastMessageAt = System.currentTimeMillis() // reset-on-connect grace (워치독 폭주 방지)
         connect(myGen)
     }
