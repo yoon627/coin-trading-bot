@@ -23,14 +23,16 @@ updated: 2026-07-17
 - 2026-07-17(2a plan-review): Claude+Codex 수렴 — 원 설계 **NO-GO**(세대 증가시점 race·connected clobber·워치독 20s 폭주·cancel 이중연결·CancellationException 삼킴). 사용자 '전체 재설계 제대로' 선택 → 아래 재설계 반영.
 - 2026-07-17(2a 구현): UpbitWebSocketClient 세대가드(dispose前 generation++·doFinally/doOnError/scheduleReconnect 세대 게이팅·sleep後 재확인)+폴백 워치독, MarketDataIngestionService 재시작루프(CancellationException rethrow)+워치독(cancelAndJoin·restartMutex·shutdown), MarketDataWatchdogProperties(kill-switch)+application.yml. 전체 `:bot:test` green(Watchdog4·WSClient8·Ingestion6). code-review: subagent 세션한도 중단→메인 직접(결함 없음, plan-review 지적 반영 확인), codex 는 push 게이트로 병행. 원본 로직 diff 보존 확인.
 - 2026-07-17(2a codex 게이트 fix): pre-push codex 2건 fix — P3(워치독 restart TOCTOU: mutex 안 isStale 재확인), P2(UpbitMarketFeed 지연 재연결 좀비 이중 WS: awaitClose interrupt + subscribe後 running 재확인). :bot:test green 유지. push 재시도(codex high-reasoning 리뷰 ~10분).
+- 2026-07-17(PR-a 머지): **PR #37 squash 머지**(origin/main 78ad3fc). PR-a(세대가드·양경로 워치독·UpbitMarketFeed close-safe·kill-switch property) 완료. 2단계 절반 done. 세션 컨텍스트 방대 → 사용자 선택 '새 세션에서 PR-b 이어가기'.
 
 # Next
 
-PR-a(marketdata-consolidation-2) TDD 진행 — half-open 고착 해소 3종:
-1. (3) 세대가드: 양 WS connect 마다 generation++, doFinally 는 자기 세대==현재일 때만 재연결(중복 connect·disposable leak 차단).
-2. (2) 폴백 워치독: UpbitWebSocketClient lastMessageAt @Volatile + @Scheduled → connected&&stale 시 dispose(→scheduleReconnect). isStale 순수함수 분리로 단위테스트.
-3. (1) 주경로 재시작+워치독: MarketDataIngestionService runTickerCollection while 루프(flow 종료/에러 시 backoff 재구독) + @Scheduled(lastTickerAt stale → tickerJob 재기동). markets 필드화.
-그 다음 code-review·머지 → PR-b(unsubscribe ref-count·파싱 fixture 테스트 5종).
+**PR-a 완료·머지(#37, origin/main 78ad3fc).** 다음 세션 `/c` 로 **PR-b** 착수:
+1. **base 정렬**: 현재 브랜치 `marketdata-consolidation-2` 는 이미 머지됨 — 새 worktree 또는 현재 worktree 에서 `git checkout -B <새브랜치> origin/main`(78ad3fc 기준). ⚠️ 이 plan 갱신(PR-b Next)이 marketdata-consolidation-2 에만 있으니, base 정렬 전 plan 커밋을 cherry-pick 하거나 갱신 내용을 새 브랜치에서 재기록.
+2. **PR-b 구현(structural, dlc)**:
+   - **unsubscribe ref-count**(1단계 defer 흡수): UpbitWebSocketClient 에 tickerRefCount(watchlist=baseline 영구, engine 구독만 ref-count) + `unsubscribe(tickers)`. TradingEngine.stop()/UserTradingManager.stopBot·reloadUserRuntime 에서 호출 → 전역 싱글턴 subscribedTickers 단조증가 해소. subscribe/unsubscribe 가 세대가드 startConnection 과 정합하는지 주의(구독 변경 시 reconnect).
+   - **파싱 fixture 테스트 5종**: UpbitMarketFeed.parseTickerMessage internal 분리 + `catch{null}`(:187 부근)에 warn 추가. fixture: 정상/필드누락/비-ticker/깨진 JSON/timestamp 단위.
+3. codex 게이트 회당 ~10분(high-reasoning) — push 는 background 권장.
 
 # Decisions
 
