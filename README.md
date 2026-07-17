@@ -235,7 +235,7 @@ cp deploy/aws/.env.example deploy/aws/.env
 ```text
 Pull request ──> ./gradlew test --parallel
 main push    ──> test ──> multi-arch Docker image ──> GHCR
-manual deploy ─> deploy/aws/deploy.sh deploy ──> EC2 pulls latest image
+manual deploy ─> deploy/aws/deploy.sh deploy ──> EC2가 대상 SHA 이미지 pull(헬스 실패 시 자동 롤백)
 ```
 
 ## 참고 사항
