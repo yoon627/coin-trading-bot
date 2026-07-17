@@ -31,12 +31,25 @@ KEY="${PREFIX}/trading-${TS}.sql.gz"
 DEST="s3://${BACKUP_S3_BUCKET}/${KEY}"
 
 echo "[backup] $(date -u +%FT%TZ) pg_dump → gzip → ${DEST} (SSE=${SSE})"
-# pipefail 로 어느 단계라도 실패하면 중단 — 부분/빈 백업이 "성공"으로 업로드되지 않게.
+# 로컬 temp 파일로 먼저 덤프한 뒤 성공했을 때만 업로드한다. 스트리밍(`aws s3 cp -`)이면
+# pg_dump 가 중간 실패해도 gzip 이 부분 데이터를 최종 키에 이미 올려버려, 복원이 손상본을
+# 최신으로 고를 수 있다. temp 파일 방식은 최종 키에 완전한 백업만 존재하게 보장한다.
 # </dev/null: exec 가 이 스크립트/cron 의 stdin 을 읽지 않도록 차단(안전 습관).
-if ! docker compose exec -T postgres pg_dump -U trading -d trading --no-owner </dev/null \
-     | gzip -c \
-     | aws s3 cp - "$DEST" --sse "$SSE" --only-show-errors; then
-    echo "[backup] ERROR: 백업 실패 (pg_dump/gzip/s3 cp)" >&2
+TMP="$(mktemp "${TMPDIR:-/tmp}/trading-backup.XXXXXX.sql.gz")"
+trap 'rm -f "$TMP"' EXIT
+if ! docker compose exec -T postgres pg_dump -U trading -d trading --no-owner </dev/null | gzip -c > "$TMP"; then
+    echo "[backup] ERROR: pg_dump/gzip 실패 (부분 파일 폐기)" >&2
+    exit 1
+fi
+# 빈 덤프 검출: gzip 은 빈 입력이어도 헤더(~20B)를 쓰므로 파일 크기(-s)로는 못 잡는다.
+# 압축을 풀어 실제 내용이 있는지 확인한다(정상 pg_dump 는 최소한 스키마 DDL 을 포함).
+if [[ "$(gzip -dc "$TMP" 2>/dev/null | head -c 1 | wc -c)" -eq 0 ]]; then
+    echo "[backup] ERROR: 덤프 내용이 비었음 — 업로드 중단" >&2
+    exit 1
+fi
+echo "[backup] 업로드 → ${DEST} ($(du -h "$TMP" | cut -f1))"
+if ! aws s3 cp "$TMP" "$DEST" --sse "$SSE" --only-show-errors; then
+    echo "[backup] ERROR: S3 업로드 실패" >&2
     exit 1
 fi
 echo "[backup] 업로드 완료: ${KEY}"

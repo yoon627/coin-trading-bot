@@ -76,3 +76,9 @@ O4(6b33546) 리뷰(2026-07-17) — code-reviewer(Claude) + codex 병행. **전�
 - `defer` **Minor** (양쪽) LAST_GOOD 가 운영자 로컬 `.state` 에만 존재 → 다중 머신 배포 시 롤백 불가/불일치. 서버측 상태(컨테이너 라벨 등) 이전은 별도 작업(# Deferred).
 - `defer` **informational** (code-reviewer) push 직후 CI 이미지 빌드 전 배포 시 `docker compose pull` 실패 → 클린 exit 1(버그 아님). CI 완료 대기를 README 운영 섹션에 명시(O3/README 작업 시).
 - `false-positive` (양쪽 확인): `ssh ... <<REMOTE || deploy_rc=$?` exit code 포착 정상, 성공 후 이미지 정리가 다음 롤백 대상을 안 지움, migration pathspec(`-C repo_root` 상대경로) 정확.
+
+O2(b39cac6) codex 리뷰(2026-07-17) — 2건 fix 적용(code-reviewer 결과 합류 예정):
+- `fix` **High** destroy 최종백업 실패해도 WARN 후 EC2/EBS 삭제 → 데이터 백업 없이 영구 소멸. → 버킷 설정 시 백업 실패면 destroy 중단(opt-out=버킷 비우기).
+- `fix` **Medium** `pg_dump|gzip|aws s3 cp -` 스트리밍이 pg_dump 중간 실패 시 부분 gzip 을 최종 S3 키에 업로드(손상본이 "최신"). → 로컬 temp 파일 덤프 후 성공 시에만 업로드(trap 로 temp 정리). 검증: docker/aws stub 3케이스(성공 rc0 / pg_dump실패 rc1·부분폐기 / 빈덤프 rc1).
+- `fix` **grounding 발견** (내 stub 테스트) 빈 덤프 검출용 `[[ ! -s "$TMP" ]]` 가 무력 — gzip 은 빈 입력도 ~20B 헤더를 써 항상 non-empty. → `gzip -dc | head -c 1 | wc -c` 로 **압축 해제 후 내용** 검사(빈 덤프 케이스 rc1 재확인).
+- `false-positive` (codex 확인): pg_dump socket local trust(PGPASSWORD 불요), 보존 정리 pipefail 안전, date GNU(EC2), 백업이 .env(AES키) 미포함·로그 시크릿 미노출·SSE 적용. 단 BACKUP_S3_PREFIX 는 백업 전용 유지 필요(그 prefix 하 오래된 객체 전부 삭제).

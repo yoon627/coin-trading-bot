@@ -468,9 +468,15 @@ do_destroy() {
 
     # 삭제 전 최종 DB 백업 (BACKUP_S3_BUCKET 설정 + 인스턴스 접근 가능할 때만).
     # 거래이력·암호화 Upbit 키가 볼륨과 함께 영구 소멸하므로 마지막 스냅샷을 S3 로 남긴다.
+    # 백업을 명시 설정(BACKUP_S3_BUCKET)했는데 실패하면 — 데이터 영구 소멸을 막기 위해 destroy 중단.
     if [[ -n "${EC2_PUBLIC_IP:-}" && -n "${BACKUP_S3_BUCKET:-}" ]]; then
         log "최종 DB 백업 → S3"
-        ssh_ec2 'cd /opt/app && ./backup.sh' || echo "WARN: 최종 백업 실패 — 삭제는 계속 진행."
+        if ! ssh_ec2 'cd /opt/app && ./backup.sh'; then
+            echo "ERROR: 최종 백업 실패 — 데이터 영구 소멸을 막기 위해 destroy 를 중단합니다."
+            echo "  원인(backup.sh 부재/권한/DB) 해결 후 재시도하거나,"
+            echo "  백업 없이 삭제하려면 deploy/aws/.env 의 BACKUP_S3_BUCKET 를 비우고 다시 실행하세요."
+            exit 1
+        fi
     elif [[ -n "${EC2_PUBLIC_IP:-}" ]]; then
         echo "WARN: BACKUP_S3_BUCKET 미설정 → 최종 DB 백업 생략. 거래이력·암호화키가 소멸됩니다."
     fi
