@@ -2,6 +2,7 @@ package com.trading.bot.engine
 
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
+import com.trading.common.strategy.CombinedStrategy
 import com.trading.common.strategy.TradingStrategy
 import com.trading.common.strategy.VolatilityBreakout
 import kotlinx.coroutines.test.runTest
@@ -182,9 +183,9 @@ class BacktestEngineTest {
     @Test
     fun `config defaults match live trading defaults`() {
         // 백테 디폴트 ≠ 라이브 디폴트가 #27 부정합의 근본 원인 — drift 를 CI 로 가드.
-        // kValue·investRatio 는 엔진이 읽지 않는 dead field 라 제외.
         val live = TradingProperties()
         val bt = BacktestConfig()
+        assertEquals(live.kValue, bt.kValue) // #31 로 신호에 반영되므로 parity 대상
         assertEquals(live.takeProfitPct, bt.takeProfitPct)
         assertEquals(live.maxLossPct, bt.maxLossPct)
         assertEquals(live.trailingStopPct, bt.trailingStopPct)
@@ -277,5 +278,43 @@ class BacktestEngineTest {
         // trade 가 0건이면 none 단언이 공허참이 되므로 진입이 실제로 일어났음을 함께 보장.
         assertTrue(result!!.totalTrades > 0, "scenario must produce trades")
         assertTrue(result.trades.none { it.reason == "CHART_EXIT" }, "CHART_EXIT must not occur when disabled")
+    }
+
+    // --- #31: 진입 신호 파라미터(kValue)가 config 로 백테에 반영되는지 ---
+
+    @Test
+    fun `backtest reflects config kValue in entry signal`() = runTest {
+        // 돌파 목표가 = open + (전일 range) * k. k 가 낮으면 목표가가 낮아 진입이 쉬워 거래가 많고,
+        // 높으면 진입이 어려워 거래가 적다. #31 결함(신호가 live tradingProperties 의 0.5 고정)이면 둘이 동일.
+        val candles = buildTrendCandles(120)
+        // highK 는 API 상한(StrategyController 의 kValue in 0.0..2.0)의 경계값 — 실제 도달 가능한 최대.
+        val lowK = engine.run("volatility_breakout", candles, "KRW-BTC", BacktestConfig(kValue = 0.1))
+        val highK = engine.run("volatility_breakout", candles, "KRW-BTC", BacktestConfig(kValue = 2.0))
+
+        assertNotNull(lowK)
+        assertNotNull(highK)
+        assertTrue(lowK!!.totalTrades > 0, "낮은 kValue 시나리오는 진입이 발생해야 유효한 대조")
+        assertTrue(
+            lowK.totalTrades > highK!!.totalTrades,
+            "config.kValue 가 신호에 반영되면 낮은 k 의 거래수가 높은 k 보다 많아야 한다 (#31)",
+        )
+    }
+
+    @Test
+    fun `backtest reflects config kValue for combined strategy`() = runTest {
+        // 라이브 기본 전략(combined, TradingProperties.strategy 기본값)도 진입에 config.kValue 를 읽으므로
+        // 실사용 경로까지 #31 수정을 가드한다. combined 는 kValue 돌파에 더해 MA 상승/RSI 게이트를 AND 한다.
+        val combinedEngine = BacktestEngine(listOf(CombinedStrategy()), tradingProperties)
+        val candles = buildTrendCandles(120)
+        val lowK = combinedEngine.run("combined", candles, "KRW-BTC", BacktestConfig(kValue = 0.1))
+        val highK = combinedEngine.run("combined", candles, "KRW-BTC", BacktestConfig(kValue = 2.0))
+
+        assertNotNull(lowK)
+        assertNotNull(highK)
+        assertTrue(lowK!!.totalTrades > 0, "combined 낮은 kValue 시나리오는 진입이 발생해야 유효한 대조")
+        assertTrue(
+            lowK.totalTrades > highK!!.totalTrades,
+            "combined 전략도 config.kValue 가 신호에 반영되어야 한다 (#31)",
+        )
     }
 }
