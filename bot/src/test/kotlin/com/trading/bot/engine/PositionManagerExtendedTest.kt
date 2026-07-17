@@ -7,6 +7,10 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
@@ -864,5 +868,56 @@ class PositionManagerExtendedTest {
 
         assertNotNull(result)
         assertNull(result!!.pnlPercent)
+    }
+
+    // --- 취소 안전성: placeOrder 성공 후 후처리는 NonCancellable 로 원자 완주 ---
+    // reload/stop 이 tick 코루틴을 취소해도, 이미 주문이 나간 뒤의 체결확인·상태반영이 중단되면
+    // 구 states 에만 남은 pending 이 새 엔진에서 유실돼 이중매수·감사유실로 이어진다. 취소돼도 완주해야 한다.
+
+    @Test
+    fun `buy post-order processing completes despite cancellation`() = runTest {
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-nc")
+        // 체결확인이 진행 중일 때 취소가 끼어드는 창을 delay 로 연다.
+        coEvery { upbitClient.getOrder("buy-nc") } coAnswers {
+            delay(300)
+            Order(uuid = "buy-nc", state = "done", executedVolume = "0.00038")
+        }
+
+        val state = TradingState("KRW-BTC")
+        val job = launch { manager.buy("KRW-BTC", state, 50000000.0, "test") }
+        advanceTimeBy(100) // placeOrder 완료 후 체결확인 진행 중까지 진입
+        job.cancel()       // reload/stop 의 취소 시뮬
+        advanceUntilIdle()
+
+        // 원자 완주 → 매수 확정·pending 해소 (취소로 중단되면 position=false, pendingBuy 잔존)
+        assertTrue(state.position)
+        assertNull(state.pendingBuyUuid)
+        assertEquals(0.00038, state.holdVolume)
+    }
+
+    @Test
+    fun `sell post-order processing completes despite cancellation`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-nc")
+        coEvery { upbitClient.getOrder("sell-nc") } coAnswers {
+            delay(300)
+            Order(uuid = "sell-nc", state = "done")
+        }
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001)
+        val job = launch { manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT) }
+        advanceTimeBy(100)
+        job.cancel()
+        advanceUntilIdle()
+
+        // 원자 완주 → 청산 확정·pending 해소 (취소로 중단되면 position=true, pendingSell 잔존)
+        assertFalse(state.position)
+        assertNull(state.pendingSellUuid)
     }
 }

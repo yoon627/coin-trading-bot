@@ -11,7 +11,10 @@ import com.trading.bot.domain.TradingState
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
 import kotlin.math.floor
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
 class PositionManager(
@@ -91,8 +94,15 @@ class PositionManager(
         state.pendingBuyUuid = order.uuid
         state.pendingBuyStrategy = strategyName
         return try {
-            val filled = awaitFill(order.uuid)
-            applyFillOutcome(ticker, state, currentPrice, filled)
+            // 주문은 이미 나갔다 — 체결확인·상태반영은 취소돼도 원자적으로 완주해야 한다. reload/stop 이 tick 코루틴을
+            // 취소하면 이 후처리가 중단돼 pending 이 폐기될 states 에만 남고(H8 방어망 무력화), 새 엔진이 같은 tick 을
+            // 재매수해 이중 포지션이 된다. NonCancellable 로 원자화하면 cancelAndJoin 이 완주를 기다린다.
+            withContext(NonCancellable) {
+                val filled = awaitFill(order.uuid)
+                applyFillOutcome(ticker, state, currentPrice, filled)
+            }
+        } catch (e: CancellationException) {
+            throw e // 취소는 삼키지 않고 전파(구조적 동시성).
         } catch (e: Exception) {
             log.error("Buy post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
             null // pending 유지 → 다음 tick reconcile
@@ -256,15 +266,20 @@ class PositionManager(
         state.pendingSellUuid = order.uuid
         state.pendingSellReason = reason
         return try {
-            val filled = awaitFill(order.uuid)
-            if (filled?.state == "done") {
-                // 즉시 전량 체결 — 주문량(sellable)으로 기록. done 은 upbit 시장가 매도의 정상 종결.
-                completeSellRecord(ticker, state, currentPrice, sellable, reason)
-            } else {
-                // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
-                log.warn("Sell not confirmed for {}: state={} — pending kept for reconcile", ticker, filled?.state)
-                null
+            // 매수판과 동일 — 주문 접수 후 체결확인·상태반영은 취소돼도 원자 완주해야 청산 기록이 유실되지 않는다.
+            withContext(NonCancellable) {
+                val filled = awaitFill(order.uuid)
+                if (filled?.state == "done") {
+                    // 즉시 전량 체결 — 주문량(sellable)으로 기록. done 은 upbit 시장가 매도의 정상 종결.
+                    completeSellRecord(ticker, state, currentPrice, sellable, reason)
+                } else {
+                    // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
+                    log.warn("Sell not confirmed for {}: state={} — pending kept for reconcile", ticker, filled?.state)
+                    null
+                }
             }
+        } catch (e: CancellationException) {
+            throw e // 취소는 삼키지 않고 전파(구조적 동시성).
         } catch (e: Exception) {
             log.error("Sell post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
             null // pending 유지 → 다음 tick reconcile

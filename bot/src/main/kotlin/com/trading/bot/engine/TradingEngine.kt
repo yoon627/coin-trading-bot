@@ -14,10 +14,12 @@ import com.trading.common.domain.NormalizedCandle
 import com.trading.common.strategy.TradingStrategy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -95,11 +97,12 @@ class TradingEngine(
         }
     }
 
-    fun stop() {
+    suspend fun stop() {
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
-            // 실행 중인 루프 코루틴을 즉시 취소해 delay 대기/리소스 잔존 방지 (scope 는 재시작 위해 유지).
-            loopJob?.cancel()
+            // 취소 후 완료까지 대기(join). 진행 중이던 tick 의 주문 후처리(PositionManager NonCancellable 구간)가
+            // 끝난 뒤 반환한다. cancel 만 하고 즉시 새 엔진을 기동하면(reload) 구 루프와 경합해 이중 매매가 된다. scope 는 재시작 위해 유지.
+            loopJob?.cancelAndJoin()
             loopJob = null
         }
     }
@@ -138,6 +141,8 @@ class TradingEngine(
                 }
 
                 delay(tradingProperties.intervalSeconds * 1000)
+            } catch (e: CancellationException) {
+                throw e // stop/reload 의 취소는 정상 종료 — 삼키면 ERROR 로그(Discord 스팸)로 둔갑하고 delay 재진입으로 join 이 지연된다.
             } catch (e: Exception) {
                 log.error("Trading loop error (user {}): {}", userId, e.message, e)
                 delay(ERROR_RETRY_DELAY_MS)
@@ -239,6 +244,8 @@ class TradingEngine(
                     onTrade(buyRecord)
                 }
             }
+        } catch (e: CancellationException) {
+            throw e // 취소 전파(runLoop 와 동일 이유 — 삼키면 loop 가 계속 돌아 join 지연·오탐 ERROR).
         } catch (e: Exception) {
             log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
         }

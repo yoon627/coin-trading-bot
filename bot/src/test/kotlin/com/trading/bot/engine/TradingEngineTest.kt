@@ -1,5 +1,9 @@
 package com.trading.bot.engine
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.domain.*
@@ -16,12 +20,17 @@ import com.trading.common.strategy.MacdCross
 import com.trading.common.strategy.VolatilityBreakout
 import io.mockk.*
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
 
 class TradingEngineTest {
 
@@ -71,7 +80,7 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `start sets engine to running`() {
+    fun `start sets engine to running`() = runBlocking {
         val engine = createEngine()
         assertFalse(engine.isRunning())
         engine.start(listOf("KRW-BTC"))
@@ -80,7 +89,7 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `stop sets engine to not running`() {
+    fun `stop sets engine to not running`() = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
         assertTrue(engine.isRunning())
@@ -89,7 +98,44 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `start is idempotent`() {
+    fun `stop joins in-flight tick and does not log spurious cancellation errors`() = runBlocking {
+        // stop 은 취소 후 join — 진행 중이던 tick 의 주문 후처리(NonCancellable)가 끝난 뒤 반환해야 reload 가
+        // 구 루프와 경합하지 않는다. 또한 취소가 오탐 ERROR(Discord 스팸)로 둔갑하면 안 된다(CE rethrow).
+        val postProcessingDone = AtomicBoolean(false)
+        val buyEntered = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles(any(), any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        coEvery { positionManager.buy(any(), any(), any(), any()) } coAnswers {
+            buyEntered.complete(Unit)
+            withContext(NonCancellable) { delay(300); postProcessingDone.set(true) }
+            null
+        }
+        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+
+        try {
+            val engine = createEngine()
+            engine.start(listOf("KRW-BTC"))
+            buyEntered.await() // tick 이 매수 후처리에 진입할 때까지 대기
+            engine.stop()      // cancelAndJoin — 후처리 완주까지 대기해야
+            assertTrue(postProcessingDone.get(), "stop 이 진행 중 후처리 완주를 기다리지 않음")
+            val errors = appender.list.filter { it.level == Level.ERROR }
+            assertTrue(
+                errors.none {
+                    it.formattedMessage.contains("Trading loop error") ||
+                        it.formattedMessage.contains("Error processing")
+                },
+                "cancel 이 오탐 ERROR 로그를 남김: ${errors.map { it.formattedMessage }}",
+            )
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun `start is idempotent`() = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
         engine.start(listOf("KRW-ETH")) // second call should be no-op
@@ -99,7 +145,7 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `start subscribes active tickers to WebSocket fallback`() {
+    fun `start subscribes active tickers to WebSocket fallback`() = runBlocking {
         // watchlist 밖 티커로 startBot 해도 WS 폴백(latestPrice)이 커버하도록 engine.start 가 구독을 건다.
         val engine = createEngine()
         engine.start(listOf("KRW-DOGE", "KRW-ADA"))
