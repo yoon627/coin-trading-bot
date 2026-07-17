@@ -144,6 +144,9 @@ class MarketDataIngestionService(
         scope.launch {
             restartMutex.withLock {
                 if (shuttingDown.get()) return@withLock
+                // mutex 대기 중 새 tick 이 도착했으면(더 이상 stale 아님) 재시작하지 않는다 — late-tick 을
+                // 불필요한 WS 재연결로 만들지 않도록 cancel 직전에 재확인(TOCTOU).
+                if (!watchdogProperties.isStale(System.currentTimeMillis(), lastTickerAt)) return@withLock
                 tickerJob?.cancelAndJoin() // 이전 flow 완전 종료 후 재시작 — 이중 WS 연결 창 제거
                 if (shuttingDown.get()) return@withLock
                 lastTickerAt = System.currentTimeMillis() // reset grace
