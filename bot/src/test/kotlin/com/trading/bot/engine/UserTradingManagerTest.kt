@@ -130,11 +130,24 @@ class UserTradingManagerTest {
         engines()[1L] = engine1
         engines()[2L] = engine2
 
-        manager.shutdownAll()
+        manager.stop() // SmartLifecycle.stop
 
-        // @PreDestroy 가 모든 엔진을 stop(cancelAndJoin) — 진행 중 tick 완주 후 종료.
+        // 모든 엔진을 stop(cancelAndJoin) — 진행 중 tick 완주 후 종료.
         coVerify { engine1.stop() }
         coVerify { engine2.stop() }
+    }
+
+    @Test
+    fun `restore does not start engines once shutting down`() = runTest {
+        // SmartLifecycle.stop 이 shuttingDown 을 세우면 이후 restore 는 신규 엔진을 기동하지 않는다
+        // (backoff 중 SIGTERM → shutdown 후 엔진 기동으로 아무도 stop 안 하는 유령 엔진 방지, M5).
+        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+
+        manager.stop() // shuttingDown = true
+        manager.restoreAllRunningBots()
+
+        verify(exactly = 0) { manager.createEngine(any()) }
     }
 
     @Test

@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -25,6 +26,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
 class TradingEngine(
@@ -337,7 +339,9 @@ class TradingEngine(
         return if (storeCandles != null && storeCandles.size >= MIN_DAILY_CANDLES) storeCandles else null
     }
 
-    private suspend fun onTrade(record: TradeRecord) {
+    // 체결·상태는 이미 반영됐는데 취소로 이 기록이 스킵되면 TradeRecord·Discord 감사가 유실된다(M1). NonCancellable 로
+    // 완주를 보장한다. 재시작 후 복구(record durable)는 trading-state-durability(#20) 소관.
+    private suspend fun onTrade(record: TradeRecord) = withContext(NonCancellable) {
         tradeExecutionService.saveAndNotify(
             record = record.copy(userId = userId),
             client = upbitClient,

@@ -136,6 +136,29 @@ class TradingEngineTest {
     }
 
     @Test
+    fun `record persistence completes despite cancellation during shutdown`() = runBlocking {
+        // 체결·상태 반영 후 취소가 오면 onTrade(DB 기록·Discord)가 스킵돼 감사 유실 → NonCancellable 완주 검증(M1).
+        val recordSaved = AtomicBoolean(false)
+        val saveEntered = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles(any(), any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        val record = TradeRecord(ticker = "KRW-BTC", side = TradeSide.BUY, price = 100.0, volume = 1.0, totalAmount = 100.0)
+        coEvery { positionManager.buy(any(), any(), any(), any()) } returns record
+        coEvery { tradeExecutionService.saveAndNotify(any(), any(), any(), any()) } coAnswers {
+            saveEntered.complete(Unit)
+            delay(300)
+            recordSaved.set(true)
+        }
+
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"))
+        saveEntered.await() // onTrade 의 기록 영속화 진입
+        engine.stop()        // 취소 — NonCancellable 이면 기록이 완주
+        assertTrue(recordSaved.get(), "onTrade 가 취소로 중단돼 기록이 유실됨")
+    }
+
+    @Test
     fun `concurrent stop calls are safe and halt the loop`() = runBlocking {
         // stopMutex 직렬화로 동시 stop(shutdownAll ↔ reload/stopBot)이 데드락·예외 없이 완료되고 loop 가 멈춘다(M4).
         val engine = createEngine()

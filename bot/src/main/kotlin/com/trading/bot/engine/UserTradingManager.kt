@@ -14,13 +14,15 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
-import jakarta.annotation.PreDestroy
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
@@ -28,9 +30,10 @@ import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationReadyEvent
-import org.springframework.context.annotation.DependsOn
+import org.springframework.context.SmartLifecycle
 import org.springframework.context.event.EventListener
 import org.springframework.core.Ordered
 import org.springframework.core.annotation.Order
@@ -38,7 +41,6 @@ import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
 
 @Service
-@DependsOn("discordErrorLogAppender") // @PreDestroy 소멸 순서 고정: appender 가 먼저 생성→나중 detach, 이 매니저가 먼저 stop → 종료 중 에러도 Discord 도달.
 class UserTradingManager(
     private val userRepository: UserRepository,
     private val botStateRepository: BotStateRepository,
@@ -50,7 +52,7 @@ class UserTradingManager(
     private val userSecretsService: UserSecretsService,
     private val upbitWebSocketClient: UpbitWebSocketClient,
     private val marketDataStore: MarketDataStore,
-) {
+) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
     private val userStrategies = ConcurrentHashMap<Long, String>()
@@ -59,6 +61,10 @@ class UserTradingManager(
     // stop 이 끼어드는 race window 를 닫지 못함.
     private val userLocks = ConcurrentHashMap<Long, Mutex>()
     private val scope = CoroutineScope(Dispatchers.Default)
+    // SmartLifecycle 상태 + shutdown 진행 플래그(신규 엔진 기동 차단). restoreJob 은 shutdown 시 취소 대상(M5).
+    @Volatile private var lifecycleRunning = false
+    @Volatile private var shuttingDown = false
+    private var restoreJob: Job? = null
 
     private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { Mutex() }
 
@@ -72,28 +78,50 @@ class UserTradingManager(
             log.info("Auto-start disabled. Skipping bot restoration.")
             return
         }
-        scope.launch { restoreAllRunningBots() }
+        restoreJob = scope.launch { restoreAllRunningBots() }
     }
 
+    override fun start() {
+        lifecycleRunning = true
+    }
+
+    override fun isRunning(): Boolean = lifecycleRunning
+
+    // web 요청 드레이닝(WebServer phase = Integer.MAX_VALUE) 이후에 엔진을 멈추도록 낮은 phase. appender detach(@PreDestroy)는
+    // 모든 SmartLifecycle.stop 뒤라 자동 후행(@DependsOn 불필요).
+    override fun getPhase(): Int = 0
+
     /**
-     * graceful shutdown: SIGTERM(@PreDestroy) 시 모든 엔진을 stop(cancelAndJoin)해 진행 중이던 tick 의 주문
-     * 후처리(NonCancellable)가 끝난 뒤 종료한다. 병렬 stop 으로 다중 유저 합산 대기를 timeout-per-shutdown-phase(30s)
-     * 예산 안에 들인다. @DependsOn 으로 DiscordErrorLogAppender detach 는 이 stop 이후로 밀려 종료 중 에러도 도달한다.
+     * graceful shutdown: SmartLifecycle.stop 은 @PreDestroy 와 달리 `timeout-per-shutdown-phase`(30s) 예산을 실제로
+     * 받아 무한 hang 을 막는다(@PreDestroy 엔 미적용 — 리뷰 arch Major). 진행 중 restore 를 먼저 취소해(M5) shutdown
+     * 이후 엔진 기동을 막고, 모든 엔진을 병렬 stop(cancelAndJoin)해 tick 후처리 완주를 기다린다. NonCancellable 후처리가
+     * 예산을 넘기면 self-bound(withTimeoutOrNull)로 끊고 잔여는 재시작 후 durable reconcile(#20) 소관으로 남긴다.
      */
-    @PreDestroy
-    fun shutdownAll() {
-        if (engines.isEmpty()) return
-        log.info("Graceful shutdown: stopping {} running engine(s)", engines.size)
+    override fun stop() {
+        lifecycleRunning = false
+        shuttingDown = true
         runBlocking {
-            engines.values.toList().map { engine ->
-                async {
-                    try {
-                        engine.stop()
-                    } catch (e: Exception) {
-                        log.error("Failed to stop engine during shutdown: {}", e.message, e)
-                    }
+            val completed = withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
+                restoreJob?.cancelAndJoin()
+                if (engines.isNotEmpty()) {
+                    log.info("Graceful shutdown: stopping {} running engine(s)", engines.size)
+                    engines.values.toList().map { engine ->
+                        async {
+                            try {
+                                engine.stop()
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                log.error("Failed to stop engine during shutdown: {}", e.message, e)
+                            }
+                        }
+                    }.awaitAll()
                 }
-            }.awaitAll()
+                true
+            }
+            if (completed == null) {
+                log.warn("Graceful shutdown: {}ms 예산 초과 — 일부 엔진 미완 정지(잔여는 재시작 후 durable reconcile 소관)", SHUTDOWN_TIMEOUT_MS)
+            }
         }
     }
 
@@ -134,6 +162,7 @@ class UserTradingManager(
      * 반환: true=복원 완료 또는 재시도 무의미(유저/키 없음·이미 개입), false=일시적 실패(재시도 대상).
      */
     private suspend fun restoreOne(state: BotStateEntity): Boolean = lockFor(state.userId).withLock {
+        if (shuttingDown) return@withLock true // 종료 중 — 신규 엔진 기동 안 함(M5)
         if (engines.containsKey(state.userId)) return@withLock true
         try {
             val user = userRepository.findById(state.userId).awaitSingleOrNull() ?: return@withLock true
@@ -290,5 +319,6 @@ class UserTradingManager(
 
     companion object {
         private const val RESTORE_MAX_ATTEMPTS = 5
+        private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
     }
 }

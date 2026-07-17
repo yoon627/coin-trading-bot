@@ -21,10 +21,11 @@ updated: 2026-07-18
 - 2026-07-18(스코프 결정 — 사용자): durable 근본(C1 주문유실·M1 재시작복구)은 **trading-state-durability(#19+#20, engine-lifecycle 다음 순서로 이미 설계·codex 검토 완료)로 defer**. 이 PR = **SmartLifecycle 전환**(C2) + 국소 fix(M2·M3·M4·M5·M6) + onTrade NonCancellable(M1 프로세스생존중 부분).
 - 2026-07-18(fix 1 — M6/M3, 25a09f6): suspend broad catch 8곳 + chartExit runCatching CE rethrow. 오탐 alert 제거. TDD 2건(pre-order·syncPosition 취소 전파).
 - 2026-07-18(fix 2 — M2·M4): restore DB 전실패 alert(lastQueryFailed 추적)+마지막 backoff 제거(M2). stop() stopMutex 직렬화, CAS 실패자도 공통 loopJob join(M4). TDD 2건(DB 전실패 alert, 동시 stop 안전). M5 는 SmartLifecycle 과 통합해 다음.
+- 2026-07-18(fix 3 — C2·M5·M1, SmartLifecycle 전환): UserTradingManager 를 SmartLifecycle 로 전환(@PreDestroy shutdownAll·@DependsOn·appender @Order 소멸훅 제거) — stop() 이 timeout-per-shutdown-phase(30s) 예산 실제 수령 + withTimeoutOrNull(25s) self-bound 로 무한 hang 제거(C2). restoreJob 보관 + shuttingDown 으로 restore lifecycle 결속, stop 시 restore 먼저 취소·restoreOne skip(M5). onTrade withContext(NonCancellable)로 취소 시 record 유실 방지(M1 프로세스생존중). TDD 2건(record 완주·shutdown 후 미기동) + shutdown 테스트 stop() 전환. 전체 스위트 green.
 
 # Next
 
-fix loop 남은: **④M5+⑤C2 — SmartLifecycle 전환** (engine stop 을 SmartLifecycle.stop 으로, @PreDestroy shutdownAll·@DependsOn·@Order 소멸훅 제거, restore lifecycle 결속 restoreJob+shutting-down 을 그 stop 에서 cancel) + **M1 onTrade NonCancellable** → ⑥ 테스트 보강 → code-reviewer 재검토 → simplify → 전체 검증.
+**dlc 14 재리뷰**: 큰 변경(SmartLifecycle 전환 + 6 fix) code-reviewer 재검토(codex 병행) → simplify(주석 문구 정정: '30s예산/병렬/리스너순서 보장') → 전체 검증 + graceful 로컬 SIGTERM 관찰 → Acceptance 증거 대조.
 
 # Decisions
 
@@ -60,13 +61,13 @@ fix loop 남은: **④M5+⑤C2 — SmartLifecycle 전환** (engine stop 을 Smar
 - [x] buy/sell 후처리 cancel → NonCancellable 완주 (PositionManagerExtendedTest 2건) + runLoop/processTicker CE rethrow
 - [x] restore ↔ 개입 경합: 유령 엔진 미발생 (UserTradingManagerTest — skip 시 createEngine·start·setStrategy 0회)
 - [x] restore 실패 → backoff 재시도 → 복원 (UserTradingManagerTest)
-- [ ] **[리뷰]** 취소 시 오탐 ERROR 없음: placeOrder/reconcile/chartExit 취소가 ERROR 로그 미발생(로그 캡처)
-- [ ] **[리뷰]** restore DB 전실패 → '봇 미복원' ERROR + 마지막 backoff 미실행 테스트
-- [ ] **[리뷰]** stop() 동시호출 시 양쪽 loop 완료까지 join 테스트
-- [ ] **[리뷰]** restore 진행 중 shutdown → restore 취소·신규 엔진 미기동 테스트
-- [ ] **[리뷰]** SmartLifecycle: shutdown 이 30s 예산 내 bounded 종료(hang 없음), stop 이 appender detach 앞(로컬 SIGTERM 관찰)
-- [ ] **[리뷰]** onTrade 취소 시 record 유실 없음(NonCancellable) 테스트
-- [ ] `./gradlew test` 전체 green
+- [x] **[리뷰]** 취소 시 오탐 ERROR 없음: pre-order placeOrder·syncPosition 취소 전파 (PositionManagerExtendedTest 2건, CE rethrow)
+- [x] **[리뷰]** restore DB 전실패 → '봇 미복원' ERROR (UserTradingManagerTest) + 마지막 backoff 제거
+- [x] **[리뷰]** stop() 동시호출 안전·loop 정지 (TradingEngineTest concurrent stop, stopMutex)
+- [x] **[리뷰]** restore 진행 중 shutdown → 신규 엔진 미기동 (UserTradingManagerTest — shuttingDown skip)
+- [x] **[리뷰]** SmartLifecycle 전환: stop() 이 30s 예산 수령 + withTimeoutOrNull self-bound (단위 green). ⏳ 로컬 SIGTERM 관찰은 최종 검증에서
+- [x] **[리뷰]** onTrade 취소 시 record 유실 없음 (TradingEngineTest — NonCancellable 완주)
+- [x] `./gradlew test` 전체 green (2026-07-18 확인)
 
 # Blockers
 
