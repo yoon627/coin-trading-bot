@@ -24,6 +24,7 @@ updated: 2026-07-17
 - 2026-07-17(2a 구현): UpbitWebSocketClient 세대가드(dispose前 generation++·doFinally/doOnError/scheduleReconnect 세대 게이팅·sleep後 재확인)+폴백 워치독, MarketDataIngestionService 재시작루프(CancellationException rethrow)+워치독(cancelAndJoin·restartMutex·shutdown), MarketDataWatchdogProperties(kill-switch)+application.yml. 전체 `:bot:test` green(Watchdog4·WSClient8·Ingestion6). code-review: subagent 세션한도 중단→메인 직접(결함 없음, plan-review 지적 반영 확인), codex 는 push 게이트로 병행. 원본 로직 diff 보존 확인.
 - 2026-07-17(2a codex 게이트 fix): pre-push codex 2건 fix — P3(워치독 restart TOCTOU: mutex 안 isStale 재확인), P2(UpbitMarketFeed 지연 재연결 좀비 이중 WS: awaitClose interrupt + subscribe後 running 재확인). :bot:test green 유지. push 재시도(codex high-reasoning 리뷰 ~10분).
 - 2026-07-17(PR-a 머지): **PR #37 squash 머지**(origin/main 78ad3fc). PR-a(세대가드·양경로 워치독·UpbitMarketFeed close-safe·kill-switch property) 완료. 2단계 절반 done. 세션 컨텍스트 방대 → 사용자 선택 '새 세션에서 PR-b 이어가기'.
+- 2026-07-17(PR-b, 이 세션 계속): 사용자 '니가해' → PR-b 이 세션 진행. base 정렬(브랜치 marketdata-consolidation-3, origin/main 기준 + plan cherry-pick). 파싱 fixture 5종(UpbitMarketFeedParsingTest)+parseTickerMessage internal·warn, unsubscribe ref-count(baseline watchlist ∪ refCounts engine, TradingEngine.stop→unsubscribe) — subscribedTickers 단조증가(1단계 defer) 해소. 전체 :bot:test green(파싱5·WSClient11).
 
 # Next
 
@@ -74,7 +75,8 @@ updated: 2026-07-17
 - [x] 주 경로 워치독+재시작: runTickerCollection 재구독 루프(CancellationException rethrow) + checkTickerHealth→restartTickerCollection(cancelAndJoin) 구현, MarketDataWatchdogProperties.isStale green. 실제 재기동은 통합 성격(수동 관찰)
 - [x] 폴백 워치독: checkConnectionHealth→dispose(→doFinally 세대가드 재연결) 구현, isStale green. dispose→재연결은 통합 성격
 - [x] 세대 가드: shouldActForGeneration predicate 단위테스트 green(myGen==generation·shuttingDown 케이스). 실제 스레드 race 는 transport seam 없이 결정적 불가 → 수동/통합 관찰(정직 조정)
-- [ ] 파싱 fixture 테스트 5종 green + 파싱 실패 warn 로그 검증
+- [x] 파싱 fixture 테스트 5종 green — UpbitMarketFeedParsingTest(정상/optional누락/비-ticker/깨진JSON/timestamp), parseTickerMessage internal 분리+warn(null 반환 검증, 로그는 코드리뷰)
+- [x] (PR-b) unsubscribe ref-count — WSClient 11 green(baseline∪refCounts, TradingEngine.stop→unsubscribe). subscribedTickers 단조증가(1단계 defer) 해소
 - [ ] (3단계 진행 시) 상시 WS 연결 1개 — 로컬 실행·관찰(연결 로그/netstat), SSE·엔진 폴백 동등성 확인
 - [ ] `./gradlew test` 전체 green
 
