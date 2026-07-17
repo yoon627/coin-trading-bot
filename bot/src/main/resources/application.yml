@@ -59,6 +59,16 @@ app:
 watchlist:
   tickers: ${WATCHLIST_TICKERS:KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR}
 
+# 시세 수집 WS 무수신(half-open) 자동복구 워치독. 매매 정확성은 별도 staleness 게이팅이 보호하므로 피드 복구용 —
+# 재연결 폭주 등 오작동 시 enabled=false 로 즉시 비활성(kill-switch). stale-ms 는 watchlist 유동성에 맞춰 조정.
+marketdata:
+  watchdog:
+    enabled: ${MARKETDATA_WATCHDOG_ENABLED:true}
+    stale-ms: ${MARKETDATA_WATCHDOG_STALE_MS:60000}
+    interval-ms: ${MARKETDATA_WATCHDOG_INTERVAL_MS:20000}
+    initial-delay-ms: ${MARKETDATA_WATCHDOG_INITIAL_DELAY_MS:30000}
+    restart-backoff-ms: ${MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS:1000}
+
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}
   error-alert:
