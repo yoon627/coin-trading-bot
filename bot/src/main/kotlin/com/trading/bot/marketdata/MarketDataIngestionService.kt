@@ -1,5 +1,6 @@
 package com.trading.bot.marketdata
 
+import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.stream.MarketDataPersistenceService
 import com.trading.common.domain.CandleInterval
@@ -9,16 +10,25 @@ import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 구 collector 모듈(Kafka 발행)을 흡수한 in-process 시세 수집기.
@@ -31,12 +41,27 @@ class MarketDataIngestionService(
     private val marketDataStore: MarketDataStore,
     private val persistenceService: MarketDataPersistenceService,
     private val watchlistProperties: WatchlistProperties,
+    private val watchdogProperties: MarketDataWatchdogProperties,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.IO +
             CoroutineExceptionHandler { _, e -> log.error("Market data ingestion coroutine failed: {}", e.message, e) },
     )
+
+    @Volatile
+    private var markets: List<String> = emptyList()
+
+    // 마지막 ticker ingest 시각 — half-open(무수신) 워치독 판정용. start/재시작 시 now 로 리셋해 폭주 방지.
+    @Volatile
+    private var lastTickerAt = 0L
+
+    @Volatile
+    private var tickerJob: Job? = null
+    private val shuttingDown = AtomicBoolean(false)
+
+    // 워치독 재시작 직렬화 — 연속 tick 이 동시에 재시작을 시도해 다중 job/연결을 만들지 않도록.
+    private val restartMutex = Mutex()
 
     companion object {
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
@@ -46,27 +71,40 @@ class MarketDataIngestionService(
 
     @PostConstruct
     fun start() {
-        val markets = watchlistProperties.tickerList().map { MarketPair.normalize(Exchange.UPBIT, it) }
-        if (markets.isEmpty()) {
+        val m = watchlistProperties.tickerList().map { MarketPair.normalize(Exchange.UPBIT, it) }
+        if (m.isEmpty()) {
             log.warn("No watchlist markets configured; market data ingestion disabled")
             return
         }
-        log.info("Starting in-process market data ingestion for {} markets: {}", markets.size, markets)
-        scope.launch { collectTickers(markets) }
-        scope.launch { collectCandlesPeriodically(markets) }
+        markets = m
+        lastTickerAt = System.currentTimeMillis() // grace: 부팅 직후 워치독 오발동 방지
+        log.info("Starting in-process market data ingestion for {} markets: {}", m.size, m)
+        tickerJob = scope.launch { runTickerCollection(m) }
+        scope.launch { collectCandlesPeriodically(m) }
     }
 
     @PreDestroy
     fun stop() {
         log.info("Stopping market data ingestion")
+        shuttingDown.set(true)
         scope.cancel()
     }
 
-    private suspend fun collectTickers(markets: List<String>) {
-        try {
-            upbitMarketFeed.tickerFlow(markets).collect { ticker -> ingestTicker(ticker) }
-        } catch (e: Exception) {
-            log.error("Ticker collection stopped: {}", e.message, e)
+    // WS flow 가 (에러/정상) 종료해도 backoff 후 재구독 — 구 구현은 catch 후 종료라 한 번 끊기면 영영 수집이 멈췄다.
+    private suspend fun runTickerCollection(markets: List<String>) {
+        while (currentCoroutineContext().isActive) {
+            try {
+                upbitMarketFeed.tickerFlow(markets).collect { ticker -> ingestTicker(ticker) }
+                log.warn("Ticker flow completed unexpectedly; restarting in {}ms", watchdogProperties.restartBackoffMs)
+            } catch (e: CancellationException) {
+                throw e // 취소는 정상 종료 경로(재시작/shutdown) — 재구독하지 않는다.
+            } catch (e: Exception) {
+                log.error(
+                    "Ticker collection error; restarting in {}ms: {}",
+                    watchdogProperties.restartBackoffMs, e.message, e,
+                )
+            }
+            delay(watchdogProperties.restartBackoffMs)
         }
     }
 
@@ -85,9 +123,39 @@ class MarketDataIngestionService(
         }
     }
 
+    // half-open(TCP 살아있으나 무수신) 자동복구: 임계 초과 시 수집 코루틴을 재기동한다. half-open 은 flow 재구독이
+    // 아니라 새 연결로만 풀리므로 job 을 취소·재생성한다. 매매 정확성은 TradingEngine staleness 게이팅이 이미 보호하므로
+    // 여기선 수집 복구가 목적이고, 오판 시 enabled 로 런타임 비활성할 수 있다.
+    @Scheduled(
+        fixedDelayString = "\${marketdata.watchdog.interval-ms:20000}",
+        initialDelayString = "\${marketdata.watchdog.initial-delay-ms:30000}",
+    )
+    fun checkTickerHealth() {
+        if (!watchdogProperties.enabled || shuttingDown.get()) return
+        val m = markets
+        if (m.isEmpty()) return
+        if (watchdogProperties.isStale(System.currentTimeMillis(), lastTickerAt)) {
+            log.warn("No ticker for >{}ms; restarting collection", watchdogProperties.staleMs)
+            restartTickerCollection(m)
+        }
+    }
+
+    private fun restartTickerCollection(markets: List<String>) {
+        scope.launch {
+            restartMutex.withLock {
+                if (shuttingDown.get()) return@withLock
+                tickerJob?.cancelAndJoin() // 이전 flow 완전 종료 후 재시작 — 이중 WS 연결 창 제거
+                if (shuttingDown.get()) return@withLock
+                lastTickerAt = System.currentTimeMillis() // reset grace
+                tickerJob = scope.launch { runTickerCollection(markets) }
+            }
+        }
+    }
+
     // fan-out 격리: store / persistence 를 각각 독립 try/catch 로 감싼다.
     // 한 sink 의 실패가 다른 sink 나 수집 코루틴(Flow collect)을 죽이지 않게 — 구 Kafka 2-consumer-group 격리와 등가.
     internal fun ingestTicker(ticker: NormalizedTicker) {
+        lastTickerAt = System.currentTimeMillis()
         try {
             marketDataStore.updateTicker(ticker)
         } catch (e: Exception) {

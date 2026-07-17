@@ -1,5 +1,6 @@
 package com.trading.bot.marketdata
 
+import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.stream.MarketDataPersistenceService
 import com.trading.common.domain.CandleInterval
@@ -20,7 +21,7 @@ class MarketDataIngestionServiceTest {
     private val store = mockk<MarketDataStore>(relaxed = true)
     private val persistence = mockk<MarketDataPersistenceService>(relaxed = true)
     private val watchlist = mockk<WatchlistProperties>(relaxed = true)
-    private val service = MarketDataIngestionService(feed, store, persistence, watchlist)
+    private val service = MarketDataIngestionService(feed, store, persistence, watchlist, MarketDataWatchdogProperties())
 
     private val ticker = NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = 50_000_000.0)
     private val candle = NormalizedCandle(
