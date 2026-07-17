@@ -21,6 +21,7 @@ import reactor.util.retry.Retry
 class UpbitClientImpl(
     private val upbitWebClient: WebClient,
     private val authProvider: UpbitAuthProvider?,
+    private val retryBackoffBase: Duration = Duration.ofSeconds(1),
 ) : UpbitClient {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -127,7 +128,7 @@ class UpbitClientImpl(
 
     private fun <T> Mono<T>.retryOnRateLimit(): Mono<T> {
         return this.retryWhen(
-            Retry.backoff(2, Duration.ofSeconds(1))
+            Retry.backoff(2, retryBackoffBase)
                 .filter { it is UpbitApiException && it.statusCode == 429 }
                 .doBeforeRetry { log.warn("Retrying Upbit API call (rate limit): attempt {}", it.totalRetries() + 1) }
                 // Reactor's default wraps the last failure in a retry-exhausted
