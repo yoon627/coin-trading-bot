@@ -14,14 +14,15 @@ updated: 2026-07-17
 
 - 2026-07-08: 전방위 감사(멀티에이전트 워크플로 + 메인 세션 grep spot-check) 기반 plan 작성. spot-check: Dockerfile USER 없음, deploy.sh:89 `APP_VERSION=${APP_VERSION:-latest}`, 백업 자동화 0건, stop_grace_period 없음.
 - 2026-07-10: plan-review(Claude subagent + codex 병행) 반영 — 자동 롤백에 Flyway forward-compat 게이트 추가, 백업 보안(S3 SSE·시크릿 분리 보관) 명시, prune 인과 교정, pg_dump 실행 방식(compose exec), 감시 커버리지 한계 명시, DISCORD_ERROR_ALERT_ENABLED 실측 항목 추가.
-- 2026-07-17: 세션 범위 = **O5 non-root 먼저**(사용자 선택, Acceptance 전건이 실기 EC2/외부 SaaS 검증이라 코딩 세션에선 O5 만 완결·실증 가능). 구현: `Dockerfile` 런타임 스테이지에 `adduser -D -u 1001 app` + `USER app`(ENTRYPOINT 직전). 로컬 Docker 데몬 미기동 → Docker Desktop 기동 후 런타임 유저 로직만 담은 미니 이미지(base+adduser+USER, 앱 컴파일 제외)로 실증: `docker run` → `uid=1001(app) gid=1001(app)` **PASS**. 앱 실기동 non-root 검증은 CI 멀티스테이지 빌드(push 시) + EC2 `docker exec app id` 로 승계. O2/O3/O4 는 미착수.
+- 2026-07-17: 세션 범위 = **O5 non-root 먼저**(사용자 선택, Acceptance 전건이 실기 EC2/외부 SaaS 검증이라 코딩 세션에선 O5 만 완결·실증 가능). 구현: `Dockerfile` 런타임 스테이지에 `adduser -D -u 1001 app` + `USER app`(ENTRYPOINT 직전). 로컬 Docker 데몬 미기동 → Docker Desktop 기동 후 런타임 유저 로직만 담은 미니 이미지(base+adduser+USER, 앱 컴파일 제외)로 실증: `docker run` → `uid=1001(app) gid=1001(app)` **PASS**. 커밋 15d251d.
+- 2026-07-17: **O4 배포 SHA 고정/자동 롤백** 구현(사용자 선택, O5 다음). `deploy/aws/deploy.sh`: (1) `update_state()` 헬퍼(.state 중복 방지), (2) do_deploy 에 대상 SHA 고정(`git fetch origin main`→`rev-parse`, APP_VERSION=latest 대체) + migration 게이트(`git diff last_good..target -- db/migration/` 비었을 때만 `rollback-ok`), (3) remote 블록을 롤백 상태기계로 재작성 — 헬스OK 시 이전 이미지 정리 후 exit 0, 실패+rollback-ok 시 `APP_VERSION=$LAST_GOOD docker compose up -d --pull never`+재헬스체크(exit 2), 실패+blocked(migration 포함/LAST_GOOD 없음) 시 수동안내 exit 1, (4) 로컬에서 exit code 해석해 성공 시 `update_state LAST_GOOD_SHA`. 검증: `bash -n` 통과. 실deploy·롤백은 EC2 핸드오프(Acceptance). CI 태그=전체 SHA(deploy.yml:53-55), migration 경로 13파일 실존 확인. **리뷰 대기**(code-reviewer+codex). O2/O3 미착수.
 
 # Next
 
-O5(non-root) 완료(2026-07-17, 로컬 실증). 남은 3건은 다음 세션에서 착수(사용자 범위 재확인 후) — 각 상태:
-- **O4 배포 SHA 고정/롤백** (레포 측 구현 가능, 다음 우선 후보): `deploy/aws/deploy.sh` 에 대상 SHA rev-parse→APP_VERSION 렌더, `.state` LAST_GOOD_SHA 기록, 헬스실패 시 자동 재기동(migration 포함 배포는 자동롤백 제외·수동안내). bash -n + 로직검토로 검증, 실deploy 롤백테스트는 EC2 핸드오프.
-- **O2 DB 백업 스크립트** (레포 측 저작 가능): EC2 cron pg_dump(compose exec)→S3(SSE·시크릿 분리). 스크립트 저작·shellcheck 가능, cron 실행·S3 는 EC2 핸드오프.
+O5(non-root)·O4(배포 롤백) 완료(2026-07-17, 코드+로컬검증). O4 는 리뷰 반영 후 커밋 확정 예정. 남은 2건:
+- **O2 DB 백업 스크립트** (레포 측 저작 가능, 다음 우선 후보): EC2 cron pg_dump(compose exec)→S3(SSE·시크릿 분리). 스크립트 저작·shellcheck 가능, cron 실행·S3 는 EC2 핸드오프. destroy 경로에 최종 백업 훅.
 - **O3 외부 감시** (대부분 외부·수동): healthchecks.io/UptimeRobot 등록 + Discord — SaaS 등록은 사용자 몫, 레포 측은 host-cron fallback 스크립트 + README 운영 섹션.
+- 실기 검증(EC2/외부 SaaS) 전건은 사용자 핸드오프 체크리스트로 별도 정리 필요(Acceptance 참조).
 
 # Decisions
 
@@ -46,7 +47,7 @@ O5(non-root) 완료(2026-07-17, 로컬 실증). 남은 3건은 다음 세션에�
 - [ ] 외부 감시 등록 + 앱 컨테이너 수동 stop 시 Discord 알림 실측 수신 (실행·관찰)
 - [ ] `DISCORD_ERROR_ALERT_ENABLED=true` 운영 설정 확인 + ERROR 로그 1건 실측 도달 (다른 plan 들의 log.error 승격 전제 충족 확인)
 - [ ] 백업 cron 1회 실행 → S3 객체 생성(SSE 적용 확인) + `gunzip -t` 무결성 + 복원 리허설(스테이징 DB pg_restore) 1회 성공
-- [ ] deploy.sh: SHA 렌더·.state 기록 확인, 고의 깨진 이미지(migration 미포함) 배포 → LAST_GOOD_SHA 자동 롤백 동작 확인, migration 포함 케이스 → 자동 롤백 제외·수동 안내 출력 확인
+- [~] deploy.sh: SHA 렌더·.state 기록 확인, 고의 깨진 이미지(migration 미포함) 배포 → LAST_GOOD_SHA 자동 롤백 동작 확인, migration 포함 케이스 → 자동 롤백 제외·수동 안내 출력 확인 — **구현 완료**(`bash -n` 통과), 실deploy 3케이스(성공/자동롤백/게이트차단) 실측은 EC2 핸드오프
 - [~] `docker exec app id` → uid≠0, 앱 정상 기동·거래 조회 정상 — **uid≠0 로컬 실증 완료**(미니 이미지 `docker run` → `uid=1001(app)`), 앱 실기동 non-root 는 CI 풀빌드+EC2 실기로 승계
 - [ ] README 운영 섹션 반영 (문서 동기화 게이트)
 
