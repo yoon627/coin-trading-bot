@@ -2,7 +2,7 @@
 title: ops-safety-net — 운영 안전망 (DB 백업·외부 감시·배포 SHA 고정/롤백·non-root)
 status: in_progress
 started: 2026-07-08
-updated: 2026-07-10
+updated: 2026-07-17
 ---
 
 # Goal
@@ -14,10 +14,14 @@ updated: 2026-07-10
 
 - 2026-07-08: 전방위 감사(멀티에이전트 워크플로 + 메인 세션 grep spot-check) 기반 plan 작성. spot-check: Dockerfile USER 없음, deploy.sh:89 `APP_VERSION=${APP_VERSION:-latest}`, 백업 자동화 0건, stop_grace_period 없음.
 - 2026-07-10: plan-review(Claude subagent + codex 병행) 반영 — 자동 롤백에 Flyway forward-compat 게이트 추가, 백업 보안(S3 SSE·시크릿 분리 보관) 명시, prune 인과 교정, pg_dump 실행 방식(compose exec), 감시 커버리지 한계 명시, DISCORD_ERROR_ALERT_ENABLED 실측 항목 추가.
+- 2026-07-17: 세션 범위 = **O5 non-root 먼저**(사용자 선택, Acceptance 전건이 실기 EC2/외부 SaaS 검증이라 코딩 세션에선 O5 만 완결·실증 가능). 구현: `Dockerfile` 런타임 스테이지에 `adduser -D -u 1001 app` + `USER app`(ENTRYPOINT 직전). 로컬 Docker 데몬 미기동 → Docker Desktop 기동 후 런타임 유저 로직만 담은 미니 이미지(base+adduser+USER, 앱 컴파일 제외)로 실증: `docker run` → `uid=1001(app) gid=1001(app)` **PASS**. 앱 실기동 non-root 검증은 CI 멀티스테이지 빌드(push 시) + EC2 `docker exec app id` 로 승계. O2/O3/O4 는 미착수.
 
 # Next
 
-우선순위 1(무음 다운 탐지)부터: 외부 uptime 감시(healthchecks.io 또는 UptimeRobot free tier)가 `https://<APP_DOMAIN>/actuator/health`(permitAll·Caddy 프록시 — 실현 가능 확인됨)를 1분 주기 확인 + Discord 연동. 앱 외부 경로라 코드 변경 없음 — deploy/aws 문서화 + 설정. 인스턴스/도메인 변경 시 감시 등록 갱신 절차를 README 에 포함.
+O5(non-root) 완료(2026-07-17, 로컬 실증). 남은 3건은 다음 세션에서 착수(사용자 범위 재확인 후) — 각 상태:
+- **O4 배포 SHA 고정/롤백** (레포 측 구현 가능, 다음 우선 후보): `deploy/aws/deploy.sh` 에 대상 SHA rev-parse→APP_VERSION 렌더, `.state` LAST_GOOD_SHA 기록, 헬스실패 시 자동 재기동(migration 포함 배포는 자동롤백 제외·수동안내). bash -n + 로직검토로 검증, 실deploy 롤백테스트는 EC2 핸드오프.
+- **O2 DB 백업 스크립트** (레포 측 저작 가능): EC2 cron pg_dump(compose exec)→S3(SSE·시크릿 분리). 스크립트 저작·shellcheck 가능, cron 실행·S3 는 EC2 핸드오프.
+- **O3 외부 감시** (대부분 외부·수동): healthchecks.io/UptimeRobot 등록 + Discord — SaaS 등록은 사용자 몫, 레포 측은 host-cron fallback 스크립트 + README 운영 섹션.
 
 # Decisions
 
@@ -43,7 +47,7 @@ updated: 2026-07-10
 - [ ] `DISCORD_ERROR_ALERT_ENABLED=true` 운영 설정 확인 + ERROR 로그 1건 실측 도달 (다른 plan 들의 log.error 승격 전제 충족 확인)
 - [ ] 백업 cron 1회 실행 → S3 객체 생성(SSE 적용 확인) + `gunzip -t` 무결성 + 복원 리허설(스테이징 DB pg_restore) 1회 성공
 - [ ] deploy.sh: SHA 렌더·.state 기록 확인, 고의 깨진 이미지(migration 미포함) 배포 → LAST_GOOD_SHA 자동 롤백 동작 확인, migration 포함 케이스 → 자동 롤백 제외·수동 안내 출력 확인
-- [ ] `docker exec app id` → uid≠0, 앱 정상 기동·거래 조회 정상
+- [~] `docker exec app id` → uid≠0, 앱 정상 기동·거래 조회 정상 — **uid≠0 로컬 실증 완료**(미니 이미지 `docker run` → `uid=1001(app)`), 앱 실기동 non-root 는 CI 풀빌드+EC2 실기로 승계
 - [ ] README 운영 섹션 반영 (문서 동기화 게이트)
 
 # Blockers
