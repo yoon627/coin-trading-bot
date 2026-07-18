@@ -98,6 +98,8 @@ class TradingEngine(
     fun stop() {
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
+            // engine 이 활성화했던 티커의 WS 폴백 구독 해제 (ref-count — 다른 engine 이 아직 쓰면 유지).
+            webSocketClient?.unsubscribe(activeTickers)
             // 실행 중인 루프 코루틴을 즉시 취소해 delay 대기/리소스 잔존 방지 (scope 는 재시작 위해 유지).
             loopJob?.cancel()
             loopJob = null
