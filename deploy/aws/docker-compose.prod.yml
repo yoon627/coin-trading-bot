@@ -78,6 +78,9 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # graceful shutdown: SIGTERM 후 진행 중이던 tick(주문 후처리 포함)이 끝나도록 대기.
+    # 앱의 spring.lifecycle.timeout-per-shutdown-phase(30s)보다 넉넉히 크게 잡아 강제 kill(SIGKILL)을 피한다.
+    stop_grace_period: 40s
     mem_limit: 1280m
     mem_reservation: 1024m
     healthcheck:
