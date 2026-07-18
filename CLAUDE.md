@@ -37,6 +37,13 @@
 - ⚠️ 글로벌 `/e`·`/c`·`/wt` skill 은 plans/ 가 **gitignored 라고 전제**한다 (예: `/e` 의 "plan 이 worktree 내부면 삭제 제안 생략", worktree 삭제 전 main 백업). 이 repo 에선 그 전제가 어긋난다 — plan 이 git 에 보존되므로 worktree 삭제 전 별도 백업이 불필요하다.
 - 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`) 하거나 작업 커밋에 포함한다.
 
+## 머지 후 main 동기화 (이 repo 고유)
+
+머지·worktree 정리 후 세션이 main worktree 로 복귀할 때, **아래 안전 조건을 모두 만족하면** `git pull origin main --rebase` 로 로컬 main 을 최신화한다. 하나라도 어긋나면 **건너뛰고 사용자에게 알린다** (자동 rebase 금지 — 예상외 히스토리 재작성·충돌 방지).
+
+- **clean**: main worktree 가 `git status --porcelain` 비어있음 (uncommitted 변경 없음; untracked 는 무관).
+- **fast-forward 가능**: 로컬 전용 커밋 없음 (`git log origin/main..HEAD` 비어있음). 로컬 커밋이 있으면 rebase 가 히스토리를 재작성하므로 건너뛴다.
+
 ## 문서 동기화 대상
 
 글로벌 `~/.claude/CLAUDE.md`의 "문서 동기화(범위 한정)" 기준에 해당할 때 업데이트:

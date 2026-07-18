@@ -108,6 +108,8 @@ class TradingEngine(
         val job = loopJob
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
+            // engine 이 활성화했던 티커의 WS 폴백 구독 해제 (ref-count — 다른 engine 이 아직 쓰면 유지, #44).
+            webSocketClient?.unsubscribe(activeTickers)
             // 취소 후 완료까지 대기(join). 진행 중이던 tick 의 주문 후처리(PositionManager NonCancellable 구간)가
             // 끝난 뒤 반환한다. cancel 만 하고 즉시 새 엔진을 기동하면(reload) 구 루프와 경합해 이중 매매가 된다. scope 는 재시작 위해 유지.
             job?.cancelAndJoin()
