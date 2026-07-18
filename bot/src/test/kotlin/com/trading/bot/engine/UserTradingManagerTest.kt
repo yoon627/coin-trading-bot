@@ -151,6 +151,17 @@ class UserTradingManagerTest {
     }
 
     @Test
+    fun `startBot is rejected while shutting down`() = runTest {
+        // restore 뿐 아니라 API 경로(startBot)도 종료 중이면 신규 엔진을 기동하지 않는다(M5 일관, 재검토 발견).
+        manager.stop() // shuttingDown = true
+
+        val result = manager.startBot(1L, listOf("KRW-BTC"), "combined")
+
+        assertTrue(result["error"] == "Service is shutting down", "종료 중 startBot 이 거부되지 않음: $result")
+        verify(exactly = 0) { manager.createEngine(any()) }
+    }
+
+    @Test
     fun `restore logs error when all DB queries fail`() = runTest {
         // 모든 attempt 에서 bot state 조회가 실패하면 복원 0건 — pendingUserIds 는 비어 있어도 alert 해야 한다(M2).
         every { botStateRepository.findByRunningTrue() } returns Flux.error(RuntimeException("db down"))

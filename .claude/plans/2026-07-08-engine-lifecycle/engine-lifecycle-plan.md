@@ -26,10 +26,11 @@ updated: 2026-07-18
 - 2026-07-18(재검토·simplify·검증): code-reviewer 재검토 subagent 가 세션 한도(4:10am KST 리셋)로 종료 → 메인 self-review 로 핵심 5 리스크(withTimeoutOrNull self-bound·getPhase 순서·stopMutex↔lockFor 데드락·restore lifecycle race·CE rethrow 누락) 코드 점검 통과. codex 교차검증은 세션 한도로 생략(이전 리뷰서 codex gpt-5.5 high 대부분 합의). simplify: restore/stop 주석 문구 정정(리스너 순서 과보수 서술·'병렬'→'동시'). 전체 test green.
 
 - 2026-07-18(push+PR): pre-push codex hook 이 codex 세션 한도로 hang → --no-verify push(정식 code-reviewer 리뷰+fix 완료, 사용자 승인). **PR #43** 생성(main←engine-lifecycle, HTTP/1.1 로 HTTP/2 pack hang 회피).
+- 2026-07-18(재검토 — 메인 직접, subagent 세션한도 회피): UserTradingManager 최종 일관성 재검토 — 6 fix·SmartLifecycle 전환 정상. **새 엣지 발견·fix**: startBot·reloadUserRuntime 이 shuttingDown 미체크 → shutdown 중 API 경로로 신규 엔진 기동 가능(M5 는 restore 만 막음). getPhase=0(web 먼저 stop)로 실질 완화되나 비대칭 → 두 메서드 shuttingDown 가드 + test(종료 중 startBot 거부). 전체 스위트 green.
 
 # Next
 
-**PR #43 리뷰·머지 대기.** codex 세션 리셋(4:10am KST) 후 필요 시 PR 에서 `/code-review` 로 pre-push 우회분 보완. graceful 로컬 SIGTERM 관찰(수동, 로컬 DB 기동) 미완. 머지 후 worktree 정리.
+**PR #43 리뷰·머지 대기.** codex 세션 리셋 후 PR 에서 `/code-review` 보완(선택). graceful 로컬 SIGTERM 관찰(수동, 로컬 DB 기동) 미완. 머지 후 worktree 정리.
 
 # Decisions
 
@@ -88,6 +89,7 @@ updated: 2026-07-18
 - M5 (restore lifecycle 미결속): **fix**
 - M6 (broad catch CE 삼킴 family): **fix**
 - Minor(테스트 공백·문구): **fix** — DB 전실패·shutdown 심화 테스트, 주석 '30s예산/병렬/리스너순서' 정정(simplify)
+- [재검토] startBot/reloadUserRuntime shuttingDown 미체크(M5 비대칭): **fix** — 가드 추가(getPhase=0 web-stop-order 로 완화되나 완결성)
 
 # Deferred (범위 밖 — trading-state-durability #20 로 이관)
 

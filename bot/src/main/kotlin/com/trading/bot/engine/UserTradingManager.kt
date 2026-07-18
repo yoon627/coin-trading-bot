@@ -189,6 +189,7 @@ class UserTradingManager(
     fun getEngine(userId: Long): TradingEngine? = engines[userId]
 
     suspend fun startBot(userId: Long, tickers: List<String>?, strategyName: String?): Map<String, Any> = lockFor(userId).withLock {
+        if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down") // 종료 중 신규 엔진 기동 차단(M5 일관)
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: return@withLock mapOf("error" to "User not found")
 
@@ -263,6 +264,7 @@ class UserTradingManager(
     }
 
     suspend fun reloadUserRuntime(userId: Long) = lockFor(userId).withLock {
+        if (shuttingDown) return@withLock // 종료 중 — 엔진 교체·재기동 안 함(M5 일관)
         val existing = engines[userId] ?: return@withLock
         val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
