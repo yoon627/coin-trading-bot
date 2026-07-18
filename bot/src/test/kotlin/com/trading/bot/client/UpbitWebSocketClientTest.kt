@@ -65,4 +65,37 @@ class UpbitWebSocketClientTest {
         assertFalse(UpbitWebSocketClient.shouldActForGeneration(myGen = 4, currentGen = 5, shuttingDown = false))
         assertFalse(UpbitWebSocketClient.shouldActForGeneration(myGen = 5, currentGen = 5, shuttingDown = true))
     }
+
+    // --- unsubscribe ref-count (PR-b) ---
+
+    @Test
+    fun `unsubscribe removes engine ticker but keeps watchlist baseline`() {
+        val c = client(tickers = "KRW-BTC")
+        c.init()
+        c.subscribe(listOf("KRW-DOGE"))
+        assertEquals(setOf("KRW-BTC", "KRW-DOGE"), c.subscribedMarkets())
+        c.unsubscribe(listOf("KRW-DOGE"))
+        assertEquals(setOf("KRW-BTC"), c.subscribedMarkets())
+    }
+
+    @Test
+    fun `unsubscribe keeps ticker while another engine still holds it`() {
+        val c = client(tickers = "KRW-BTC")
+        c.init()
+        c.subscribe(listOf("KRW-DOGE")) // engine A
+        c.subscribe(listOf("KRW-DOGE")) // engine B
+        c.unsubscribe(listOf("KRW-DOGE")) // A stop
+        assertEquals(setOf("KRW-BTC", "KRW-DOGE"), c.subscribedMarkets())
+        c.unsubscribe(listOf("KRW-DOGE")) // B stop
+        assertEquals(setOf("KRW-BTC"), c.subscribedMarkets())
+    }
+
+    @Test
+    fun `unsubscribe of a watchlist baseline ticker keeps it subscribed`() {
+        val c = client(tickers = "KRW-BTC")
+        c.init()
+        c.subscribe(listOf("KRW-BTC"))   // engine 이 watchlist 티커도 활성화
+        c.unsubscribe(listOf("KRW-BTC")) // engine stop → refCount 0 이어도 baseline 이라 유지
+        assertEquals(setOf("KRW-BTC"), c.subscribedMarkets())
+    }
 }

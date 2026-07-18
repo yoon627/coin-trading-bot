@@ -1,8 +1,8 @@
 ---
 title: marketdata-consolidation — Upbit WS 수집 단일화 + half-open 고착 워치독 + 파싱 테스트
-status: in_progress
+status: blocked
 started: 2026-07-08
-updated: 2026-07-17
+updated: 2026-07-18
 ---
 
 # Goal
@@ -23,14 +23,17 @@ updated: 2026-07-17
 - 2026-07-17(2a plan-review): Claude+Codex 수렴 — 원 설계 **NO-GO**(세대 증가시점 race·connected clobber·워치독 20s 폭주·cancel 이중연결·CancellationException 삼킴). 사용자 '전체 재설계 제대로' 선택 → 아래 재설계 반영.
 - 2026-07-17(2a 구현): UpbitWebSocketClient 세대가드(dispose前 generation++·doFinally/doOnError/scheduleReconnect 세대 게이팅·sleep後 재확인)+폴백 워치독, MarketDataIngestionService 재시작루프(CancellationException rethrow)+워치독(cancelAndJoin·restartMutex·shutdown), MarketDataWatchdogProperties(kill-switch)+application.yml. 전체 `:bot:test` green(Watchdog4·WSClient8·Ingestion6). code-review: subagent 세션한도 중단→메인 직접(결함 없음, plan-review 지적 반영 확인), codex 는 push 게이트로 병행. 원본 로직 diff 보존 확인.
 - 2026-07-17(2a codex 게이트 fix): pre-push codex 2건 fix — P3(워치독 restart TOCTOU: mutex 안 isStale 재확인), P2(UpbitMarketFeed 지연 재연결 좀비 이중 WS: awaitClose interrupt + subscribe後 running 재확인). :bot:test green 유지. push 재시도(codex high-reasoning 리뷰 ~10분).
+- 2026-07-17(PR-a 머지): **PR #37 squash 머지**(origin/main 78ad3fc). PR-a(세대가드·양경로 워치독·UpbitMarketFeed close-safe·kill-switch property) 완료. 2단계 절반 done. 세션 컨텍스트 방대 → 사용자 선택 '새 세션에서 PR-b 이어가기'.
+- 2026-07-17(PR-b, 이 세션 계속): 사용자 '니가해' → PR-b 이 세션 진행. base 정렬(브랜치 marketdata-consolidation-3, origin/main 기준 + plan cherry-pick). 파싱 fixture 5종(UpbitMarketFeedParsingTest)+parseTickerMessage internal·warn, unsubscribe ref-count(baseline watchlist ∪ refCounts engine, TradingEngine.stop→unsubscribe) — subscribedTickers 단조증가(1단계 defer) 해소. 전체 :bot:test green(파싱5·WSClient11).
+- 2026-07-18(PR-b push BLOCKED): PR-b 커밋(`783b61e`, 코드+테스트+plan) 검증 완료. pre-push codex 3회 P2·P3 fix 반영(소켓 dispose 순서·connected 정리·UpbitMarketFeed close-safe). 그러나 **codex pre-push 무한 hang**(다중 세션 경합 + hook timeout 부재)으로 push 차단 → `status: blocked`. 근본원인·자기개선 사각 분석(# Workflow Findings), memory [[project_prepush_codex_slow]] 에 hang 모드 추가.
 
 # Next
 
-PR-a(marketdata-consolidation-2) TDD 진행 — half-open 고착 해소 3종:
-1. (3) 세대가드: 양 WS connect 마다 generation++, doFinally 는 자기 세대==현재일 때만 재연결(중복 connect·disposable leak 차단).
-2. (2) 폴백 워치독: UpbitWebSocketClient lastMessageAt @Volatile + @Scheduled → connected&&stale 시 dispose(→scheduleReconnect). isStale 순수함수 분리로 단위테스트.
-3. (1) 주경로 재시작+워치독: MarketDataIngestionService runTickerCollection while 루프(flow 종료/에러 시 backoff 재구독) + @Scheduled(lastTickerAt stale → tickerJob 재기동). markets 필드화.
-그 다음 code-review·머지 → PR-b(unsubscribe ref-count·파싱 fixture 테스트 5종).
+**PR-b 는 구현·검증 완료, push 만 codex hang 으로 차단(# Blockers).** 재개 절차 (브랜치 `marketdata-consolidation-3`, HEAD `783b61e`):
+1. **push**: codex hang 해소(다른 세션 push 종료 대기) 후 `git push -u origin marketdata-consolidation-3`(run_in_background — [[project_prepush_codex_slow]]). 재발 시 `CODEX_SKIP=1 git push`(hook 공식 bypass). ⚠️ 이 plan 갱신이 marketdata-consolidation-3 에 커밋되니, 다른 worktree 에서 이어받으면 이 브랜치 기준.
+2. **PR·머지**: `gh pr create --base main --head marketdata-consolidation-3`(body: `scratchpad/prb_pr_body.md` 참고, 없으면 재작성) → squash 머지 → **2단계 완결**.
+3. **3단계**(별도): 상시 WS 연결 1개로 풀 통합 — UpbitMarketFeed 단일 수집, SSE(PriceStreamController)·엔진 폴백을 MarketDataStore 기반 전환(동작 동등성 확인 필수).
+4. **개선(승인 시, 별도 wt→dlc)**: pre-push hook 에 codex `timeout` + hang fail 처리, codex 동시 실행 flock 직렬화(# Workflow Findings).
 
 # Decisions
 
@@ -72,7 +75,8 @@ PR-a(marketdata-consolidation-2) TDD 진행 — half-open 고착 해소 3종:
 - [x] 주 경로 워치독+재시작: runTickerCollection 재구독 루프(CancellationException rethrow) + checkTickerHealth→restartTickerCollection(cancelAndJoin) 구현, MarketDataWatchdogProperties.isStale green. 실제 재기동은 통합 성격(수동 관찰)
 - [x] 폴백 워치독: checkConnectionHealth→dispose(→doFinally 세대가드 재연결) 구현, isStale green. dispose→재연결은 통합 성격
 - [x] 세대 가드: shouldActForGeneration predicate 단위테스트 green(myGen==generation·shuttingDown 케이스). 실제 스레드 race 는 transport seam 없이 결정적 불가 → 수동/통합 관찰(정직 조정)
-- [ ] 파싱 fixture 테스트 5종 green + 파싱 실패 warn 로그 검증
+- [x] 파싱 fixture 테스트 5종 green — UpbitMarketFeedParsingTest(정상/optional누락/비-ticker/깨진JSON/timestamp), parseTickerMessage internal 분리+warn(null 반환 검증, 로그는 코드리뷰)
+- [x] (PR-b) unsubscribe ref-count — WSClient 11 green(baseline∪refCounts, TradingEngine.stop→unsubscribe). subscribedTickers 단조증가(1단계 defer) 해소
 - [ ] (3단계 진행 시) 상시 WS 연결 1개 — 로컬 실행·관찰(연결 로그/netstat), SSE·엔진 폴백 동등성 확인
 - [ ] `./gradlew test` 전체 green
 
@@ -97,6 +101,12 @@ PR-a(marketdata-consolidation-2) TDD 진행 — half-open 고착 해소 3종:
 - unsubscribe 경로 부재 → subscribedTickers 단조 증가 (Major, UpbitWebSocketClient): 2단계 registry.
 - subscribe→reconnect 재연결 race 노출 증가 (Major, UpbitWebSocketClient): 2단계 세대 가드.
 
+# Workflow Findings
+
+- **codex pre-push 무한 hang** · 재발조건: 다중 worktree 세션이 동시에 `git push` → codex 병렬 실행 경합 → `codex exec review`(high-reasoning) 40분+ 무한 대기(background 무관, `running codex...` 후 `OK:`/`BLOCK:` 안 나옴) · 근본: `.git/hooks/pre-push` line 168-173 codex 호출에 `timeout` wrapper 부재 → hang 시 hook·push 무한 · 수정 후보: hook 에 `timeout <N>` + hang fail 처리, codex 동시 실행 flock 직렬화(운영 자산 — 승인 후 wt→dlc) · 발생: 이 세션 다수(P2·P3 fix 후 재push 마다).
+- **자기개선 사각**(왜 자동 축적 안 됐나): ① dlc-signal telemetry(`~/.claude/scripts/dlc-signal.js`)는 dlc 파이프라인 **내부** 단계만 계측 — push/pre-push hook 은 dlc Report **이후**라 사각(dlc-signals.jsonl codex 신호 0건) ② wiki `workflow-failures.md`(및 wiki/ 전체) 미구축이라 dlc "workflow 실패 wiki 기록" 규약이 무효 · 개선 후보: hook 이 codex timeout/실패를 telemetry 로 로깅→`/improve` 집계, 또는 wiki 구축. 현재는 memory [[project_prepush_codex_slow]] 수동 기록으로만 대체(hang 모드 추가함).
+
 # Blockers
 
-(없음) — dead-path-cleanup 이 이 plan 의 워치독(수집 신뢰성)에 **기능 의존**(파일 인접 이상의 이유): 이 plan 머지 후 착수.
+- **PR-b push 차단**: pre-push codex 무한 hang(위 Workflow Findings) → PR-b(커밋 `783b61e`, 코드 검증 완료·`:bot:test` green)가 원격 미반영. 풀려면: codex 회복 후 push(background) 또는 `CODEX_SKIP=1 git push`(hook 공식 bypass, `--no-verify` 아님).
+- (기존) dead-path-cleanup 이 이 plan 의 워치독(수집 신뢰성)에 **기능 의존**: 이 plan 머지 후 착수.
