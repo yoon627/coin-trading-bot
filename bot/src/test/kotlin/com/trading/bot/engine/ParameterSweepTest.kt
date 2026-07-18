@@ -17,7 +17,7 @@ import org.springframework.web.reactive.function.client.bodyToMono
  * 이슈 #27 Structural: 라이브(combined)와 정합된 BacktestEngine 으로 TP/SL/trailing/arm/maxHold 조합을
  * 실데이터(Upbit 일봉, 공개 quotation API)에서 비교해 env 점진 적용의 근거를 만든다.
  *
- * 해석 한계(plan 참조): 일봉 종가 peak(장중 미반영)·TIME_EXIT 종가 체결·~150봉 단일 국면 표본 —
+ * 해석 한계(plan 참조): intrabar 청산(#33)은 무슬리피지·무갭 가정(체결가=게이트 임계선)·~150봉 단일 국면 표본 —
  * 결과는 참고용(순위·plateau 민감도만), 절대 수익률 신뢰 금지. 적용 전 소액 카나리아 필수.
  */
 @EnabledIfEnvironmentVariable(named = "RUN_SWEEP", matches = "true")

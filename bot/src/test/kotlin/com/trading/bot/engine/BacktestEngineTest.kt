@@ -62,17 +62,18 @@ class BacktestEngineTest {
 
     @Test
     fun `backtest respects stop loss`() = runTest {
-        // Create a scenario with an initial breakout then crash
-        val config = BacktestConfig(maxLossPct = 3.0, takeProfitPct = 50.0, maxHoldDays = 100)
+        // trailingStopPct=99 로 트레일링을 격리해 STOP_LOSS 만 남긴다 —
+        // 그렇지 않으면 SL 거래 0건이어도(트레일링이 선점) 단언이 공허참으로 통과한다.
+        val config = BacktestConfig(maxLossPct = 3.0, takeProfitPct = 50.0, trailingStopPct = 99.0, maxHoldDays = 100)
         val candles = buildCrashCandles(120)
 
         val result = engine.run("volatility_breakout", candles, "KRW-BTC", config)
 
-        if (result != null && result.trades.isNotEmpty()) {
-            val stopLossTrades = result.trades.filter { it.reason == "STOP_LOSS" }
-            stopLossTrades.forEach { trade ->
-                assertTrue(trade.pnlPercent <= 0, "Stop loss trade should have negative PnL")
-            }
+        assertNotNull(result)
+        val stopLossTrades = result!!.trades.filter { it.reason == "STOP_LOSS" }
+        assertTrue(stopLossTrades.isNotEmpty(), "급락 시나리오는 STOP_LOSS 거래를 내야 한다")
+        stopLossTrades.forEach { trade ->
+            assertTrue(trade.pnlPercent <= 0, "Stop loss trade should have negative PnL")
         }
     }
 
@@ -233,6 +234,28 @@ class BacktestEngineTest {
         }
     }
 
+    // #33 intrabar 청산 검증용: 50봉 워밍업 → c=51 진입(fill)봉 → c=52 시나리오봉 → 종가 횡보.
+    // fill/bar 는 [open, high, low, close] 순. 종가 모델과 intrabar 모델의 청산 차이를 드러내려 high≠low 로 지정.
+    private fun buildExitScenario(fill: List<Double>, bar: List<Double>, count: Int = 120): List<Candle> {
+        return (0 until count).map { i ->
+            val c = count - 1 - i
+            val ohlc = when {
+                c <= 50 -> listOf(10000.0, 10000.0, 10000.0, 10000.0)
+                c == 51 -> fill
+                c == 52 -> bar
+                else -> bar[3].let { listOf(it, it, it, it) }
+            }
+            Candle(
+                market = "KRW-BTC",
+                openingPrice = ohlc[0],
+                highPrice = ohlc[1],
+                lowPrice = ohlc[2],
+                tradePrice = ohlc[3],
+                candleAccTradeVolume = 100.0,
+            )
+        }
+    }
+
     @Test
     fun `backtest trailing stop fires with arm zero`() = runTest {
         val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
@@ -316,5 +339,91 @@ class BacktestEngineTest {
             lowK.totalTrades > highK!!.totalTrades,
             "combined 전략도 config.kValue 가 신호에 반영되어야 한다 (#31)",
         )
+    }
+
+    // --- #33: intrabar 보수 청산 모델 ---
+
+    @Test
+    fun `intrabar trailing fires on low penetration below entry`() = runTest {
+        // 진입봉 장중 고점 +5%(peak), 다음봉 저점이 진입가 아래(-1%)지만 트레일링선(peak*0.98=+2.9%)은 진입가 위.
+        // 종가 모델은 장중 고점을 못 봐 이익 트레일링을 통째로 놓치지만, intrabar 모델은 트레일링선에서 이익 청산.
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 3.0, takeProfitPct = 99.0, trailingStopPct = 2.0, trailingArmPct = 0.0,
+            maxHoldDays = 999, useMarketFilter = false,
+        )
+        val candles = buildExitScenario(
+            fill = listOf(10000.0, 10500.0, 10450.0, 10490.0), // 진입가 10000, 장중 peak 10500
+            bar = listOf(10490.0, 10500.0, 9900.0, 9950.0),     // 저점 9900 < 진입가, 종가 9950
+        )
+        val result = ce.run("always_buy", candles, "KRW-BTC", config)
+
+        assertNotNull(result)
+        val trailing = result!!.trades.filter { it.reason == "TRAILING_STOP" }
+        assertTrue(trailing.isNotEmpty(), "저점-침투 봉에서 트레일링이 발동해야 한다 (intrabar)")
+        assertTrue(trailing.any { it.sellPrice > 10000.0 }, "트레일링은 진입가 위 이익 청산(트레일링선≈10290)이어야 한다")
+    }
+
+    @Test
+    fun `intrabar stop loss fires when low breaches threshold though close is above`() = runTest {
+        // 종가(-1%)로는 SL 미달이나 장중 저점(-4%)이 SL선(-3%)을 침 → intrabar 모델만 SL 발동.
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 3.0, takeProfitPct = 99.0, trailingStopPct = 99.0,
+            maxHoldDays = 999, useMarketFilter = false,
+        )
+        val candles = buildExitScenario(
+            fill = listOf(10000.0, 10000.0, 10000.0, 10000.0),
+            bar = listOf(10000.0, 10100.0, 9600.0, 9900.0), // 저점 -4%(SL선 침), 종가 -1%(SL 미달)
+        )
+        val result = ce.run("always_buy", candles, "KRW-BTC", config)
+
+        assertNotNull(result)
+        val sl = result!!.trades.filter { it.reason == "STOP_LOSS" }
+        assertTrue(sl.isNotEmpty(), "장중 저점이 SL선을 치면 종가가 위여도 SL 발동해야 한다 (intrabar)")
+        assertTrue(sl.all { it.sellPrice in 9600.0..9800.0 }, "SL 체결가는 손절선(≈9700) 근처여야 한다")
+    }
+
+    @Test
+    fun `intrabar worst-case prefers stop loss when SL and TP both hit in one bar`() = runTest {
+        // 한 봉에서 저점이 SL선(-3%), 고점이 TP선(+5%)을 동시에 침 → 봉 내 도달 순서 불명이라 SL 우선(worst-case).
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 3.0, takeProfitPct = 5.0, trailingStopPct = 99.0,
+            maxHoldDays = 999, useMarketFilter = false,
+        )
+        val candles = buildExitScenario(
+            fill = listOf(10000.0, 10000.0, 10000.0, 10000.0),
+            bar = listOf(10000.0, 10600.0, 9600.0, 10000.0), // 고점 +6%(TP선 10500 침), 저점 -4%(SL선 9700 침)
+        )
+        val result = ce.run("always_buy", candles, "KRW-BTC", config)
+
+        assertNotNull(result)
+        val first = result!!.trades.minByOrNull { it.sellIndex }
+        assertNotNull(first)
+        assertEquals("STOP_LOSS", first!!.reason, "SL·TP 동시 충족 봉은 worst-case 로 SL 우선이어야 한다")
+    }
+
+    @Test
+    fun `intrabar same-bar new high with low breach must not phantom-trail`() = runTest {
+        // 한 봉이 신고점(high, 직전 peak 갱신)과 SL선 이하 저점(low)을 동시에 찍을 때 — 봉 내 도달 순서 불명.
+        // 그 봉의 high 로 트레일링을 arm 하면 SL 손실이 팬텀 트레일링 '이익'으로 오기록된다(낙관 편향, #33 역행).
+        // 트레일링 arm 은 직전까지 형성된 peak 로만 해야 하므로, 직전 peak 이 진입가면 SL 이 발동해야 한다.
+        val ce = BacktestEngine(listOf(alwaysBuyStrategy()), tradingProperties)
+        val config = BacktestConfig(
+            maxLossPct = 3.0, takeProfitPct = 99.0, trailingStopPct = 2.0, trailingArmPct = 0.0,
+            maxHoldDays = 999, useMarketFilter = false,
+        )
+        val candles = buildExitScenario(
+            fill = listOf(10000.0, 10000.0, 10000.0, 10000.0), // 진입봉 flat → 직전 peak = 진입가 10000
+            bar = listOf(10000.0, 10600.0, 9600.0, 10000.0),    // 같은 봉 신고점 +6% & 저점 -4%(SL선 -3% 침)
+        )
+        val result = ce.run("always_buy", candles, "KRW-BTC", config)
+
+        assertNotNull(result)
+        val first = result!!.trades.minByOrNull { it.sellIndex }
+        assertNotNull(first)
+        assertEquals("STOP_LOSS", first!!.reason, "같은 봉 신고점으로는 트레일링을 arm 하지 않아 SL 이 발동해야 한다")
+        assertTrue(first.sellPrice < 10000.0, "SL 손실 체결이어야 한다(팬텀 트레일링 이익 아님)")
     }
 }
