@@ -23,6 +23,7 @@ git config core.hooksPath scripts/git-hooks
 
 - `codex` CLI on PATH (tested against 0.116.0)
 - `python3` on PATH (JSONL parsing)
+- `perl` on PATH (codex 호출 timeout wrapper — macOS 에 `gtimeout` 부재)
 - `~/.codex/config.toml` configured (model + trust_level for this repo)
 
 ### Policy
@@ -54,6 +55,35 @@ CODEX_SKIP=1 git push
 Leaves an audit line in `.git/codex-pre-push/bypass.log`. Avoid in normal flow.
 The policy explicitly forbids `--no-verify` — use `CODEX_SKIP` instead so the
 bypass is visible.
+
+### Serialization & timeout (codegraph MCP hang 재발방지)
+
+여러 worktree 세션이 동시에 push 하면 codex review 가 codegraph MCP(`codegraph_explore`)에서
+경합해 **무한 hang** 할 수 있다(검증됨: codex 단독 exec 는 정상, review 만 hang). 이를 막기 위해:
+
+- **직렬화**: codex review 를 머신 단위 lock(`$TMPDIR/codex-pre-push.lock`)으로 순차 실행 —
+  다른 세션 review 중이면 대기(최대 `CODEX_LOCK_WAIT`). docs-only·`CODEX_SKIP` 은 lock 전 bypass(불필요 대기 없음).
+- **timeout**: codex 호출에 escalation timeout(`TERM`→grace→`KILL`, process group). 초과 시 exit 124
+  → BLOCK + `CODEX_SKIP` 안내. 무한 hang 을 유한화(자식이 `TERM` 을 무시해도 `KILL` 로 유한 리턴).
+
+환경변수(기본값):
+
+| var | default | 설명 |
+|-----|---------|------|
+| `CODEX_TIMEOUT` | 480 | codex 호출 상한(초) |
+| `CODEX_KILL_GRACE` | 10 | `TERM` 후 `KILL` 까지(초) |
+| `CODEX_LOCK_WAIT` | 600 | lock 획득 대기 상한(초) |
+| `CODEX_STALE_AGE` | 600 | pid 없는 lock 을 stale 로 볼 age(초) |
+
+### Rollback (hook 오동작 시)
+
+실행본은 untracked `.git/hooks/pre-push`(설치본), 소스는 tracked `scripts/git-hooks/pre-push`.
+
+```bash
+git show <good-rev>:scripts/git-hooks/pre-push > .git/hooks/pre-push   # 이전 정상본 복구
+chmod +x .git/hooks/pre-push
+rm -rf "${TMPDIR:-/tmp}/codex-pre-push.lock"                            # 잔존 lock 정리
+```
 
 ### Known limitations (open work)
 
