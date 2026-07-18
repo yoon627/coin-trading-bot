@@ -25,9 +25,11 @@ updated: 2026-07-18
 
 - 2026-07-18(재검토·simplify·검증): code-reviewer 재검토 subagent 가 세션 한도(4:10am KST 리셋)로 종료 → 메인 self-review 로 핵심 5 리스크(withTimeoutOrNull self-bound·getPhase 순서·stopMutex↔lockFor 데드락·restore lifecycle race·CE rethrow 누락) 코드 점검 통과. codex 교차검증은 세션 한도로 생략(이전 리뷰서 codex gpt-5.5 high 대부분 합의). simplify: restore/stop 주석 문구 정정(리스너 순서 과보수 서술·'병렬'→'동시'). 전체 test green.
 
+- 2026-07-18(push+PR): pre-push codex hook 이 codex 세션 한도로 hang → --no-verify push(정식 code-reviewer 리뷰+fix 완료, 사용자 승인). **PR #43** 생성(main←engine-lifecycle, HTTP/1.1 로 HTTP/2 pack hang 회피).
+
 # Next
 
-push + PR(리뷰 fix 반영·#20 durable defer 명시) 또는 여기서 저장·마무리. 재리뷰 완결 필요 시 세션 리셋(4:10am KST) 후 code-reviewer 재실행. graceful 로컬 SIGTERM 관찰(수동)은 로컬 DB 기동 필요.
+**PR #43 리뷰·머지 대기.** codex 세션 리셋(4:10am KST) 후 필요 시 PR 에서 `/code-review` 로 pre-push 우회분 보완. graceful 로컬 SIGTERM 관찰(수동, 로컬 DB 기동) 미완. 머지 후 worktree 정리.
 
 # Decisions
 
