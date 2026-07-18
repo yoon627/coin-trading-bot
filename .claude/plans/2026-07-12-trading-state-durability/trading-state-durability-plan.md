@@ -1,8 +1,8 @@
 ---
 title: trading-state-durability — per-ticker 거래 상태의 재시작 생존 (#19 halt 상한 + #20 pending durable + 포지션 메타 영속)
-status: blocked
+status: in_progress
 started: 2026-07-12
-updated: 2026-07-12
+updated: 2026-07-18
 ---
 
 # Goal
@@ -13,10 +13,11 @@ updated: 2026-07-12
 
 - 2026-07-12: plan 간 틈새 분석에서 발굴 — 3개 plan(order-state-integrity·engine-lifecycle·strategy-evolution-loop)이 의존하는데 소유자가 없던 작업. #19/#20 이슈 본문 대조(#20 스스로 "H8 만 durable vs 상태 전체 영속화 설계 검토 필요"를 남김), 코드 확인: BotStateEntity/BotStateRepository 는 per-user 실행 상태만 저장(UserTradingManager.kt:63,147), per-ticker TradingState(TradingState.kt:9-20)는 전부 메모리. 구현 미착수.
 - 2026-07-12: codex 검토(medium, read-only) 반영 — major 3건: ① pending 기록 실패를 "warn+계속"으로 두면 #20 의 크래시 구멍이 그대로 남음 → 해당 ticker 신규 진입 차단+alert 로 강화, ② position/잔고 제외 전제는 order-state 의 unsynced 재시도 게이트 존재에 의존함을 명시, ③ 복원 주입은 UserTradingManager 배선만으론 불가 — TradingEngine 이 상태를 private lazy 초기화(:57,:120-127)하므로 초기 상태 주입 API 신설 + syncPosition 병합 순서 정의 필요. minor: lastTradeTime 비영속 명시. Claude plan-reviewer 는 세션 쿼터 소진으로 생략(§9 사유 기록) — 착수 시 dlc plan 단계에서 보완.
+- 2026-07-18: **blocker 둘 다 해소**(order-state #39·engine-lifecycle #43 main 머지) → main(6ec7157) rebase(코드 충돌 0, plan 커밋만 재배치). status blocked→in_progress. sync 진단(라인 shift): TradingState 영속필드 확정(peakPrice:13·buyDate:14·boughtToday:15·entryStrategy:17·pendingBuyUuid:19·pendingBuyStrategy:20·pendingSellUuid:23·pendingSellReason:24·unsynced:27). engine-lifecycle 이 createEngine 을 internal 화(:284, 호출 :175 restore/:201 startBot/:275 reload)·SmartLifecycle 도입. TradingEngine states:63·초기화 :140. reconcilePendingBuy:120. **migration 최신 V13 → trading_states=V14**.
 
 # Next
 
-order-state-integrity 머지 대기(TradingState 필드 확정 선행 — Blockers). 해소 후 첫 작업(TDD): "pending 보유 상태로 재시작 → 복원 → reconcile 재개 → TradeRecord 생성" 재현 테스트부터.
+착수(TDD, dlc structural): "pending 보유 상태로 재시작 → 복원 → reconcile 재개 → TradeRecord 생성" 재현 테스트부터. 인프라 선행(entity/repository/V14 migration → TradingEngine 초기 상태 주입 API → pending 기록/복원). Claude plan-review 는 dlc plan 단계에서(codex 검토 완료).
 
 # Decisions
 
@@ -29,12 +30,12 @@ order-state-integrity 머지 대기(TradingState 필드 확정 선행 — Blocke
 
 # Key Files
 
-- `bot/src/main/kotlin/com/trading/bot/domain/TradingState.kt` — :9-20 영속 대상 필드(order-state 머지 후 pendingSellUuid 추가분 포함)
-- `bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt` — :57,:120-127(private lazy 상태 초기화 — 초기 상태 주입 API 신설 지점)
-- `bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt` — :80-106(reconcilePendingBuy — halt 카운터 삽입점), pending 기록/해소 전이 지점
-- `bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt` — 엔진 생성 시 복원 주입(:180-198), BotStateRepository 사용례(:34,:63,:147 — 동일 패턴의 신규 repository)
+- `bot/src/main/kotlin/com/trading/bot/domain/TradingState.kt` — :13-27 영속 대상 필드(peakPrice·buyDate·boughtToday·entryStrategy·pendingBuy/Sell·unsynced 확정)
+- `bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt` — :63(private val states)·:140(computeIfAbsent{TradingState}) 초기 상태 주입 API 신설 지점 (engine-lifecycle 후 라인 shift)
+- `bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt` — :120(reconcilePendingBuy — halt 카운터 삽입점)·:56(buy)·:228(sell) pending 기록/해소 전이 지점
+- `bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt` — createEngine internal(:284)·복원 주입 호출부(:175 restore/:201 startBot/:275 reload), BotStateRepository 사용례(동일 패턴의 신규 repository)
 - `bot/src/main/kotlin/com/trading/bot/persistence/` — 신규 TradingStateRepository + entity (BotStateEntity 패턴 준용)
-- `bot/src/main/resources/db/migration/` — trading_states 테이블(V 번호는 착수 시 확인 — stock-bot-kis V14-16 선점·dead-path drop migration 경합 주의)
+- `bot/src/main/resources/db/migration/` — trading_states 테이블 **V14**(main 최신 V13; stock-bot-kis 미머지라 선점 없음 — 그 브랜치가 먼저 머지되면 renumber)
 - `bot/src/main/kotlin/com/trading/bot/notification/DiscordNotifier.kt` — halt ERROR alert
 - `bot/src/test/kotlin/com/trading/bot/engine/PositionManagerExtendedTest.kt` — reconcile 테스트 패턴 확장
 
@@ -50,5 +51,4 @@ order-state-integrity 머지 대기(TradingState 필드 확정 선행 — Blocke
 
 # Blockers
 
-- **order-state-integrity 머지 선행**: TradingState 신규 필드(pendingSellUuid·unsynced)와 매도 reconcile 훅이 확정돼야 영속 스키마가 안정. **engine-lifecycle 머지 선행**: UserTradingManager restore 경로 개편과 같은 파일 — 개편 후 복원 주입 지점이 확정됨. 권장 순서: order-state → engine-lifecycle → **이 plan** → strategy-evolution Phase 2.
-- 해소 시 status: in_progress 전환.
+- ~~order-state-integrity 머지 선행~~ · ~~engine-lifecycle 머지 선행~~ — **둘 다 해소** (2026-07-18: #39·#43 main 머지 → rebase 완료). TradingState pending/unsynced 필드 확정(:19-27), createEngine(:284)·복원 주입 호출부(:175/:201/:275) 확정. 남은 권장 순서: **이 plan** → strategy-evolution Phase 2.
