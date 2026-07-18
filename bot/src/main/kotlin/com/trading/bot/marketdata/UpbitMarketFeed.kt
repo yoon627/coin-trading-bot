@@ -171,7 +171,7 @@ class UpbitMarketFeed(
         return objectMapper.writeValueAsString(listOf(ticket, type))
     }
 
-    private fun parseTickerMessage(message: String): NormalizedTicker? {
+    internal fun parseTickerMessage(message: String): NormalizedTicker? {
         return try {
             val node = objectMapper.readTree(message)
             if (!node.has("type") || node["type"].asText() != "ticker") return null
@@ -190,7 +190,13 @@ class UpbitMarketFeed(
                 lowPrice24h = node["low_price"]?.asDouble() ?: 0.0,
                 timestamp = Instant.ofEpochMilli(node["timestamp"]?.asLong() ?: System.currentTimeMillis()),
             )
+        } catch (e: com.fasterxml.jackson.core.JacksonException) {
+            // 비-ticker/연결 ACK 등 파싱 불가 프레임 — 흔하므로 debug.
+            log.debug("Skipped non-parsable ticker frame: {}", e.message)
+            null
         } catch (e: Exception) {
+            // 스키마 변경·예상치 못한 구조는 가시화해야 디버깅 가능.
+            log.warn("Failed to parse ticker message: {}", e.message)
             null
         }
     }
