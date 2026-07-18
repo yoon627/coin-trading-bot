@@ -10,6 +10,8 @@ import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.ApplicationListener
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
 
 /**
@@ -23,6 +25,7 @@ import org.springframework.stereotype.Component
  * - 한계: ApplicationReadyEvent 이후부터 캡처(기동 실패 에러는 미포함).
  */
 @Component
+@Order(Ordered.HIGHEST_PRECEDENCE) // restore(@Order LOWEST)보다 먼저 attach 되어 restore 중 에러가 Discord 에 도달하도록.
 class DiscordErrorLogAppender(
     private val discordNotifier: DiscordNotifier,
     private val props: ErrorAlertProperties,

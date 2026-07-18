@@ -1,6 +1,9 @@
 spring:
   application:
     name: coin-trading-bot
+  # SIGTERM 시 진행 중이던 웹 요청·트레이딩 tick 이 끝나도록 대기(강제 종료 방지). server.shutdown=graceful 과 짝.
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   jackson:
     property-naming-strategy: SNAKE_CASE
     deserialization:
@@ -19,6 +22,9 @@ spring:
     user: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
     locations: classpath:db/migration
+
+server:
+  shutdown: graceful
 
 management:
   endpoints:
