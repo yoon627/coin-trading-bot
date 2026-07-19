@@ -115,45 +115,17 @@ class BacktestEngine(
     ) {
         val holdDays = index - state.buyIndex
         val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
-
-        // intrabar 보수 모델(#33): 봉 종가만 보면 라이브(10초 tick)의 봉 내 고저 도달을 놓쳐 가격 게이트가 낙관 편향.
-        // → SL/트레일링은 lowPrice, TP 는 highPrice, peak 은 highPrice 로 판정. 무슬리피지·무갭 가정(체결가=게이트 임계선).
-        // 한도봉은 라이브가 09:00 리셋(=봉 open)에 이미 청산해 그날 intraday 에 노출되지 않으므로 open 가만 평가.
-        val high = if (atHoldLimit) bar.openingPrice else bar.highPrice
-        val low = if (atHoldLimit) bar.openingPrice else bar.lowPrice
         val buyPrice = state.buyPrice
 
-        // 트레일링 arm 은 이 봉 high 반영 전 peak(직전까지 형성된 고점)으로만 판정한다. 같은 봉에서 신고점(high)과
-        // 저점(low)이 함께 나오면 봉 내 도달 순서 불명인데, 이 봉 high 로 arm 하면 SL 손실을 팬텀 트레일링 이익으로
-        // 오기록하는 낙관 편향(#33 목표 역행)이 생긴다. peak 갱신 자체는 다음 봉 판정용으로 이 봉 high 를 반영.
+        // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
+        // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
         val armPeak = state.peakPrice
-        state.peakPrice = max(state.peakPrice, high)
-        val pnlAtLow = ((low - buyPrice) / buyPrice) * 100.0
-        val pnlAtHigh = ((high - buyPrice) / buyPrice) * 100.0
-        val armPeakPnl = ((armPeak - buyPrice) / buyPrice) * 100.0
-        val dropFromArmPeakAtLow = ((armPeak - low) / armPeak) * 100.0
-
-        // 트레일링 체결선과 그 선 기준 pnl — 라이브가 트레일링을 거는 순간(현재가≈트레일링선)의 pnl 과 일치시킨다.
-        // pnlAtLow 를 넣으면 저점이 진입가 아래일 때 pnlPct>0 게이트가 이익 트레일링을 통째로 놓친다.
-        val trailStopPrice = armPeak * (1 - config.trailingStopPct / 100.0)
-        val pnlAtTrailStop = ((trailStopPrice - buyPrice) / buyPrice) * 100.0
-
-        // 하강 경로에서 라이브가 먼저 닿는 순서로 평가: 트레일링선(>진입가>SL선)이 SL 보다 먼저 도달하므로 TRAILING → STOP_LOSS.
-        // SL↔TP 는 봉 내 도달 순서 불명이라 SL(손실) 우선(worst-case). CHART_EXIT 는 종가 신호(한도봉 제외 —
-        // 라이브는 09:00 리셋 시점에 그 봉 종가가 미형성이라 chart 청산 없이 리셋). TIME_EXIT 은 한도봉 open.
-        val (reason, sellPrice) = when {
-            ExitGates.isTrailingStopTriggered(pnlAtTrailStop, armPeakPnl, dropFromArmPeakAtLow, config.trailingStopPct, config.trailingArmPct) ->
-                "TRAILING_STOP" to trailStopPrice
-            pnlAtLow <= -config.maxLossPct ->
-                "STOP_LOSS" to buyPrice * (1 - config.maxLossPct / 100.0)
-            pnlAtHigh >= config.takeProfitPct ->
-                "TAKE_PROFIT" to buyPrice * (1 + config.takeProfitPct / 100.0)
-            config.chartExitEnabled && !atHoldLimit && strategy.shouldSell(window, bar.tradePrice, signalProps) ->
-                "CHART_EXIT" to bar.tradePrice
-            atHoldLimit ->
-                "TIME_EXIT" to bar.openingPrice
-            else -> return
-        }
+        state.peakPrice = IntrabarExitModel.updatedPeak(state.peakPrice, bar, atHoldLimit)
+        val chartExitSignal = config.chartExitEnabled && !atHoldLimit &&
+            strategy.shouldSell(window, bar.tradePrice, signalProps)
+        val (reason, sellPrice) = IntrabarExitModel
+            .evaluate(bar, buyPrice, armPeak, atHoldLimit, config, chartExitSignal)
+            ?.let { it.reason to it.sellPrice } ?: return
 
         val netPnl = ((sellPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         state.balance *= (1 + netPnl / 100.0)
