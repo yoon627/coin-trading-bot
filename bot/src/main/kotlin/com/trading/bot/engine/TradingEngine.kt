@@ -191,7 +191,10 @@ class TradingEngine(
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
         val strategy = activeStrategy ?: return
+        processTicker(ticker, state, strategy)
+    }
 
+    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
         try {
             val currentPrice = getRealtimePrice(ticker)
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
