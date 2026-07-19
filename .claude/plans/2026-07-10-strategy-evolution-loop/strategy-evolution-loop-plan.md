@@ -19,10 +19,11 @@ updated: 2026-07-18
 - 2026-07-18: **#31 구현·검증 완료(미push)**. `signalProps = tradingProperties.copy(kValue=config.kValue)` 를 신호(shouldBuy/shouldSell)에 전달, `investRatio` 제거, parity 가드에 `kValue` 추가. 신규 회귀 테스트 2개(`volatility_breakout`·`combined`) green, `:bot:test` 전체 통과(JDK21 prefix). code-review(Claude subagent + codex 0.134.0 medium 병행) **APPROVE — Critical/Major 0**. Minor fix 반영: 테스트 highK `3.0→2.0`(API 상한 경계값), `combined` 회귀 테스트 추가(라이브 기본 전략 경로 가드). ⚠️ Phase 0 나머지(#33 intrabar 청산 모델·M1 replay 편향·engine_version)는 **미착수** — Acceptance Phase 0 항목은 #31 조각만 충족.
 - 2026-07-18: **Phase 0 #33 intrabar 보수 청산 모델 착수(#31 push·PR #42 후)**. plan-review(NO-GO 조건부) 교정 3건 반영: ① trailing pnlPct 인자를 pnlAtLow→**트레일링 체결선 기준 pnl**(저점<진입가일 때 라이브가 거는 이익 트레일링 누락 방지), ② when 순서 **TRAILING→STOP_LOSS**(라이브 SL우선은 tick 상호배타 전제라 봉붕괴 모델엔 부적합 — 좋은 트레일링 거래를 -maxLoss 손절로 오기록), ③ TIME_EXIT 체결가 **현재봉 open**+한도봉 intraday 미평가(라이브 09:00 리셋=한도봉 open). researcher ✅확실: Upbit `/v1/candles/days` 봉 경계=KST09:00=UTC00:00, D1 open=09:00 시장가라 리셋 정합(실측 교차검증). 사용자가 고른 'TIME_EXIT 다음봉 시가'는 한 봉 늦어 현재봉 open 으로 정정.
 - 2026-07-18: **#33 구현·검증 완료(미push)**. processExit intrabar 재작성(peak=high, SL=low·TP=high 판정, 체결가=게이트 임계선, TIME_EXIT=현재봉 open, 한도봉 open-only). code-review(Claude+codex high 병행) **REQUEST CHANGES → fix 2건**: **Major** 같은 봉 high 로 arm되는 팬텀 트레일링(SL 손실을 트레일링 이익으로 오기록, #33 역행) → 트레일링 arm 을 **직전 peak(이 봉 high 반영 전)**으로 분리; **Minor** 한도봉 chartExit 종가노출 누수 → `!atHoldLimit` 가드. 팬텀 트레일링 재현 테스트 추가(Red→Green), 신규 회귀 4개 + #5 강화, `:bot:test` 전체 green. `ParameterSweepTest` disclaimer 갱신. simplify: 추가 정리 없음.
+- 2026-07-18: **M1 replay 편향 실측 도구 구현·검증(미push)**. Plan agent 설계로 `IntrabarExitModel` 추출(processExit 판정부 → D1·M1 공유 순수함수, 동작보존 리팩·BacktestEngineTest 18개 green), `M1ReplayEngine`(보유구간 M1 순차 evaluate — worst-case 없이 실제 순서), `M1ReplayBiasTest`(RUN_M1_REPLAY 수동 게이트, `to` 페이지네이션 M1 백필, confusion matrix + meanPnlBias±CI + N 판정/유보). 단위테스트 `IntrabarExitModelTest`·`M1ReplayEngineTest` green, `:bot:test` 전체 green. **수동 실행 검증(3마켓 90일): N=6 → 판정 유보(표본 미달, plan Decisions ③ 예견대로)** — 6건 중 TIME_EXIT 5·TAKE_PROFIT 1로 편향 0.000%. combined+maxHoldDays=1 은 청산 대부분 TIME_EXIT(D1=M1 동일 open)라 intrabar 편향(SL/trailing) 노출이 적음 → 편향 크게 보려면 maxHoldDays 확장 필요(후속). `days` coerceIn 하한 60 버그(MIN_CANDLES=50 미달 시 백테 null→조용한 N=0) 발견·수정.
 
 # Next
 
-Phase 0 나머지: **M1 replay 편향 실측**(표본수 병기) → **engine_version 기록**(#33·#31 시맨틱 변경이 v1→v2 트리거). #33 커밋·push(브랜치 strategy-evolution-loop, PR #42 에 포함)는 사용자 확인 대기. 승인 채널(SPA vs Discord) 확인은 Phase 2 안건.
+Phase 0 나머지: **engine_version 기록**(#31·#33·M1 시맨틱 변경이 v1→v2 트리거 — 저장/비교 소비처 `strategy_champions` 는 Phase 1 이라 지금은 필드만 넣으면 dead, 실효는 Phase 1 과 함께). M1 replay 도구는 완성(실측 N 확대는 maxHoldDays 스윕·마켓 확대 후속). ③ 커밋·push(브랜치 strategy-evolution-loop, PR #42 포함)는 code-review 처분 후 사용자 확인. 승인 채널(SPA vs Discord)은 Phase 2 안건.
 
 # Decisions
 
@@ -56,7 +57,10 @@ Phase 0 나머지: **M1 replay 편향 실측**(표본수 병기) → **engine_ve
 
 # Key Files
 
-- `bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt` — :71(reversed 최신-우선 전제), :113-117(processExit 종가 평가), :125,:155(#31), :64,:217, :191-196(미연율화 sharpe — 게이트 미사용)
+- `bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt` — :71(reversed 최신-우선 전제), processExit 는 IntrabarExitModel 로 위임(#33), signalProps=copy(kValue)(#31), :191-196(미연율화 sharpe — 게이트 미사용)
+- `bot/src/main/kotlin/com/trading/bot/engine/IntrabarExitModel.kt` — **신규(#33/③)**: D1 백테·M1 replay 공유 청산 판정 순수함수(evaluate/updatedPeak) — 편향 정합의 단일 소스
+- `bot/src/main/kotlin/com/trading/bot/engine/M1ReplayEngine.kt` — **신규(③)**: 보유구간 M1 순차 replay(worst-case 없이 실제 순서)
+- `bot/src/test/kotlin/com/trading/bot/engine/M1ReplayBiasTest.kt` — **신규(③)**: RUN_M1_REPLAY 수동 하네스(to 페이지네이션·confusion·bias±CI·N 판정). `IntrabarExitModelTest`·`M1ReplayEngineTest` = 순수 단위 가드
 - `bot/src/test/kotlin/com/trading/bot/engine/ParameterSweepTest.kt` — :48-68(grid 이관 원본)
 - `bot/src/main/kotlin/com/trading/bot/api/StrategyController.kt` — :79(REST 재조회→스냅샷 직독), :43-49(trade_records 조회 패턴)
 - `bot/src/main/kotlin/com/trading/bot/persistence/MarketDataRepository.kt` — :30-36(findByTimeRange ASC), :40-59(upsert 멱등)
