@@ -25,7 +25,9 @@ class MarketDataStore {
 
     // 최신 스냅샷(latestTickers)에 더해, ticker 갱신을 실시간으로 밀어내는 hot multicast 스트림.
     // SSE(PriceStreamController) 가 이 스트림을 구독 → 별도 WS 연결 없이 store 하나가 스냅샷+스트림 단일 소스.
-    private val tickerSink = Sinks.many().multicast().onBackpressureBuffer<NormalizedTicker>(TICKER_STREAM_BUFFER)
+    // autoCancel=false: 모든 SSE 구독자가 끊겨도 sink 를 살려둔다 — 기본(true)은 마지막 구독자 취소 시
+    // sink 가 닫혀 이후 새 SSE 연결이 죽은 스트림을 받는다(app-lifetime 싱글턴엔 부적합).
+    private val tickerSink = Sinks.many().multicast().onBackpressureBuffer<NormalizedTicker>(TICKER_STREAM_BUFFER, false)
 
     companion object {
         private const val MAX_CANDLE_BUFFER_SIZE = 200

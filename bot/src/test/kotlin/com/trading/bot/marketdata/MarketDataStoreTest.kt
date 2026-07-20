@@ -116,4 +116,18 @@ class MarketDataStoreTest {
         store.updateTicker(ticker(100.0))
         assertEquals(100.0, store.getLatestTicker(Exchange.UPBIT, "BTC/KRW")?.price)
     }
+
+    // 모든 SSE 구독자가 떠난 뒤 붙는 새 구독자도 이후 emit 을 받아야 한다.
+    // autoCancel=true(기본)면 첫 구독자 취소 시 sink 가 닫혀 이 테스트가 실패한다.
+    @Test
+    fun `tickerStream survives subscriber churn`() {
+        StepVerifier.create(store.tickerStream()).thenCancel().verify(Duration.ofSeconds(2))
+
+        val t = ticker(200.0)
+        StepVerifier.create(store.tickerStream())
+            .then { store.updateTicker(t) }
+            .expectNext(t)
+            .thenCancel()
+            .verify(Duration.ofSeconds(2))
+    }
 }

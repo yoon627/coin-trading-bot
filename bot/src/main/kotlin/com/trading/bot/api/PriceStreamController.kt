@@ -67,10 +67,7 @@ class PriceStreamController(
         @RequestParam(required = false) tickers: List<String>?,
     ): Map<String, RealtimePrice> {
         // 미인증 공개 — 항상 watchlist 로만 제한(매매용 티커가 유입돼도 노출 차단).
-        val all = marketDataStore.getTickersByExchange(Exchange.UPBIT)
-            .map { it.toRealtimePrice() }
-            .filter { it.market in allowedTickers }
-            .associateBy { it.market }
+        val all = allowedSnapshot().associateBy { it.market }
         if (tickers.isNullOrEmpty()) return all
         val tickerSet = tickers.map { it.uppercase() }.toSet()
         return all.filterKeys { it in tickerSet }
@@ -81,15 +78,19 @@ class PriceStreamController(
         // 연결 상태 = 소켓 open 여부가 아니라 store 신선도로 판정: watchlist 티커 중 staleMs 내 갱신이
         // 하나라도 있으면 수집이 살아있다고 본다(단일 수집 경로 UpbitMarketFeed→MarketDataStore).
         val now = System.currentTimeMillis()
-        val prices = marketDataStore.getTickersByExchange(Exchange.UPBIT)
-            .map { it.toRealtimePrice() }
-            .filter { it.market in allowedTickers }
+        val prices = allowedSnapshot()
         val connected = prices.any { now - it.timestamp < watchdogProperties.staleMs }
         return mapOf(
             "connected" to connected,
             "tickers" to prices.map { it.market }.toSet(),
         )
     }
+
+    // store 스냅샷을 watchlist 로 제한한 RealtimePrice 목록 — /latest·/status 공용.
+    private fun allowedSnapshot(): List<RealtimePrice> =
+        marketDataStore.getTickersByExchange(Exchange.UPBIT)
+            .map { it.toRealtimePrice() }
+            .filter { it.market in allowedTickers }
 
     // 정규화 NormalizedTicker(수집 도메인) → RealtimePrice(SSE 응답 DTO). market 은 Upbit 표기("KRW-BTC")로 복원.
     private fun NormalizedTicker.toRealtimePrice() = RealtimePrice(
