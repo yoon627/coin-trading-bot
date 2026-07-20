@@ -3,8 +3,11 @@ package com.trading.bot.marketdata
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
+import com.trading.common.domain.NormalizedTicker
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import reactor.test.StepVerifier
+import java.time.Duration
 import java.time.Instant
 
 class MarketDataStoreTest {
@@ -91,5 +94,26 @@ class MarketDataStoreTest {
     @Test
     fun `getCandles returns empty for unknown key`() {
         assertEquals(0, store.getCandles(Exchange.UPBIT, "KRW-XRP", CandleInterval.D1, 10).size)
+    }
+
+    private fun ticker(price: Double) =
+        NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = price)
+
+    @Test
+    fun `tickerStream emits updated tickers to subscribers`() {
+        val t = ticker(100.0)
+        StepVerifier.create(store.tickerStream())
+            .then { store.updateTicker(t) }
+            .expectNext(t)
+            .thenCancel()
+            .verify(Duration.ofSeconds(2))
+    }
+
+    // SSE 구독자가 없을 때 multicast sink 는 FAIL_ZERO_SUBSCRIBER 로 정상 drop — updateTicker 는 던지지 않고
+    // store 최신값은 그대로 갱신돼야 한다(수집 hot path 가 스트림 소비자 유무에 영향받지 않음).
+    @Test
+    fun `updateTicker without stream subscriber still stores latest`() {
+        store.updateTicker(ticker(100.0))
+        assertEquals(100.0, store.getLatestTicker(Exchange.UPBIT, "BTC/KRW")?.price)
     }
 }
