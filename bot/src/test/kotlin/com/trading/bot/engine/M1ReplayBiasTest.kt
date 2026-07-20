@@ -34,6 +34,18 @@ class M1ReplayBiasTest {
         private const val PAGE = 200
         private val UTC = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         private val REASONS = listOf("TRAILING_STOP", "STOP_LOSS", "TAKE_PROFIT", "CHART_EXIT", "TIME_EXIT")
+
+        // 편향은 intraday 가격 게이트에서만 나온다(TIME_EXIT/CHART_EXIT 는 D1=M1 자명 일치) — 이 게이트 이벤트가
+        // 최소치 미만이면 CI=0 이 나와도 미관측 행동의 증거가 아니므로 trust verdict 금지.
+        private val RELEVANT_GATES = setOf("STOP_LOSS", "TRAILING_STOP", "TAKE_PROFIT")
+        private const val MIN_RELEVANT_EVENTS = 10
+
+        // Student-t 95% 양측 임계값 (index=df, 1..30 정확값). df>30 은 유한-df 보수값으로 감쇠.
+        private val T95 = doubleArrayOf(
+            0.0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
+            2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
+            2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042,
+        )
     }
 
     private data class Row(
@@ -90,36 +102,53 @@ class M1ReplayBiasTest {
             emit(sb); return
         }
         val diffs = rows.map { it.pnlDiff }
-        val mean = diffs.average()
-        val sd = if (n > 1) sqrt(diffs.sumOf { (it - mean) * (it - mean) } / (n - 1)) else 0.0
-        val stdErr = if (n > 0) sd / sqrt(n.toDouble()) else 0.0
-        val ci95 = 1.96 * stdErr // 정규 근사(N<30 은 참고 — t분포 미적용, 아래 판정에서 명시)
+        val tradeMean = diffs.average() // trade-weighted (참고용)
+        val fee = config.feeRate * 2 * 100
         val mismatch = rows.count { it.d1Reason != it.m1Reason }.toDouble() / n
+        // 동일 마켓/기간 트레이드는 clustered 라 iid sd/√n 은 불확실성을 과소평가 → 마켓을 클러스터 단위로.
+        val marketMeans = rows.groupBy { it.market }.map { (_, rs) -> rs.map { it.pnlDiff }.average() }
+        val k = marketMeans.size
 
-        sb.appendLine("- meanPnlBias(M1−D1) = ${fmt(mean)}%  (±${fmt(ci95)} 95%CI, sd=${fmt(sd)})")
+        // reason 불일치는 방향성 편향 증거가 아니다(다른 reason 이 같은 sellPrice 를 낼 수 있음) → PnL 판정과 분리 보고.
+        val mismatchNote = "- reason 불일치율 = ${fmt(mismatch * 100)}%  (※ 청산 사유 구성 차이 지표 — PnL 방향성 편향 증거 아님)"
+
+        if (k < 2) {
+            sb.appendLine("- meanPnlBias(trade-weighted) = ${fmt(tradeMean)}%  (단일 마켓 — 클러스터 CI 산출 불가)")
+            sb.appendLine(mismatchNote); sb.appendLine()
+            appendConfusion(sb, rows)
+            sb.appendLine("## 판정")
+            sb.appendLine("- **판정 유보 (단일 마켓, N=$n)** — 마켓 간 독립 표본이 없어 불확실성 추정 불가, 다마켓 확대 필요.")
+            emit(sb); return
+        }
+
+        // CI 와 estimand 를 맞추려 point 도 마켓 균등가중 평균(clusterMean)으로 보고. between-market 변동 → stdErr.
+        // 소표본 t 임계값(df=K-1) — K 가 작으면 정규 1.96 은 CI 를 크게 과소추정(K=2 → t≈12.7)해 과신을 유발.
+        val clusterMean = marketMeans.average()
+        val clusterSd = sqrt(marketMeans.sumOf { (it - clusterMean) * (it - clusterMean) } / (k - 1))
+        val tCrit = tCritical95(k - 1)
+        val ci95 = tCrit * (clusterSd / sqrt(k.toDouble()))
+        val lo = clusterMean - ci95
+        val hi = clusterMean + ci95
+
+        sb.appendLine("- meanPnlBias(M1−D1, 마켓 균등가중) = ${fmt(clusterMean)}%  (±${fmt(ci95)} 95%CI, 클러스터 K=$k, t(df=${k - 1})=${fmt(tCrit)}; trade-weighted=${fmt(tradeMean)}%)")
         sb.appendLine("  - 부호: +면 D1 이 비관(실제가 더 유리), −면 D1 이 낙관(실제가 더 불리)")
-        sb.appendLine("- reason 불일치율 = ${fmt(mismatch * 100)}%")
-        sb.appendLine()
-        sb.appendLine("## reason confusion (행=D1, 열=M1)")
-        sb.appendLine("| D1 \\ M1 | ${REASONS.joinToString(" | ")} |")
-        sb.appendLine("|---|${REASONS.joinToString("|") { "---" }}|")
-        for (dr in REASONS) {
-            val cells = REASONS.joinToString(" | ") { mr -> rows.count { it.d1Reason == dr && it.m1Reason == mr }.toString() }
-            sb.appendLine("| $dr | $cells |")
-        }
-        sb.appendLine()
+        sb.appendLine(mismatchNote); sb.appendLine()
+        appendConfusion(sb, rows)
         sb.appendLine("## 판정")
+        // 편향 유발 게이트(SL/TRAILING/TP) 이벤트가 최소치 미만이면 CI=0 이 나와도 미관측 행동의 증거가 아님 → 유보.
+        // 그 위에서만 CI 기반 판정: 전체 CI ⊂ ±fee → 등가(신뢰), CI 전체가 ±fee 밖 → 편향, 걸치면 유보.
+        val relevant = rows.count { it.d1Reason in RELEVANT_GATES || it.m1Reason in RELEVANT_GATES }
         when {
-            n < 10 -> sb.appendLine("- **판정 유보 (표본 미달: N=$n, 청산 이벤트 한 자릿수)** — 신뢰/불신 주장 금지, 마켓·기간 확대 필요.")
-            n < 30 -> sb.appendLine("- **참고 수준 (N=$n, t분포·표본상관 미보정 정규근사)**: 편향 방향=${if (mean >= 0) "비관(+)" else "낙관(−)"}, ${fmt(mean)}%±${fmt(ci95)}. 게이트 근거로는 표본 부족(동일 마켓/기간 트레이드 상관도 미보정).")
-            else -> {
-                val ciCovers0 = (mean - ci95) <= 0.0 && (mean + ci95) >= 0.0
-                // negligible 임계 = 왕복수수료(config.feeRate*2). 편향이 수수료보다 작으면 실무상 무시 가능.
-                val negligible = ciCovers0 && kotlin.math.abs(mean) < config.feeRate * 2 * 100 && mismatch < 0.2
-                if (negligible) sb.appendLine("- **D1 청산 모델 신뢰 가능** (N=$n): CI 가 0 포함·|bias|<왕복수수료(0.1%)·불일치 낮음.")
-                else sb.appendLine("- **D1 모델 ${if (mean >= 0) "비관" else "낙관"} 편향 ${fmt(mean)}%±${fmt(ci95)} (N=$n)** — 절대수익률 해석 시 보정 필요.")
-            }
+            relevant < MIN_RELEVANT_EVENTS ->
+                sb.appendLine("- **판정 유보 (N=$n, K=$k): 편향 유발 게이트(SL/TRAILING/TP) 관측 $relevant 건 < $MIN_RELEVANT_EVENTS** — 대부분 TIME_EXIT 이라 편향 노출 표본 부족(maxHoldDays 확대 등으로 intraday 청산 이벤트 확보 필요).")
+            lo >= -fee && hi <= fee ->
+                sb.appendLine("- **D1 청산 모델 신뢰 가능** (N=$n, K=$k, 관련이벤트 $relevant): 전체 95%CI ⊂ ±수수료(${fmt(fee)}%).")
+            lo > fee || hi < -fee ->
+                sb.appendLine("- **D1 모델 ${if (clusterMean >= 0) "비관" else "낙관"} PnL 편향 ${fmt(clusterMean)}%±${fmt(ci95)} (N=$n, K=$k)** — CI 전체가 허용범위 밖, 절대수익률 보정 필요.")
+            else ->
+                sb.appendLine("- **판정 유보 (N=$n, K=$k): 95%CI(±${fmt(ci95)}%)가 허용범위 ±${fmt(fee)}% 를 걸쳐 등가·편향 단정 불가** — 클러스터(마켓) 확대 필요.")
         }
+        if (mismatch >= 0.2) sb.appendLine("- ⚠️ reason 불일치율 ${fmt(mismatch * 100)}% 높음 — 청산 사유 구성 차이 큼(PnL 편향과 별개로 검토).")
         emit(sb)
     }
 
@@ -131,6 +160,27 @@ class M1ReplayBiasTest {
     }
 
     private fun fmt(v: Double): String = "%.3f".format(v)
+
+    private fun appendConfusion(sb: StringBuilder, rows: List<Row>) {
+        sb.appendLine("## reason confusion (행=D1, 열=M1)")
+        sb.appendLine("| D1 \\ M1 | ${REASONS.joinToString(" | ")} |")
+        sb.appendLine("|---|${REASONS.joinToString("|") { "---" }}|")
+        for (dr in REASONS) {
+            val cells = REASONS.joinToString(" | ") { mr -> rows.count { it.d1Reason == dr && it.m1Reason == mr }.toString() }
+            sb.appendLine("| $dr | $cells |")
+        }
+        sb.appendLine()
+    }
+
+    /** Student-t 95% 양측 임계값(df=K-1). df 1..30 은 정확값, >30 은 유한-df 보수값으로 감쇠(1.96 으로 조기 수렴 금지). */
+    private fun tCritical95(df: Int): Double = when {
+        df < 1 -> T95[1]
+        df <= 30 -> T95[df]
+        df <= 40 -> 2.021
+        df <= 60 -> 2.000
+        df <= 120 -> 1.980
+        else -> 1.962
+    }
 
     private fun fetchDayCandles(client: WebClient, market: String, count: Int): List<Candle> {
         val candles = client.get()
