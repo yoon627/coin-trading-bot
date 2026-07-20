@@ -4,7 +4,6 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
-import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
@@ -35,7 +34,6 @@ class UserTradingManagerTest {
     private lateinit var tradeExecutionService: TradeExecutionService
     private lateinit var discordNotifier: DiscordNotifier
     private lateinit var userSecretsService: UserSecretsService
-    private lateinit var upbitWebSocketClient: UpbitWebSocketClient
     private lateinit var marketDataStore: MarketDataStore
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
@@ -48,14 +46,13 @@ class UserTradingManagerTest {
         tradeExecutionService = mockk(relaxed = true)
         discordNotifier = mockk(relaxed = true)
         userSecretsService = mockk(relaxed = true)
-        upbitWebSocketClient = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
         upbitWebClient = mockk(relaxed = true)
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, tradeExecutionService, discordNotifier,
                 emptyList(), TradingProperties(autoStart = true), upbitWebClient,
-                userSecretsService, upbitWebSocketClient, marketDataStore,
+                userSecretsService, marketDataStore,
             ),
         )
         // engine.start 의 실코루틴 기동을 피하고 restore 오케스트레이션만 검증하기 위한 seam.

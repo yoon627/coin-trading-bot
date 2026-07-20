@@ -78,8 +78,8 @@ class PriceStreamController(
 
     @GetMapping("/status")
     fun getConnectionStatus(): Map<String, Any> {
-        // 구 UpbitWebSocketClient.isConnected() 대체 — 소켓 open 여부 대신 store 신선도로 판정.
-        // watchlist 티커 중 staleMs 내 갱신이 하나라도 있으면 수집이 살아있다고 본다.
+        // 연결 상태 = 소켓 open 여부가 아니라 store 신선도로 판정: watchlist 티커 중 staleMs 내 갱신이
+        // 하나라도 있으면 수집이 살아있다고 본다(단일 수집 경로 UpbitMarketFeed→MarketDataStore).
         val now = System.currentTimeMillis()
         val prices = marketDataStore.getTickersByExchange(Exchange.UPBIT)
             .map { it.toRealtimePrice() }
