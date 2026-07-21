@@ -106,9 +106,9 @@ coin-trading-bot/
 │       │   ├── api/              # REST/SSE 컨트롤러와 요청 검증
 │       │   ├── auth/             # JWT 인증과 Security 설정
 │       │   ├── cache/            # Redis 가격 캐시
-│       │   ├── client/           # Upbit REST/WebSocket 클라이언트
+│       │   ├── client/           # Upbit REST 클라이언트
 │       │   ├── engine/           # 매매, 포지션, 백테스트 엔진
-│       │   ├── marketdata/       # 시세 수집과 인메모리 저장소
+│       │   ├── marketdata/       # 시세 수집(WS ticker + REST candle)과 인메모리 저장소·스트림
 │       │   ├── notification/     # Discord 거래·오류 알림
 │       │   ├── persistence/      # R2DBC 엔티티와 repository
 │       │   ├── security/         # 사용자 API 키 암호화

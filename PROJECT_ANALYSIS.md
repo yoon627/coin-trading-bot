@@ -57,8 +57,8 @@ coin-trading-bot/
 │   └── src/main/kotlin/com/trading/bot/
 │       ├── api/                     # REST 컨트롤러 10개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
-│       ├── client/                  # UpbitClient (REST 주문), UpbitWebSocketClient
-│       ├── marketdata/              # in-process 시세 수집 (구 collector 흡수)
+│       ├── client/                  # UpbitClient (REST 주문/조회)
+│       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
 │       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager, BacktestEngine
 │       ├── stream/                  # CandleAggregator, MarketDataPersistenceService, DataRetentionService
 │       ├── cache/                   # PriceCacheService (Redis)

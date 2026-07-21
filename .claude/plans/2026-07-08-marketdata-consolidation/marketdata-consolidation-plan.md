@@ -1,8 +1,8 @@
 ---
-title: marketdata-consolidation — Upbit WS 수집 단일화 + half-open 고착 워치독 + 파싱 테스트
-status: blocked
+title: marketdata-consolidation — Upbit WS 수집 단일화 + half-open 고착 워치독 + 파싱 테스트 (1·2단계 done, 3단계 풀통합 진행)
+status: done
 started: 2026-07-08
-updated: 2026-07-18
+updated: 2026-07-21
 ---
 
 # Goal
@@ -26,14 +26,15 @@ updated: 2026-07-18
 - 2026-07-17(PR-a 머지): **PR #37 squash 머지**(origin/main 78ad3fc). PR-a(세대가드·양경로 워치독·UpbitMarketFeed close-safe·kill-switch property) 완료. 2단계 절반 done. 세션 컨텍스트 방대 → 사용자 선택 '새 세션에서 PR-b 이어가기'.
 - 2026-07-17(PR-b, 이 세션 계속): 사용자 '니가해' → PR-b 이 세션 진행. base 정렬(브랜치 marketdata-consolidation-3, origin/main 기준 + plan cherry-pick). 파싱 fixture 5종(UpbitMarketFeedParsingTest)+parseTickerMessage internal·warn, unsubscribe ref-count(baseline watchlist ∪ refCounts engine, TradingEngine.stop→unsubscribe) — subscribedTickers 단조증가(1단계 defer) 해소. 전체 :bot:test green(파싱5·WSClient11).
 - 2026-07-18(PR-b push BLOCKED): PR-b 커밋(`783b61e`, 코드+테스트+plan) 검증 완료. pre-push codex 3회 P2·P3 fix 반영(소켓 dispose 순서·connected 정리·UpbitMarketFeed close-safe). 그러나 **codex pre-push 무한 hang**(다중 세션 경합 + hook timeout 부재)으로 push 차단 → `status: blocked`. 근본원인·자기개선 사각 분석(# Workflow Findings), memory [[project_prepush_codex_slow]] 에 hang 모드 추가.
+- 2026-07-19(BLOCKER 해소·1·2단계 완결 확인): **PR-b 는 실제로 PR #44 로 origin/main 머지됨**(`5338572`). blocked 는 stale — codex hang 은 PR #45(pre-push codex 직렬화+timeout)로 해소된 것으로 보임. 검증: dangling `783b61e` 의 소스 5파일(UpbitWebSocketClient·UpbitMarketFeed·양 테스트)이 origin/main 과 **byte-identical**, TradingEngine `unsubscribe(activeTickers)` 도 origin/main:112 존재. **1단계(#36)·2단계 PR-a(#37)·PR-b(#44) 전부 머지 = 2단계 완결.** 남은 건 3단계뿐. 신규 worktree `marketdata-full-consolidation`(origin/main #46 기준)에서 3단계 착수. main 12커밋 전진(특히 #43 graceful shutdown·TradingEngine 수명주기) 반영해 Explore 재확인.
+- 2026-07-19(3단계 Explore 완료): 현 구조 확정 — **상시 WS 연결 2개**: ① UpbitMarketFeed(→MarketDataIngestionService→MarketDataStore, NormalizedTicker) ② UpbitWebSocketClient(→latestPrices/sink, RealtimePrice). 둘 다 watchlist 구독 중복. UpbitWebSocketClient 소비자 3곳: PriceStreamController(SSE: priceFlow·allLatestPrices·isConnected·subscribe), TradingEngine(getRealtimePrice tier-2 폴백 + start/stop subscribe/unsubscribe), UserTradingManager(DI 주입만). TradingEngine 는 **이미 MarketDataStore 우선**(tier-1), WS tier-2, REST tier-3. SSE 는 `allowedTickers=watchlist` 로만 필터. 핵심 발견: `startBot(tickers)`(UserTradingManager:191-207)이 **임의 티커 허용**(watchlist 검증 없음) → engine 티커가 watchlist 밖일 수 있음 = 동작 동등성 유일 갭.
+- 2026-07-21(3단계 완료·머지): PR #48 squash 머지 → **1·2·3단계 전부 origin/main 반영, marketdata 통합 완결**. codex pre-push blocking 없음, `:bot:test` 412 green. worktree·브랜치 정리. 커밋 4개(worktree `marketdata-full-consolidation`): `438bde2` store sink → `3308770` SSE store 전환 → `cad7451` UpbitWebSocketClient 제거·engine 통합 → `d9660fa` sink autoCancel=false + simplify. 리뷰는 격리 plan-reviewer 2회 한도사망 → 메인 자체리뷰(# Review Disposition). **자체리뷰가 실 버그 1건 발견·수정**: multicast sink autoCancel=true(기본)면 마지막 SSE 구독자 취소 시 sink 가 닫혀 새 SSE 가 죽은 스트림 수신 → `autoCancel=false` + churn 회귀 테스트. 구조 증거: WS 연결점=UpbitMarketFeed 1개, @PostConstruct WS opener=MarketDataIngestionService 1개, UpbitWebSocketClient 잔여참조 0. **미완: 로컬 실행 관찰**(실거래 봇 실키 부팅 위험 → 사용자 확인 후) + push·PR·머지.
 
 # Next
 
-**PR-b 는 구현·검증 완료, push 만 codex hang 으로 차단(# Blockers).** 재개 절차 (브랜치 `marketdata-consolidation-3`, HEAD `783b61e`):
-1. **push**: codex hang 해소(다른 세션 push 종료 대기) 후 `git push -u origin marketdata-consolidation-3`(run_in_background — [[project_prepush_codex_slow]]). 재발 시 `CODEX_SKIP=1 git push`(hook 공식 bypass). ⚠️ 이 plan 갱신이 marketdata-consolidation-3 에 커밋되니, 다른 worktree 에서 이어받으면 이 브랜치 기준.
-2. **PR·머지**: `gh pr create --base main --head marketdata-consolidation-3`(body: `scratchpad/prb_pr_body.md` 참고, 없으면 재작성) → squash 머지 → **2단계 완결**.
-3. **3단계**(별도): 상시 WS 연결 1개로 풀 통합 — UpbitMarketFeed 단일 수집, SSE(PriceStreamController)·엔진 폴백을 MarketDataStore 기반 전환(동작 동등성 확인 필수).
-4. **개선(승인 시, 별도 wt→dlc)**: pre-push hook 에 codex `timeout` + hang fail 처리, codex 동시 실행 flock 직렬화(# Workflow Findings).
+**3단계 풀통합** (worktree `marketdata-full-consolidation`, base origin/main #46). 1·2단계는 머지 완료 → 이 단계가 남은 전부.
+**완료 — PR #48 머지(3단계 완결).** 1·2·3단계 전부 origin/main 반영. worktree·브랜치 정리 후 종료.
+- (선택, 미실행) 로컬 실행 관찰: 부팅 로그 WS 연결 1건·SSE 수신. **실거래 봇 실키 부팅 위험**(autoStart 시 실주문) → 필요 시 안전설정 후 사용자 주관. acceptance item 5 는 구조적 증거로 대체.
 
 # Decisions
 
@@ -56,16 +57,25 @@ updated: 2026-07-18
 - **재연결 race**: 연결 세대(generation) 부여, doFinally 는 자기 세대가 현재일 때만 scheduleReconnect. (이유: 핸드셰이크 >1s 장애 상황에서 중복 connect → disposable 덮어쓰기 leak·이중 수신 — UpbitWebSocketClient.kt:75-118,162-186)
 - **파싱 테스트는 이 plan 스코프**: 파싱 함수 internal 분리 + 실제 Upbit ticker 프레임 fixture(정상/필드누락/비-ticker/깨진 JSON/timestamp 단위). UpbitMarketFeed.parseTickerMessage 의 `catch { null }` 무로그(:187-189)에 warn 추가. 기존 UpbitWebSocketClientTest 의 실네트워크 유발 테스트(subscribe)는 연결 비활성 구조로 교체.
 - 3단계 진행 시 SSE(PriceStreamController)·엔진 폴백을 MarketDataStore 기반으로 전환 — 동작 동등성 확인 필수.
+- **2026-07-19 3단계 확정 설계 (b1, 사용자 승인)**: UpbitWebSocketClient 를 **완전 제거**하고 상시 WS 연결을 UpbitMarketFeed 1개로 통합.
+  - **MarketDataStore reactive stream**: store 에 `Sinks.many().multicast().onBackpressureBuffer<NormalizedTicker>(256)` 추가, `updateTicker` 에서 `tryEmitNext`(FAIL_ZERO_SUBSCRIBER 는 정상 drop — 현 UpbitWebSocketClient sink 규약 이식). `fun tickerStream(): Flux<NormalizedTicker>` 노출. 단일 writer = MarketDataIngestionService.ingestTicker → store.updateTicker.
+  - **PriceStreamController → store 기반**: 의존 `UpbitWebSocketClient` → `MarketDataStore`. `priceFlow` = `store.tickerStream()` 를 UPBIT 필터 + `NormalizedTicker→RealtimePrice` 변환(market=`MarketPair.toUpbitFormat`, tradePrice=price, signedChangeRate=changeRate24h, accTradePrice24h=quoteVolume24h, high/low=highPrice24h/lowPrice24h, timestamp=toEpochMilli). `allLatestPrices` = store 스냅샷 변환. **subscribe 호출 제거**(요청 티커 ⊆ allowedTickers ⊆ watchlist = 이미 상시 수집). `connected` = store freshness(watchlist 티커 중 staleMs 내 수신 존재) 파생.
+  - **TradingEngine**: `getRealtimePrice` tier-2(WS) 제거 → tier-1 store + tier-3 REST 만. `start`/`stop` 의 `webSocketClient?.subscribe/unsubscribe` 제거. 생성자 `webSocketClient` 파라미터 제거. watchlist 밖 티커는 REST 폴백(b1 승인).
+  - **UserTradingManager**: `upbitWebSocketClient` DI·`createEngine` 의 `webSocketClient=` 인자 제거.
+  - **제거**: `UpbitWebSocketClient.kt` + `UpbitWebSocketClientTest.kt` + `RealtimePrice` 는 SSE 응답 DTO 로 유지(domain 잔존).
+  - **동등성 caveat**: watchlist 티커·SSE 는 완전 동등. watchlist 밖 engine 티커만 실시간성 WS→REST 강등(staleness 게이팅이 매매 정확성 보호 — 얼어붙은 가격 매매 없음).
 
 # Key Files
 
-- `bot/src/main/kotlin/com/trading/bot/client/UpbitWebSocketClient.kt` — :39-48(init 하드코딩·무의존 @Component), :75-118(connect/reconnect), :130-160(파싱), :162-186(scheduleReconnect)
-- `bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt` — :44-101(callbackFlow 지역 상태·재연결), :168-190(parseTickerMessage)
-- `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt` — :65-71(collect 종료 시 미재시작 — 주 경로 워치독 삽입 지점)
-- `bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt` — :146-169(폴백 소비자), start(구독 추가 지점)
-- `bot/src/main/kotlin/com/trading/bot/api/PriceStreamController.kt` — :45(SSE 구독 경로)
-- `bot/src/main/kotlin/com/trading/bot/config/WatchlistProperties` — 주입 대상
-- `bot/src/test/kotlin/com/trading/bot/client/UpbitWebSocketClientTest.kt` — 교체 대상
+3단계(b1) 대상 (base origin/main #46):
+- `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt` — reactive sink 추가·`tickerStream()` 노출·`updateTicker` emit (현 순수 store, 29-38 updateTicker)
+- `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt` — 단일 writer 확인(ingestTicker:160-172), 변경 없음(store.updateTicker 가 emit 트리거)
+- `bot/src/main/kotlin/com/trading/bot/api/PriceStreamController.kt` — WS→store 의존 교체, DTO 변환, subscribe 제거, connected 파생
+- `bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt` — :42(webSocketClient 파라미터 제거), :80·112(subscribe/unsubscribe 제거), :166-189(getRealtimePrice tier-2 제거)
+- `bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt` — :53·299(upbitWebSocketClient DI·인자 제거)
+- `bot/src/main/kotlin/com/trading/bot/domain/RealtimePrice.kt` — SSE 응답 DTO 로 유지(변환 소스 = NormalizedTicker)
+- **제거**: `bot/src/main/kotlin/com/trading/bot/client/UpbitWebSocketClient.kt` + `bot/src/test/kotlin/com/trading/bot/client/UpbitWebSocketClientTest.kt`
+- 갱신 테스트: `PriceStreamControllerTest.kt`, `TradingEngineTest.kt`, `UserTradingManagerTest.kt`, `MarketDataStoreTest.kt`(sink 신규)
 
 # Acceptance
 
@@ -77,8 +87,12 @@ updated: 2026-07-18
 - [x] 세대 가드: shouldActForGeneration predicate 단위테스트 green(myGen==generation·shuttingDown 케이스). 실제 스레드 race 는 transport seam 없이 결정적 불가 → 수동/통합 관찰(정직 조정)
 - [x] 파싱 fixture 테스트 5종 green — UpbitMarketFeedParsingTest(정상/optional누락/비-ticker/깨진JSON/timestamp), parseTickerMessage internal 분리+warn(null 반환 검증, 로그는 코드리뷰)
 - [x] (PR-b) unsubscribe ref-count — WSClient 11 green(baseline∪refCounts, TradingEngine.stop→unsubscribe). subscribedTickers 단조증가(1단계 defer) 해소
-- [ ] (3단계 진행 시) 상시 WS 연결 1개 — 로컬 실행·관찰(연결 로그/netstat), SSE·엔진 폴백 동등성 확인
-- [ ] `./gradlew test` 전체 green
+- [x] (3단계) MarketDataStore reactive stream: MarketDataStoreTest 10 green — emit/zero-subscriber drop/subscriber-churn(autoCancel=false). writer 단일(ingestTicker) 확인.
+- [x] (3단계) SSE store 기반 전환: PriceStreamControllerTest 9 green — store 왕복(정규화↔KRW-BTC) 변환·allowedTickers 필터·freshness connected·샘플링 스트림.
+- [x] (3단계) TradingEngine 폴백 store+REST 2단: TradingEngineTest 29 green — store 신선→store, stale/miss→REST(getRealtimePrice null→processTicker REST). WS 주입 제거 후 컴파일·동작.
+- [x] (3단계) UpbitWebSocketClient·Test 제거 후 컴파일·DI 정상: `:bot:compileKotlin`·`compileTestKotlin` green, 잔여참조 0, UserTradingManager createEngine WS 인자 없음.
+- [~] (3단계) 상시 WS 연결 **1개**: **구조적 증거로 확인**(WebSocket 연결점=UpbitMarketFeed 단일, @PostConstruct WS opener=MarketDataIngestionService 단일, UpbitWebSocketClient 완전 삭제). 로컬 실행 관찰은 실거래 봇 부팅 위험으로 보류(# Next 2, 사용자 확인 후).
+- [x] `./gradlew :bot:test` 전체 green — 412 tests, 0 failures/errors (`--rerun-tasks`).
 
 # Review Disposition
 
@@ -95,6 +109,13 @@ updated: 2026-07-18
 - (2a) STALE 저유동 false-positive: **fix**(property 조정 가능) + 문서화.
 - (2a codex pre-push P3) 워치독 restart TOCTOU(mutex 대기 중 late-tick): **fix** — restartMutex 안에서 isStale 재확인 후에만 cancelAndJoin.
 - (2a codex pre-push P2) UpbitMarketFeed 지연 재연결 좀비 이중 WS: **fix** — awaitClose 가 재연결 스레드 interrupt + connect 가 subscribe 직후 running 재확인 dispose(close-safe). plan-review 의 'running 지역가드 충분' 판단을 codex 가 교정.
+- **(3단계 리뷰 방식, 2026-07-20)**: 격리 plan-reviewer subagent 2회 연속 **API 한도(세션→주간)로 강제종료**·codex 미가용 → §9 "미가용 시 생략 사유 기록 후 메인이 같은 관점 직접 점검"에 따라 **메인 자체 비판 리뷰**로 대체. 아래 finding 은 그 결과.
+- (3단계 self-review) TradingEngine 생성부 누락 위험(Major): **fix** — `webSocketClient` 파라미터 제거 시 프로덕션(`UserTradingManager.createEngine`) + **모든 테스트 생성부** 동시 갱신. 구현 첫 단계에서 생성부 전수 grep.
+- (3단계 self-review) store sink 단일 writer 보장(Major): **fix** — ticker 쓰기가 `MarketDataIngestionService.ingestTicker`→`store.updateTicker` 단일 경로인지, `CandleAggregator`/기타 소비자가 sink 도입에 안 깨지는지 구현 시 확인(writer grep).
+- (3단계 self-review) SSE `connected` 의미 이동(Minor): **fix(수용)** — 소켓 open→store freshness(watchlist 티커 staleMs 내 수신). 더 정확한 헬스 신호지만 부팅 warmup 중 false 가능 → 문서 1줄. 컨트롤러 sampling 유지 + `tryEmitNext`(비블로킹)로 ingestion 안 막음.
+- (3단계 self-review) watchlist 밖 티커 REST 부하 증가(Minor): **risk-accept** — b1 승인. staleness 게이팅이 매매 정확성 보호(얼어붙은 가격 매매 없음). 대량 out-of-watchlist 운용 시에만 유의.
+- (3단계 self-review) sink 위치(arch): **결정** — MarketDataStore 에 배치(단일 진실원=스냅샷+스트림 한 의존; ingestion 배치는 API→collection 역의존 유발). reactor 는 이미 전역 의존이라 신규 의존 없음.
+- (3단계 self-review) 포맷/필드 매핑: **검증완료(no-op)** — `signed_change_rate`·`acc_trade_price_24h`·`high/low_price` 를 두 파서가 동일 원본에서 파생 → RealtimePrice 변환 무손실, `toUpbitFormat("BTC/KRW")="KRW-BTC"` allowedTickers 매칭 정확.
 
 # Deferred
 
@@ -108,5 +129,5 @@ updated: 2026-07-18
 
 # Blockers
 
-- **PR-b push 차단**: pre-push codex 무한 hang(위 Workflow Findings) → PR-b(커밋 `783b61e`, 코드 검증 완료·`:bot:test` green)가 원격 미반영. 풀려면: codex 회복 후 push(background) 또는 `CODEX_SKIP=1 git push`(hook 공식 bypass, `--no-verify` 아님).
-- (기존) dead-path-cleanup 이 이 plan 의 워치독(수집 신뢰성)에 **기능 의존**: 이 plan 머지 후 착수.
+- ~~PR-b push 차단(codex hang)~~ **해소(2026-07-19)**: PR-b 는 PR #44 로 머지됨(codex hang 은 #45 로 fix). 1·2단계 완결.
+- (없음) 3단계 blocker 없음 — 설계 분기(b1/b2) 사용자 확정 대기 중.

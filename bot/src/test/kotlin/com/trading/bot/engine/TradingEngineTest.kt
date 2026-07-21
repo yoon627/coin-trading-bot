@@ -5,7 +5,6 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.domain.*
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
@@ -40,7 +39,6 @@ class TradingEngineTest {
     private lateinit var dailyResetManager: DailyResetManager
     private lateinit var tradeExecutionService: TradeExecutionService
     private lateinit var strategy: TradingStrategy
-    private lateinit var webSocketClient: UpbitWebSocketClient
     private lateinit var marketDataStore: MarketDataStore
     private val tradingProperties = TradingProperties(intervalSeconds = 1)
 
@@ -51,10 +49,9 @@ class TradingEngineTest {
         dailyResetManager = mockk(relaxed = true)
         tradeExecutionService = mockk(relaxed = true)
         strategy = mockk()
-        webSocketClient = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
         // store miss 기본값 — relaxed mock 이 non-null child mock 을 반환해 store-hit 으로 오작동하는 것 방지
-        // (가격 경로는 ws/REST).
+        // (가격 경로는 store→REST 2단).
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { dailyResetManager.checkAndReset(any()) } returns false
@@ -75,7 +72,6 @@ class TradingEngineTest {
             userId = 1L,
             username = "testuser",
             discordWebhookUrl = null,
-            webSocketClient = webSocketClient,
             marketDataStore = marketDataStore,
         )
     }
@@ -182,15 +178,6 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `start subscribes active tickers to WebSocket fallback`() = runBlocking {
-        // watchlist 밖 티커로 startBot 해도 WS 폴백(latestPrice)이 커버하도록 engine.start 가 구독을 건다.
-        val engine = createEngine()
-        engine.start(listOf("KRW-DOGE", "KRW-ADA"))
-        verify { webSocketClient.subscribe(listOf("KRW-DOGE", "KRW-ADA")) }
-        engine.stop()
-    }
-
-    @Test
     fun `getActiveStrategyName returns strategy name`() {
         val engine = createEngine()
         assertEquals("test_strategy", engine.getActiveStrategyName())
@@ -293,10 +280,10 @@ class TradingEngineTest {
         TradeRecord(ticker = "KRW-BTC", side = side, price = 100.0, volume = 1.0, totalAmount = 100.0)
 
     @Test
-    fun `processTicker buys using REST price when store and WebSocket miss`() = runTest {
+    fun `processTicker buys using REST price when store misses`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC")
-        every { webSocketClient.latestPrice(any()) } returns null // getRealtimePrice → null → REST 폴백
+        // store mock=null(setup) → getRealtimePrice null → REST(getTicker) 폴백
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 51_000_000.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
@@ -312,7 +299,6 @@ class TradingEngineTest {
         val engine = createEngine()
         // boughtToday=false 로 둬 sell 후 return 만을 격리 검증(프로덕션은 boughtToday 게이트로 이중 방어).
         val state = TradingState("KRW-BTC", position = true)
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 제거 시 buy 도달 보장
@@ -332,7 +318,6 @@ class TradingEngineTest {
     fun `processTicker after pending buy reconcile does not sell in same tick`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC", pendingBuyUuid = "uuid-buy")
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         every { positionManager.checkStopLoss(any(), any()) } returns true // 재평가되면 sell 트리거
         coEvery { positionManager.reconcilePendingBuy("KRW-BTC", state, any()) } answers {
@@ -350,7 +335,6 @@ class TradingEngineTest {
     fun `processTicker skips buy while pending buy is unresolved`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC", pendingBuyUuid = "uuid-buy")
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
@@ -365,7 +349,6 @@ class TradingEngineTest {
     fun `processTicker skips sell while pending sell is unresolved`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell")
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         every { positionManager.checkStopLoss(any(), any()) } returns true // 재평가되면 sell 트리거
         coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } returns null // 미해소, uuid 유지
@@ -379,7 +362,6 @@ class TradingEngineTest {
     fun `processTicker skips buy when already bought today`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC", position = false, boughtToday = true)
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
@@ -395,7 +377,6 @@ class TradingEngineTest {
         // 전날 보유분 청산(position=true, boughtToday=false) — reconciled 후 return 이 없으면
         // markSold 로 position=false 가 돼 같은 tick 에 신규 매수까지 흘러간다(pendingBuy S3 의 매도판 대칭).
         val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell")
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 제거 시 buy 도달 보장
@@ -414,7 +395,6 @@ class TradingEngineTest {
     fun `processTicker retries syncPosition when state is unsynced`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC", unsynced = true)
-        every { webSocketClient.latestPrice(any()) } returns null
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
@@ -554,13 +534,6 @@ class TradingEngineTest {
         timestamp = Instant.now().minusSeconds(ageSeconds),
     )
 
-    private fun wsPrice(price: Double, ageMs: Long = 0) = RealtimePrice(
-        market = "KRW-BTC",
-        tradePrice = price,
-        signedChangeRate = 0.0,
-        accTradePrice24h = 0.0,
-        timestamp = System.currentTimeMillis() - ageMs,
-    )
 
     @Test
     fun `getRealtimePrice uses fresh store ticker`() {
@@ -571,19 +544,9 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `getRealtimePrice falls back to WS when store ticker stale`() {
+    fun `getRealtimePrice returns null when store ticker stale`() {
         val engine = createEngine()
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
-        every { webSocketClient.latestPrice("KRW-BTC") } returns wsPrice(70500000.0)
-
-        assertEquals(70500000.0, engine.getRealtimePrice("KRW-BTC"))
-    }
-
-    @Test
-    fun `getRealtimePrice returns null when store and WS both stale`() {
-        val engine = createEngine()
-        every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
-        every { webSocketClient.latestPrice("KRW-BTC") } returns wsPrice(70500000.0, ageMs = 60_000)
 
         assertNull(engine.getRealtimePrice("KRW-BTC")) // null → processTicker 의 REST 폴백 경로
     }
@@ -595,9 +558,8 @@ class TradingEngineTest {
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 25)
         assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
 
-        // 32s — threshold 바깥, WS 도 없음 → null
+        // 32s — threshold 바깥 → null (processTicker 가 REST 로 폴백)
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 32)
-        every { webSocketClient.latestPrice("KRW-BTC") } returns null
         assertNull(engine.getRealtimePrice("KRW-BTC"))
     }
 }

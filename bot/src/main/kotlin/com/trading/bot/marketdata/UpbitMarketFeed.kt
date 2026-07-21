@@ -89,7 +89,7 @@ class UpbitMarketFeed(
                             .coerceAtMost(MAX_RECONNECT_DELAY_MS)
                         log.info("Upbit WS reconnecting in {}ms (attempt {})", delay, attempt)
                         // 재연결 대기를 netty 신호 스레드에서 Thread.sleep 하면 이벤트 루프를 점유한다.
-                        // 별도 daemon 스레드로 분리 (bot UpbitWebSocketClient 와 동일 패턴).
+                        // 별도 daemon 스레드로 분리 (netty 이벤트 루프 스레드 점유 방지).
                         val thread = Thread {
                             try {
                                 Thread.sleep(delay)
