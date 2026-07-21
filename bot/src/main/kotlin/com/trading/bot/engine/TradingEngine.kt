@@ -1,7 +1,6 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
@@ -39,7 +38,6 @@ class TradingEngine(
     private val userId: Long = 0,
     private val username: String = "",
     private val discordWebhookUrl: String? = null,
-    private val webSocketClient: UpbitWebSocketClient? = null,
     private val marketDataStore: MarketDataStore? = null,
     private val exchange: Exchange = Exchange.UPBIT,
 ) {
@@ -47,7 +45,7 @@ class TradingEngine(
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
-        // store/WS 공통 가격 신선도 한계 — 초과분은 다음 폴백(WS→REST)으로.
+        // store 가격 신선도 한계 — 초과분은 REST 폴백으로.
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
         // stale 폴백 WARN 은 ticker 당 1분 1회 — 피드 장애 시 tick(기본 10s)마다 반복되는 스팸 방지.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
@@ -76,8 +74,6 @@ class TradingEngine(
     fun start(tickers: List<String> = tradingProperties.tickerList()) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
-            // engine 이 활성화한 티커(watchlist 밖 포함)를 WS 폴백이 커버하도록 구독.
-            webSocketClient?.subscribe(tickers)
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
@@ -108,8 +104,6 @@ class TradingEngine(
         val job = loopJob
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
-            // engine 이 활성화했던 티커의 WS 폴백 구독 해제 (ref-count — 다른 engine 이 아직 쓰면 유지, #44).
-            webSocketClient?.unsubscribe(activeTickers)
             // 취소 후 완료까지 대기(join). 진행 중이던 tick 의 주문 후처리(PositionManager NonCancellable 구간)가
             // 끝난 뒤 반환한다. cancel 만 하고 즉시 새 엔진을 기동하면(reload) 구 루프와 경합해 이중 매매가 된다. scope 는 재시작 위해 유지.
             job?.cancelAndJoin()
@@ -176,15 +170,11 @@ class TradingEngine(
             }
             if (now - (staleWarnAtMs[ticker] ?: 0L) >= STALE_WARN_INTERVAL_MS) {
                 staleWarnAtMs[ticker] = now
-                log.warn("Stale store price for {} (age {}ms) — falling back to WS/REST", ticker, ageMs)
+                log.warn("Stale store price for {} (age {}ms) — falling back to REST", ticker, ageMs)
             }
         }
 
-        // Fallback to WebSocket
-        val wsPrice = webSocketClient?.latestPrice(ticker)
-        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < PRICE_STALE_THRESHOLD_MS) {
-            return wsPrice.tradePrice
-        }
+        // store 미보유(watchlist 밖 티커)·stale 이면 null 반환 → processTicker 가 REST(upbitClient.getTicker)로 폴백.
         return null
     }
 
