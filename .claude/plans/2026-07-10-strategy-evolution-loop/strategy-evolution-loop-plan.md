@@ -2,7 +2,7 @@
 title: strategy-evolution-loop — 자기 방어를 갖춘 반자동 리서치 파이프라인 (지속 백테스팅→후보 발굴→통계 게이트→승인→카나리아→추적/강등)
 status: in_progress
 started: 2026-07-10
-updated: 2026-07-18
+updated: 2026-07-21
 ---
 
 # Goal
@@ -20,6 +20,7 @@ updated: 2026-07-18
 - 2026-07-18: **Phase 0 #33 intrabar 보수 청산 모델 착수(#31 push·PR #42 후)**. plan-review(NO-GO 조건부) 교정 3건 반영: ① trailing pnlPct 인자를 pnlAtLow→**트레일링 체결선 기준 pnl**(저점<진입가일 때 라이브가 거는 이익 트레일링 누락 방지), ② when 순서 **TRAILING→STOP_LOSS**(라이브 SL우선은 tick 상호배타 전제라 봉붕괴 모델엔 부적합 — 좋은 트레일링 거래를 -maxLoss 손절로 오기록), ③ TIME_EXIT 체결가 **현재봉 open**+한도봉 intraday 미평가(라이브 09:00 리셋=한도봉 open). researcher ✅확실: Upbit `/v1/candles/days` 봉 경계=KST09:00=UTC00:00, D1 open=09:00 시장가라 리셋 정합(실측 교차검증). 사용자가 고른 'TIME_EXIT 다음봉 시가'는 한 봉 늦어 현재봉 open 으로 정정.
 - 2026-07-18: **#33 구현·검증 완료(미push)**. processExit intrabar 재작성(peak=high, SL=low·TP=high 판정, 체결가=게이트 임계선, TIME_EXIT=현재봉 open, 한도봉 open-only). code-review(Claude+codex high 병행) **REQUEST CHANGES → fix 2건**: **Major** 같은 봉 high 로 arm되는 팬텀 트레일링(SL 손실을 트레일링 이익으로 오기록, #33 역행) → 트레일링 arm 을 **직전 peak(이 봉 high 반영 전)**으로 분리; **Minor** 한도봉 chartExit 종가노출 누수 → `!atHoldLimit` 가드. 팬텀 트레일링 재현 테스트 추가(Red→Green), 신규 회귀 4개 + #5 강화, `:bot:test` 전체 green. `ParameterSweepTest` disclaimer 갱신. simplify: 추가 정리 없음.
 - 2026-07-18: **M1 replay 편향 실측 도구 구현·검증(미push)**. Plan agent 설계로 `IntrabarExitModel` 추출(processExit 판정부 → D1·M1 공유 순수함수, 동작보존 리팩·BacktestEngineTest 18개 green), `M1ReplayEngine`(보유구간 M1 순차 evaluate — worst-case 없이 실제 순서), `M1ReplayBiasTest`(RUN_M1_REPLAY 수동 게이트, `to` 페이지네이션 M1 백필, confusion matrix + meanPnlBias±CI + N 판정/유보). 단위테스트 `IntrabarExitModelTest`·`M1ReplayEngineTest` green, `:bot:test` 전체 green. **수동 실행 검증(3마켓 90일): N=6 → 판정 유보(표본 미달, plan Decisions ③ 예견대로)** — 6건 중 TIME_EXIT 5·TAKE_PROFIT 1로 편향 0.000%. combined+maxHoldDays=1 은 청산 대부분 TIME_EXIT(D1=M1 동일 open)라 intrabar 편향(SL/trailing) 노출이 적음 → 편향 크게 보려면 maxHoldDays 확장 필요(후속). `days` coerceIn 하한 60 버그(MIN_CANDLES=50 미달 시 백테 null→조용한 N=0) 발견·수정.
+- 2026-07-21: **③ push 완료(PR #42 반영, `cbb6dc1`)**. pre-push codex(high) 통계 리뷰 **7건 반영** 후 게이트 통과: CI 를 마켓 클러스터-robust + 소표본 t 임계값(df 1..30 정확값), point estimate estimand 일치(마켓 균등가중), '신뢰 가능' 판정에 "전체 CI ⊂ ±수수료" + 편향 유발 게이트(SL/TRAILING/TP) 최소 관측(10건) 요구로 무증거 신뢰 차단, reason 불일치를 PnL 편향 판정에서 분리, fetchM1Page 429/5xx-only 재시도, 한도봉 백필 margin +60min. 부수: codex CLI 0.134→0.144.6 업그레이드(gpt-5.6-sol 모델 요구 대응). **Phase 0 3/4 완료(#31·#33·③), ④ engine_version 남음(Phase 1 의존).**
 
 # Next
 
