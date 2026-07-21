@@ -1,6 +1,6 @@
 ---
 title: marketdata-consolidation — Upbit WS 수집 단일화 + half-open 고착 워치독 + 파싱 테스트 (1·2단계 done, 3단계 풀통합 진행)
-status: in_progress
+status: done
 started: 2026-07-08
 updated: 2026-07-21
 ---
@@ -28,14 +28,13 @@ updated: 2026-07-21
 - 2026-07-18(PR-b push BLOCKED): PR-b 커밋(`783b61e`, 코드+테스트+plan) 검증 완료. pre-push codex 3회 P2·P3 fix 반영(소켓 dispose 순서·connected 정리·UpbitMarketFeed close-safe). 그러나 **codex pre-push 무한 hang**(다중 세션 경합 + hook timeout 부재)으로 push 차단 → `status: blocked`. 근본원인·자기개선 사각 분석(# Workflow Findings), memory [[project_prepush_codex_slow]] 에 hang 모드 추가.
 - 2026-07-19(BLOCKER 해소·1·2단계 완결 확인): **PR-b 는 실제로 PR #44 로 origin/main 머지됨**(`5338572`). blocked 는 stale — codex hang 은 PR #45(pre-push codex 직렬화+timeout)로 해소된 것으로 보임. 검증: dangling `783b61e` 의 소스 5파일(UpbitWebSocketClient·UpbitMarketFeed·양 테스트)이 origin/main 과 **byte-identical**, TradingEngine `unsubscribe(activeTickers)` 도 origin/main:112 존재. **1단계(#36)·2단계 PR-a(#37)·PR-b(#44) 전부 머지 = 2단계 완결.** 남은 건 3단계뿐. 신규 worktree `marketdata-full-consolidation`(origin/main #46 기준)에서 3단계 착수. main 12커밋 전진(특히 #43 graceful shutdown·TradingEngine 수명주기) 반영해 Explore 재확인.
 - 2026-07-19(3단계 Explore 완료): 현 구조 확정 — **상시 WS 연결 2개**: ① UpbitMarketFeed(→MarketDataIngestionService→MarketDataStore, NormalizedTicker) ② UpbitWebSocketClient(→latestPrices/sink, RealtimePrice). 둘 다 watchlist 구독 중복. UpbitWebSocketClient 소비자 3곳: PriceStreamController(SSE: priceFlow·allLatestPrices·isConnected·subscribe), TradingEngine(getRealtimePrice tier-2 폴백 + start/stop subscribe/unsubscribe), UserTradingManager(DI 주입만). TradingEngine 는 **이미 MarketDataStore 우선**(tier-1), WS tier-2, REST tier-3. SSE 는 `allowedTickers=watchlist` 로만 필터. 핵심 발견: `startBot(tickers)`(UserTradingManager:191-207)이 **임의 티커 허용**(watchlist 검증 없음) → engine 티커가 watchlist 밖일 수 있음 = 동작 동등성 유일 갭.
-- 2026-07-21(3단계 구현·검증 완료 + push·PR): PR #48 생성(codex pre-push blocking 없음). b1 전 구현·`:bot:test` 412 green. 커밋 4개(worktree `marketdata-full-consolidation`): `438bde2` store sink → `3308770` SSE store 전환 → `cad7451` UpbitWebSocketClient 제거·engine 통합 → `d9660fa` sink autoCancel=false + simplify. 리뷰는 격리 plan-reviewer 2회 한도사망 → 메인 자체리뷰(# Review Disposition). **자체리뷰가 실 버그 1건 발견·수정**: multicast sink autoCancel=true(기본)면 마지막 SSE 구독자 취소 시 sink 가 닫혀 새 SSE 가 죽은 스트림 수신 → `autoCancel=false` + churn 회귀 테스트. 구조 증거: WS 연결점=UpbitMarketFeed 1개, @PostConstruct WS opener=MarketDataIngestionService 1개, UpbitWebSocketClient 잔여참조 0. **미완: 로컬 실행 관찰**(실거래 봇 실키 부팅 위험 → 사용자 확인 후) + push·PR·머지.
+- 2026-07-21(3단계 완료·머지): PR #48 squash 머지 → **1·2·3단계 전부 origin/main 반영, marketdata 통합 완결**. codex pre-push blocking 없음, `:bot:test` 412 green. worktree·브랜치 정리. 커밋 4개(worktree `marketdata-full-consolidation`): `438bde2` store sink → `3308770` SSE store 전환 → `cad7451` UpbitWebSocketClient 제거·engine 통합 → `d9660fa` sink autoCancel=false + simplify. 리뷰는 격리 plan-reviewer 2회 한도사망 → 메인 자체리뷰(# Review Disposition). **자체리뷰가 실 버그 1건 발견·수정**: multicast sink autoCancel=true(기본)면 마지막 SSE 구독자 취소 시 sink 가 닫혀 새 SSE 가 죽은 스트림 수신 → `autoCancel=false` + churn 회귀 테스트. 구조 증거: WS 연결점=UpbitMarketFeed 1개, @PostConstruct WS opener=MarketDataIngestionService 1개, UpbitWebSocketClient 잔여참조 0. **미완: 로컬 실행 관찰**(실거래 봇 실키 부팅 위험 → 사용자 확인 후) + push·PR·머지.
 
 # Next
 
 **3단계 풀통합** (worktree `marketdata-full-consolidation`, base origin/main #46). 1·2단계는 머지 완료 → 이 단계가 남은 전부.
-**PR #48 생성됨 — 머지 대기.** push 성공(codex pre-push blocking 이슈 없음), PR https://github.com/yoon627/coin-trading-bot/pull/48. 남은 액션:
-1. **머지**: PR #48 squash 머지 → 3단계 완결 → plan `status: done`. 머지 후 worktree `marketdata-full-consolidation` 정리(worktree + 로컬·원격 브랜치, /e step5) 능동 제안.
-2. **(선택) 로컬 실행 관찰**: 부팅 로그에 UpbitMarketFeed WS 1건·SSE 스트림 수신 확인. **실거래 봇을 실 Upbit 키로 부팅 = 위험**(autoStart 시 실주문) → 사용자 확인·안전 설정 후에만. 미실행이라 acceptance item 5 는 구조적 증거로 대체.
+**완료 — PR #48 머지(3단계 완결).** 1·2·3단계 전부 origin/main 반영. worktree·브랜치 정리 후 종료.
+- (선택, 미실행) 로컬 실행 관찰: 부팅 로그 WS 연결 1건·SSE 수신. **실거래 봇 실키 부팅 위험**(autoStart 시 실주문) → 필요 시 안전설정 후 사용자 주관. acceptance item 5 는 구조적 증거로 대체.
 
 # Decisions
 
