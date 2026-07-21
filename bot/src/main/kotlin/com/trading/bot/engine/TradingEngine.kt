@@ -45,7 +45,7 @@ class TradingEngine(
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
-        // store/WS 공통 가격 신선도 한계 — 초과분은 다음 폴백(WS→REST)으로.
+        // store 가격 신선도 한계 — 초과분은 REST 폴백으로.
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
         // stale 폴백 WARN 은 ticker 당 1분 1회 — 피드 장애 시 tick(기본 10s)마다 반복되는 스팸 방지.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
@@ -181,7 +181,10 @@ class TradingEngine(
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
         val strategy = activeStrategy ?: return
+        processTicker(ticker, state, strategy)
+    }
 
+    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
         try {
             val currentPrice = getRealtimePrice(ticker)
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice

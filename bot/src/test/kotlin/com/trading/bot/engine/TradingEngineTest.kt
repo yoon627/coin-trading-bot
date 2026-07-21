@@ -201,21 +201,6 @@ class TradingEngineTest {
         assertTrue(engine.getStates().isEmpty())
     }
 
-    @Test
-    fun `falls back to REST when store has no fresh price`() = runBlocking {
-        // store 미보유(watchlist 밖 티커)·stale → getRealtimePrice null → processTicker 가 REST(getTicker)로 폴백.
-        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 51000000.0))
-        coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns emptyList()
-        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
-
-        val engine = createEngine()
-        engine.start(listOf("KRW-BTC"))
-        delay(3000)
-        engine.stop()
-
-        coVerify(atLeast = 1) { upbitClient.getTicker("KRW-BTC") }
-    }
-
     // --- decideSell 우선순위 (stopLoss > trailingStop > takeProfit > chartExit > dailyReset) ---
 
     private fun sellState() = TradingState("KRW-BTC", position = true)
@@ -283,6 +268,140 @@ class TradingEngineTest {
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns false
         assertNull(engine.decideSell(state, 100.0, "KRW-BTC", strategy))
+    }
+
+    // --- processTicker 오케스트레이션 (H8 게이트 순서·skip/return 불변식) ---
+    // 회귀 게이트가 실제로 물리도록 mock 이 TradingState 를 프로덕션 PositionManager 처럼 변이시킨다
+    // (sell→markSold, reconcile→markBought). 그러지 않으면 문제의 return 을 지워도 downstream 게이트가
+    // 대신 막아 mutation 이 관측되지 않는다(plan-review Major-1). 각 시나리오의 게이트/return 을 제거하면
+    // 실제로 FAIL 함을 수동 mutation 으로 1회 확인함(Progress 기록).
+
+    private fun tradeRec(side: TradeSide) =
+        TradeRecord(ticker = "KRW-BTC", side = side, price = 100.0, volume = 1.0, totalAmount = 100.0)
+
+    @Test
+    fun `processTicker buys using REST price when store misses`() = runTest {
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC")
+        // store mock=null(setup) → getRealtimePrice null → REST(getTicker) 폴백
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 51_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        // REST 가격이 buy 로 그대로 전달 — 삭제한 delay(3000) 테스트의 REST 폴백 커버리지 대체.
+        coVerify { positionManager.buy("KRW-BTC", state, 51_000_000.0, "test_strategy") }
+    }
+
+    @Test
+    fun `processTicker sells then returns without evaluating buy in same tick`() = runTest {
+        val engine = createEngine()
+        // boughtToday=false 로 둬 sell 후 return 만을 격리 검증(프로덕션은 boughtToday 게이트로 이중 방어).
+        val state = TradingState("KRW-BTC", position = true)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 제거 시 buy 도달 보장
+        every { positionManager.checkStopLoss(any(), any()) } returns true
+        coEvery { positionManager.sell("KRW-BTC", state, any(), SellReason.STOP_LOSS) } answers {
+            state.markSold()
+            tradeRec(TradeSide.SELL)
+        }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify { positionManager.sell("KRW-BTC", state, 100.0, SellReason.STOP_LOSS) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `processTicker after pending buy reconcile does not sell in same tick`() = runTest {
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "uuid-buy")
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { positionManager.checkStopLoss(any(), any()) } returns true // 재평가되면 sell 트리거
+        coEvery { positionManager.reconcilePendingBuy("KRW-BTC", state, any()) } answers {
+            state.markBought(100.0, 1.0, "test_strategy") // position=true, pendingBuyUuid=null
+            tradeRec(TradeSide.BUY)
+        }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify { positionManager.reconcilePendingBuy("KRW-BTC", state, 100.0) }
+        coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `processTicker skips buy while pending buy is unresolved`() = runTest {
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "uuid-buy")
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        coEvery { positionManager.reconcilePendingBuy("KRW-BTC", state, any()) } returns null // 미해소, uuid 유지
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `processTicker skips sell while pending sell is unresolved`() = runTest {
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell")
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { positionManager.checkStopLoss(any(), any()) } returns true // 재평가되면 sell 트리거
+        coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } returns null // 미해소, uuid 유지
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `processTicker skips buy when already bought today`() = runTest {
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", position = false, boughtToday = true)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `processTicker after pending sell reconcile does not buy in same tick`() = runTest {
+        val engine = createEngine()
+        // 전날 보유분 청산(position=true, boughtToday=false) — reconciled 후 return 이 없으면
+        // markSold 로 position=false 가 돼 같은 tick 에 신규 매수까지 흘러간다(pendingBuy S3 의 매도판 대칭).
+        val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell")
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 제거 시 buy 도달 보장
+        coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
+            state.markSold() // position=false, boughtToday 미변경(false 유지)
+            tradeRec(TradeSide.SELL)
+        }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify { positionManager.reconcilePendingSell("KRW-BTC", state, 100.0) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `processTicker retries syncPosition when state is unsynced`() = runTest {
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", unsynced = true)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify { positionManager.syncPosition("KRW-BTC", state) }
     }
 
     // chartExit 평가의 데이터 조회 실패가 가격 안전망/매수까지 막지 않도록 격리되는지 (REST 예외 전파 방지).
