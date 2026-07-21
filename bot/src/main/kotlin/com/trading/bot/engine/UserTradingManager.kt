@@ -3,7 +3,6 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitClientImpl
-import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
@@ -50,7 +49,6 @@ class UserTradingManager(
     private val tradingProperties: TradingProperties,
     private val upbitWebClient: WebClient,
     private val userSecretsService: UserSecretsService,
-    private val upbitWebSocketClient: UpbitWebSocketClient,
     private val marketDataStore: MarketDataStore,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -296,7 +294,6 @@ class UserTradingManager(
             userId = user.id!!,
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
-            webSocketClient = upbitWebSocketClient,
             marketDataStore = marketDataStore,
         )
     }
