@@ -23,6 +23,9 @@ data class TradingProperties(
     val autoStart: Boolean = false,
     // 차트/지표 기반 청산(shouldSell) 활성화. 기본 off — 켜기 전 백테스트 검증 권장.
     val chartExitEnabled: Boolean = false,
+    // #19: reconcilePendingBuy 의 getOrder·잔고조회가 연속으로 이 횟수만큼 실패하면 해당 ticker 를 halt.
+    // interval-seconds(기본 10s) 기준 20회 ≈ 200초 이상 지속 장애 시 무한 재시도를 멈춘다.
+    val reconcileHaltThreshold: Int = 20,
 ) {
     fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 }

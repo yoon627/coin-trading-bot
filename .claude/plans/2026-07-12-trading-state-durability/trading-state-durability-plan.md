@@ -2,53 +2,91 @@
 title: trading-state-durability — per-ticker 거래 상태의 재시작 생존 (#19 halt 상한 + #20 pending durable + 포지션 메타 영속)
 status: in_progress
 started: 2026-07-12
-updated: 2026-07-18
+updated: 2026-07-19
 ---
 
 # Goal
 
-메모리 전용인 per-ticker `TradingState` 의 거래 무결성 필드를 durable 하게 영속화해 재시작/크래시/배포를 견디게 한다. 세 갈래를 하나의 응집 작업으로: ① #20 pendingBuyUuid(+order-state 작업의 pendingSellUuid) durable 영속화, ② #19 reconcile 무한 pending halt 상한 + Discord alert(halt 상태도 영속), ③ 포지션 메타(entryStrategy·진입 시점 청산 파라미터 스냅샷·peakPrice) 영속 — strategy-evolution-loop Phase 2 와 order-state 정책("진입 시점 설정으로 청산")의 선결 조건.
+메모리 전용인 per-ticker `TradingState` 의 거래 무결성 필드를 durable 하게 영속화해 재시작/크래시/배포를 견디게 한다. 세 갈래를 하나의 응집 작업으로: ① #20 pendingBuyUuid(+order-state 의 pendingSellUuid) durable 영속화 + **재시작 reconcile 멱등성**, ② #19 reconcile 무한 pending halt 상한 + Discord alert + 수동 해제 API(백엔드), ③ 포지션 메타(entryStrategy·진입 시점 청산 파라미터 스냅샷·peakPrice·boughtToday·buyDate) 영속. **스냅샷 "소비"(진입 시점 값으로 청산)는 strategy-evolution Phase 2 로 이관** — 이 PR 은 저장+복원까지(현재 청산 파라미터가 전역이라 지금 소비해도 관측 효과 없음).
 
 # Progress
 
 - 2026-07-12: plan 간 틈새 분석에서 발굴 — 3개 plan(order-state-integrity·engine-lifecycle·strategy-evolution-loop)이 의존하는데 소유자가 없던 작업. #19/#20 이슈 본문 대조(#20 스스로 "H8 만 durable vs 상태 전체 영속화 설계 검토 필요"를 남김), 코드 확인: BotStateEntity/BotStateRepository 는 per-user 실행 상태만 저장(UserTradingManager.kt:63,147), per-ticker TradingState(TradingState.kt:9-20)는 전부 메모리. 구현 미착수.
-- 2026-07-12: codex 검토(medium, read-only) 반영 — major 3건: ① pending 기록 실패를 "warn+계속"으로 두면 #20 의 크래시 구멍이 그대로 남음 → 해당 ticker 신규 진입 차단+alert 로 강화, ② position/잔고 제외 전제는 order-state 의 unsynced 재시도 게이트 존재에 의존함을 명시, ③ 복원 주입은 UserTradingManager 배선만으론 불가 — TradingEngine 이 상태를 private lazy 초기화(:57,:120-127)하므로 초기 상태 주입 API 신설 + syncPosition 병합 순서 정의 필요. minor: lastTradeTime 비영속 명시. Claude plan-reviewer 는 세션 쿼터 소진으로 생략(§9 사유 기록) — 착수 시 dlc plan 단계에서 보완.
-- 2026-07-18: **blocker 둘 다 해소**(order-state #39·engine-lifecycle #43 main 머지) → main(6ec7157) rebase(코드 충돌 0, plan 커밋만 재배치). status blocked→in_progress. sync 진단(라인 shift): TradingState 영속필드 확정(peakPrice:13·buyDate:14·boughtToday:15·entryStrategy:17·pendingBuyUuid:19·pendingBuyStrategy:20·pendingSellUuid:23·pendingSellReason:24·unsynced:27). engine-lifecycle 이 createEngine 을 internal 화(:284, 호출 :175 restore/:201 startBot/:275 reload)·SmartLifecycle 도입. TradingEngine states:63·초기화 :140. reconcilePendingBuy:120. **migration 최신 V13 → trading_states=V14**.
+- 2026-07-12: codex 검토(medium, read-only) 반영 — major 3건: ① pending 기록 실패를 "warn+계속"으로 두면 #20 의 크래시 구멍이 그대로 남음 → 해당 ticker 신규 진입 차단+alert 로 강화, ② position/잔고 제외 전제는 order-state 의 unsynced 재시도 게이트 존재에 의존함을 명시, ③ 복원 주입은 UserTradingManager 배선만으론 불가 — TradingEngine 이 상태를 private lazy 초기화하므로 초기 상태 주입 API 신설 + syncPosition 병합 순서 정의 필요. minor: lastTradeTime 비영속 명시. Claude plan-reviewer 는 세션 쿼터 소진으로 생략(§9 사유 기록) — 착수 시 dlc plan 단계에서 보완.
+- 2026-07-18: **blocker 둘 다 해소**(order-state #39·engine-lifecycle #43 main 머지) → main(6ec7157) rebase(코드 충돌 0, plan 커밋만 재배치). status blocked→in_progress. sync 진단(라인 shift): TradingState 영속필드 확정(peakPrice:13·buyDate:14·boughtToday:15·entryStrategy:17·pendingBuyUuid:19·pendingBuyStrategy:20·pendingSellUuid:23·pendingSellReason:24·unsynced:27). engine-lifecycle 이 createEngine 을 internal 화(:284)·SmartLifecycle 도입. TradingEngine states:63·초기화 :140. reconcilePendingBuy:120. migration 최신 V13 → trading_states=V14.
+- 2026-07-18: /c 이어받기 — 최신 origin/main(1ecee2e) 위로 재rebase(engine/migration 무관, 충돌 0). V13 최신 재확인. dlc structural 파이프라인 진입.
+- 2026-07-19: **Explore 완료.** R2DBC reactive(prod=Postgres, 단위테스트=mockk, 실DB/flyway 없음). 복원 주입점=runLoop:139-145(computeIfAbsent 빈상태→syncPosition). **dead `positions` 인프라 발견**(V11 테이블+PositionEntity+PositionRepository 프로덕션 미사용). halt 삽입점=reconcilePendingBuy:120. halt alert=log.error→DiscordErrorLogAppender. 사용자 확정: (b) 새 테이블+dead 정리, 스냅샷=VARCHAR JSON.
+- 2026-07-21: **구현 완료(dlc 9~10) — 전체 test green(exit 0), 기존 회귀 0.** 도메인(markBought replace 가드·halt 필드·clearHalt·pendingPersistFailed·exitParams·TradingProperties threshold) + 인프라(TradingStateEntity/Repository/Service·V14 CREATE+DROP+unique·ExitParamsSnapshot·dead positions 삭제) + PositionManager(seam·pending durable·halt 카운터·멱등 dedup·replace·sell 대칭) + TradeExecutionService(exchange_order_id·dedup) + TradingEngine(start initialStates·halt 게이트·주석 drift) + UserTradingManager(seam 배선·복원·부분복원 격리·halt 해제) + DailyReset flush + TradingController(halt 해제 endpoint·status 노출). 신규 재현 테스트: Critical① 이중계상 없음·#19 halt·카운터 reset·Critical② 멱등 dedup 2건. 16 files +411/-82 + 신규 5.
+  - **slice test(Acceptance) defer**: 이 프로젝트는 통합테스트 인프라(test resources·H2 flyway 하네스)가 전무 — slice test 하나를 위한 하네스 구축은 과도한 스코프 확대라 별도 이슈로 분리. V14 SQL 문법·entity 매핑·exchange_order_id unique 는 flyway 부팅 검증 + code-review 로 커버(mock 사각은 남는 리스크로 명시).
+- 2026-07-19: **arch planning + plan-reviewer(codex gpt-5.5 병행) 완료 — 양측 강하게 합치.** Critical/blocker: ① **markBought 이중계상**(durable pending 복원+syncPosition→completeBuy averaging→holdVolume 2×·spurious BUY, TradingState.kt:52-58 검증됨), ② **재시작 reconcile 멱등성 부재**(exchange_order_id 미기록·unique 없음→중복 TradeRecord), ③ **placeOrder↔durable pending 취소 창**(NonCancellable 안·awaitFill 이전 완료 필수), ④ **주입 seam 미정**. Major: 실패정책 Acceptance↔Decisions 모순, 스냅샷 소비부 미포함, 부분복원 격리 없음, halt 해제 endpoint 부재, peakPrice write 증폭, resetDaily durable flush 누락, reload memory→durable 유실. 직렬화=Jackson(bot 은 kotlinx 미사용). **사용자 스코프 확정: 스냅샷 소비=Phase 2 이관, halt 해제=백엔드 endpoint 만.** 전 지적을 아래 Decisions/Acceptance 에 반영.
 
 # Next
 
-착수(TDD, dlc structural): "pending 보유 상태로 재시작 → 복원 → reconcile 재개 → TradeRecord 생성" 재현 테스트부터. 인프라 선행(entity/repository/V14 migration → TradingEngine 초기 상태 주입 API → pending 기록/복원). Claude plan-review 는 dlc plan 단계에서(codex 검토 완료).
+TDD Red 착수 — 재현 테스트 3개 우선(모두 mockk): ① "durable pending 복원 + syncPosition 이 balance 채운 상태에서 reconcile → **중복 기록·holdVolume 2× 없이** 단일 확정"(Critical①②), ② "reconcile getOrder+balance N회 실패 → halt + 재시작 후 halt 유지 → 수동 해제 → 정상"(#19), ③ "boughtToday durable 복원 → 재시작 후 당일 재진입 차단 유지 + 9AM reset 후 재시작 정합". 이어서 인프라(TradingStateEntity/Repository + TradingStateService + V14) → 복원 주입 API(start initialStates) → pending/halt/메타 durable 기록·복원 → halt 해제 endpoint.
 
 # Decisions
 
-- **영속 범위 = 거래 무결성 최소 필드 집합(#20 의 설계 질문에 대한 답)**: per-(userId, ticker) 신규 테이블 `trading_states` 에 pendingBuyUuid/pendingBuyStrategy(+order-state 도입 예정 pendingSellUuid/사유), entryStrategy, buyDate, boughtToday, **peakPrice**(유실 시 재시작 후 트레일링 스톱 리셋 — 청산 지연 실손실), 진입 시점 청산 파라미터 스냅샷(jsonb), halt 상태/사유/누적 실패 수. **제외**: position/avgBuyPrice/holdVolume — syncPosition 이 거래소 잔고에서 복원(거래소가 진실 소스). ⚠️ 이 제외는 **order-state 의 unsynced 재시도 게이트가 있어야만 안전**(현재 syncPosition 은 실패를 삼키고 매수 평가로 진행 — codex 확인 PositionManager.kt:33-44, TradingEngine.kt:121-127) — 선행 의존의 실질 이유. lastTradeTime 은 **비영속**(프로덕션 읽기 없음 확인). 전체 객체 blob 직렬화는 스키마 진화·부분 갱신에 불리해 기각.
-- **쓰기 시점 = 상태 전이 동기 upsert, 실패 정책은 리스크 비대칭**: placeOrder 직후 pending 기록, 체결 확정 시 해소, 진입 시 메타 기록. **pending 기록 실패는 best-effort 가 아니다**(codex major: 그 순간 크래시하면 #20 구멍 재현) — 기록 실패 시 해당 ticker **신규 진입 차단 + ERROR alert**, 거래소 reconcile 로 pending 해소될 때까지 유지. 메타(peakPrice 등) 기록 실패만 warn+재시도(유실 시 보수적 동작으로 퇴화).
-- **#19 halt**: reconcilePendingBuy 의 getOrder+getAccounts 지속 실패 N회(설정) 누적 시 해당 ticker halt + Discord ERROR(이슈 본문의 해결 방향 그대로: pending clear 후 재매수는 금지 — H8 재발 방지). halt 는 영속되어 재시작 후에도 유지, 해제는 수동(운영 API 또는 SPA — 해제 시 reconcile 1회 강제 후 정상 복귀).
-- **복원 경로 = TradingEngine 초기 상태 주입 API 신설**: 엔진 상태는 private lazy 초기화(TradingEngine.kt:57,:120-127 — 빈 TradingState 생성)이고 createEngine 에 초기 상태 파라미터가 없다(UserTradingManager.kt:180-198) — 생성자/start 시점 initial states 주입을 추가하고 **syncPosition 과의 병합 순서를 정의**(durable 복원값 주입 → syncPosition 이 position/잔고를 거래소에서 덮어씀 → pending 은 reconcile 로 해소). engine-lifecycle 의 restore 개편과 같은 파일 — 그 plan 머지 후 착수(Blockers).
-- **소유권 정리(타 plan 과의 계약)**: order-state-integrity 는 pendingSellUuid 를 **메모리까지** 구현(그 plan 명시), 이 plan 이 durable 화를 인수. strategy-evolution-loop Phase 2 의 "보유 포지션은 진입 시점 설정으로 청산" 정책과 스왑 게이트("in-flight 없음" 판정의 재시작 신뢰성)는 이 plan 의 산출물에 의존 — 이 plan 이 strategy-evolution Phase 2 보다 먼저 머지되어야 함.
+- **[영속 범위] 거래 무결성 최소 필드**: per-(userId, ticker) 신규 테이블 `trading_states` 에 pendingBuyUuid/pendingBuyStrategy·pendingSellUuid/사유, entryStrategy, buyDate, boughtToday, peakPrice, 진입 시점 청산 파라미터 스냅샷(VARCHAR JSON — 하단), halt 상태(halted/haltReason/reconcileFailureCount). **제외**: position/avgBuyPrice/holdVolume — syncPosition 이 거래소 잔고에서 복원. ⚠️ 이 제외는 order-state 의 unsynced 재시도 게이트에 의존(선행 이유). lastTradeTime 비영속. 전체 blob 직렬화는 스키마 진화·부분 갱신 불리로 기각.
+- **[Critical① 복원 병합 규칙 — markBought idempotency 가드]**: durable pendingBuyUuid 복원 시 그 주문이 이미 체결됐으면 syncPosition 이 먼저 position=true·holdVolume=balance 로 채우고, 이후 reconcile→completeBuy→`markBought`(TradingState.kt:52-58)가 `if(position)` averaging 경로로 진입 → holdVolume≈2×balance·avgBuyPrice 오평균·spurious BUY 기록. **이 기능의 대표 시나리오에서 터짐(검증됨).** 대응: markBought 에 idempotency 가드 — 이미 이 fill 이 반영(holdVolume≈balance)돼 있으면 averaging 대신 pending clear + entryStrategy/buyDate 세팅만. runLoop init 순서: durable seed → syncPosition → tick reconcile.
+- **[Critical② 재시작 reconcile 멱등성]**: `saveAndNotify`(TradeExecutionService.kt:175-186)가 `exchange_order_id` 를 안 채우고 V11 에 unique 도 없음 → 체결 기록 후 durable pending clear 커밋 전 크래시 시 재시작 reconcile 이 같은 uuid 로 **중복 기록**. 대응: **exchange_order_id = order uuid 를 채우고**, reconcile(completeBuy/completeSellRecord) 전에 "이 uuid 로 이미 trade_executions 에 기록됐나" 확인 → 있으면 기록 skip + pending clear 만. V14 에 `trade_executions.exchange_order_id` 부분 unique 인덱스(NOT NULL). (트랜잭션 묶기 대안보다 uuid dedup 이 크래시 위치 무관하게 견고.)
+- **[Critical③ 취소 창 + 쓰기 시점]**: durable pending upsert 는 suspend R2DBC → **placeOrder 반환 직후, `withContext(NonCancellable)` 안에서 awaitFill 이전**에 완료(PositionManager.kt:98·104 구간). placeOrder↔upsert 사이에 reload/stop 취소가 끼면 "주문은 나갔는데 durable pending 없음". 취소(정상 종료)와 예외(DB 장애)를 구분: 취소는 전파, DB 예외는 pendingPersistFailed 게이트.
+- **[Blocker④ 주입 seam] = concrete `TradingStateService` + userId 를 PositionManager 에 주입**: PositionManager 는 현재 upbitClient+props 만 의존. durable write 를 상태 전이 지점(pending set:98 등)에 co-locate 하려면 seam 필요. house style(TradeExecutionService 도 concrete service, interface 아님)을 따라 `TradingStateService`(upsert/load/멱등확인 담당)를 만들고 PositionManager(client, props, tradingStateService, userId) 로 주입. userId 는 createEngine:296(user.id!!) 공급. 테스트는 service mock. (arch 는 함수형 port 도 제안했으나 house style 일관 우선.)
+- **[실패정책 — 리스크 비대칭, 2항목 분리]**: **pending 기록 실패 = 차단** — `pendingPersistFailed` 게이트(unsynced 선례 재사용)로 buy() 초입 신규진입 차단 + ERROR alert, 다음 tick 재기록/reconcile 성공 시 해소. **메타(peakPrice/boughtToday) 기록 실패 = warn+재시도**(유실 시 보수적 퇴화). Acceptance 를 이 둘로 분리(기존 모순 해소).
+- **[#19 halt]**: reconcilePendingBuy 에서 **getOrder throw + recoverFromBalance 도 null**(둘 다 실패) 경로만 reconcileFailureCount++, `wait`(정상 진행중)·`cancel+0 abandoned`(pending 해소)는 카운트 금지, 성공 시 0 reset. count≥threshold(TradingProperties 신설) → state.halted=true + haltReason + log.error(→DiscordErrorLogAppender). processTicker:208 초입 `if(state.halted) return` 게이트. halt 영속·재시작 유지.
+- **[halt 수동 해제 = 백엔드 endpoint (SPA 제외, 사용자 확정)]**: TradingController 에 신규 endpoint(현재 부재) + current-user authz(타인 봇 해제 차단) + status 응답에 halt 노출. 해제는 UserTradingManager(per-user lock 중재) 메서드 경유 — engine states 는 private 이라 해제용 신규 메서드 필요(getStates 는 복사본). 해제 시 halt clear + 다음 tick reconcile 재개.
+- **[복원 API] = `start(tickers, initialStates: Map<String,TradingState> = emptyMap())`**: 3 진입점(restoreOne:178·startBot:207·reloadUserRuntime:280)이 모두 engine.start 로 수렴 → 한 곳 주입으로 균일 커버. 기본값 emptyMap 으로 기존 호출부·테스트 무변경(blast radius=UserTradingManager 배선). durable read(suspend/reactive)는 UserTradingManager(botStateRepository 이미 보유)가 TradingStateService 로 수행 → Map 매핑해 start 전달. 생성자 주입은 computeIfAbsent non-suspend 람다 제약으로 기각.
+- **[reload 정합] durable authoritative**: reloadUserRuntime 이 memory states 폐기 후 durable+syncPosition 재구축 → 상태 전이마다 durable flush 완결이 전제(peakPrice/boughtToday flush 정책과 일관). in-memory 갱신이 durable 로 안 내려가면 reload 로 유실.
+- **[peakPrice write 정책]**: updatePeakPrice 는 매 tick 2회 호출(TradingEngine:230·PositionManager:439) → 매번 upsert 는 write 증폭. **값 상승(실제 갱신) 시에만 flush** + 매도 판정 직전 보장. resetDaily(boughtToday=false)도 durable flush 동반(9AM reset 후 재시작 시 boughtToday=true 복원으로 재진입 재차단 방지).
+- **[부분 복원 격리]**: restoreOne(UserTradingManager:181-184)은 예외 1개에 유저 전체 미복원 → 손상 JSON row 1개가 봇 전체 복원 차단. **per-ticker row decode 실패 시 해당 ticker 만 빈 상태로 격리(syncPosition 재구축)**, 나머지 ticker 는 복원 진행 + 격리 ticker WARN.
+- **[스냅샷 컬럼 타입 = VARCHAR/TEXT JSON, 직렬화=Jackson (사용자 확정)]**: 진입 시점 청산 파라미터를 Jackson(bot 은 kotlinx.serialization 미사용 — plan-reviewer 확인)으로 JSON 직렬화해 VARCHAR/TEXT 저장. H2/Postgres 중립·매핑 단순. jsonb 는 단위테스트(repo mock) 매핑 미검증이라 기각. **소비(exit gate read)는 이 PR 밖 — Phase 2**.
+- **[스냅샷 소비 = strategy-evolution Phase 2 이관 (사용자 확정)]**: checkStopLoss/TrailingStop/TakeProfit·shouldSellForDailyReset 이 전역 tradingProperties read. 진입 시점 값 소비는 exit gate 3종+TradingState 모델 cross-cutting refactor → champion 파라미터 도입(Phase 2) 시점에. 이 PR 은 스냅샷 저장+복원까지, Acceptance 의 "진입 시점 값 청산"은 이 PR 밖.
+- **[dead `positions` 정리 = (b) 신규+삭제 (사용자 확정)]**: ① V14 `DROP TABLE IF EXISTS positions` ② PositionEntity.kt 삭제 ③ TradingRepository.kt 에서 PositionRepository interface+import 제거(TradeExecutionRepository·BotConfigRepository 유지). 삭제 안전 재검증(양측): positions 역참조 FK 0·코드 사용처 0·테스트 0. strategy_signals 는 스코프 밖.
+- **[rollback] V14 = trading_states CREATE + positions DROP, forward-only**: Postgres DDL 트랜잭션이라 all-or-nothing. 롤백은 V15 forward-fix 로만. **DROP 전 운영 DB 의 positions empty/non-prod 확인 또는 백업**(dead 라 비었을 것이나 절차 명시).
+- **[주석 drift]** resolveExitStrategy(TradingEngine.kt:267-268) "entryStrategy 재시작 유실은 알려진 한계" 주석은 이 plan 으로 무효화 → 구현 시 동기화(§5).
+- **[소유권 계약]** order-state 는 pendingSellUuid 를 메모리까지 구현, 이 plan 이 durable 인수. strategy-evolution Phase 2(진입시점 청산·스왑 게이트)는 이 plan 산출물 의존 → 이 plan 이 먼저 머지.
 - **Closes #19, #20** (PR 에서 연결).
 
 # Key Files
 
-- `bot/src/main/kotlin/com/trading/bot/domain/TradingState.kt` — :13-27 영속 대상 필드(peakPrice·buyDate·boughtToday·entryStrategy·pendingBuy/Sell·unsynced 확정)
-- `bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt` — :63(private val states)·:140(computeIfAbsent{TradingState}) 초기 상태 주입 API 신설 지점 (engine-lifecycle 후 라인 shift)
-- `bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt` — :120(reconcilePendingBuy — halt 카운터 삽입점)·:56(buy)·:228(sell) pending 기록/해소 전이 지점
-- `bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt` — createEngine internal(:284)·복원 주입 호출부(:175 restore/:201 startBot/:275 reload), BotStateRepository 사용례(동일 패턴의 신규 repository)
-- `bot/src/main/kotlin/com/trading/bot/persistence/` — 신규 TradingStateRepository + entity (BotStateEntity 패턴 준용)
-- `bot/src/main/resources/db/migration/` — trading_states 테이블 **V14**(main 최신 V13; stock-bot-kis 미머지라 선점 없음 — 그 브랜치가 먼저 머지되면 renumber)
-- `bot/src/main/kotlin/com/trading/bot/notification/DiscordNotifier.kt` — halt ERROR alert
-- `bot/src/test/kotlin/com/trading/bot/engine/PositionManagerExtendedTest.kt` — reconcile 테스트 패턴 확장
+- `bot/.../domain/TradingState.kt` — :52-72 markBought(idempotency 가드 추가), :47-50 resetDaily(durable flush), 영속 필드 :13-27
+- `bot/.../engine/TradingEngine.kt` — :63 states·:138-145 runLoop(초기 상태 주입 API·병합 순서), :208 processTicker(halt 게이트), :267-268 주석 drift, :346 onTrade
+- `bot/.../engine/PositionManager.kt` — :98·104 buy(pending durable upsert·NonCancellable), :120 reconcilePendingBuy(halt 카운터+멱등 dedup), :186-209 completeBuy, :428-446 exit gate(Phase 2 소비 — 이 PR 미변경)
+- `bot/.../engine/UserTradingManager.kt` — createEngine:284(seam 배선·userId), 복원 주입 :178/:207/:280, restoreOne 부분복원 격리:166, halt 해제 메서드 신설
+- `bot/.../engine/TradeExecutionService.kt` — :175-186 saveAndNotify(exchange_order_id 채움·멱등 dedup), reactive→suspend 영속 service 선례
+- `bot/.../engine/DailyResetManager.kt` — :46-49 resetDaily durable flush 동반
+- `bot/.../api/TradingController.kt` — halt 해제 endpoint 신설 + authz + status halt 노출
+- `bot/.../persistence/` — 신규 `TradingStateService` + `TradingStateRepository` + entity(BotStateEntity 패턴), TradingRepository.kt(PositionRepository 삭제), entity/PositionEntity.kt(삭제)
+- `common/.../config/TradingProperties.kt` — reconcileHaltThreshold 신설
+- `bot/src/main/resources/db/migration/V14__*.sql` — trading_states CREATE + positions DROP + trade_executions.exchange_order_id 부분 unique
+- 테스트: `PositionManagerExtendedTest.kt`·`PositionManagerTest.kt`·`TradingEngineTest.kt`·`UserTradingManagerTest.kt`(생성자 blast radius, 기본값 흡수) + 신규 멱등/복원/halt 테스트 + Flyway+R2DBC slice/smoke test 1개(mockk 한계 보완)
 
 # Acceptance
 
-- [ ] 재시작 생존: pending 보유 상태 저장 → 새 엔진 복원 → reconcile 재개 → 체결 확정 시 TradeRecord 생성 테스트 green
-- [ ] halt: reconcile 실패 N회 주입 → ticker halt + ERROR 로그, pending clear 후 재매수 금지 확인, 재시작 후 halt 유지, 수동 해제 후 정상 복귀 테스트 green
-- [ ] boughtToday·buyDate 복원으로 재시작 후 당일 1회 진입 규칙 유지 테스트 green
-- [ ] peakPrice 복원으로 재시작 전후 트레일링 스톱 판정 연속성 테스트 green
-- [ ] 진입 시점 청산 파라미터 스냅샷: champion 파라미터 변경 후에도 기존 포지션이 진입 시점 값으로 청산 판정(전이 시나리오) — strategy-evolution 과 공유하는 계약 테스트
-- [ ] DB 기록 실패 시 주문 흐름 비차단(warn) + 연속 실패 ERROR 승격 테스트
-- [ ] `./gradlew test` 전체 green
+- [ ] **재시작 생존 + 이중계상 없음(Critical①)**: durable pending 복원 + syncPosition 이 balance 채운 상태 → reconcile → 단일 확정(holdVolume 2× 아님·avgBuyPrice 정상·BUY 기록 1건) green
+- [ ] **재시작 reconcile 멱등(Critical②)**: 이미 trade_executions 에 기록된 pending 을 재시작 후 reconcile → 중복 기록 안 됨(exchange_order_id dedup) green
+- [ ] **취소 창(Critical③)**: placeOrder 후 durable pending upsert 가 NonCancellable 안에서 완료(취소가 끼어들어도 주문↔pending 정합) green
+- [ ] **halt(#19)**: getOrder+balance 둘 다 실패 N회 → ticker halt + ERROR + processTicker 게이트로 재시도 차단, pending clear 후 재매수 금지, 재시작 후 halt 유지, 수동 해제(authz — 타인 봇 차단) 후 reconcile 재개 green
+- [ ] **boughtToday/buyDate**: durable 복원 → 재시작 후 당일 1회 진입 유지 + **9AM reset 후 재시작 정합**(재차단 없음) green
+- [ ] **peakPrice**: durable 복원 → 재시작 전후 트레일링 스톱 판정 연속성 green
+- [ ] **실패정책 2분리**: pending 기록 실패 → 신규진입 차단 + ERROR / meta 기록 실패 → warn+재시도(비차단) — 각각 green
+- [ ] **부분 복원 격리**: 손상 JSON row 1개 → 해당 ticker 만 빈 상태 격리, 나머지 ticker 복원 진행 green
+- [ ] **스냅샷 저장+복원**(소비는 Phase 2): 진입 시점 파라미터 JSON 저장 → 재시작 복원 시 state 에 실림 green (소비 청산 판정은 이 PR 밖)
+- [ ] **dead positions 정리**: V14 적용 후 positions 없음, PositionEntity/PositionRepository 삭제, 앱 기동·기존 테스트 무영향
+- [ ] Flyway+R2DBC slice/smoke test: trading_states 스키마·entity 매핑·exchange_order_id unique 실 DB 검증(mockk 사각 보완)
+- [ ] `./gradlew test` + `./gradlew compileKotlin` 전체 green
 
 # Blockers
 
-- ~~order-state-integrity 머지 선행~~ · ~~engine-lifecycle 머지 선행~~ — **둘 다 해소** (2026-07-18: #39·#43 main 머지 → rebase 완료). TradingState pending/unsynced 필드 확정(:19-27), createEngine(:284)·복원 주입 호출부(:175/:201/:275) 확정. 남은 권장 순서: **이 plan** → strategy-evolution Phase 2.
+- ~~order-state-integrity 머지 선행~~ · ~~engine-lifecycle 머지 선행~~ — **둘 다 해소**(#39·#43 머지·rebase 완료). 리뷰 blocker 3건(멱등성·취소창·seam)은 위 Decisions 에 설계 반영으로 해소 — 구현 blocker 없음. 권장 머지 순서: **이 plan** → strategy-evolution Phase 2.
+
+# Review Disposition
+
+- arch Critical(markBought 이중계상) → **fix**(Decisions Critical①, markBought 가드 + 재현 테스트).
+- plan-reviewer blocker(멱등성) → **fix**(Critical②, exchange_order_id dedup).
+- plan-reviewer blocker(취소 창) → **fix**(Critical③, NonCancellable 순서).
+- arch Major1/plan blocker(seam) → **fix**(concrete TradingStateService+userId 주입).
+- 양측 Major(스냅샷 소비) → **defer to Phase 2**(사용자 확정 — 이 PR 스코프 밖).
+- 양측 Major(halt endpoint) → **fix**(백엔드만, 사용자 확정).
+- 양측 Major(부분복원 격리·resetDaily flush·peakPrice throttle·reload 정합) → **fix**(Decisions 반영).
+- codex(Acceptance↔Decisions 모순) → **fix**(실패정책 2분리).
+- codex(plan jsonb↔VARCHAR 표기) → **fix**(전면 VARCHAR JSON/Jackson 통일).

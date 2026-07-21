@@ -7,6 +7,7 @@ import com.trading.bot.config.UpbitProperties
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
@@ -50,6 +51,7 @@ class UserTradingManager(
     private val upbitWebClient: WebClient,
     private val userSecretsService: UserSecretsService,
     private val marketDataStore: MarketDataStore,
+    private val tradingStateService: TradingStateService,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -173,7 +175,7 @@ class UserTradingManager(
                 createEngine(userSecretsService.decryptUserSecrets(user))
             }
             engine.setStrategy(state.strategy)
-            engine.start(tickers)
+            engine.start(tickers, tradingStateService.loadStates(state.userId))
             log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, state.strategy, tickers)
             true
         } catch (e: Exception) {
@@ -202,7 +204,7 @@ class UserTradingManager(
         if (strategy != null) engine.setStrategy(strategy)
 
         val tickerList = tickers ?: tradingProperties.tickerList()
-        engine.start(tickerList)
+        engine.start(tickerList, tradingStateService.loadStates(userId))
 
         saveState(userId, true, engine.getActiveStrategyName(), tickerList)
         mapOf("status" to "started", "strategy" to engine.getActiveStrategyName())
@@ -234,9 +236,18 @@ class UserTradingManager(
                     "avg_buy_price" to state.avgBuyPrice,
                     "hold_volume" to state.holdVolume,
                     "bought_today" to state.boughtToday,
+                    "halted" to state.halted,
                 )
             } ?: emptyList<Map<String, Any>>()),
+            "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
         )
+    }
+
+    /** #19: halt 된 ticker 수동 해제 — 다음 tick 부터 reconcile/매매 재개. */
+    suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
+        val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
+        val cleared = engine.clearHalt(ticker)
+        mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 
     suspend fun setStrategy(userId: Long, strategyName: String): Boolean = lockFor(userId).withLock {
@@ -275,13 +286,13 @@ class UserTradingManager(
         engines[userId] = replacement
         userStrategies[userId] = strategy
         if (wasRunning) {
-            replacement.start(tickers.ifEmpty { tradingProperties.tickerList() })
+            replacement.start(tickers.ifEmpty { tradingProperties.tickerList() }, tradingStateService.loadStates(userId))
         }
     }
 
     internal fun createEngine(user: UserEntity): TradingEngine {
         val client = createUpbitClient(user)
-        val positionManager = PositionManager(client, tradingProperties)
+        val positionManager = PositionManager(client, tradingProperties, tradingStateService, user.id!!)
         val dailyResetManager = DailyResetManager(tradingProperties)
 
         return TradingEngine(

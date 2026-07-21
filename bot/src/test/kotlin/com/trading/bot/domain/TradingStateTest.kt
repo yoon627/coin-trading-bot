@@ -1,5 +1,6 @@
 package com.trading.bot.domain
 
+import java.time.LocalDate
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -139,5 +140,61 @@ class TradingStateTest {
         state.markBought(50000000.0, 0.001, "macd_cross")
         state.markSold()
         assertNull(state.entryStrategy)
+    }
+
+    @Test
+    fun `markBought replace does not double-count an already-synced position`() {
+        // 재시작 복원 시나리오: durable pendingBuyUuid 복원 + syncPosition 이 거래소 잔고를 이미 반영
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            avgBuyPrice = 50_000_000.0,
+            holdVolume = 0.001,
+            entryStrategy = "macd_cross",
+            buyDate = LocalDate.of(2026, 7, 19),
+            pendingBuyUuid = "uuid-1",
+            pendingBuyStrategy = "macd_cross",
+        )
+
+        // reconcile completeBuy 는 거래소 실잔고(절대값)로 확정 — averaging 이 아니라 절대 세팅이어야 이중계상이 안 난다.
+        state.markBought(50_000_000.0, 0.001, "macd_cross", replace = true)
+
+        assertEquals(0.001, state.holdVolume, 1e-9) // 0.002 (2×) 가 아니라 0.001 유지
+        assertEquals(50_000_000.0, state.avgBuyPrice, 0.01)
+        assertNull(state.pendingBuyUuid) // pending 해소
+    }
+
+    @Test
+    fun `markBought replace preserves durable buyDate and entryStrategy`() {
+        val entryDate = LocalDate.of(2026, 7, 19)
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            avgBuyPrice = 50_000_000.0,
+            holdVolume = 0.001,
+            entryStrategy = "macd_cross",
+            buyDate = entryDate,
+            pendingBuyUuid = "uuid-1",
+        )
+
+        // 다음 거래일 재시작 시점에 확정되어도 진입일/진입전략은 최초 값을 유지(now 로 덮지 않음).
+        state.markBought(50_000_000.0, 0.001, "golden_cross", replace = true)
+
+        assertEquals(entryDate, state.buyDate)
+        assertEquals("macd_cross", state.entryStrategy)
+    }
+
+    @Test
+    fun `clearHalt resets halt state`() {
+        val state = TradingState(
+            "KRW-BTC",
+            halted = true,
+            haltReason = "reconcile failures exceeded",
+            reconcileFailureCount = 5,
+        )
+        state.clearHalt()
+        assertFalse(state.halted)
+        assertNull(state.haltReason)
+        assertEquals(0, state.reconcileFailureCount)
     }
 }

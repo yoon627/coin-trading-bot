@@ -32,7 +32,7 @@ class PositionManagerExtendedTest {
     @BeforeEach
     fun setup() {
         upbitClient = mockk(relaxed = true)
-        manager = PositionManager(upbitClient, properties)
+        manager = PositionManager(upbitClient, properties, mockk(relaxed = true), 1L)
     }
 
     // --- syncPosition tests ---
@@ -433,6 +433,8 @@ class PositionManagerExtendedTest {
             trailingArmPct = armPct,
             maxInvestAmount = 100000.0,
         ),
+        mockk(relaxed = true),
+        1L,
     )
 
     @Test
@@ -577,6 +579,65 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `reconcile after restart does not double-count when syncPosition already applied the fill`() = runTest {
+        // #20 Critical: durable pendingBuyUuid 복원 + syncPosition 이 거래소 잔고를 이미 반영(position=true, holdVolume=balance).
+        // reconcile 이 completeBuy 로 확정할 때 averaging 하면 holdVolume 이 2배가 된다 — replace 절대세팅으로 방지.
+        coEvery { upbitClient.getOrder("r1") } returns Order(uuid = "r1", state = "done", executedVolume = "0.001")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "r1", pendingBuyStrategy = "macd")
+        state.position = true // syncPosition 복원분
+        state.avgBuyPrice = 50000000.0
+        state.holdVolume = 0.001
+
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertNotNull(result)
+        assertEquals(0.001, state.holdVolume, 1e-9) // 0.002(2×) 가 아님
+        assertEquals(50000000.0, state.avgBuyPrice, 0.01)
+        assertNull(state.pendingBuyUuid)
+        assertEquals("r1", result!!.exchangeOrderId) // 멱등 dedup 키
+    }
+
+    @Test
+    fun `reconcile halts ticker after repeated getOrder and balance failures`() = runTest {
+        // #19: getOrder·잔고조회가 둘 다 실패해 pending 이 무한 재시도되면 threshold 도달 시 halt.
+        val mgr = PositionManager(
+            upbitClient,
+            TradingProperties(reconcileHaltThreshold = 3),
+            mockk(relaxed = true),
+            1L,
+        )
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "h1", pendingBuyStrategy = "vb")
+
+        repeat(2) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) }
+        assertFalse(state.halted) // 아직 미달
+        assertEquals(2, state.reconcileFailureCount)
+
+        mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) // 3회째 → halt
+        assertTrue(state.halted)
+        assertEquals(3, state.reconcileFailureCount)
+        assertNotNull(state.haltReason)
+        assertEquals("h1", state.pendingBuyUuid) // pending 은 여전히 미해소(수동 개입 필요)
+    }
+
+    @Test
+    fun `reconcile failure count resets once getOrder responds again`() = runTest {
+        // getOrder 응답을 받으면(wait 판정) 진전이므로 누적 실패 카운터를 해소한다.
+        coEvery { upbitClient.getOrder("h2") } returns Order(uuid = "h2", state = "wait", executedVolume = "0")
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "h2", pendingBuyStrategy = "vb")
+        state.reconcileFailureCount = 2
+
+        manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
+
+        assertEquals(0, state.reconcileFailureCount)
+        assertFalse(state.halted)
+    }
+
+    @Test
     fun `resetDaily keeps pendingBuyUuid`() {
         val state = TradingState("KRW-BTC", boughtToday = true, pendingBuyUuid = "x")
         state.resetDaily()
@@ -613,7 +674,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `exit gates stay gross while record is net`() = runTest {
         // 이 PR 의 핵심 불변식: 청산 게이트는 gross(행동 불변), 기록만 net.
-        val mgr = PositionManager(upbitClient, TradingProperties()) // takeProfitPct 2.0
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L) // takeProfitPct 2.0
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.001", avgBuyPrice = "100000")
         )

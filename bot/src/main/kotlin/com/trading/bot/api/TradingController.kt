@@ -60,6 +60,14 @@ class TradingController(
         return mapOf("status" to "changed", "strategy" to strategy)
     }
 
+    @PostMapping("/bot/halt/clear")
+    suspend fun clearHalt(@RequestBody request: ClearHaltRequest): Map<String, Any> {
+        // currentUserId() 로 자기 봇만 대상 — 타인 봇 halt 해제 불가.
+        val ticker = requestValidators.normalizeMarkets(listOf(request.ticker)).firstOrNull()
+            ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid ticker: ${request.ticker}")
+        return userTradingManager.clearHalt(currentUserId(), ticker)
+    }
+
     @GetMapping("/account")
     suspend fun getAccount(): Any {
         val userId = currentUserId()
@@ -105,4 +113,5 @@ class TradingController(
 
 data class StartBotRequest(val tickers: List<String>? = null, val strategy: String? = null)
 data class StrategyRequest(val strategy: String)
+data class ClearHaltRequest(val ticker: String)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)

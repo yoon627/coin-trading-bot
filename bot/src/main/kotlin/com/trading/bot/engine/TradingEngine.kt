@@ -71,9 +71,14 @@ class TradingEngine(
             ?: strategies.firstOrNull()
     }
 
-    fun start(tickers: List<String> = tradingProperties.tickerList()) {
+    fun start(
+        tickers: List<String> = tradingProperties.tickerList(),
+        initialStates: Map<String, TradingState> = emptyMap(),
+    ) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
+            // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
+            initialStates.forEach { (ticker, state) -> states[ticker] = state }
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
@@ -118,6 +123,19 @@ class TradingEngine(
 
     fun getStates(): Map<String, TradingState> = states.toMap()
 
+    /** #19: halt 된 ticker 목록(status 노출용). */
+    fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
+
+    /** #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false. */
+    suspend fun clearHalt(ticker: String): Boolean {
+        val state = states[ticker] ?: return false
+        if (!state.halted) return false
+        state.clearHalt()
+        positionManager.persistState(state)
+        log.info("Halt cleared for {} ({})", ticker, username)
+        return true
+    }
+
     fun getActiveTickers(): List<String> = activeTickers.toList()
 
     fun getActiveStrategyName(): String = activeStrategy?.name ?: "none"
@@ -140,7 +158,10 @@ class TradingEngine(
 
         while (running.get() && scope.isActive) {
             try {
-                dailyResetManager.checkAndReset(states)
+                if (dailyResetManager.checkAndReset(states)) {
+                    // 9AM 리셋(boughtToday=false)을 durable 로 flush — 리셋 직후 재시작 시 boughtToday=true 복원으로 당일 재진입이 재차단되는 것 방지.
+                    states.values.forEach { positionManager.persistState(it) }
+                }
 
                 for (ticker in activeTickers) {
                     if (!running.get()) break
@@ -185,6 +206,9 @@ class TradingEngine(
     }
 
     internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
+        // #19: reconcile 무한 실패로 halt 된 ticker 는 reconcile·매매를 모두 건너뛴다(수동 해제 전까지).
+        if (state.halted) return
+
         try {
             val currentPrice = getRealtimePrice(ticker)
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
@@ -257,8 +281,8 @@ class TradingEngine(
         }
     }
 
-    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 가 없으면(재시작 syncPosition 복원분 — 메모리 상태라
-    // 재시작 시 유실되는 알려진 한계) 또는 전략 목록에서 사라졌으면 활성 전략으로 폴백. 후자는 청산 기준이 진입과 달라지므로 WARN.
+    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 는 durable 복원되지만, 전략이 목록에서 사라졌으면
+    // (전략 제거/rename) 활성 전략으로 폴백한다. 폴백은 청산 기준이 진입과 달라지므로 WARN.
     internal fun resolveExitStrategy(state: TradingState, fallback: TradingStrategy): TradingStrategy {
         val entry = state.entryStrategy ?: return fallback
         return strategies.find { it.name == entry } ?: run {

@@ -7,6 +7,7 @@ import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
@@ -35,6 +36,7 @@ class UserTradingManagerTest {
     private lateinit var discordNotifier: DiscordNotifier
     private lateinit var userSecretsService: UserSecretsService
     private lateinit var marketDataStore: MarketDataStore
+    private lateinit var tradingStateService: TradingStateService
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
@@ -47,12 +49,13 @@ class UserTradingManagerTest {
         discordNotifier = mockk(relaxed = true)
         userSecretsService = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
+        tradingStateService = mockk(relaxed = true)
         upbitWebClient = mockk(relaxed = true)
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, tradeExecutionService, discordNotifier,
                 emptyList(), TradingProperties(autoStart = true), upbitWebClient,
-                userSecretsService, marketDataStore,
+                userSecretsService, marketDataStore, tradingStateService,
             ),
         )
         // engine.start 의 실코루틴 기동을 피하고 restore 오케스트레이션만 검증하기 위한 seam.

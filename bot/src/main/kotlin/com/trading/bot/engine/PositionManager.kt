@@ -2,12 +2,14 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
+import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
+import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
 import kotlin.math.floor
@@ -20,6 +22,8 @@ import org.slf4j.LoggerFactory
 class PositionManager(
     private val upbitClient: UpbitClient,
     private val tradingProperties: TradingProperties,
+    private val tradingStateService: TradingStateService,
+    private val userId: Long,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -68,6 +72,11 @@ class PositionManager(
             log.debug("Skip buy for {}: position not synced with exchange — avoiding double entry", ticker)
             return null
         }
+        if (state.pendingPersistFailed) {
+            // 직전 pending durable 기록이 실패 — 지금 매수하면 크래시 시 pending 유실로 복구 불가. 재기록 성공 전까지 진입 차단.
+            log.warn("Skip buy for {}: pending persistence unhealthy — avoiding unrecoverable entry", ticker)
+            return null
+        }
 
         // placeOrder 까지: 실패하면 주문이 나가지 않았으므로 그대로 종료(pending 없음 → 다음 tick 정상 재매수).
         val order = try {
@@ -102,6 +111,9 @@ class PositionManager(
             // 취소하면 이 후처리가 중단돼 pending 이 폐기될 states 에만 남고(H8 방어망 무력화), 새 엔진이 같은 tick 을
             // 재매수해 이중 포지션이 된다. NonCancellable 로 원자화하면 cancelAndJoin 이 완주를 기다린다.
             withContext(NonCancellable) {
+                // #20: pending 을 durable 로 먼저 기록해야 이 시점 크래시/재시작에도 reconcile 이 이어진다.
+                // placeOrder↔기록 사이를 취소가 끊지 못하게 NonCancellable 안·awaitFill 이전에 수행.
+                persistPending(state)
                 val filled = awaitFill(order.uuid)
                 applyFillOutcome(ticker, state, currentPrice, filled)
             }
@@ -125,7 +137,18 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             log.warn("reconcile getOrder failed for {} ({}): falling back to balance", ticker, e.message)
-            return recoverFromBalance(ticker, state, currentPrice)
+            val recovered = recoverFromBalance(ticker, state, currentPrice)
+            if (recovered == null && state.pendingBuyUuid != null) {
+                // getOrder·잔고조회가 둘 다 실패해 pending 이 미해소 — #19 무한 재시도를 막는 실패 카운터.
+                recordReconcileFailure(state)
+                persist(state)
+            }
+            return recovered
+        }
+        // getOrder 응답을 받았으면(wait/done/cancel 판정 가능) 진전이므로 실패 카운터 해소.
+        if (state.reconcileFailureCount != 0) {
+            state.reconcileFailureCount = 0
+            persist(state)
         }
         return applyFillOutcome(ticker, state, currentPrice, filled)
     }
@@ -154,6 +177,7 @@ class PositionManager(
                 log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
                 state.pendingBuyUuid = null
                 state.pendingBuyStrategy = null
+                persist(state)
                 null
             }
         }
@@ -183,7 +207,7 @@ class PositionManager(
     }
 
     /** 실잔고/평단으로 markBought + TradeRecord. account==null/잔고0 이면 executedVolume·currentPrice fallback. */
-    private fun completeBuy(
+    private suspend fun completeBuy(
         ticker: String,
         state: TradingState,
         currentPrice: Double,
@@ -193,10 +217,16 @@ class PositionManager(
         // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
         // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
         val strategy = state.pendingBuyStrategy
+        val orderUuid = state.pendingBuyUuid // markBought 가 clear 하기 전에 캡처 — 멱등 dedup 키.
         val volume = account?.balanceDouble()?.takeIf { it > 0.0 } ?: executedVolume
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
         val totalAmount = fillPrice * volume
-        state.markBought(fillPrice, volume, strategy) // markBought 내부에서 pendingBuy* clear
+        // 진입 시점 청산 파라미터 스냅샷(재시작 복원 시엔 기존 값 유지). 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
+        state.exitParams = state.exitParams ?: snapshotExitParams()
+        state.reconcileFailureCount = 0
+        // replace=true: 거래소 실잔고를 절대값으로 반영해 syncPosition 복원분과 이중계상되지 않게(#20). markBought 가 pendingBuy* clear.
+        state.markBought(fillPrice, volume, strategy, replace = true)
+        persist(state)
         log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
         return TradeRecord(
             ticker = ticker,
@@ -205,8 +235,57 @@ class PositionManager(
             volume = volume,
             totalAmount = totalAmount,
             strategy = strategy,
+            exchangeOrderId = orderUuid,
         )
     }
+
+    private fun snapshotExitParams() = ExitParamsSnapshot(
+        takeProfitPct = tradingProperties.takeProfitPct,
+        maxLossPct = tradingProperties.maxLossPct,
+        trailingStopPct = tradingProperties.trailingStopPct,
+        trailingArmPct = tradingProperties.trailingArmPct,
+        maxHoldDays = tradingProperties.maxHoldDays,
+    )
+
+    private fun recordReconcileFailure(state: TradingState) {
+        state.reconcileFailureCount++
+        if (!state.halted && state.reconcileFailureCount >= tradingProperties.reconcileHaltThreshold) {
+            state.halted = true
+            state.haltReason = "pending reconcile ${state.reconcileFailureCount}회 연속 실패 (getOrder·잔고조회 장애)"
+            // log.error → DiscordErrorLogAppender 로 자동 alert.
+            log.error(
+                "[HALT] {} pending reconcile failed {} times — auto-trading stopped, manual clear required",
+                state.ticker, state.reconcileFailureCount,
+            )
+        }
+    }
+
+    /** 메타(peakPrice/boughtToday/entryStrategy/halt 등) durable 반영. best-effort — 실패 시 다음 전이에서 재기록. */
+    private suspend fun persist(state: TradingState) {
+        try {
+            tradingStateService.upsert(userId, state)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("trading_state persist failed for {} — retry on next transition: {}", state.ticker, e.message)
+        }
+    }
+
+    /** pending durable 기록 — 실패 시 pendingPersistFailed 게이트로 신규 진입을 차단(#20 크래시 윈도우 방어). */
+    private suspend fun persistPending(state: TradingState) {
+        try {
+            tradingStateService.upsert(userId, state)
+            state.pendingPersistFailed = false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            state.pendingPersistFailed = true
+            log.error("pending persist failed for {} — blocking new entries (retry next tick): {}", state.ticker, e.message, e)
+        }
+    }
+
+    /** engine 이 halt 수동 해제 등 도메인-외 상태 변경 후 durable 반영에 쓰는 진입점(best-effort). */
+    internal suspend fun persistState(state: TradingState) = persist(state)
 
     /**
      * 매도판 H8: 미해소 매도 주문(pendingSellUuid)을 거래소 상태로 확정. processTicker 가 매 tick 호출.
@@ -214,15 +293,18 @@ class PositionManager(
      */
     suspend fun reconcilePendingSell(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
         val uuid = state.pendingSellUuid ?: return null
-        val filled = try {
-            upbitClient.getOrder(uuid)
+        val result = try {
+            val filled = upbitClient.getOrder(uuid)
+            applySellFillOutcome(ticker, state, currentPrice, filled)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
-            return recoverSellFromBalance(ticker, state, currentPrice)
+            recoverSellFromBalance(ticker, state, currentPrice)
         }
-        return applySellFillOutcome(ticker, state, currentPrice, filled)
+        // 매도 pending 전이(clearPendingSell/markSold/부분갱신) durable 반영. wait(무전이)도 upsert 무해.
+        persist(state)
+        return result
     }
 
     suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? {
@@ -255,6 +337,7 @@ class PositionManager(
             }
             log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
             state.markSold()
+            persist(state)
             return null
         }
 
@@ -282,8 +365,10 @@ class PositionManager(
         return try {
             // 매수판과 동일 — 주문 접수 후 체결확인·상태반영은 취소돼도 원자 완주해야 청산 기록이 유실되지 않는다.
             withContext(NonCancellable) {
+                // 매도 pending 을 durable 로 먼저 기록(취소·크래시가 placeOrder 와 기록 사이를 끊지 못하게).
+                persistPending(state)
                 val filled = awaitFill(order.uuid)
-                if (filled?.state == "done") {
+                val record = if (filled?.state == "done") {
                     // 즉시 전량 체결 — 주문량(sellable)으로 기록. done 은 upbit 시장가 매도의 정상 종결.
                     completeSellRecord(ticker, state, currentPrice, sellable, reason)
                 } else {
@@ -291,6 +376,8 @@ class PositionManager(
                     log.warn("Sell not confirmed for {}: state={} — pending kept for reconcile", ticker, filled?.state)
                     null
                 }
+                persist(state) // markSold(done) 또는 pending 유지 상태 durable 반영
+                record
             }
         } catch (e: CancellationException) {
             throw e // 취소는 삼키지 않고 전파(구조적 동시성).
@@ -406,6 +493,8 @@ class PositionManager(
             totalAmount = currentPrice * volume,
             pnlPercent = pnl,
             reason = reason?.name,
+            // markSold 이전 호출이라 pendingSellUuid 가 살아있음 — 재시작 reconcile 중복 기록을 막는 dedup 키.
+            exchangeOrderId = state.pendingSellUuid,
         )
     }
 
