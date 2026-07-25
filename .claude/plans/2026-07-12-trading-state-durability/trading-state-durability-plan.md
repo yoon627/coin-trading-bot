@@ -1,8 +1,8 @@
 ---
 title: trading-state-durability — per-ticker 거래 상태의 재시작 생존 (#19 halt 상한 + #20 pending durable + 포지션 메타 영속)
-status: in_progress
+status: blocked
 started: 2026-07-12
-updated: 2026-07-19
+updated: 2026-07-25
 ---
 
 # Goal
@@ -19,10 +19,11 @@ updated: 2026-07-19
 - 2026-07-21: **구현 완료(dlc 9~10) — 전체 test green(exit 0), 기존 회귀 0.** 도메인(markBought replace 가드·halt 필드·clearHalt·pendingPersistFailed·exitParams·TradingProperties threshold) + 인프라(TradingStateEntity/Repository/Service·V14 CREATE+DROP+unique·ExitParamsSnapshot·dead positions 삭제) + PositionManager(seam·pending durable·halt 카운터·멱등 dedup·replace·sell 대칭) + TradeExecutionService(exchange_order_id·dedup) + TradingEngine(start initialStates·halt 게이트·주석 drift) + UserTradingManager(seam 배선·복원·부분복원 격리·halt 해제) + DailyReset flush + TradingController(halt 해제 endpoint·status 노출). 신규 재현 테스트: Critical① 이중계상 없음·#19 halt·카운터 reset·Critical② 멱등 dedup 2건. 16 files +411/-82 + 신규 5.
   - **slice test(Acceptance) defer**: 이 프로젝트는 통합테스트 인프라(test resources·H2 flyway 하네스)가 전무 — slice test 하나를 위한 하네스 구축은 과도한 스코프 확대라 별도 이슈로 분리. V14 SQL 문법·entity 매핑·exchange_order_id unique 는 flyway 부팅 검증 + code-review 로 커버(mock 사각은 남는 리스크로 명시).
 - 2026-07-19: **arch planning + plan-reviewer(codex gpt-5.5 병행) 완료 — 양측 강하게 합치.** Critical/blocker: ① **markBought 이중계상**(durable pending 복원+syncPosition→completeBuy averaging→holdVolume 2×·spurious BUY, TradingState.kt:52-58 검증됨), ② **재시작 reconcile 멱등성 부재**(exchange_order_id 미기록·unique 없음→중복 TradeRecord), ③ **placeOrder↔durable pending 취소 창**(NonCancellable 안·awaitFill 이전 완료 필수), ④ **주입 seam 미정**. Major: 실패정책 Acceptance↔Decisions 모순, 스냅샷 소비부 미포함, 부분복원 격리 없음, halt 해제 endpoint 부재, peakPrice write 증폭, resetDaily durable flush 누락, reload memory→durable 유실. 직렬화=Jackson(bot 은 kotlinx 미사용). **사용자 스코프 확정: 스냅샷 소비=Phase 2 이관, halt 해제=백엔드 endpoint 만.** 전 지적을 아래 Decisions/Acceptance 에 반영.
+- 2026-07-25: 구현(커밋 **ab89676**, test green) 후 **code-review(메인+codex gpt-5.5 high 병행) = REQUEST CHANGES**. 실재 Critical 다수 발굴 + **base drift 발견** → status blocked. ⓐ Critical: daily-reset `lastResetDate` in-memory 라 재시작 첫 tick 이 boughtToday 리셋(durable #6 무효·당일 재매수) / restoreOne 이 loadStates 실패 시 미기동 엔진을 map 에 남겨 영구 미복원(silent) / pendingPersistFailed 가드가 buy 초입이라 재기록 도달 불가(deadlock) / halt 게이트가 processTicker 초입이라 **매도·reconcile 까지 차단**(청산 갇힘) / JSON row-drop 격리가 pending UUID 까지 폐기 → 이중주문. ⓑ Major: recoverFromBalance 오탐 halt·**peakPrice 미영속(plan 결정했으나 구현 누락)**·pending sell 수량 미저장(phantom zero SELL)·stale buyDate 상속·clearHalt 허위성공·NonCancellable timeout·V14 미검증/DROP. ⓒ **base drift**: origin/main 이 base(1ecee2e) 이후 3커밋 전진 — #47(processTicker 회귀테스트 추가 → code-review 의 "테스트 8개 삭제 Major"는 이 착시로 인한 **오탐**), **#48 UpbitWebSocketClient 제거(rebase 충돌)**, #42(backtest). 통과 항목: Critical① replace·멱등 dedup·userId 정합(onTrade copy)·backward compat.
 
 # Next
 
-TDD Red 착수 — 재현 테스트 3개 우선(모두 mockk): ① "durable pending 복원 + syncPosition 이 balance 채운 상태에서 reconcile → **중복 기록·holdVolume 2× 없이** 단일 확정"(Critical①②), ② "reconcile getOrder+balance N회 실패 → halt + 재시작 후 halt 유지 → 수동 해제 → 정상"(#19), ③ "boughtToday durable 복원 → 재시작 후 당일 재진입 차단 유지 + 9AM reset 후 재시작 정합". 이어서 인프라(TradingStateEntity/Repository + TradingStateService + V14) → 복원 주입 API(start initialStates) → pending/halt/메타 durable 기록·복원 → halt 해제 endpoint.
+**미완 — code-review REQUEST CHANGES + base drift 미해결(status blocked).** 재개 순서: ① 최신 origin/main(bfb237f) rebase — **#48 UpbitWebSocketClient 제거 충돌 해결**(TradingEngine/UserTradingManager 참조 정리) + #47 processTicker internal 3-arg seam·회귀테스트와 halt 게이트 정합. ② Critical fix 5건(Review Disposition): daily-reset lastResetDate durable화 or 시작 시 tradingDate 초기화 · restore loadStates 를 computeIfAbsent 밖 선평가+실패 시 미등록(containsKey→isRunning) · pendingPersistFailed 매 tick 재기록 경로 · halt 게이트를 매수 전용으로 분리(sync/reconcile/매도 허용) · JSON 격리 시 pending UUID 항상 복원. ③ Major 선별 fix. ④ 재검증(test)·재리뷰. 재현 테스트는 실제 restart 경로(엔진 레벨) 커버 추가.
 
 # Decisions
 
@@ -77,7 +78,9 @@ TDD Red 착수 — 재현 테스트 3개 우선(모두 mockk): ① "durable pend
 
 # Blockers
 
-- ~~order-state-integrity 머지 선행~~ · ~~engine-lifecycle 머지 선행~~ — **둘 다 해소**(#39·#43 머지·rebase 완료). 리뷰 blocker 3건(멱등성·취소창·seam)은 위 Decisions 에 설계 반영으로 해소 — 구현 blocker 없음. 권장 머지 순서: **이 plan** → strategy-evolution Phase 2.
+- ~~order-state-integrity 머지 선행~~ · ~~engine-lifecycle 머지 선행~~ — **둘 다 해소**(#39·#43 머지·rebase 완료).
+- **(2026-07-25 신규) base drift**: origin/main 이 base(1ecee2e) 이후 3커밋 전진(#42·#47·#48). **#48 UpbitWebSocketClient 제거**가 내 변경(TradingEngine·UserTradingManager)과 충돌 → 재개 시 최신 origin/main rebase + 충돌 해결 필요. #47 은 processTicker internal 3-arg seam·회귀테스트 추가(정합 필요).
+- **(2026-07-25 신규) code-review REQUEST CHANGES**: 아래 Review Disposition 의 Critical 5건 fix 전까지 머지 불가. 권장 머지 순서: **이 plan**(fix 후) → strategy-evolution Phase 2.
 
 # Review Disposition
 
@@ -90,3 +93,21 @@ TDD Red 착수 — 재현 테스트 3개 우선(모두 mockk): ① "durable pend
 - 양측 Major(부분복원 격리·resetDaily flush·peakPrice throttle·reload 정합) → **fix**(Decisions 반영).
 - codex(Acceptance↔Decisions 모순) → **fix**(실패정책 2분리).
 - codex(plan jsonb↔VARCHAR 표기) → **fix**(전면 VARCHAR JSON/Jackson 통일).
+
+## code-review 2026-07-25 (메인+codex gpt-5.5 high) — REQUEST CHANGES 처분
+- daily-reset `lastResetDate` in-memory(Critical) → **fix**: 시작 시 현재 tradingDate 로 초기화 or lastResetDate durable화(재시작 첫 tick 오리셋 방지).
+- restore loadStates 실패 미기동(Critical) → **fix**: loadStates 를 `computeIfAbsent` 밖에서 선평가, 실패 시 엔진 미등록, `containsKey`→`isRunning` 검사.
+- pendingPersistFailed deadlock(Critical/Major) → **fix**: buy 초입 가드가 재기록을 막음 — 매 tick pending 재upsert 경로 추가, 성공 시에만 게이트 해제.
+- halt 게이트 매도 차단(Critical/Major) → **fix**: `buyHalted`(신규 매수만) 분리, sync/reconcile/위험축소 매도는 허용.
+- JSON row-drop pending 유실(Critical/Major) → **fix**: pending UUID 는 항상 복원, exit_params 만 필드 단위 기본값, 핵심 손상 시 ticker quarantine.
+- processTicker 회귀테스트 8개 삭제(Major) → **false-positive**: base drift 착시(#47 이 추가한 테스트, 내 브랜치 stale). rebase 로 편입, halt 게이트 정합만 확인.
+- recoverFromBalance 오탐 halt(Major) → **fix**: FILLED/NO_BALANCE/LOOKUP_FAILED 3분류, NO_BALANCE 카운트 제외.
+- peakPrice 미영속(Major) → **fix**: plan 결정(값 상승 시 flush) 구현 누락분 — dirty+throttle 저장 + stop/reload 전 flush.
+- pending sell 수량 미저장→phantom zero SELL(Major) → **fix**: pendingSellVolume·기준평단 durable, zero-balance 단독 audit 확정 금지.
+- stale buyDate/entryStrategy 상속(Major) → **fix**: markSold 가 position-scoped 메타(exitParams 포함) 초기화, reconcile-replace 와 신규 entry 경로 분리.
+- clearHalt 허위성공(Major) → **fix**: durable commit 실패를 호출자에 전파(실패 응답).
+- NonCancellable timeout 부재(Major) → **defer**: R2DBC/HTTP timeout 설정 확인 후 별도(원자구간 최소화 검토).
+- V14 미검증/destructive DROP(Major) → **defer**(slice test 인프라 부재) + **배포 절차 필수**: 배포 전 trade_executions 의 (user_id, exchange_order_id) 중복 확인, DROP positions 는 rename/archive 후 후속 migration 권장.
+- audit 유실 창(persist→record 순서, Minor) → **fix 검토**: record insert 를 pending clear 앞으로 / 또는 wontfix(hard crash 한정, position sync 복구).
+- 알림 유실(Minor)·upsert N+1(Minor) → **defer**(별도). 비활성 ticker seed(Minor)·reconcileHaltThreshold @Min(1)(Minor) → **fix**.
+- `record.userId ?: 0` dead·markBought replace=false dead branch(Nit) → **fix**(simplify 단계 정리).
