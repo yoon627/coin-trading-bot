@@ -7,18 +7,23 @@ import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.spyk
 import io.mockk.verify
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -35,6 +40,7 @@ class UserTradingManagerTest {
     private lateinit var discordNotifier: DiscordNotifier
     private lateinit var userSecretsService: UserSecretsService
     private lateinit var marketDataStore: MarketDataStore
+    private lateinit var tradingStateService: TradingStateService
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
@@ -47,12 +53,13 @@ class UserTradingManagerTest {
         discordNotifier = mockk(relaxed = true)
         userSecretsService = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
+        tradingStateService = mockk(relaxed = true)
         upbitWebClient = mockk(relaxed = true)
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, tradeExecutionService, discordNotifier,
                 emptyList(), TradingProperties(autoStart = true), upbitWebClient,
-                userSecretsService, marketDataStore,
+                userSecretsService, marketDataStore, tradingStateService,
             ),
         )
         // engine.start 의 실코루틴 기동을 피하고 restore 오케스트레이션만 검증하기 위한 seam.
@@ -72,8 +79,41 @@ class UserTradingManagerTest {
         UserEntity(id = userId, username = "u$userId", password = "p", upbitAccessKey = "ak", upbitSecretKey = "sk")
 
     @Test
-    fun `restore skips a user whose engine already exists`() = runTest {
+    fun `restore retries when durable state load fails instead of stranding an unstarted engine`() = runTest {
+        // loadStates 가 터지면 engines 에는 생성만 되고 기동 안 된 엔진이 남는다. 그 엔진의 존재만으로
+        // 다음 시도가 "이미 복원됨" 으로 판단하면 그 유저는 프로세스 수명 내내 영구 미복원(무증상)이 된다.
+        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { mockEngine.isRunning() } returns false
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down") andThen emptyMap()
+
+        manager.restoreAllRunningBots()
+
+        coVerify(exactly = 1) { mockEngine.start(any(), any()) } // 재시도에서 실제로 기동돼야 한다
+    }
+
+    @Test
+    fun `reload restores the running engine when durable state load fails`() = runTest {
+        // 교체 실패는 정지 의도가 아니다. 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
+        // 무기한 중단되는데, running=true 라 겉으로는 정상으로 보인다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+
+        manager.reloadUserRuntime(1L)
+
+        assertSame(mockEngine, engines()[1L], "로드 실패 시 교체 엔진이 등록되면 안 된다")
+        verify(exactly = 0) { manager.createEngine(any()) }
+        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), emptyMap()) } // 옛 엔진 재기동
+    }
+
+    @Test
+    fun `restore skips a user whose engine is already running`() = runTest {
         engines()[1L] = mockEngine // 사용자가 이미 start 로 개입한 상태 시뮬
+        every { mockEngine.isRunning() } returns true
         every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
 
         manager.restoreAllRunningBots()

@@ -11,6 +11,8 @@ data class TradeRecord(
     val pnlPercent: Double? = null,
     val reason: String? = null,
     val strategy: String? = null,
+    // 거래소 주문 uuid — 재시작 후 reconcile 중복 기록을 막는 멱등 dedup 키(#20). null 이면 dedup 대상 아님.
+    val exchangeOrderId: String? = null,
     val userId: Long = 0,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )

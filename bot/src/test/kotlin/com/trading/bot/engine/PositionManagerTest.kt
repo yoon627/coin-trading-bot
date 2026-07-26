@@ -5,6 +5,7 @@ import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.TradingState
 import com.trading.common.config.TradingProperties
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -20,7 +21,7 @@ class PositionManagerTest {
         UpbitAuthProvider(UpbitProperties(accessKey = "x", secretKey = "x")),
     )
 
-    private val manager = PositionManager(dummyClient, config)
+    private val manager = PositionManager(dummyClient, config, mockk(relaxed = true), 1L)
 
     @Test
     fun `checkTakeProfit returns true when pnl exceeds threshold`() {
