@@ -78,7 +78,8 @@ class TradingEngine(
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
-            initialStates.forEach { (ticker, state) -> states[ticker] = state }
+            // 이번 실행의 활성 ticker 만 — 과거 ticker 까지 실으면 tick 이 안 도는 상태가 getStates·일일 리셋에 섞인다.
+            initialStates.filterKeys { it in tickers }.forEach { (ticker, state) -> states[ticker] = state }
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
