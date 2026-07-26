@@ -640,7 +640,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `resetDaily keeps pendingBuyUuid`() {
         val state = TradingState("KRW-BTC", boughtToday = true, pendingBuyUuid = "x")
-        state.resetDaily()
+        state.resetDaily(java.time.LocalDate.of(2026, 6, 11))
         assertFalse(state.boughtToday)
         assertEquals("x", state.pendingBuyUuid) // H8: 끄면 재발 → 불변
     }

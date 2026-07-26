@@ -21,6 +21,7 @@ data class TradingStateEntity(
     val entryStrategy: String? = null,
     val buyDate: LocalDate? = null,
     val boughtToday: Boolean = false,
+    val boughtDate: LocalDate? = null,
     val peakPrice: Double = 0.0,
     val exitParamsJson: String? = null,
     val halted: Boolean = false,

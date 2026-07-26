@@ -2,7 +2,6 @@ package com.trading.bot.domain
 
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneId
 import kotlin.math.max
 
 data class TradingState(
@@ -13,6 +12,9 @@ data class TradingState(
     var peakPrice: Double = 0.0,
     var buyDate: LocalDate? = null,
     var boughtToday: Boolean = false,
+    // boughtToday 가 가리키는 거래일. 재시작 후 그 플래그가 오늘 것인지 어제 것인지 구분하는 유일한 근거다
+    // (프로세스 수명 플래그로는 구분 불가 — 같은 거래일 재시작이면 재매수가 뚫리고, 경계를 넘겼으면 매수가 막힌다).
+    var boughtDate: LocalDate? = null,
     var lastTradeTime: LocalDateTime? = null,
     var entryStrategy: String? = null,
     // H8: placeOrder 성공 후 후처리(awaitFill/getAccounts) 실패 시 주문 uuid 를 보존해 다음 tick reconcile.
@@ -35,10 +37,6 @@ data class TradingState(
     // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
     var pendingPersistFailed: Boolean = false,
 ) {
-    companion object {
-        private val KST: ZoneId = ZoneId.of("Asia/Seoul")
-    }
-
     fun pnlPercent(currentPrice: Double): Double {
         if (avgBuyPrice <= 0) return 0.0
         return ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0
@@ -53,9 +51,9 @@ data class TradingState(
         peakPrice = max(peakPrice, currentPrice)
     }
 
-    fun resetDaily() {
+    fun resetDaily(tradingDate: LocalDate) {
         // H8: pendingBuyUuid 는 건드리지 않는다(끄면 미해소 주문이 다음날 재매수로 이어져 H8 재발).
-        boughtToday = false
+        if (boughtDate != tradingDate) boughtToday = false
     }
 
     /**
@@ -63,7 +61,7 @@ data class TradingState(
      * 이미 position 을 채운 상태에서 추가매수 averaging 으로 이중계상되는 것을 막는다(#20). buyDate·entryStrategy 는
      * durable 복원값이 있으면 유지(재시작으로 진입일/진입전략이 뒤덮이지 않게).
      */
-    fun markBought(price: Double, volume: Double, strategy: String? = null, replace: Boolean = false, now: LocalDateTime = LocalDateTime.now(KST)) {
+    fun markBought(price: Double, volume: Double, strategy: String? = null, replace: Boolean = false, now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
         if (position && !replace) {
             // 추가 매수: 평균 단가 계산. entryStrategy 는 최초 진입 전략 유지(덮어쓰지 않음).
             val totalCost = avgBuyPrice * holdVolume + price * volume
@@ -79,6 +77,7 @@ data class TradingState(
         }
         // 당일 1회 진입 게이트가 동작하도록 매수 시점에 반드시 set. resetDaily()에서만 해제됨.
         boughtToday = true
+        boughtDate = TradingDay.of(now)
         peakPrice = max(peakPrice, price)
         lastTradeTime = now
         // H8: 체결 확정 = pending 주문 해소.
@@ -86,7 +85,7 @@ data class TradingState(
         pendingBuyStrategy = null
     }
 
-    fun markSold(now: LocalDateTime = LocalDateTime.now(KST)) {
+    fun markSold(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
         position = false
         avgBuyPrice = 0.0
         holdVolume = 0.0

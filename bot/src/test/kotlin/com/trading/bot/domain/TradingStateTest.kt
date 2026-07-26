@@ -1,6 +1,7 @@
 package com.trading.bot.domain
 
 import java.time.LocalDate
+import java.time.LocalDateTime
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -24,6 +25,30 @@ class TradingStateTest {
     fun `pnlPercent returns 0 when avgBuyPrice is 0`() {
         val state = TradingState("KRW-BTC")
         assertEquals(0.0, state.pnlPercent(50000000.0))
+    }
+
+    @Test
+    fun `markBought stamps the trading date, not the calendar date`() {
+        // 08:00 매수는 거래일 기준 전날(09:00 리셋 전)에 속한다 — 달력일로 찍으면 다음 tick 의
+        // 리셋이 boughtToday 를 즉시 해제해 같은 거래일에 재진입이 뚫린다.
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, now = LocalDateTime.of(2026, 6, 11, 8, 0))
+        assertEquals(LocalDate.of(2026, 6, 10), state.boughtDate)
+
+        val afterReset = TradingState("KRW-ETH")
+        afterReset.markBought(3000000.0, 0.01, now = LocalDateTime.of(2026, 6, 11, 9, 0))
+        assertEquals(LocalDate.of(2026, 6, 11), afterReset.boughtDate)
+    }
+
+    @Test
+    fun `resetDaily clears boughtToday only when the trading date rolled over`() {
+        val state = TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11))
+
+        state.resetDaily(LocalDate.of(2026, 6, 11))
+        assertTrue(state.boughtToday)
+
+        state.resetDaily(LocalDate.of(2026, 6, 12))
+        assertFalse(state.boughtToday)
     }
 
     @Test
@@ -103,9 +128,10 @@ class TradingStateTest {
     }
 
     @Test
-    fun `resetDaily clears boughtToday flag`() {
+    fun `resetDaily clears boughtToday when the state has no recorded trading date`() {
+        // boughtDate = null 은 이 컬럼 이전에 저장된 상태 — 거래일을 모르므로 보수적으로 해제한다.
         val state = TradingState("KRW-BTC", boughtToday = true)
-        state.resetDaily()
+        state.resetDaily(LocalDate.of(2026, 6, 11))
         assertFalse(state.boughtToday)
     }
 

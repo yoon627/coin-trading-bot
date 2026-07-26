@@ -1,8 +1,8 @@
 ---
 title: trading-state-durability — per-ticker 거래 상태의 재시작 생존 (#19 halt 상한 + #20 pending durable + 포지션 메타 영속)
-status: blocked
+status: in_progress
 started: 2026-07-12
-updated: 2026-07-25
+updated: 2026-07-26
 ---
 
 # Goal
@@ -19,11 +19,12 @@ updated: 2026-07-25
 - 2026-07-21: **구현 완료(dlc 9~10) — 전체 test green(exit 0), 기존 회귀 0.** 도메인(markBought replace 가드·halt 필드·clearHalt·pendingPersistFailed·exitParams·TradingProperties threshold) + 인프라(TradingStateEntity/Repository/Service·V14 CREATE+DROP+unique·ExitParamsSnapshot·dead positions 삭제) + PositionManager(seam·pending durable·halt 카운터·멱등 dedup·replace·sell 대칭) + TradeExecutionService(exchange_order_id·dedup) + TradingEngine(start initialStates·halt 게이트·주석 drift) + UserTradingManager(seam 배선·복원·부분복원 격리·halt 해제) + DailyReset flush + TradingController(halt 해제 endpoint·status 노출). 신규 재현 테스트: Critical① 이중계상 없음·#19 halt·카운터 reset·Critical② 멱등 dedup 2건. 16 files +411/-82 + 신규 5.
   - **slice test(Acceptance) defer**: 이 프로젝트는 통합테스트 인프라(test resources·H2 flyway 하네스)가 전무 — slice test 하나를 위한 하네스 구축은 과도한 스코프 확대라 별도 이슈로 분리. V14 SQL 문법·entity 매핑·exchange_order_id unique 는 flyway 부팅 검증 + code-review 로 커버(mock 사각은 남는 리스크로 명시).
 - 2026-07-19: **arch planning + plan-reviewer(codex gpt-5.5 병행) 완료 — 양측 강하게 합치.** Critical/blocker: ① **markBought 이중계상**(durable pending 복원+syncPosition→completeBuy averaging→holdVolume 2×·spurious BUY, TradingState.kt:52-58 검증됨), ② **재시작 reconcile 멱등성 부재**(exchange_order_id 미기록·unique 없음→중복 TradeRecord), ③ **placeOrder↔durable pending 취소 창**(NonCancellable 안·awaitFill 이전 완료 필수), ④ **주입 seam 미정**. Major: 실패정책 Acceptance↔Decisions 모순, 스냅샷 소비부 미포함, 부분복원 격리 없음, halt 해제 endpoint 부재, peakPrice write 증폭, resetDaily durable flush 누락, reload memory→durable 유실. 직렬화=Jackson(bot 은 kotlinx 미사용). **사용자 스코프 확정: 스냅샷 소비=Phase 2 이관, halt 해제=백엔드 endpoint 만.** 전 지적을 아래 Decisions/Acceptance 에 반영.
+- 2026-07-26: **base drift 해소** — 최신 origin/main(bfb237f) rebase 완료(`ffb1c5a`). 충돌 2건 해결: ① `TradingEngine.start` 의 `webSocketClient?.subscribe` 제거(#48 이 UpbitWebSocketClient 삭제) + initialStates seed 유지, ② halt 게이트를 #47 이 도입한 internal 3-arg `processTicker` seam 안으로 이동(2-arg wrapper 는 위임만). `UserTradingManagerTest` 생성자 인자에서 upbitWebSocketClient 제거·tradingStateService 유지. rebase 후 `compileKotlin`+`compileTestKotlin`+전체 `test` green(JDK21). code-review 의 "processTicker 회귀테스트 8개 삭제" 는 예상대로 base drift 착시였음(#47 테스트 그대로 편입). 브랜치는 origin 백업 완료(`CODEX_SKIP=1` — 리뷰 통과 아님, 소실 방지용). 작업 순서는 트래킹 이슈 #49 에 등록(우선순위 1).
 - 2026-07-25: 구현(커밋 **ab89676**, test green) 후 **code-review(메인+codex gpt-5.5 high 병행) = REQUEST CHANGES**. 실재 Critical 다수 발굴 + **base drift 발견** → status blocked. ⓐ Critical: daily-reset `lastResetDate` in-memory 라 재시작 첫 tick 이 boughtToday 리셋(durable #6 무효·당일 재매수) / restoreOne 이 loadStates 실패 시 미기동 엔진을 map 에 남겨 영구 미복원(silent) / pendingPersistFailed 가드가 buy 초입이라 재기록 도달 불가(deadlock) / halt 게이트가 processTicker 초입이라 **매도·reconcile 까지 차단**(청산 갇힘) / JSON row-drop 격리가 pending UUID 까지 폐기 → 이중주문. ⓑ Major: recoverFromBalance 오탐 halt·**peakPrice 미영속(plan 결정했으나 구현 누락)**·pending sell 수량 미저장(phantom zero SELL)·stale buyDate 상속·clearHalt 허위성공·NonCancellable timeout·V14 미검증/DROP. ⓒ **base drift**: origin/main 이 base(1ecee2e) 이후 3커밋 전진 — #47(processTicker 회귀테스트 추가 → code-review 의 "테스트 8개 삭제 Major"는 이 착시로 인한 **오탐**), **#48 UpbitWebSocketClient 제거(rebase 충돌)**, #42(backtest). 통과 항목: Critical① replace·멱등 dedup·userId 정합(onTrade copy)·backward compat.
 
 # Next
 
-**미완 — code-review REQUEST CHANGES + base drift 미해결(status blocked).** 재개 순서: ① 최신 origin/main(bfb237f) rebase — **#48 UpbitWebSocketClient 제거 충돌 해결**(TradingEngine/UserTradingManager 참조 정리) + #47 processTicker internal 3-arg seam·회귀테스트와 halt 게이트 정합. ② Critical fix 5건(Review Disposition): daily-reset lastResetDate durable화 or 시작 시 tradingDate 초기화 · restore loadStates 를 computeIfAbsent 밖 선평가+실패 시 미등록(containsKey→isRunning) · pendingPersistFailed 매 tick 재기록 경로 · halt 게이트를 매수 전용으로 분리(sync/reconcile/매도 허용) · JSON 격리 시 pending UUID 항상 복원. ③ Major 선별 fix. ④ 재검증(test)·재리뷰. 재현 테스트는 실제 restart 경로(엔진 레벨) 커버 추가.
+**Critical fix 진행 중** (base drift 해소 완료). 남은 순서: ① Critical-1 daily-reset(진행 중, 아래 Decisions) · ② restore loadStates 를 computeIfAbsent 밖 선평가+실패 시 미등록(containsKey→isRunning) · ③ pendingPersistFailed 매 tick 재기록 경로 · ④ halt 게이트를 매수 전용으로 분리(sync/reconcile/매도 허용) · ⑤ JSON 격리 시 pending UUID 항상 복원. 이후 Major 선별 fix → 재검증(test) → 재리뷰. 재현 테스트는 실제 restart 경로(엔진 레벨) 커버 추가.
 
 # Decisions
 
@@ -43,6 +44,7 @@ updated: 2026-07-25
 - **[스냅샷 소비 = strategy-evolution Phase 2 이관 (사용자 확정)]**: checkStopLoss/TrailingStop/TakeProfit·shouldSellForDailyReset 이 전역 tradingProperties read. 진입 시점 값 소비는 exit gate 3종+TradingState 모델 cross-cutting refactor → champion 파라미터 도입(Phase 2) 시점에. 이 PR 은 스냅샷 저장+복원까지, Acceptance 의 "진입 시점 값 청산"은 이 PR 밖.
 - **[dead `positions` 정리 = (b) 신규+삭제 (사용자 확정)]**: ① V14 `DROP TABLE IF EXISTS positions` ② PositionEntity.kt 삭제 ③ TradingRepository.kt 에서 PositionRepository interface+import 제거(TradeExecutionRepository·BotConfigRepository 유지). 삭제 안전 재검증(양측): positions 역참조 FK 0·코드 사용처 0·테스트 0. strategy_signals 는 스코프 밖.
 - **[rollback] V14 = trading_states CREATE + positions DROP, forward-only**: Postgres DDL 트랜잭션이라 all-or-nothing. 롤백은 V15 forward-fix 로만. **DROP 전 운영 DB 의 positions empty/non-prod 확인 또는 백업**(dead 라 비었을 것이나 절차 명시).
+- **[Critical-1 daily-reset = 전역 lastResetDate 의존 제거, boughtToday 에 날짜를 붙임]** (2026-07-26): code-review 제안 두 가지 중 "시작 시 현재 tradingDate 로 초기화"는 **반대 방향 버그**를 만든다 — 봇이 9AM 경계를 넘겨 정지했다가 재시작하면 `lastResetDate == 오늘`이라 리셋이 영영 안 걸리고 어제의 `boughtToday=true` 가 남아 **당일 매수가 차단**된다. "lastResetDate durable 화"는 bot_state 컬럼 추가 + 리셋마다 별도 영속 경로를 TradingEngine 에 배선해야 한다. 근본 원인은 *당일 진입 여부*가 프로세스 수명 플래그에 의존한다는 것이므로, **`TradingState.boughtDate` 를 신설·영속화하고 `resetDaily(tradingDate)` 를 날짜 비교로** 바꾼다(`boughtDate != tradingDate` 일 때만 해제). 재시작 첫 tick 이 리셋을 호출해도 무해(멱등)하고, 경계를 넘긴 재시작도 정상 해제된다. 9AM 경계 규칙은 `DailyResetManager` 와 `markBought` 두 곳에서 필요하므로 `domain/TradingDay` 로 추출해 단일 소스 유지(도메인이 engine 클래스를 역참조하지 않게).
 - **[주석 drift]** resolveExitStrategy(TradingEngine.kt:267-268) "entryStrategy 재시작 유실은 알려진 한계" 주석은 이 plan 으로 무효화 → 구현 시 동기화(§5).
 - **[소유권 계약]** order-state 는 pendingSellUuid 를 메모리까지 구현, 이 plan 이 durable 인수. strategy-evolution Phase 2(진입시점 청산·스왑 게이트)는 이 plan 산출물 의존 → 이 plan 이 먼저 머지.
 - **Closes #19, #20** (PR 에서 연결).

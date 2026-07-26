@@ -11,6 +11,7 @@ CREATE TABLE trading_states (
     entry_strategy VARCHAR(50),
     buy_date DATE,
     bought_today BOOLEAN NOT NULL DEFAULT FALSE,
+    bought_date DATE,
     peak_price DOUBLE PRECISION NOT NULL DEFAULT 0,
     exit_params_json VARCHAR(500),
     halted BOOLEAN NOT NULL DEFAULT FALSE,
