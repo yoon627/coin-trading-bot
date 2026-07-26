@@ -656,6 +656,22 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `reconcile does not count an unfilled order as a failure`() = runTest {
+        // getOrder 는 죽었지만 잔고조회로 "아직 체결 안 됨" 을 확인한 경우는 장애가 아니다.
+        // 이걸 실패로 세면 미체결 주문 하나로 멀쩡한 ticker 가 halt 되어 매수가 정지된다.
+        val mgr = PositionManager(upbitClient, TradingProperties(reconcileHaltThreshold = 2), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "n1", pendingBuyStrategy = "vb")
+
+        repeat(5) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) }
+
+        assertEquals(0, state.reconcileFailureCount)
+        assertFalse(state.halted)
+        assertEquals("n1", state.pendingBuyUuid) // pending 은 유지(다음 tick 재확인)
+    }
+
+    @Test
     fun `reconcile halts ticker after repeated getOrder and balance failures`() = runTest {
         // #19: getOrder·잔고조회가 둘 다 실패해 pending 이 무한 재시도되면 threshold 도달 시 halt.
         val mgr = PositionManager(
@@ -665,7 +681,7 @@ class PositionManagerExtendedTest {
             1L,
         )
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
-        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        coEvery { upbitClient.getAccounts() } throws RuntimeException("balance api down")
         val state = TradingState("KRW-BTC", pendingBuyUuid = "h1", pendingBuyStrategy = "vb")
 
         repeat(2) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) }

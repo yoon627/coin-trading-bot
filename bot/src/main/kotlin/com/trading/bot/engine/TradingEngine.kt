@@ -245,7 +245,9 @@ class TradingEngine(
             }
 
             if (state.position) {
-                state.updatePeakPrice(currentPrice)
+                // 신고점은 트레일링 스톱의 기준선 — 영속 안 하면 재시작 후 peak 이 0 에서 다시 쌓여
+                // 이미 발동했어야 할 청산이 안 걸린다. 갱신된 tick 에만 flush(상승 시에만 true).
+                if (state.updatePeakPrice(currentPrice)) positionManager.persistState(state)
                 val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
                 if (reason != null) {
                     val sellRecord = positionManager.sell(ticker, state, currentPrice, reason)

@@ -47,8 +47,11 @@ data class TradingState(
         return ((peakPrice - currentPrice) / peakPrice) * 100.0
     }
 
-    fun updatePeakPrice(currentPrice: Double) {
-        peakPrice = max(peakPrice, currentPrice)
+    /** @return 신고점 갱신 여부 — durable flush 를 갱신 시점에만 걸기 위한 신호(매 tick upsert 는 write 증폭). */
+    fun updatePeakPrice(currentPrice: Double): Boolean {
+        if (currentPrice <= peakPrice) return false
+        peakPrice = currentPrice
+        return true
     }
 
     fun resetDaily(tradingDate: LocalDate) {

@@ -143,13 +143,18 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             log.warn("reconcile getOrder failed for {} ({}): falling back to balance", ticker, e.message)
-            val recovered = recoverFromBalance(ticker, state, currentPrice)
-            if (recovered == null && state.pendingBuyUuid != null) {
-                // getOrder·잔고조회가 둘 다 실패해 pending 이 미해소 — #19 무한 재시도를 막는 실패 카운터.
-                recordReconcileFailure(state)
-                persist(state)
+            return when (val recovery = recoverFromBalance(ticker, state, currentPrice)) {
+                is BalanceRecovery.Filled -> recovery.record
+                // 잔고조회는 성공했고 "체결 안 됨" 을 확인한 정상 판정 — 장애가 아니므로 halt 카운터에 넣지 않는다.
+                // (여기서 세면 미체결 주문 하나로 멀쩡한 ticker 가 매수 정지된다.)
+                BalanceRecovery.NoBalance -> null
+                // getOrder·잔고조회가 둘 다 실패 = 상태를 볼 수단이 없음. #19 무한 재시도를 막는 실패 카운터.
+                BalanceRecovery.LookupFailed -> {
+                    recordReconcileFailure(state)
+                    persist(state)
+                    null
+                }
             }
-            return recovered
         }
         // getOrder 응답을 받았으면(wait/done/cancel 판정 가능) 진전이므로 실패 카운터 해소.
         if (state.reconcileFailureCount != 0) {
@@ -194,21 +199,31 @@ class PositionManager(
      * 전제: 1 ticker = 1 position, pending 생존 중 position=false(이전 봇 보유분 없음)이므로 해당 통화 잔고는
      * 이 주문 체결분이다. dust/수동매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
      */
-    private suspend fun recoverFromBalance(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
+    private sealed interface BalanceRecovery {
+        data class Filled(val record: TradeRecord) : BalanceRecovery
+
+        /** 잔고조회 성공 + 잔고 0 — 주문이 아직 체결 안 된 정상 상태. */
+        data object NoBalance : BalanceRecovery
+
+        /** 잔고조회 자체가 실패 — 체결 여부를 판단할 수단이 없는 장애 상태. */
+        data object LookupFailed : BalanceRecovery
+    }
+
+    private suspend fun recoverFromBalance(ticker: String, state: TradingState, currentPrice: Double): BalanceRecovery {
         return try {
             val account = findAccount(ticker.substringAfter("-"))
             val balance = account?.balanceDouble() ?: 0.0
             if (balance > 0.0) {
-                completeBuy(ticker, state, currentPrice, balance, account)
+                BalanceRecovery.Filled(completeBuy(ticker, state, currentPrice, balance, account))
             } else {
                 log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
-                null
+                BalanceRecovery.NoBalance
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log.warn("reconcile balance recovery failed for {} ({}) — pending kept", ticker, e.message)
-            null
+            BalanceRecovery.LookupFailed
         }
     }
 
