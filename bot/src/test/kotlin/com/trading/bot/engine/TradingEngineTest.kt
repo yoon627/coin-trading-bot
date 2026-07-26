@@ -280,6 +280,33 @@ class TradingEngineTest {
         TradeRecord(ticker = "KRW-BTC", side = side, price = 100.0, volume = 1.0, totalAmount = 100.0)
 
     @Test
+    fun `processTicker persists a new peak so trailing stop survives restart`() = runTest {
+        // peakPrice 를 안 남기면 재시작 후 peak 이 현재가에서 다시 쌓여, 이미 발동했어야 할 트레일링 스톱이 안 걸린다.
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, peakPrice = 51_000_000.0)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        assertEquals(52_000_000.0, state.peakPrice)
+        coVerify(exactly = 1) { positionManager.persistState(state) }
+    }
+
+    @Test
+    fun `processTicker does not persist when the peak is unchanged`() = runTest {
+        // 매 tick upsert 는 write 증폭 — 갱신된 tick 에만 flush 한다.
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, peakPrice = 53_000_000.0)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 0) { positionManager.persistState(any()) }
+    }
+
+    @Test
     fun `processTicker buys using REST price when store misses`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC")

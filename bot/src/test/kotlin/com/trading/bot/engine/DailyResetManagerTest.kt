@@ -51,6 +51,49 @@ class DailyResetManagerTest {
         assertTrue(states["KRW-BTC"]!!.boughtToday) // not reset again
     }
 
+    // --- 재시작 정합 (#20 durable boughtToday) ---
+
+    @Test
+    fun `checkAndReset keeps boughtToday for state bought on the current trading date`() {
+        // 재시작 = 새 DailyResetManager(lastResetDate 없음) → 첫 tick 이 리셋을 호출한다.
+        // durable 로 복원된 "오늘 이미 매수함" 이 이때 지워지면 당일 재매수가 뚫린다.
+        val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
+        val states = mapOf(
+            "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11)),
+        )
+
+        m.checkAndReset(states)
+
+        assertTrue(states["KRW-BTC"]!!.boughtToday)
+    }
+
+    @Test
+    fun `checkAndReset clears boughtToday for state bought on a previous trading date`() {
+        // 9AM 경계를 넘겨 정지했다 재시작한 경우 — 어제의 boughtToday 는 반드시 해제돼야 당일 매수가 열린다.
+        val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
+        val states = mapOf(
+            "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 10)),
+        )
+
+        m.checkAndReset(states)
+
+        assertFalse(states["KRW-BTC"]!!.boughtToday)
+    }
+
+    @Test
+    fun `checkAndReset resets only the states whose trading date rolled over`() {
+        val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
+        val states = mapOf(
+            "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 10)),
+            "KRW-ETH" to TradingState("KRW-ETH", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11)),
+        )
+
+        m.checkAndReset(states)
+
+        assertFalse(states["KRW-BTC"]!!.boughtToday)
+        assertTrue(states["KRW-ETH"]!!.boughtToday)
+    }
+
     @Test
     fun `shouldSellForDailyReset returns false when no position`() {
         val state = TradingState("KRW-BTC", position = false)
