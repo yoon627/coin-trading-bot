@@ -28,7 +28,7 @@ updated: 2026-07-26
 
 # Next
 
-**3차 리뷰 대응 + simplify + 문서 동기화 완료, 471 test green → push/PR.** PR 본문에 후속 이슈 5건(reload fallback 거짓 성공 · pending 해소↔audit 원자화 · V14 통합테스트 · peak flush dirty bit · sell 알림 durable)과 **배포 절차**(`trade_executions` 중복 확인 → V14 적용, `positions` 는 rename/archive 선행 권장)를 명시할 것.
+**PR #50 오픈 — 리뷰/머지 대기.** 머지되면 status: done + 배포 절차(PR 본문) 수행. 후속 이슈 6건은 PR 본문 하단에 정리됨(별도 GitHub Issue 로 등록 필요).
 
 # Decisions
 
