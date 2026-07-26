@@ -251,7 +251,13 @@ class UserTradingManager(
     /** #19: halt 된 ticker 수동 해제 — 다음 tick 부터 reconcile/매매 재개. */
     suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
         val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
-        val cleared = engine.clearHalt(ticker)
+        val cleared = try {
+            engine.clearHalt(ticker)
+        } catch (e: Exception) {
+            // durable 반영 실패 — 해제되지 않았음을 그대로 알린다(재시도는 사용자 몫).
+            log.error("halt 해제 실패 user={} ticker={}: {}", userId, ticker, e.message, e)
+            return@withLock mapOf("error" to "Failed to clear halt — state not persisted")
+        }
         mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 

@@ -656,6 +656,23 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `markSold clears the entry-time exit snapshot`() {
+        // 스냅샷은 그 포지션 소유 — 남으면 다음 진입이 이전 포지션의 청산 파라미터를 물려받는다.
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001)
+        state.exitParams = ExitParamsSnapshot(
+            takeProfitPct = 2.0,
+            maxLossPct = 3.0,
+            trailingStopPct = 1.0,
+            trailingArmPct = 1.5,
+            maxHoldDays = 5,
+        )
+
+        state.markSold()
+
+        assertNull(state.exitParams)
+    }
+
+    @Test
     fun `reconcile does not count an unfilled order as a failure`() = runTest {
         // getOrder 는 죽었지만 잔고조회로 "아직 체결 안 됨" 을 확인한 경우는 장애가 아니다.
         // 이걸 실패로 세면 미체결 주문 하나로 멀쩡한 ticker 가 halt 되어 매수가 정지된다.

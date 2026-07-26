@@ -126,12 +126,25 @@ class TradingEngine(
     /** #19: halt 된 ticker 목록(status 노출용). */
     fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
 
-    /** #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false. */
+    /**
+     * #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false.
+     * durable 기록이 실패하면 메모리 해제를 되돌리고 예외를 올린다 — 성공으로 응답하면 사용자는 풀린 줄 알지만
+     * 재시작 시 halt 가 되살아난다.
+     */
     suspend fun clearHalt(ticker: String): Boolean {
         val state = states[ticker] ?: return false
         if (!state.halted) return false
+        val reason = state.haltReason
+        val failureCount = state.reconcileFailureCount
         state.clearHalt()
-        positionManager.persistState(state)
+        try {
+            positionManager.persistStateOrThrow(state)
+        } catch (e: Exception) {
+            state.halted = true
+            state.haltReason = reason
+            state.reconcileFailureCount = failureCount
+            throw e
+        }
         log.info("Halt cleared for {} ({})", ticker, username)
         return true
     }

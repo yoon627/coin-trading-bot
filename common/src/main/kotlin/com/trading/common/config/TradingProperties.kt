@@ -27,5 +27,10 @@ data class TradingProperties(
     // interval-seconds(기본 10s) 기준 20회 ≈ 200초 이상 지속 장애 시 무한 재시도를 멈춘다.
     val reconcileHaltThreshold: Int = 20,
 ) {
+    init {
+        // 0 이하면 첫 실패에서 곧바로 halt 되어 모든 ticker 의 매수가 멈춘다 — 기동 시 걸러낸다.
+        require(reconcileHaltThreshold >= 1) { "trading.reconcile-halt-threshold must be >= 1, got $reconcileHaltThreshold" }
+    }
+
     fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 }

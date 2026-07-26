@@ -95,6 +95,8 @@ data class TradingState(
         peakPrice = 0.0
         buyDate = null
         entryStrategy = null
+        // 진입 시점 스냅샷은 그 포지션에 귀속 — 남겨두면 다음 진입이 이전 포지션의 청산 파라미터를 물려받는다.
+        exitParams = null
         lastTradeTime = now
         // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
         pendingBuyUuid = null

@@ -305,8 +305,11 @@ class PositionManager(
         }
     }
 
-    /** engine 이 halt 수동 해제 등 도메인-외 상태 변경 후 durable 반영에 쓰는 진입점(best-effort). */
+    /** 메타 변경 후 durable 반영(best-effort) — 실패해도 다음 전이에서 재기록된다. */
     internal suspend fun persistState(state: TradingState) = persist(state)
+
+    /** 실패를 호출자에게 알려야 하는 durable 반영(halt 해제 등 사용자 응답이 걸린 경로). */
+    internal suspend fun persistStateOrThrow(state: TradingState) = tradingStateService.upsert(userId, state)
 
     /** pending 기록 실패로 막힌 진입을 푸는 유일한 경로 — 성공해야 pendingPersistFailed 가 해제된다. */
     internal suspend fun retryPendingPersistIfNeeded(state: TradingState) {
