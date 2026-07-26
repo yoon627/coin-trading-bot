@@ -71,9 +71,24 @@ class TradingEngine(
             ?: strategies.firstOrNull()
     }
 
-    fun start(tickers: List<String> = tradingProperties.tickerList()) {
+    fun start(
+        tickers: List<String> = tradingProperties.tickerList(),
+        initialStates: Map<String, TradingState> = emptyMap(),
+    ) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
+            // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
+            // 이번 실행의 활성 ticker 만 — 과거 ticker 까지 실으면 tick 이 안 도는 상태가 getStates·일일 리셋에 섞인다.
+            initialStates.filterKeys { it in tickers }.forEach { (ticker, state) -> states[ticker] = state }
+            // 드롭한 ticker 에 미해소 주문이 남아 있으면 아무도 reconcile 하지 않는다 — 사람이 알아야 한다.
+            initialStates.filterKeys { it !in tickers }
+                .filterValues { it.pendingBuyUuid != null || it.pendingSellUuid != null }
+                .forEach { (ticker, state) ->
+                    log.error(
+                        "비활성 ticker {} 에 미해소 주문이 남아 있습니다(buy={}, sell={}) — 이 실행에서는 reconcile 되지 않습니다.",
+                        ticker, state.pendingBuyUuid, state.pendingSellUuid,
+                    )
+                }
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
@@ -118,6 +133,32 @@ class TradingEngine(
 
     fun getStates(): Map<String, TradingState> = states.toMap()
 
+    /** #19: halt 된 ticker 목록(status 노출용). */
+    fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
+
+    /**
+     * #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false.
+     * durable 기록이 실패하면 메모리 해제를 되돌리고 예외를 올린다 — 성공으로 응답하면 사용자는 풀린 줄 알지만
+     * 재시작 시 halt 가 되살아난다.
+     */
+    suspend fun clearHalt(ticker: String): Boolean {
+        val state = states[ticker] ?: return false
+        if (!state.halted) return false
+        val reason = state.haltReason
+        val failureCount = state.reconcileFailureCount
+        state.clearHalt()
+        try {
+            positionManager.persistStateOrThrow(state)
+        } catch (e: Exception) {
+            state.halted = true
+            state.haltReason = reason
+            state.reconcileFailureCount = failureCount
+            throw e
+        }
+        log.info("Halt cleared for {} ({})", ticker, username)
+        return true
+    }
+
     fun getActiveTickers(): List<String> = activeTickers.toList()
 
     fun getActiveStrategyName(): String = activeStrategy?.name ?: "none"
@@ -140,7 +181,10 @@ class TradingEngine(
 
         while (running.get() && scope.isActive) {
             try {
-                dailyResetManager.checkAndReset(states)
+                if (dailyResetManager.checkAndReset(states)) {
+                    // 9AM 리셋(boughtToday=false)을 durable 로 flush — 리셋 직후 재시작 시 boughtToday=true 복원으로 당일 재진입이 재차단되는 것 방지.
+                    states.values.forEach { positionManager.persistState(it) }
+                }
 
                 for (ticker in activeTickers) {
                     if (!running.get()) break
@@ -196,6 +240,10 @@ class TradingEngine(
                 positionManager.syncPosition(ticker, state)
             }
 
+            // pending durable 기록이 실패해 매수가 막힌 상태면 매 tick 재기록을 시도한다 — buy() 초입 가드가
+            // 재기록 경로까지 막아버려서, 여기서 풀어주지 않으면 그 ticker 는 영영 매수 불가로 남는다.
+            positionManager.retryPendingPersistIfNeeded(state)
+
             // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
             if (state.pendingBuyUuid != null) {
@@ -220,7 +268,9 @@ class TradingEngine(
             }
 
             if (state.position) {
-                state.updatePeakPrice(currentPrice)
+                // 신고점은 트레일링 스톱의 기준선 — 영속 안 하면 재시작 후 peak 이 0 에서 다시 쌓여
+                // 이미 발동했어야 할 청산이 안 걸린다. 갱신된 tick 에만 flush(상승 시에만 true).
+                if (state.updatePeakPrice(currentPrice)) positionManager.persistState(state)
                 val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
                 if (reason != null) {
                     val sellRecord = positionManager.sell(ticker, state, currentPrice, reason)
@@ -257,8 +307,8 @@ class TradingEngine(
         }
     }
 
-    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 가 없으면(재시작 syncPosition 복원분 — 메모리 상태라
-    // 재시작 시 유실되는 알려진 한계) 또는 전략 목록에서 사라졌으면 활성 전략으로 폴백. 후자는 청산 기준이 진입과 달라지므로 WARN.
+    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 는 durable 복원되지만, 전략이 목록에서 사라졌으면
+    // (전략 제거/rename) 활성 전략으로 폴백한다. 폴백은 청산 기준이 진입과 달라지므로 WARN.
     internal fun resolveExitStrategy(state: TradingState, fallback: TradingStrategy): TradingStrategy {
         val entry = state.entryStrategy ?: return fallback
         return strategies.find { it.name == entry } ?: run {
@@ -335,7 +385,8 @@ class TradingEngine(
     }
 
     // 체결·상태는 이미 반영됐는데 취소로 이 기록이 스킵되면 TradeRecord·Discord 감사가 유실된다(M1). NonCancellable 로
-    // 완주를 보장한다. 재시작 후 복구(record durable)는 trading-state-durability(#20) 소관.
+    // 완주를 보장한다. 단 pending 해소는 이 호출보다 먼저 durable 에 커밋되므로, 여기서 예외가 나면
+    // reconcile 이 재시도할 근거가 없어 그 기록은 유실된다 — 상태 전이와 감사 기록의 원자화는 별도 작업.
     private suspend fun onTrade(record: TradeRecord) = withContext(NonCancellable) {
         tradeExecutionService.saveAndNotify(
             record = record.copy(userId = userId),

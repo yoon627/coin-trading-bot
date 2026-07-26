@@ -172,8 +172,17 @@ class TradeExecutionService(
         username: String?,
         discordWebhookUrl: String?,
     ) {
+        val userId = record.userId ?: 0
+        // #20 멱등: 재시작 후 같은 주문 uuid 를 다시 reconcile 해도 이중 기록/알림하지 않게 skip.
+        val orderId = record.exchangeOrderId
+        if (orderId != null &&
+            tradeExecutionRepository.existsByUserIdAndExchangeOrderId(userId, orderId).awaitSingle()
+        ) {
+            log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", userId, record.ticker, orderId)
+            return
+        }
         val executionEntity = TradeExecutionEntity(
-            userId = record.userId ?: 0,
+            userId = userId,
             exchange = "UPBIT",
             market = record.ticker,
             side = record.side.name,
@@ -183,6 +192,7 @@ class TradeExecutionService(
             pnlPercent = record.pnlPercent,
             reason = record.reason,
             strategy = record.strategy,
+            exchangeOrderId = record.exchangeOrderId,
         )
         // trade_records 와 trade_executions 를 한 트랜잭션으로 묶어 한쪽만 남는 audit 불일치를 방지.
         // (R2DBC suspend 에선 @Transactional 대신 TransactionalOperator 사용)

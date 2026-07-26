@@ -1,7 +1,6 @@
 package com.trading.bot.persistence
 
 import com.trading.bot.persistence.entity.BotConfigEntity
-import com.trading.bot.persistence.entity.PositionEntity
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import org.springframework.data.r2dbc.repository.Query
 import org.springframework.data.repository.reactive.ReactiveCrudRepository
@@ -15,18 +14,10 @@ interface TradeExecutionRepository : ReactiveCrudRepository<TradeExecutionEntity
 
     @Query("SELECT COUNT(*) FROM trade_executions WHERE user_id = :userId")
     fun countByUserId(userId: Long): Mono<Long>
-}
 
-interface PositionRepository : ReactiveCrudRepository<PositionEntity, Long> {
-
-    @Query("SELECT * FROM positions WHERE user_id = :userId")
-    fun findByUserId(userId: Long): Flux<PositionEntity>
-
-    @Query("SELECT * FROM positions WHERE user_id = :userId AND exchange = :exchange AND market = :market")
-    fun findByUserAndMarket(userId: Long, exchange: String, market: String): Mono<PositionEntity>
-
-    @Query("DELETE FROM positions WHERE user_id = :userId AND exchange = :exchange AND market = :market")
-    fun deleteByUserAndMarket(userId: Long, exchange: String, market: String): Mono<Long>
+    // #20 멱등: 재시작 후 같은 주문 uuid 를 다시 reconcile 해도 이중 기록되지 않게 존재 여부 확인.
+    @Query("SELECT COUNT(*) > 0 FROM trade_executions WHERE user_id = :userId AND exchange_order_id = :orderId")
+    fun existsByUserIdAndExchangeOrderId(userId: Long, orderId: String): Mono<Boolean>
 }
 
 interface BotConfigRepository : ReactiveCrudRepository<BotConfigEntity, Long> {
