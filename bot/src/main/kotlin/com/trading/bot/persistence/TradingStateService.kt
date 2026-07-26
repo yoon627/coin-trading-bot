@@ -30,20 +30,14 @@ class TradingStateService(
     }
 
     /**
-     * 재시작 복원 — user 의 모든 ticker row 를 도메인으로 매핑. 개별 row decode 실패(손상 JSON·알 수 없는 enum 등)는
-     * 해당 ticker 만 건너뛰어 빈 상태로 syncPosition 재구축되게 격리한다 — 한 row 손상이 유저 전체 복원을 막지 않게.
+     * 재시작 복원 — user 의 모든 ticker row 를 도메인으로 매핑. 손상 필드는 **필드 단위로만** 버린다:
+     * row 를 통째로 건너뛰면 pending 주문 uuid 까지 사라져 미체결 주문이 orphan 이 되고 재매수로 이중 주문이 난다(#20).
      */
     suspend fun loadStates(userId: Long): Map<String, TradingState> {
         val rows = tradingStateRepository.findByUserId(userId).collectList().awaitSingle()
         val result = LinkedHashMap<String, TradingState>()
         for (row in rows) {
-            val state = try {
-                row.toDomain()
-            } catch (e: Exception) {
-                log.warn("trading_state 복원 실패 — ticker={} 격리(빈 상태로 재구축): {}", row.ticker, e.message)
-                continue
-            }
-            result[state.ticker] = state
+            result[row.ticker] = row.toDomain()
         }
         return result
     }
@@ -81,10 +75,24 @@ class TradingStateService(
             pendingBuyUuid = pendingBuyUuid,
             pendingBuyStrategy = pendingBuyStrategy,
             pendingSellUuid = pendingSellUuid,
-            pendingSellReason = pendingSellReason?.let { SellReason.valueOf(it) },
+            pendingSellReason = pendingSellReason?.let { decodeSellReason(ticker, it) },
             halted = halted,
             haltReason = haltReason,
             reconcileFailureCount = reconcileFailureCount,
-            exitParams = exitParamsJson?.let { objectMapper.readValue(it, ExitParamsSnapshot::class.java) },
+            exitParams = exitParamsJson?.let { decodeExitParams(ticker, it) },
         )
+
+    // 손상 필드는 그 필드만 버린다 — pending uuid·halt 는 어떤 경우에도 복원돼야 한다(위 loadStates 주석).
+    private fun decodeSellReason(ticker: String, raw: String): SellReason? =
+        runCatching { SellReason.valueOf(raw) }.getOrElse {
+            // 사유를 모른 채 매도 기록을 남기면 감사 왜곡 — MANUAL 로 표기해 사람이 구분할 수 있게 한다.
+            log.warn("trading_state 복원: ticker={} 의 pending_sell_reason='{}' 을 해석 못 해 MANUAL 로 대체", ticker, raw)
+            SellReason.MANUAL
+        }
+
+    private fun decodeExitParams(ticker: String, raw: String): ExitParamsSnapshot? =
+        runCatching { objectMapper.readValue(raw, ExitParamsSnapshot::class.java) }.getOrElse {
+            log.warn("trading_state 복원: ticker={} 의 exit_params JSON 손상 — 스냅샷만 버린다: {}", ticker, it.message)
+            null
+        }
 }

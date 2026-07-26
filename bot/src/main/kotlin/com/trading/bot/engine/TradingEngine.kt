@@ -206,9 +206,6 @@ class TradingEngine(
     }
 
     internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
-        // #19: reconcile 무한 실패로 halt 된 ticker 는 reconcile·매매를 모두 건너뛴다(수동 해제 전까지).
-        if (state.halted) return
-
         try {
             val currentPrice = getRealtimePrice(ticker)
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
@@ -219,6 +216,10 @@ class TradingEngine(
             if (state.unsynced) {
                 positionManager.syncPosition(ticker, state)
             }
+
+            // pending durable 기록이 실패해 매수가 막힌 상태면 매 tick 재기록을 시도한다 — buy() 초입 가드가
+            // 재기록 경로까지 막아버려서, 여기서 풀어주지 않으면 그 ticker 는 영영 매수 불가로 남는다.
+            positionManager.retryPendingPersistIfNeeded(state)
 
             // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).

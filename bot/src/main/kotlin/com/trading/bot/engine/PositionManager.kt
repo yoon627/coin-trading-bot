@@ -77,6 +77,12 @@ class PositionManager(
             log.warn("Skip buy for {}: pending persistence unhealthy — avoiding unrecoverable entry", ticker)
             return null
         }
+        if (state.halted) {
+            // #19: reconcile 무한 실패로 halt — 신규 진입만 막는다. 매도·reconcile·잔고 동기화는 계속 돌아야
+            // 이미 잡힌 포지션이 청산되지 못한 채 갇히지 않는다(수동 해제 전까지).
+            log.warn("Skip buy for {}: halted ({})", ticker, state.haltReason)
+            return null
+        }
 
         // placeOrder 까지: 실패하면 주문이 나가지 않았으므로 그대로 종료(pending 없음 → 다음 tick 정상 재매수).
         val order = try {
@@ -286,6 +292,11 @@ class PositionManager(
 
     /** engine 이 halt 수동 해제 등 도메인-외 상태 변경 후 durable 반영에 쓰는 진입점(best-effort). */
     internal suspend fun persistState(state: TradingState) = persist(state)
+
+    /** pending 기록 실패로 막힌 진입을 푸는 유일한 경로 — 성공해야 pendingPersistFailed 가 해제된다. */
+    internal suspend fun retryPendingPersistIfNeeded(state: TradingState) {
+        if (state.pendingPersistFailed) persistPending(state)
+    }
 
     /**
      * 매도판 H8: 미해소 매도 주문(pendingSellUuid)을 거래소 상태로 확정. processTicker 가 매 tick 호출.

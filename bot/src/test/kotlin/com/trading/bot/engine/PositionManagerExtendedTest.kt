@@ -601,6 +601,61 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `halted ticker blocks new buys but still reconciles and sells`() = runTest {
+        // #19 halt 를 processTicker 초입에서 걸면 매도·reconcile 까지 막혀 포지션이 청산 못 하고 갇힌다.
+        // 차단 대상은 신규 진입뿐이다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val halted = TradingState("KRW-BTC", halted = true, haltReason = "reconcile 실패")
+
+        assertNull(mgr.buy("KRW-BTC", halted, 50000000.0, "vb"))
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+
+        // 매도 경로는 halt 와 무관하게 살아 있어야 한다.
+        val holding = TradingState(
+            "KRW-BTC",
+            position = true,
+            avgBuyPrice = 50000000.0,
+            holdVolume = 0.001,
+            halted = true,
+            haltReason = "reconcile 실패",
+        )
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"),
+            Account(currency = "KRW", balance = "100000"),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "s1")
+        coEvery { upbitClient.getOrder("s1") } returns Order(uuid = "s1", state = "done", executedVolume = "0.001")
+
+        assertNotNull(mgr.sell("KRW-BTC", holding, 52000000.0, SellReason.TAKE_PROFIT))
+    }
+
+    @Test
+    fun `pending persist failure is retried so the buy gate can clear`() = runTest {
+        // buy() 초입 가드가 재기록까지 막으므로, 별도 재시도 경로가 없으면 그 ticker 는 영구 매수 불가.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p1", pendingPersistFailed = true)
+
+        mgr.retryPendingPersistIfNeeded(state)
+
+        assertFalse(state.pendingPersistFailed) // upsert 성공 → 게이트 해제
+        coVerify(exactly = 1) { stateService.upsert(1L, state) }
+    }
+
+    @Test
+    fun `pending persist retry keeps the gate closed while the write still fails`() = runTest {
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>()
+        coEvery { stateService.upsert(any(), any()) } throws RuntimeException("db down")
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", pendingBuyUuid = "p1", pendingPersistFailed = true)
+
+        mgr.retryPendingPersistIfNeeded(state)
+
+        assertTrue(state.pendingPersistFailed)
+    }
+
+    @Test
     fun `reconcile halts ticker after repeated getOrder and balance failures`() = runTest {
         // #19: getOrder·잔고조회가 둘 다 실패해 pending 이 무한 재시도되면 threshold 도달 시 halt.
         val mgr = PositionManager(

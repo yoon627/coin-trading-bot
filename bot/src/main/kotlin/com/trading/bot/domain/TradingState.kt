@@ -28,7 +28,7 @@ data class TradingState(
     // 재시작 직후(429 빈발) 이중 포지션을 방지. processTicker 가 다음 tick 재시도해 성공 시 해소.
     var unsynced: Boolean = false,
     // #19: reconcilePendingBuy 의 getOrder·잔고조회가 연속 실패해 pending 이 무한 재시도되면 halt.
-    // halt 된 ticker 는 processTicker 초입에서 skip 되어 무한 매수 시도를 멈추고, 수동 해제 전까지 유지된다.
+    // 신규 매수만 막는다(buy() 가드) — 매도·reconcile·잔고 동기화까지 막으면 포지션이 청산 못 하고 갇힌다.
     var halted: Boolean = false,
     var haltReason: String? = null,
     var reconcileFailureCount: Int = 0,
