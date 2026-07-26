@@ -8,7 +8,7 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V13) |
+| **마이그레이션** | Flyway (V1~V14) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
@@ -107,15 +107,16 @@ coin-trading-bot/
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V13)
+### Flyway 마이그레이션 (V1~V14)
 
 | 버전 | 내용 |
 |------|------|
 | V1~V9 | trade_records, users, bot_state, public_profile, discord_webhook, price_snapshots, admin_role, indexes |
 | V10 | `market_tickers`, `market_candles` — 시계열 시세 데이터 |
-| V11 | `trade_executions`, `positions`, `strategy_signals` — 매매 기록 |
+| V11 | `trade_executions`, `positions`(V14 에서 제거), `strategy_signals` — 매매 기록 |
 | V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정 |
 | V13 | bot_configs에 `trade_mode` 컬럼 |
+| V14 | `trading_states` — per-(user, ticker) 거래 상태 durable 영속(미해소 주문 uuid·halt·진입 메타). `trade_executions.exchange_order_id` + 부분 unique(재시작 reconcile 멱등). 미사용 `positions` 제거 |
 
 ### 핵심 테이블
 
@@ -182,7 +183,7 @@ bot_configs
 | 그룹 | 컨트롤러 | 대표 경로 |
 |------|----------|-----------|
 | 인증 | AuthController | `/api/auth/{register,login,logout}` |
-| 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy}` |
+| 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy,halt/clear}` |
 | 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
 | 사용자 | TradingController/LeaderboardController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/ManualTrade/TradeHistory | `/api/{portfolio,account,trade/buy,trade/sell,trades}` |

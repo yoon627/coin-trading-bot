@@ -7,6 +7,7 @@ import com.trading.bot.config.UpbitProperties
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
@@ -50,6 +51,7 @@ class UserTradingManager(
     private val upbitWebClient: WebClient,
     private val userSecretsService: UserSecretsService,
     private val marketDataStore: MarketDataStore,
+    private val tradingStateService: TradingStateService,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -163,17 +165,20 @@ class UserTradingManager(
      */
     private suspend fun restoreOne(state: BotStateEntity): Boolean = lockFor(state.userId).withLock {
         if (shuttingDown) return@withLock true // 종료 중 — 신규 엔진 기동 안 함(M5)
-        if (engines.containsKey(state.userId)) return@withLock true
+        // containsKey 가 아니라 isRunning — 기동 전에 실패해 map 에 남은 엔진은 재시도 대상이어야 한다.
+        if (engines[state.userId]?.isRunning() == true) return@withLock true
         try {
             val user = userRepository.findById(state.userId).awaitSingleOrNull() ?: return@withLock true
             if (user.upbitAccessKey.isNullOrBlank()) return@withLock true
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             userStrategies[state.userId] = state.strategy
+            // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 engines 에 아무것도 남기지 않는다.
+            val initialStates = tradingStateService.loadStates(state.userId)
             val engine = engines.computeIfAbsent(state.userId) {
                 createEngine(userSecretsService.decryptUserSecrets(user))
             }
             engine.setStrategy(state.strategy)
-            engine.start(tickers)
+            engine.start(tickers, initialStates)
             log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, state.strategy, tickers)
             true
         } catch (e: Exception) {
@@ -196,13 +201,15 @@ class UserTradingManager(
         }
 
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
+        // restoreOne 과 같은 이유로 durable 로드를 엔진 등록 앞에 둔다(실패 시 미기동 엔진 잔류 방지).
+        val initialStates = tradingStateService.loadStates(userId)
         val engine = engines.computeIfAbsent(userId) { createEngine(decryptedUser) }
 
         val strategy = strategyName ?: userStrategies[userId]
         if (strategy != null) engine.setStrategy(strategy)
 
         val tickerList = tickers ?: tradingProperties.tickerList()
-        engine.start(tickerList)
+        engine.start(tickerList, initialStates)
 
         saveState(userId, true, engine.getActiveStrategyName(), tickerList)
         mapOf("status" to "started", "strategy" to engine.getActiveStrategyName())
@@ -234,9 +241,24 @@ class UserTradingManager(
                     "avg_buy_price" to state.avgBuyPrice,
                     "hold_volume" to state.holdVolume,
                     "bought_today" to state.boughtToday,
+                    "halted" to state.halted,
                 )
             } ?: emptyList<Map<String, Any>>()),
+            "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
         )
+    }
+
+    /** #19: halt 된 ticker 수동 해제 — 다음 tick 부터 reconcile/매매 재개. */
+    suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
+        val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
+        val cleared = try {
+            engine.clearHalt(ticker)
+        } catch (e: Exception) {
+            // durable 반영 실패 — 해제되지 않았음을 그대로 알린다(재시도는 사용자 몫).
+            log.error("halt 해제 실패 user={} ticker={}: {}", userId, ticker, e.message, e)
+            return@withLock mapOf("error" to "Failed to clear halt — state not persisted")
+        }
+        mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 
     suspend fun setStrategy(userId: Long, strategyName: String): Boolean = lockFor(userId).withLock {
@@ -270,18 +292,33 @@ class UserTradingManager(
         val tickers = existing.getActiveTickers()
         val strategy = existing.getActiveStrategyName()
         existing.stop()
+        // stop 이후에 읽어야 마지막 tick 의 durable flush(pending 주문 포함)까지 잡힌다 — 먼저 읽으면
+        // 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending 이 된다(#20).
+        val initialStates = if (wasRunning) {
+            try {
+                tradingStateService.loadStates(userId)
+            } catch (e: Exception) {
+                // 교체 실패는 정지 의도가 아니다 — 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
+                // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살리고 알린다.
+                log.error("reload: user {} durable 상태 로드 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
+                existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
+                return@withLock
+            }
+        } else {
+            emptyMap()
+        }
         val replacement = createEngine(decryptedUser)
         replacement.setStrategy(strategy)
         engines[userId] = replacement
         userStrategies[userId] = strategy
         if (wasRunning) {
-            replacement.start(tickers.ifEmpty { tradingProperties.tickerList() })
+            replacement.start(tickers.ifEmpty { tradingProperties.tickerList() }, initialStates)
         }
     }
 
     internal fun createEngine(user: UserEntity): TradingEngine {
         val client = createUpbitClient(user)
-        val positionManager = PositionManager(client, tradingProperties)
+        val positionManager = PositionManager(client, tradingProperties, tradingStateService, user.id!!)
         val dailyResetManager = DailyResetManager(tradingProperties)
 
         return TradingEngine(

@@ -6,6 +6,7 @@ import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradeRecord
+import com.trading.bot.domain.TradeSide
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeRecordRepository
@@ -17,6 +18,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
@@ -262,5 +264,34 @@ class TradeExecutionServiceTest {
 
         assertTrue(result.success)
         assertEquals("sell-789", result.orderUuid)
+    }
+
+    @Test
+    fun `saveAndNotify skips duplicate by exchangeOrderId (idempotent)`() = runTest {
+        // #20: 재시작 후 같은 주문 uuid 로 reconcile 이 다시 기록을 시도하면 저장·알림 모두 skip.
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "dup-1") } returns Mono.just(true)
+        val record = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, exchangeOrderId = "dup-1", userId = 1L,
+        )
+
+        service.saveAndNotify(record, client, null, null)
+
+        coVerify(exactly = 0) { tradeRecordRepository.save(any()) }
+        coVerify(exactly = 0) { tradeExecutionRepository.save(any()) }
+        verify(exactly = 0) { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `saveAndNotify records when exchangeOrderId not seen before`() = runTest {
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "new-1") } returns Mono.just(false)
+        val record = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, exchangeOrderId = "new-1", userId = 1L,
+        )
+
+        service.saveAndNotify(record, client, null, null)
+
+        coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
     }
 }
