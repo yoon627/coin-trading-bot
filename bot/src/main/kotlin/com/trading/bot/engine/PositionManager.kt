@@ -391,6 +391,9 @@ class PositionManager(
         // 다음 tick reconcilePendingSell 이 이어받아 청산 확정·기록 → 이중매도·감사유실 방지.
         state.pendingSellUuid = order.uuid
         state.pendingSellReason = reason
+        // 재시작 후에는 잔고·평단이 이미 비어 있으므로, 청산 기록의 근거를 주문 시점 값으로 함께 남긴다.
+        state.pendingSellVolume = sellable
+        state.pendingSellAvgPrice = state.avgBuyPrice
         return try {
             // 매수판과 동일 — 주문 접수 후 체결확인·상태반영은 취소돼도 원자 완주해야 청산 기록이 유실되지 않는다.
             withContext(NonCancellable) {
@@ -464,8 +467,16 @@ class PositionManager(
         return try {
             val total = findAccount(ticker.substringAfter("-"))?.totalBalance() ?: 0.0
             if (total <= 0.0) {
-                val record = buildSellRecord(ticker, state, currentPrice, state.holdVolume)
-                log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, state.holdVolume)
+                // 주문 시점 수량이 우선 — 재시작 후 holdVolume 은 이미 0 으로 동기화돼 있다.
+                val volume = state.pendingSellVolume ?: state.holdVolume
+                if (volume <= 0.0) {
+                    // 근거 없이 잔고 0 만으로 확정하면 수량 0 의 유령 SELL 이 감사에 남는다 — pending 을 유지해
+                    // getOrder 복구나 사람 개입으로 확정하게 둔다.
+                    log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept for manual review", ticker)
+                    return null
+                }
+                val record = buildSellRecord(ticker, state, currentPrice, volume)
+                log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, volume)
                 state.markSold()
                 record
             } else {
@@ -509,8 +520,10 @@ class PositionManager(
         volume: Double,
         reason: SellReason? = state.pendingSellReason,
     ): TradeRecord {
-        val pnl = if (state.avgBuyPrice > 0) {
-            state.pnlPercent(currentPrice) - tradingProperties.roundTripFeeRate * 100
+        // 재시작 복원 경로에서는 avgBuyPrice 가 이미 0 으로 동기화돼 있으므로 주문 시점 평단을 쓴다.
+        val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
+        val pnl = if (basisPrice > 0) {
+            ((currentPrice - basisPrice) / basisPrice) * 100.0 - tradingProperties.roundTripFeeRate * 100
         } else {
             null
         }

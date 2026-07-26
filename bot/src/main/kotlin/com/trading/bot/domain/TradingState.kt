@@ -24,6 +24,10 @@ data class TradingState(
     // 잃으면 뒤늦게 체결된 청산이 기록에서 사라지거나(감사 유실) 재평가로 이중 매도된다.
     var pendingSellUuid: String? = null,
     var pendingSellReason: SellReason? = null,
+    // 매도 주문 시점의 수량·평단. 재시작 후엔 syncPosition 이 잔고 0 을 반영해 holdVolume/avgBuyPrice 가
+    // 이미 비어 있으므로, 이 값 없이 잔고만 보고 청산을 확정하면 수량 0·손익 없음의 유령 SELL 이 기록된다.
+    var pendingSellVolume: Double? = null,
+    var pendingSellAvgPrice: Double? = null,
     // syncPosition 이 거래소 잔고 동기화에 실패하면 true — position 상태가 불확실하므로 매수를 막아
     // 재시작 직후(429 빈발) 이중 포지션을 방지. processTicker 가 다음 tick 재시도해 성공 시 해소.
     var unsynced: Boolean = false,
@@ -108,6 +112,8 @@ data class TradingState(
     fun clearPendingSell() {
         pendingSellUuid = null
         pendingSellReason = null
+        pendingSellVolume = null
+        pendingSellAvgPrice = null
     }
 
     /** #19: 수동 해제 — halt 플래그·사유·실패 카운터를 초기화해 다음 tick 부터 reconcile/매매를 재개한다. */

@@ -18,6 +18,8 @@ data class TradingStateEntity(
     val pendingBuyStrategy: String? = null,
     val pendingSellUuid: String? = null,
     val pendingSellReason: String? = null,
+    val pendingSellVolume: Double? = null,
+    val pendingSellAvgPrice: Double? = null,
     val entryStrategy: String? = null,
     val buyDate: LocalDate? = null,
     val boughtToday: Boolean = false,

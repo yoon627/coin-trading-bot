@@ -8,6 +8,8 @@ CREATE TABLE trading_states (
     pending_buy_strategy VARCHAR(50),
     pending_sell_uuid VARCHAR(100),
     pending_sell_reason VARCHAR(20),
+    pending_sell_volume DOUBLE PRECISION,
+    pending_sell_avg_price DOUBLE PRECISION,
     entry_strategy VARCHAR(50),
     buy_date DATE,
     bought_today BOOLEAN NOT NULL DEFAULT FALSE,

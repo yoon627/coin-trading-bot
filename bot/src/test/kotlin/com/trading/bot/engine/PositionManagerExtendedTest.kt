@@ -656,6 +656,40 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `sell recovery uses the recorded volume instead of the already-synced zero balance`() = runTest {
+        // 재시작 후 syncPosition 이 잔고 0 을 반영하면 holdVolume·avgBuyPrice 가 비어 있다.
+        // 그 상태로 잔고 0 을 보고 청산을 확정하면 수량 0·손익 없음의 유령 SELL 이 남는다.
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            pendingSellUuid = "s9",
+            pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellVolume = 0.002,
+            pendingSellAvgPrice = 50_000_000.0,
+        )
+
+        val record = mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertNotNull(record)
+        assertEquals(0.002, record!!.volume, 1e-9)
+        assertNotNull(record.pnlPercent) // 주문 시점 평단으로 손익이 계산돼야 한다
+    }
+
+    @Test
+    fun `sell recovery keeps pending when there is no recorded volume to justify it`() = runTest {
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "s9", pendingSellReason = SellReason.TAKE_PROFIT)
+
+        assertNull(mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0))
+        assertEquals("s9", state.pendingSellUuid) // 확정하지 않고 보류
+    }
+
+    @Test
     fun `markSold clears the entry-time exit snapshot`() {
         // 스냅샷은 그 포지션 소유 — 남으면 다음 진입이 이전 포지션의 청산 파라미터를 물려받는다.
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001)
