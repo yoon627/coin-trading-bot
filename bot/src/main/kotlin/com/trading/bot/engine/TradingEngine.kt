@@ -84,7 +84,7 @@ class TradingEngine(
             initialStates.filterKeys { it !in tickers }
                 .filterValues { it.pendingBuyUuid != null || it.pendingSellUuid != null }
                 .forEach { (ticker, state) ->
-                    log.warn(
+                    log.error(
                         "비활성 ticker {} 에 미해소 주문이 남아 있습니다(buy={}, sell={}) — 이 실행에서는 reconcile 되지 않습니다.",
                         ticker, state.pendingBuyUuid, state.pendingSellUuid,
                     )
@@ -385,7 +385,8 @@ class TradingEngine(
     }
 
     // 체결·상태는 이미 반영됐는데 취소로 이 기록이 스킵되면 TradeRecord·Discord 감사가 유실된다(M1). NonCancellable 로
-    // 완주를 보장한다. 재시작 후 복구(record durable)는 trading-state-durability(#20) 소관.
+    // 완주를 보장한다. 단 pending 해소는 이 호출보다 먼저 durable 에 커밋되므로, 여기서 예외가 나면
+    // reconcile 이 재시도할 근거가 없어 그 기록은 유실된다 — 상태 전이와 감사 기록의 원자화는 별도 작업.
     private suspend fun onTrade(record: TradeRecord) = withContext(NonCancellable) {
         tradeExecutionService.saveAndNotify(
             record = record.copy(userId = userId),

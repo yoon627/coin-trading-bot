@@ -3,7 +3,7 @@ package com.trading.bot.persistence.entity
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
 import java.time.LocalDate
-import java.time.LocalDateTime
+import java.time.Instant
 
 /**
  * per-(userId, ticker) 거래 상태의 durable 스냅샷. position/avgBuyPrice/holdVolume 은 저장하지 않고
@@ -29,5 +29,5 @@ data class TradingStateEntity(
     val halted: Boolean = false,
     val haltReason: String? = null,
     val reconcileFailureCount: Int = 0,
-    val updatedAt: LocalDateTime = LocalDateTime.now(),
+    val updatedAt: Instant = Instant.now(),
 )

@@ -117,6 +117,18 @@ data class TradingState(
         clearPendingSell()
     }
 
+    /**
+     * 신규 진입 시작 시점에 옛 포지션의 진입 메타를 끊는다. 봇 정지 중 거래소에서 직접 청산되면 markSold 를
+     * 못 타 durable 에 옛 값이 남는데, 체결 확인 전에 재시작하면 syncPosition 이 position=true 를 먼저 세워
+     * markBought 의 "연장" 판정이 그 잔재를 신규 포지션에 물려준다 — 주문 시점에 지워야 그 경로까지 닫힌다.
+     */
+    fun clearEntryMeta() {
+        buyDate = null
+        peakPrice = 0.0
+        entryStrategy = null
+        exitParams = null
+    }
+
     fun clearPendingSell() {
         pendingSellUuid = null
         pendingSellReason = null

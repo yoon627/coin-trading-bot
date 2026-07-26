@@ -43,11 +43,10 @@ class PositionManager(
             // free 가 아니라 free+locked — 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 가 0 이다.
             // 그걸 "보유 없음" 으로 동기화하면 손절·익절이 한 번도 평가되지 않는 무방비 보유가 되고,
             // boughtToday 가 풀리는 순간 그 위에 추가 매수까지 들어간다.
-            val held = account?.totalBalance() ?: 0.0
-            if (held > 0) {
+            account?.takeIf { it.totalBalance() > 0 }?.let {
                 state.position = true
-                state.avgBuyPrice = account!!.avgBuyPriceDouble()
-                state.holdVolume = held
+                state.avgBuyPrice = it.avgBuyPriceDouble()
+                state.holdVolume = it.totalBalance()
                 log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
             }
             // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
@@ -116,6 +115,9 @@ class PositionManager(
         // 다음 tick reconcilePendingBuy 가 이어받아 position 복구/미체결 확정 → 중복매수(2배 포지션) 방지.
         state.pendingBuyUuid = order.uuid
         state.pendingBuyStrategy = strategyName
+        // 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에
+        // 재시작해도(syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
+        state.clearEntryMeta()
         return try {
             // 주문은 이미 나갔다 — 체결확인·상태반영은 취소돼도 원자적으로 완주해야 한다. reload/stop 이 tick 코루틴을
             // 취소하면 이 후처리가 중단돼 pending 이 폐기될 states 에만 남고(H8 방어망 무력화), 새 엔진이 같은 tick 을
@@ -154,6 +156,7 @@ class PositionManager(
                 // 둘 다 실패" 이므로 잔고조회가 살아난 이 시점에 연속 카운트도 끊는다.
                 BalanceRecovery.NoBalance -> {
                     state.reconcileFailureCount = 0
+                    persist(state) // 리셋을 durable 에도 내려야 재시작 후 옛 카운터가 부활해 허위 halt 되지 않는다
                     null
                 }
                 // getOrder·잔고조회가 둘 다 실패 = 상태를 볼 수단이 없음. #19 무한 재시도를 막는 실패 카운터.

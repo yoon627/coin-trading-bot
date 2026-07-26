@@ -5,7 +5,7 @@ import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.entity.TradingStateEntity
-import java.time.LocalDateTime
+import java.time.Instant
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.slf4j.LoggerFactory
@@ -62,7 +62,7 @@ class TradingStateService(
             halted = halted,
             haltReason = haltReason,
             reconcileFailureCount = reconcileFailureCount,
-            updatedAt = LocalDateTime.now(),
+            updatedAt = Instant.now(),
         )
 
     // position/avgBuyPrice/holdVolume 은 durable 에 없다 — syncPosition 이 거래소 잔고에서 복원한다.

@@ -733,6 +733,45 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `restart reconcile does not inherit entry metadata of a position that was already closed`() = runTest {
+        // 실제 위험 순서: 신규 매수 주문 → 체결 확인 전 재시작 → runLoop 이 syncPosition 을 먼저 돌려
+        // position=true 가 서고 → reconcilePendingBuy 가 확정한다. 이때 markBought 의 "연장" 판정만으로는
+        // 옛 진입메타(사용자가 거래소에서 직접 청산해 markSold 를 못 탄 잔재)를 못 막는다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        // durable 잔재: 사용자가 거래소에서 직접 청산해 markSold 를 못 탄 옛 진입메타
+        val state = TradingState(
+            "KRW-BTC",
+            buyDate = LocalDate.of(2026, 7, 19),
+            peakPrice = 60_000_000.0,
+            entryStrategy = "old_strategy",
+        )
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")), // buy 사이징
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")), // 재시작 후 syncPosition
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")), // reconcile 확정
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "o1")
+        coEvery { upbitClient.getOrder("o1") } returns Order(uuid = "o1", state = "wait") // 체결 확인 전
+
+        mgr.buy("KRW-BTC", state, 50_000_000.0, "volatility_breakout")
+
+        // 주문 시점에 끊겨야 한다 — 이 상태가 durable 로 내려가 재시작 시 복원된다.
+        assertNull(state.buyDate)
+        assertEquals(0.0, state.peakPrice)
+        assertNull(state.entryStrategy)
+
+        // 재시작: syncPosition 이 position=true 를 먼저 세우고, 그 뒤 reconcile 이 확정한다.
+        coEvery { upbitClient.getOrder("o1") } returns Order(uuid = "o1", state = "done", executedVolume = "0.001")
+        mgr.syncPosition("KRW-BTC", state)
+        mgr.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+
+        assertNotEquals(LocalDate.of(2026, 7, 19), state.buyDate)
+        assertEquals(50_000_000.0, state.peakPrice) // 옛 고점 60M 상속 금지
+        assertEquals("volatility_breakout", state.entryStrategy)
+    }
+
+    @Test
     fun `markBought does not inherit entry metadata from a position that no longer exists`() {
         // 봇 정지 중 사용자가 거래소에서 직접 청산하면 markSold 를 못 타 durable 에 옛 진입일·고점이 남는다.
         // 그 잔재를 신규 진입이 물려받으면 진입 즉시 보유일 초과·과거 고점 트레일링으로 청산돼 왕복 비용만 잃는다.
