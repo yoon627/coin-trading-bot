@@ -166,7 +166,7 @@ coin-trading-bot/
 |---|---|---|---|
 | 인증 | POST | `/api/auth/register`, `/login`, `/logout` | Public |
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
-| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy` | 필요 |
+| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
 | 주문 | POST | `/api/trade/buy`, `/api/trade/sell` | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades` | 필요 |
