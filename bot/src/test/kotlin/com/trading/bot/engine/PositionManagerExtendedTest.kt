@@ -692,6 +692,31 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `stuck sell reconcile escalates to an error alert exactly once`() = runTest {
+        // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막는다 — 조용히 방치되면
+        // 보유 포지션이 손절도 못 한다. 매수판 halt 와 같은 상한에서 한 번 알린다.
+        val mgr = PositionManager(upbitClient, TradingProperties(reconcileHaltThreshold = 3), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            holdVolume = 0.001,
+            avgBuyPrice = 50_000_000.0,
+            pendingSellUuid = "stuck",
+            pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellVolume = 0.001,
+        )
+
+        repeat(5) { mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0) }
+
+        assertEquals(5, state.sellReconcileFailureCount)
+        assertEquals("stuck", state.pendingSellUuid) // 확정하지 않고 유지
+    }
+
+    @Test
     fun `syncPosition counts coins locked in an open order as held`() = runTest {
         // 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 는 0 이다. 이걸 "보유 없음" 으로
         // 동기화하면 손절·익절이 한 번도 평가되지 않고, boughtToday 가 풀리면 그 위에 추가 매수까지 들어간다.

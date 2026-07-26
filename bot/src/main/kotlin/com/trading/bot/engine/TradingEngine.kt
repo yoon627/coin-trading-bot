@@ -80,6 +80,15 @@ class TradingEngine(
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
             // 이번 실행의 활성 ticker 만 — 과거 ticker 까지 실으면 tick 이 안 도는 상태가 getStates·일일 리셋에 섞인다.
             initialStates.filterKeys { it in tickers }.forEach { (ticker, state) -> states[ticker] = state }
+            // 드롭한 ticker 에 미해소 주문이 남아 있으면 아무도 reconcile 하지 않는다 — 사람이 알아야 한다.
+            initialStates.filterKeys { it !in tickers }
+                .filterValues { it.pendingBuyUuid != null || it.pendingSellUuid != null }
+                .forEach { (ticker, state) ->
+                    log.warn(
+                        "비활성 ticker {} 에 미해소 주문이 남아 있습니다(buy={}, sell={}) — 이 실행에서는 reconcile 되지 않습니다.",
+                        ticker, state.pendingBuyUuid, state.pendingSellUuid,
+                    )
+                }
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }

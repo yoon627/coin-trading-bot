@@ -150,8 +150,12 @@ class PositionManager(
             return when (val recovery = recoverFromBalance(ticker, state, currentPrice)) {
                 is BalanceRecovery.Filled -> recovery.record
                 // 잔고조회는 성공했고 "체결 안 됨" 을 확인한 정상 판정 — 장애가 아니므로 halt 카운터에 넣지 않는다.
-                // (여기서 세면 미체결 주문 하나로 멀쩡한 ticker 가 매수 정지된다.)
-                BalanceRecovery.NoBalance -> null
+                // (여기서 세면 미체결 주문 하나로 멀쩡한 ticker 가 매수 정지된다.) halt 조건은 "getOrder·잔고조회
+                // 둘 다 실패" 이므로 잔고조회가 살아난 이 시점에 연속 카운트도 끊는다.
+                BalanceRecovery.NoBalance -> {
+                    state.reconcileFailureCount = 0
+                    null
+                }
                 // getOrder·잔고조회가 둘 다 실패 = 상태를 볼 수단이 없음. #19 무한 재시도를 막는 실패 카운터.
                 BalanceRecovery.LookupFailed -> {
                     recordReconcileFailure(state)
@@ -336,6 +340,20 @@ class PositionManager(
         } catch (e: Exception) {
             log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
             recoverSellFromBalance(ticker, state, currentPrice)
+        }
+        // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막는다 — 오래 끌면 보유 포지션이
+        // 손절도 못 한 채 방치되므로, 매수판 halt 와 같은 상한에서 한 번 ERROR 로 올려 사람이 개입하게 한다.
+        // (halt 는 신규 매수만 막는 플래그라 여기선 쓰지 않는다 — 필요한 건 차단이 아니라 알림.)
+        if (state.pendingSellUuid != null) {
+            state.sellReconcileFailureCount++
+            if (state.sellReconcileFailureCount == tradingProperties.reconcileHaltThreshold) {
+                log.error(
+                    "매도 reconcile 미해소 {}회 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요.",
+                    state.sellReconcileFailureCount, ticker, uuid,
+                )
+            }
+        } else {
+            state.sellReconcileFailureCount = 0
         }
         // 매도 pending 전이(clearPendingSell/markSold/부분갱신) durable 반영. wait(무전이)도 upsert 무해.
         persist(state)

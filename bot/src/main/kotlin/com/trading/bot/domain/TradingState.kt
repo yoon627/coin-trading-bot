@@ -36,6 +36,8 @@ data class TradingState(
     var halted: Boolean = false,
     var haltReason: String? = null,
     var reconcileFailureCount: Int = 0,
+    // 매도 pending 미해소 연속 횟수 — 차단이 아니라 1회 ERROR 알림용(비영속, 재시작 시 다시 센다).
+    var sellReconcileFailureCount: Int = 0,
     // 진입 시점 청산 파라미터 스냅샷. 저장·복원 전용 — 소비(진입 시점 값으로 청산)는 strategy-evolution Phase 2.
     var exitParams: ExitParamsSnapshot? = null,
     // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
