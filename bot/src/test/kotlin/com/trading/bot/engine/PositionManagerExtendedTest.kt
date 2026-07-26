@@ -3,6 +3,8 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.*
 import com.trading.common.config.TradingProperties
+import java.time.LocalDate
+import java.time.LocalDateTime
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -687,6 +689,41 @@ class PositionManagerExtendedTest {
 
         assertNull(mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0))
         assertEquals("s9", state.pendingSellUuid) // 확정하지 않고 보류
+    }
+
+    @Test
+    fun `syncPosition counts coins locked in an open order as held`() = runTest {
+        // 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 는 0 이다. 이걸 "보유 없음" 으로
+        // 동기화하면 손절·익절이 한 번도 평가되지 않고, boughtToday 가 풀리면 그 위에 추가 매수까지 들어간다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC")
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertTrue(state.position)
+        assertEquals(0.001, state.holdVolume, 1e-9)
+        assertEquals(50000000.0, state.avgBuyPrice, 0.01)
+    }
+
+    @Test
+    fun `markBought does not inherit entry metadata from a position that no longer exists`() {
+        // 봇 정지 중 사용자가 거래소에서 직접 청산하면 markSold 를 못 타 durable 에 옛 진입일·고점이 남는다.
+        // 그 잔재를 신규 진입이 물려받으면 진입 즉시 보유일 초과·과거 고점 트레일링으로 청산돼 왕복 비용만 잃는다.
+        val stale = TradingState(
+            "KRW-BTC",
+            position = false,
+            buyDate = LocalDate.of(2026, 7, 19),
+            peakPrice = 60_000_000.0,
+            entryStrategy = "old_strategy",
+        )
+
+        stale.markBought(50_000_000.0, 0.001, "volatility_breakout", replace = true, now = LocalDateTime.of(2026, 7, 26, 10, 0))
+
+        assertEquals(LocalDate.of(2026, 7, 26), stale.buyDate)
+        assertEquals(50_000_000.0, stale.peakPrice) // 옛 고점 60M 을 물려받지 않는다
+        assertEquals("volatility_breakout", stale.entryStrategy)
     }
 
     @Test

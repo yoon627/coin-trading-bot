@@ -293,9 +293,20 @@ class UserTradingManager(
         val strategy = existing.getActiveStrategyName()
         existing.stop()
         // stop 이후에 읽어야 마지막 tick 의 durable flush(pending 주문 포함)까지 잡힌다 — 먼저 읽으면
-        // 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending 이 된다(#20). 로드가 실패하면 교체 엔진을
-        // 만들지 않고 예외를 올린다(미기동 엔진을 등록해 두면 복원 경로가 이미 복원된 것으로 오인).
-        val initialStates = if (wasRunning) tradingStateService.loadStates(userId) else emptyMap()
+        // 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending 이 된다(#20).
+        val initialStates = if (wasRunning) {
+            try {
+                tradingStateService.loadStates(userId)
+            } catch (e: Exception) {
+                // 교체 실패는 정지 의도가 아니다 — 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
+                // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살리고 알린다.
+                log.error("reload: user {} durable 상태 로드 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
+                existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
+                return@withLock
+            }
+        } else {
+            emptyMap()
+        }
         val replacement = createEngine(decryptedUser)
         replacement.setStrategy(strategy)
         engines[userId] = replacement

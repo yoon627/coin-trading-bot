@@ -93,8 +93,9 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `reload does not register a replacement engine when durable state load fails`() = runTest {
-        // 교체 엔진을 등록해 두고 기동에 실패하면 봇은 멈춘 채 "복원됨" 으로 보인다.
+    fun `reload restores the running engine when durable state load fails`() = runTest {
+        // 교체 실패는 정지 의도가 아니다. 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
+        // 무기한 중단되는데, running=true 라 겉으로는 정상으로 보인다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
@@ -102,10 +103,11 @@ class UserTradingManagerTest {
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
 
-        assertThrows(RuntimeException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+        manager.reloadUserRuntime(1L)
 
         assertSame(mockEngine, engines()[1L], "로드 실패 시 교체 엔진이 등록되면 안 된다")
         verify(exactly = 0) { manager.createEngine(any()) }
+        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), emptyMap()) } // 옛 엔진 재기동
     }
 
     @Test

@@ -69,6 +69,10 @@ data class TradingState(
      * durable 복원값이 있으면 유지(재시작으로 진입일/진입전략이 뒤덮이지 않게).
      */
     fun markBought(price: Double, volume: Double, strategy: String? = null, replace: Boolean = false, now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
+        // 이미 포지션이 있으면 = 기존 포지션의 연장(추가매수 또는 재시작 reconcile 확정) → 진입 메타 보존.
+        // 없으면 = 신규 진입 → durable 에 남아 있던 옛 값(수동 청산 등으로 markSold 를 못 탄 잔재)을 물려받으면
+        // 진입 즉시 보유일 초과·과거 고점 기준 트레일링으로 청산돼 왕복 비용만 잃는다.
+        val resuming = position
         if (position && !replace) {
             // 추가 매수: 평균 단가 계산. entryStrategy 는 최초 진입 전략 유지(덮어쓰지 않음).
             val totalCost = avgBuyPrice * holdVolume + price * volume
@@ -79,13 +83,15 @@ data class TradingState(
             position = true
             avgBuyPrice = price
             holdVolume = volume
-            buyDate = buyDate ?: now.toLocalDate()
-            entryStrategy = entryStrategy ?: strategy
+            buyDate = if (resuming) buyDate ?: TradingDay.of(now) else TradingDay.of(now)
+            entryStrategy = if (resuming) entryStrategy ?: strategy else strategy
+            if (!resuming) exitParams = null // 신규 진입 — 진입 시점 스냅샷은 호출부가 다시 찍는다
         }
         // 당일 1회 진입 게이트가 동작하도록 매수 시점에 반드시 set. resetDaily()에서만 해제됨.
         boughtToday = true
         boughtDate = TradingDay.of(now)
-        peakPrice = max(peakPrice, price)
+        // 신규 진입이면 고점은 진입가에서 다시 시작 — 옛 고점을 물려받으면 첫 tick 부터 트레일링이 발동한다.
+        peakPrice = if (resuming) max(peakPrice, price) else price
         lastTradeTime = now
         // H8: 체결 확정 = pending 주문 해소.
         pendingBuyUuid = null

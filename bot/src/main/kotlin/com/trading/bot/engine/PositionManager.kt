@@ -40,10 +40,14 @@ class PositionManager(
     suspend fun syncPosition(ticker: String, state: TradingState) {
         try {
             val account = findAccount(ticker.substringAfter("-"))
-            if (account != null && account.balanceDouble() > 0) {
+            // free 가 아니라 free+locked — 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 가 0 이다.
+            // 그걸 "보유 없음" 으로 동기화하면 손절·익절이 한 번도 평가되지 않는 무방비 보유가 되고,
+            // boughtToday 가 풀리는 순간 그 위에 추가 매수까지 들어간다.
+            val held = account?.totalBalance() ?: 0.0
+            if (held > 0) {
                 state.position = true
-                state.avgBuyPrice = account.avgBuyPriceDouble()
-                state.holdVolume = account.balanceDouble()
+                state.avgBuyPrice = account!!.avgBuyPriceDouble()
+                state.holdVolume = held
                 log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
             }
             // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
@@ -242,11 +246,13 @@ class PositionManager(
         val volume = account?.balanceDouble()?.takeIf { it > 0.0 } ?: executedVolume
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
         val totalAmount = fillPrice * volume
-        // 진입 시점 청산 파라미터 스냅샷(재시작 복원 시엔 기존 값 유지). 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
-        state.exitParams = state.exitParams ?: snapshotExitParams()
+        // 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
         state.reconcileFailureCount = 0
         // replace=true: 거래소 실잔고를 절대값으로 반영해 syncPosition 복원분과 이중계상되지 않게(#20). markBought 가 pendingBuy* clear.
         state.markBought(fillPrice, volume, strategy, replace = true)
+        // 진입 시점 청산 파라미터 스냅샷. markBought 뒤에 찍는다 — 신규 진입이면 markBought 가 옛 스냅샷을 비우므로
+        // 여기서 현재 설정으로 새로 찍히고, 재시작 복원(기존 포지션 연장)이면 durable 값이 그대로 유지된다.
+        state.exitParams = state.exitParams ?: snapshotExitParams()
         persist(state)
         log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
         return TradeRecord(
@@ -437,10 +443,15 @@ class PositionManager(
             executed > 0.0 -> {
                 // terminal(done 전량 또는 cancel 부분) + 체결분. 미체결 잔량은 취소돼 locked 가 free 로 돌아왔으므로 실잔고가 정확.
                 val record = buildSellRecord(ticker, state, currentPrice, executed)
-                val remaining = findAccount(ticker.substringAfter("-"))?.balanceDouble() ?: 0.0
+                val account = findAccount(ticker.substringAfter("-"))
+                val remaining = account?.totalBalance() ?: 0.0
                 if (remaining > 0.0) {
                     // 부분 체결 — 잔여 실잔고로 갱신, avgBuyPrice 유지. pending 해소(잔여분은 다음 tick 재매도).
+                    // position 을 실측으로 되살린다: 매도 주문에 잠긴 잔고 때문에 복원 시 false 였을 수 있고,
+                    // 그대로 두면 잔여 포지션이 청산 평가를 영영 못 받는다.
+                    state.position = true
                     state.holdVolume = remaining
+                    if (state.avgBuyPrice <= 0.0) state.avgBuyPrice = account?.avgBuyPriceDouble() ?: 0.0
                     state.clearPendingSell()
                     log.info("SELL {} partial via reconcile: executed={}, remaining={} — position kept", ticker, executed, remaining)
                 } else {
@@ -451,7 +462,9 @@ class PositionManager(
             }
             else -> {
                 // cancel+0 미체결 — 매도 무산, pending 해소. 코인 그대로이므로 position 유지(다음 tick 재매도).
+                // 복원 직후라 position 이 false 로 남아 있을 수 있어 실잔고로 되살린다(위 부분체결 분기와 같은 이유).
                 log.warn("Pending sell unfilled for {}: state={} — order abandoned, position kept", ticker, filled?.state)
+                if (!state.position) syncPosition(ticker, state)
                 state.clearPendingSell()
                 null
             }
