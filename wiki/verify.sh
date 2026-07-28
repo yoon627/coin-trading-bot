@@ -31,6 +31,10 @@ if [ "$count" -lt 23 ] || [ "$count" -gt 27 ]; then
   echo "FAIL: 페이지 수 $count 가 기대 범위(25±2) 밖"; fail=1
 fi
 
+# 선두 `---` 블록(frontmatter)만 출력. 첫 줄이 `---` 이 아니면 아무것도 내지 않는다.
+# 본문에 우연히 같은 키가 있어도 통과하지 않도록 모든 frontmatter 검사를 이 블록으로 제한한다.
+fm() { awk 'NR==1 && $0!="---" {exit} NR>1 && /^---$/ {exit} NR>1' "$1"; }
+
 checked=0
 stems=""
 for f in "$@"; do
@@ -45,27 +49,32 @@ for f in "$@"; do
   esac
   stems="$stems $stem"
 
+  head=$(fm "$f")
+  if [ -z "$head" ]; then
+    echo "FAIL: frontmatter 블록 없음 — $f"; fail=1; checked=$((checked+1)); continue
+  fi
+
   dir_cat=$(basename "$(dirname "$f")")
-  fm_cat=$(awk 'NR>1 && /^category:/ {print $2; exit}' "$f")
+  fm_cat=$(printf '%s\n' "$head" | awk '/^category:/ {print $2; exit}')
   [ "$fm_cat" = "$dir_cat" ] \
     || { echo "FAIL: category 불일치 — $f (frontmatter=$fm_cat, dir=$dir_cat)"; fail=1; }
 
   for key in created updated; do
-    val=$(awk -v k="^$key:" 'NR>1 && $0 ~ k {print $2; exit}' "$f")
+    val=$(printf '%s\n' "$head" | awk -v k="^$key:" '$0 ~ k {print $2; exit}')
     printf '%s' "$val" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' \
       || { echo "FAIL: $key 가 ISO 날짜가 아님 — $f ($val)"; fail=1; }
   done
 
   # provenance (WIKI.md §3 이 요구하지만 check_links.py 는 안 보는 키)
-  cs=$(awk 'NR>1 && /^claim_state:/ {print $2; exit}' "$f")
+  cs=$(printf '%s\n' "$head" | awk '/^claim_state:/ {print $2; exit}')
   case "$cs" in
     current|historical|superseded) ;;
     *) echo "FAIL: claim_state 누락·허용값 아님 — $f ($cs)"; fail=1 ;;
   esac
-  grep -qE '^verified:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" \
+  printf '%s\n' "$head" | grep -qE '^verified:[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}' \
     || { echo "FAIL: verified 누락 또는 날짜 없음 — $f"; fail=1; }
 
-  awk '/^sources:/{getline; if ($0 ~ /^[[:space:]]+- [^[:space:]]/) ok=1} END{exit !ok}' "$f" \
+  printf '%s\n' "$head" | awk '/^sources:/{getline; if ($0 ~ /^[[:space:]]+- [^[:space:]]/) ok=1} END{exit !ok}' \
     || { echo "FAIL: sources 비어 있음 — $f"; fail=1; }
 
   checked=$((checked+1))

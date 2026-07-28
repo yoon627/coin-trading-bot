@@ -26,13 +26,15 @@ Flyway 는 버전 번호가 유일해야 한다. **여러 worktree 가 동시에
 `main` 의 최신 번호는 마이그레이션 디렉토리로 확인한다([[persistence-schema]]).
 
 ```bash
-git fetch origin main
+git fetch --all --prune          # origin main 만 받으면 다른 브랜치의 선점을 못 본다
 git ls-tree --name-only origin/main bot/src/main/resources/db/migration/ | sort -V | tail -3
-# 미머지 브랜치의 선점 여부
-git branch -a --format='%(refname:short)' | while read b; do
+# 아직 머지되지 않은 브랜치가 잡아둔 번호까지 훑는다
+git branch -a --format='%(refname:short)' | while read -r b; do
   git ls-tree --name-only "$b" bot/src/main/resources/db/migration/ 2>/dev/null
 done | sort -u | sort -V | tail -5
 ```
+
+`git fetch origin main` 만 돌리면 **다른 머신·worktree 가 방금 push 한 마이그레이션 브랜치가 로컬에 없어** 그 번호를 못 본다. 충돌 검사의 의미가 사라지므로 `--all` 로 받는다.
 
 **어느 브랜치가 지금 어떤 번호를 잡고 있는지는 여기 적지 않는다** — 그건 진행 중 작업의 상태이고, 이 wiki 가 아니라 GitHub 이슈 #49 와 각 브랜치의 plan 이 소유한다([[github-issues-backlog]]). 여기 적으면 반드시 stale 해진다.
 

@@ -31,8 +31,18 @@ resume 류 질문에는 아래 여섯 곳을 **모두** 확인한 뒤 답한다:
 | ② | 작업 plan | `.claude/plans/` ([[plan-git-tracking]]) |
 | ③ | stash | `git stash list` |
 | ④ | 백업 태그 | `git tag --list "claude-*"` |
-| ⑤ | 미push 커밋 | `git log --oneline @{u}..HEAD` |
+| ⑤ | 미push 커밋 | `git log --oneline @{u}..HEAD` — **upstream 이 없으면 fatal** 이므로 아래 fallback |
 | ⑥ | 작업 트리 | `git status --short` |
+
+⑤ 는 **한 번도 push 하지 않은 브랜치에서 `fatal: no upstream configured` 로 죽는다** — 그런데 그게 바로 resume 이 필요한 전형적 상황이다. upstream 유무를 갈라서 쓴다:
+
+```bash
+if up=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null); then
+  git log --oneline "$up..HEAD"
+else
+  git log --oneline --branches --not --remotes    # 어느 원격에도 없는 로컬 전용 커밋
+fi
+```
 
 이 repo 에서는 여기에 **worktree 목록**이 추가된다 — 진행 중 작업이 다른 worktree 에 있을 수 있고, 그 순서는 이슈 #49 가 소유한다([[worktree-workflow]]).
 
