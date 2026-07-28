@@ -127,6 +127,27 @@ data class KisAccountSummary(
     fun settledD2(): Long = prvsRcdlExccAmt.toLongOrNull() ?: 0
 }
 
+// ---- 매수가능조회 (inquire-psbl-order) ----
+
+data class KisBuyableResponse(
+    @JsonProperty("rt_cd") val rtCd: String = "",
+    @JsonProperty("msg1") val msg1: String? = null,
+    @JsonProperty("output") val output: KisBuyableOutput? = null,
+) {
+    fun isSuccess(): Boolean = rtCd == "0"
+}
+
+data class KisBuyableOutput(
+    @JsonProperty("nrcvb_buy_qty") val nrcvbBuyQty: String = "0",
+    @JsonProperty("nrcvb_buy_amt") val nrcvbBuyAmt: String = "0",
+) {
+    /**
+     * 미수 없는 매수가능수량. 종목 증거금률이 반영된 값으로, 계좌 예수금 계산(dnca_tot_amt/prvs_rcdl_excc_amt)만으로는
+     * 대체할 수 없다 — 미수 방지의 최종 근거는 이 값이다(KIS 공식 가이드).
+     */
+    fun buyableQty(): Long = nrcvbBuyQty.toLongOrNull() ?: 0
+}
+
 // ---- 현재가 (inquire-price) ----
 
 data class KisPriceResponse(

@@ -32,6 +32,12 @@ interface KisClient {
     /** 현재가(원). */
     suspend fun getCurrentPrice(symbol: String): Long
 
+    /**
+     * 미수 없는 매수가능수량(`nrcvb_buy_qty`). 종목 증거금률이 반영된 값이라 계좌 예수금 계산으로 대체할 수 없다.
+     * KIS 가이드대로 ORD_DVSN=01(시장가)로 조회한다 — 지정가(00)는 증거금률이 반영되지 않는다.
+     */
+    suspend fun getBuyableQty(symbol: String, price: Long): Long
+
     /** 일/주/월봉. from/to=YYYYMMDD. 시세는 실전도메인 권장(모의 가능여부 스모크 확인). */
     suspend fun getDailyCandles(
         symbol: String,

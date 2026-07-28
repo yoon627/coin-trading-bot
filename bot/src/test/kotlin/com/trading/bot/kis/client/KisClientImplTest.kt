@@ -44,6 +44,55 @@ class KisClientImplTest {
     fun teardown() = server.shutdown()
 
     @Test
+    fun `daily candles are returned newest-first to match strategy convention`() = runTest {
+        // KIS 응답 순서와 무관하게 candles[0]=최신이어야 한다 — Indicators 가 candles[0]을 오늘,
+        // candles[1]을 전일로 읽고(calculateTargetPrice) take(period)로 최신 N개를 자른다.
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                {"rt_cd":"0","output2":[
+                  {"stck_bsop_date":"20260612","stck_oprc":"100","stck_hgpr":"110","stck_lwpr":"90","stck_clpr":"105","acml_vol":"1000"},
+                  {"stck_bsop_date":"20260615","stck_oprc":"200","stck_hgpr":"210","stck_lwpr":"190","stck_clpr":"205","acml_vol":"2000"},
+                  {"stck_bsop_date":"20260613","stck_oprc":"300","stck_hgpr":"310","stck_lwpr":"290","stck_clpr":"305","acml_vol":"3000"}
+                ]}
+                """.trimIndent(),
+            ).addHeader("Content-Type", "application/json"),
+        )
+
+        val candles = client.getDailyCandles("005930", "20260601", "20260615")
+
+        assertEquals(listOf("20260615", "20260613", "20260612"), candles.map { it.date })
+    }
+
+    @Test
+    fun `buyable qty is read from nrcvb_buy_qty`() = runTest {
+        server.enqueue(
+            MockResponse().setBody("""{"rt_cd":"0","output":{"nrcvb_buy_qty":"12","nrcvb_buy_amt":"840000"}}""")
+                .addHeader("Content-Type", "application/json"),
+        )
+
+        val qty = client.getBuyableQty("005930", 70_000)
+
+        assertEquals(12L, qty)
+        val req = server.takeRequest()
+        // 지정가(00)로 조회하면 종목 증거금률이 반영되지 않아 과대 수량이 나온다 — 반드시 시장가(01).
+        assertTrue(req.path!!.contains("ORD_DVSN=01"), "expected market-order division, path=${req.path}")
+        assertTrue(req.path!!.contains("PDNO=005930"))
+    }
+
+    @Test
+    fun `buyable qty raises on business error so callers can fail closed`() {
+        server.enqueue(
+            MockResponse().setBody("""{"rt_cd":"1","msg1":"조회 실패"}""")
+                .addHeader("Content-Type", "application/json"),
+        )
+
+        assertThrows(com.trading.bot.kis.client.KisApiException::class.java) {
+            runBlocking { client.getBuyableQty("005930", 70_000) }
+        }
+    }
+
+    @Test
     fun `placeOrder maps ODNO and sends real-buy tr_id + body`() = runTest {
         server.enqueue(
             MockResponse()

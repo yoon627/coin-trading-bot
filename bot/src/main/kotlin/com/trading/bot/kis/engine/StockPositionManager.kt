@@ -42,19 +42,20 @@ class StockPositionManager(
         liveEnabled: Boolean,
     ): StockOrderIntentEntity? {
         if (currentPrice <= 0) return null
-        val qty = if (liveEnabled) sizeFromBalance(currentPrice) else nominalQty(currentPrice)
+        val qty = if (liveEnabled) sizeFromBalance(pos.symbol, currentPrice) else nominalQty(currentPrice)
         if (qty <= 0) {
-            log.debug("Skip buy {} — qty=0 (insufficient budget)", pos.symbol)
+            log.debug("Skip buy {} — qty=0 (insufficient budget or not buyable)", pos.symbol)
             return null
         }
         val intent = submit(pos.symbol, KisSide.BUY, qty) ?: return null
         if (intent.status == StockOrderStatus.DRY_RUN.name) {
             pos.markBoughtSimulated(currentPrice, strategyName)
-        } else {
-            // live: 실주문 접수 — 당일 재매수 차단. 실보유/평단은 다음 패스 getHoldings 가 확정.
+        } else if (intent.status !in MISSED_BUY_STATUSES) {
+            // 접수됐거나 접수 여부가 불명(UNKNOWN)이면 당일 재매수 차단. 실보유/평단은 다음 패스 getHoldings 가 확정.
             pos.boughtToday = true
             pos.entryStrategy = strategyName
         }
+        // 미접수 확정(FAILED/REJECTED)은 boughtToday 를 세우지 않는다 — 브로커가 거부했을 뿐 진입 기회는 남아 있다.
         return intent
     }
 
@@ -97,12 +98,29 @@ class StockPositionManager(
         }
     }
 
-    /** 보수 가용현금 = min(예수금, D+2정산) × investRatio, maxInvestAmount 상한. 시장가 슬리피지 버퍼로 미수 방지(M3). */
-    private suspend fun sizeFromBalance(currentPrice: Long): Long {
+    /**
+     * 매수 수량 = min(예산 기준 수량, 브로커 매수가능수량).
+     *
+     * 예산 기준은 min(예수금, D+2정산) × investRatio 에 maxInvestAmount 상한·슬리피지 버퍼를 적용한 값이지만,
+     * 이것만으로는 미수를 막지 못한다 — 예수금 계산에는 종목 증거금률이 반영되지 않고, 한 패스에서 여러 종목이
+     * 같은 현금을 각자 배정받기 때문이다. 미수의 실질 방어선은 `inquire-psbl-order` 의 미수없는매수수량이며
+     * 그 값을 최종 상한으로 쓴다. 조회 실패는 **fail-closed**(0 반환 → 매수 skip) — 상한을 모르는 채 주문하면
+     * 미수가 발생할 수 있다.
+     */
+    private suspend fun sizeFromBalance(symbol: String, currentPrice: Long): Long {
         val summary = client.getBalance().summary.firstOrNull() ?: return 0
         val availableCash = minOf(summary.depositTotal(), summary.settledD2())
         val budget = minOf(availableCash.toDouble() * tradingProperties.investRatio, tradingProperties.maxInvestAmount)
-        return floor(budget / (currentPrice * MARKET_SLIPPAGE_BUFFER)).toLong()
+        val byBudget = floor(budget / (currentPrice * MARKET_SLIPPAGE_BUFFER)).toLong()
+        if (byBudget <= 0) return 0
+
+        val buyable = try {
+            client.getBuyableQty(symbol, currentPrice)
+        } catch (e: Exception) {
+            log.warn("Skip buy {} — buyable qty query failed (fail-closed): {}", symbol, e.message)
+            return 0
+        }
+        return minOf(byBudget, buyable)
     }
 
     private fun nominalQty(currentPrice: Long): Long =
@@ -129,5 +147,8 @@ class StockPositionManager(
 
     private companion object {
         const val MARKET_SLIPPAGE_BUFFER = 1.1
+
+        /** 매수 미접수가 확정된 상태 — 당일 진입 기회를 소모하지 않는다. */
+        val MISSED_BUY_STATUSES = setOf(StockOrderStatus.FAILED.name, StockOrderStatus.REJECTED.name)
     }
 }

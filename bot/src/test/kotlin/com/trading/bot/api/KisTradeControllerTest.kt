@@ -2,6 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.kis.client.KisClient
 import com.trading.bot.kis.client.KisClientFactory
+import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.order.StockOrderService
 import com.trading.bot.kis.order.StockOrderValidationException
 import com.trading.bot.kis.order.SubmitOrderCommand
@@ -37,7 +38,14 @@ class KisTradeControllerTest {
     private val stockOrderService = mockk<StockOrderService>()
     private val intentRepo = mockk<StockOrderIntentRepository>()
     private val validators = RequestValidators()
-    private val controller = KisTradeController(userRepo, kisClientFactory, stockOrderService, intentRepo, validators)
+    private val marketCalendar = mockk<KisMarketCalendar>()
+    private val controller =
+        KisTradeController(userRepo, kisClientFactory, stockOrderService, intentRepo, validators, marketCalendar)
+
+    init {
+        // 기본은 장중 — 게이트 자체를 검증하는 테스트만 false 로 덮는다.
+        every { marketCalendar.isTradingNow() } returns true
+    }
 
     private fun <T : Any> authed(block: suspend () -> T): T =
         mono { block() }.contextWrite(authContext).block()!!
@@ -46,6 +54,24 @@ class KisTradeControllerTest {
         id = userId, username = "u", password = "p",
         kisAppKey = "enc:ak", kisAppSecret = "enc:sk", kisCano = "12345678", kisAcntPrdtCd = "01",
     )
+
+    @Test
+    fun `placeOrder is rejected outside market hours and never reaches WAL`() {
+        every { marketCalendar.isTradingNow() } returns false
+        every { userRepo.findById(userId) } returns Mono.just(userWithKeys())
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed {
+                controller.placeOrder(
+                    KisOrderApiRequest(symbol = "005930", side = "buy", orderType = "limit", qty = 10, price = 70000),
+                )
+            }
+        }
+
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, ex.statusCode)
+        // 게이트가 WAL 앞에 서야 미접수 주문 흔적이 남지 않는다.
+        coVerify(exactly = 0) { stockOrderService.submit(any(), any()) }
+    }
 
     @Test
     fun `placeOrder submits through WAL and returns intent status`() {

@@ -4,6 +4,7 @@ import com.trading.bot.auth.currentUserId
 import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.kis.domain.KisOrderType
 import com.trading.bot.kis.domain.KisSide
+import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.order.StockOrderService
 import com.trading.bot.kis.order.StockOrderValidationException
 import com.trading.bot.kis.order.SubmitOrderCommand
@@ -32,10 +33,17 @@ class KisTradeController(
     private val stockOrderService: StockOrderService,
     private val stockOrderIntentRepository: StockOrderIntentRepository,
     private val requestValidators: RequestValidators,
+    private val marketCalendar: KisMarketCalendar,
 ) {
 
     @PostMapping("/order")
     suspend fun placeOrder(@RequestBody req: KisOrderApiRequest): Map<String, Any?> {
+        // 엔진(runLoop)은 같은 캘린더로 장외를 막지만 이 수동 경로엔 게이트가 없었다(M-B).
+        // ⚠️ 현 캘린더는 평일 09:00~15:30 하드코딩이라 공휴일·임시휴장·단축거래를 모른다 —
+        // 장외 주문을 KIS 가 거부하기 전에 로컬에서 1차로 거르는 용도이며, 휴장일 판정은 chk-holiday 연동(후속) 몫이다.
+        if (!marketCalendar.isTradingNow()) {
+            throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "market is closed")
+        }
         val userId = currentUserId()
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND)

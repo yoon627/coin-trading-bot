@@ -121,6 +121,19 @@ class StockOrderServiceTest {
     }
 
     @Test
+    fun `overflowing qty cannot slip past the cap`() = runTest {
+        // qty * unitPrice 가 Long 을 넘으면 곱셈이 접혀 음수가 되고, 단순 비교(notional > cap)를 통과한다.
+        // 수동 주문에는 qty 상한이 없으므로 이 경로가 maxOrderAmount 가드를 무력화하는 실제 우회로였다.
+        val hugeQty = cmd.copy(qty = Long.MAX_VALUE / 1000)
+
+        assertThrows(StockOrderValidationException::class.java) {
+            kotlinx.coroutines.runBlocking { service(liveEnabled = true, maxOrderAmount = 500_000).submit(client, hugeQty) }
+        }
+        coVerify(exactly = 0) { repository.save(any()) }
+        coVerify(exactly = 0) { client.placeOrder(any()) }
+    }
+
+    @Test
     fun `market order notional uses buffered current price for cap`() = runTest {
         val marketCmd = cmd.copy(orderType = KisOrderType.MARKET, price = null)
         coEvery { client.getCurrentPrice("005930") } returns 70_000

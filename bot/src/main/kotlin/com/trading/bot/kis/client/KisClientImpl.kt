@@ -1,6 +1,7 @@
 package com.trading.bot.kis.client
 
 import com.trading.bot.kis.domain.KisBalanceResponse
+import com.trading.bot.kis.domain.KisBuyableResponse
 import com.trading.bot.kis.domain.KisCandle
 import com.trading.bot.kis.domain.KisCandlePeriod
 import com.trading.bot.kis.domain.KisCcldRow
@@ -129,6 +130,33 @@ class KisClientImpl(
 
     override suspend fun getHoldings(): List<KisHolding> = getBalance().holdings
 
+    override suspend fun getBuyableQty(symbol: String, price: Long): Long {
+        val trId = if (paper) "VTTC8908R" else "TTTC8908R"
+        val token = tokenProvider.token()
+        val resp = webClient.get()
+            .uri { b ->
+                b.path("/uapi/domestic-stock/v1/trading/inquire-psbl-order")
+                    .queryParam("CANO", cano)
+                    .queryParam("ACNT_PRDT_CD", acntPrdtCd)
+                    .queryParam("PDNO", symbol)
+                    .queryParam("ORD_UNPR", price.toString())
+                    // 01(시장가) 고정 — 지정가(00)로 조회하면 종목 증거금률이 반영되지 않아 과대 수량이 나온다(KIS 가이드).
+                    .queryParam("ORD_DVSN", "01")
+                    .queryParam("CMA_EVLU_AMT_ICLD_YN", "N")
+                    .queryParam("OVRS_ICLD_YN", "N")
+                    .build()
+            }
+            .headers(authHeaders(token, trId))
+            .retrieve()
+            .onStatus(HttpStatusCode::isError) { transportError(it) }
+            .bodyToMono<KisBuyableResponse>()
+            .awaitSingle()
+        if (!resp.isSuccess()) {
+            throw KisApiException(definitiveReject = false, rtCd = resp.rtCd, msg = resp.msg1 ?: "buyable qty query failed")
+        }
+        return resp.output?.buyableQty() ?: 0
+    }
+
     override suspend fun getBalance(): KisBalanceResponse {
         val trId = if (paper) "VTTC8434R" else "TTTC8434R"
         val token = tokenProvider.token()
@@ -209,8 +237,10 @@ class KisClientImpl(
         if (!resp.isSuccess()) {
             throw KisApiException(definitiveReject = false, rtCd = resp.rtCd, msg = resp.msg1 ?: "daily candle query failed")
         }
-        // 오래된→최신 순으로 정렬(KIS 는 최신순 반환) — 지표 계산 편의.
-        return resp.output2.map { it.toCandle() }.sortedBy { it.date }
+        // 최신→오래된 순. 전략·Indicators 가 candles[0]=최신을 가정하고(Indicators.calculateTargetPrice 의
+        // today/yesterday, take(period)) MarketDataStore.getCandles 도 descending 이라 여기에 맞춘다.
+        // (이전 구현은 ascending 이라 store 미스 시 폴백 경로만 지표가 뒤집혀 계산됐다.)
+        return resp.output2.map { it.toCandle() }.sortedByDescending { it.date }
     }
 
     override suspend fun getMinuteCandles(symbol: String, baseTime: String): List<KisCandle> {

@@ -162,7 +162,13 @@ class StockOrderService(
             } else {
                 unitPrice
             }
-            val notional = cmd.qty * buffered
+            // Long 곱셈 오버플로가 나면 음수·작은 양수로 접혀 cap 검증을 통과한다(수동 주문은 qty 상한이 없다).
+            // multiplyExact 로 오버플로를 검증 실패로 승격한다.
+            val notional = try {
+                Math.multiplyExact(cmd.qty, buffered)
+            } catch (_: ArithmeticException) {
+                throw StockOrderValidationException("order notional overflows (qty=${cmd.qty}, unit=$buffered)")
+            }
             if (notional > cap) {
                 throw StockOrderValidationException("order notional $notional exceeds max-order-amount $cap")
             }

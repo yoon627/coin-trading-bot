@@ -64,6 +64,7 @@ class StockPositionManagerTest {
         coEvery { client.getBalance() } returns KisBalanceResponse(
             rtCd = "0", summary = listOf(KisAccountSummary(dncaTotAmt = "1000000", prvsRcdlExccAmt = "800000")),
         )
+        coEvery { client.getBuyableQty(any(), any()) } returns 999 // 예산이 제약이 되는 케이스
         val cmd = slot<SubmitOrderCommand>()
         coEvery { orderService.submit(any(), capture(cmd)) } answers { intent(StockOrderStatus.PLACED, KisSide.BUY, cmd.captured.qty) }
         val pos = StockPosition("005930")
@@ -74,6 +75,52 @@ class StockPositionManagerTest {
         assertEquals(7L, cmd.captured.qty)
         assertTrue(pos.boughtToday)
         assertFalse(pos.position) // live: 체결 확정은 다음 패스 getHoldings
+    }
+
+    @Test
+    fun `live buy is capped by broker buyable qty (C-C)`() = runTest {
+        coEvery { client.getBalance() } returns KisBalanceResponse(
+            rtCd = "0", summary = listOf(KisAccountSummary(dncaTotAmt = "1000000", prvsRcdlExccAmt = "800000")),
+        )
+        // 예산으로는 7주가 나오지만 브로커의 미수없는 매수가능수량이 3주 — 증거금률이 반영된 이 값이 상한이다.
+        coEvery { client.getBuyableQty("005930", 10_000) } returns 3
+        val cmd = slot<SubmitOrderCommand>()
+        coEvery { orderService.submit(any(), capture(cmd)) } answers { intent(StockOrderStatus.PLACED, KisSide.BUY, cmd.captured.qty) }
+
+        pm.submitBuy(StockPosition("005930"), currentPrice = 10_000, strategyName = "rsi", liveEnabled = true)
+
+        assertEquals(3L, cmd.captured.qty)
+    }
+
+    @Test
+    fun `live buy is skipped when buyable qty query fails (fail-closed)`() = runTest {
+        coEvery { client.getBalance() } returns KisBalanceResponse(
+            rtCd = "0", summary = listOf(KisAccountSummary(dncaTotAmt = "1000000", prvsRcdlExccAmt = "800000")),
+        )
+        coEvery { client.getBuyableQty(any(), any()) } throws RuntimeException("psbl-order 5xx")
+        val pos = StockPosition("005930")
+
+        val intent = pm.submitBuy(pos, currentPrice = 10_000, strategyName = "rsi", liveEnabled = true)
+
+        // 상한을 모르는 채 주문하면 미수가 날 수 있다 — 주문 자체를 내지 않는다.
+        assertNull(intent)
+        assertFalse(pos.boughtToday)
+        coVerify(exactly = 0) { orderService.submit(any(), any()) }
+    }
+
+    @Test
+    fun `broker rejection does not consume the daily entry slot (C3)`() = runTest {
+        coEvery { client.getBalance() } returns KisBalanceResponse(
+            rtCd = "0", summary = listOf(KisAccountSummary(dncaTotAmt = "1000000", prvsRcdlExccAmt = "800000")),
+        )
+        coEvery { client.getBuyableQty(any(), any()) } returns 999
+        coEvery { orderService.submit(any(), any()) } returns intent(StockOrderStatus.FAILED, KisSide.BUY, 7)
+        val pos = StockPosition("005930")
+
+        pm.submitBuy(pos, currentPrice = 10_000, strategyName = "rsi", liveEnabled = true)
+
+        // FAILED = 미접수 확정. 진입 기회를 소모하면 당일 재시도가 막힌다.
+        assertFalse(pos.boughtToday)
     }
 
     @Test

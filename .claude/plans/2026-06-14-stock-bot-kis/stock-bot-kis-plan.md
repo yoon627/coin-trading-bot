@@ -29,11 +29,12 @@ updated: 2026-07-28
 - 2026-07-28: **동결 → 재조사 → 재개**. (1) #49 큐에서 ❄️동결 결정(존속/폐기 보류). (2) 같은 날 브로커 API 재조사(#59) — 토스증권 Open API 를 후보로 평가하고 Claude 1차 조사 → Codex 교차검증(사실오류 8건) → 스펙 원본 재검증. **결론: KIS 유지 확정**(D23). (3) 사용자 지시로 동결 해제·작업 재개. 코드 변경 없음 — 브랜치는 `2be1fe3` 그대로(clean, origin 과 동일, main 대비 **behind 17 / ahead 10**).
 - 2026-07-28: **rebase onto origin/main 완료**. behind 17 → 0. 충돌 3건 해소 — `PROJECT_ANALYSIS.md`/`README.md`(문서, main 재구성분 유지 + KIS 항목 이식), `UserTradingManager.kt`(main 의 `restoreAllRunningBots()` 추출 + SmartLifecycle 구조를 살리고 D22 의 `EXCHANGE="UPBIT"` 스코프 좁히기 4곳을 재적용 — 기존 `companion object` 에 상수 편입). migration **V14~V16 → V15~V17 renumber**(main 이 V14 선점) + 참조 동반 수정(README·PROJECT_ANALYSIS 표에 V15~V17 행 추가·UserEntity/BotStateEntity 주석·WAL 주석의 폐기된 `positions` 참조). rebase 로 합류한 main 테스트가 옛 `findByRunningTrue()` 를 mock 해 컴파일 실패 → `findByRunningTrueAndExchange("UPBIT")` 6곳 정합. **535 테스트 0 실패**(rebase 전 baseline 425 → main 합류 110 증가).
 
+- 2026-07-28: **실거래 블로커 해소(D24) 구현 완료 — 543 테스트 0 실패**(직전 535 + 신규 8). dlc structural. plan-review 는 **codex 단독**(Claude subagent 는 이 세션 정책상 미사용 — CLAUDE.md §9 의 "미가용 시 사유 명시" 준용) → Critical 6/Major 3 지적을 코드로 검증해 **범위를 재조정**(사용자 결정 "안전한 것부터"). 구현: ①C-C 축소 — `getBuyableQty`(inquire-psbl-order, TTTC8908R/ORD_DVSN=01) 신규 + 매수수량 최종 상한 + 조회실패 fail-closed ②`FAILED`/`REJECTED` 는 `boughtToday` 미소모(codex C3) ③M-B `KisTradeController` 시장시간 게이트(422, WAL 앞단) ④M-D 엔진 로컬 TTL 캐시(price 5s/candle 300s) + 지수 backoff + store ticker 신선도 판정 ⑤**기존 Critical 정렬 버그** — `getDailyCandles` 가 ascending 이라 store 미스 시 지표가 뒤집혀 계산되던 것을 descending 으로 근본 수정 ⑥`notional` Long 오버플로로 `maxOrderAmount` 우회되던 것을 `multiplyExact` 로 차단(codex C6). **M-E 와 durable 현금예약·재시작 안전성은 `# Deferred`** — 전략 의미 변경/스키마 변경이라 별도 작업.
+
 # Next
 
-**rebase 완료(2026-07-28). 다음 액션은 사용자 결정 대기** — 아래 중 택1:
+**완료: 실거래 블로커 해소(D24)** — 543 테스트 0 실패, `# Acceptance` 전 항목 증거 확보. 다음 후보:
 
-- **(a) 실거래 블로커 4건 해소** — `# Blockers` 의 C-C 계좌단위 현금예약 / M-B 수동주문 시장시간 게이트 / M-D REST 폴백 TTL 캐시·backoff / M-E 일봉 장중 whipsaw. 실거래(`KIS_LIVE_ENABLED=true`) 전 필수라 가장 우선순위 높음.
 - **(b) 실계정 모의투자 스모크** — `KisPaperSmokeTest`(env-gated). 사용자 KIS 모의 자격증명 필요. 미확정 스펙(필수 query 파라미터·tr_cont·ODNO 자릿수·rate limit 실값) 실측 경로.
 - **(c) force push + PR** — rebase 로 히스토리를 재작성했으므로 `--force-with-lease` 필요. **사용자 명시 확인 필수**(origin/stock-bot-kis 가 유일 백업이었음).
 - **(d) 데이터 계층 분리 설계**(D23) — KRX 원천 append-only 적재. `stock-quant-strategy` Phase 0 의 생존편향 해결 경로.
@@ -134,6 +135,41 @@ updated: 2026-07-28
 - ⚠️ 이 결정은 `stock-quant-strategy` plan `# Decisions` 의 **"데이터 소스는 KIS API 한정"** 과 충돌 → 그 plan 재개 시 완화 필요(KRX 공공데이터는 무료라 "유료 외부 데이터 없음" 원칙엔 위배 아님).
 - 확정 사실(부수 수확): 2026년 상장주식 매도세 **KOSPI 0.05%+농특세 0.15% / KOSDAQ 0.20% = 총 0.20%** — `stock-quant-strategy` 미확정 ⑤ 해소(⚠️Codex 제공, 법령 원문 미검증). KIS 일봉 **1회 최대 100건** + 일/주/월/년봉 + 시작~종료일 직접 지정.
 
+## D24. [2026-07-28] 실거래 블로커 4건 해소 설계 (사용자 결정 반영)
+
+> **[2026-07-28 plan-review(codex) 반영 — 범위 축소]** 아래 설계는 codex 리뷰(Critical 6/Major 3)와 코드 검증을 거쳐 **"안전한 것부터"** 로 재조정됐다(사용자 결정). C-C 의 durable 현금예약과 M-E 전체는 `# Deferred` 로 분리한다. 처분 근거는 `# Review Disposition` 참조.
+
+- **C-C(축소) = 종목별 매수가능수량 상한**. 원안(패스 잔고 스냅샷 차감)의 전제가 틀렸다 — `sizeFromBalance` 가 쓰는 `getBalance()` 의 예수금·D+2 는 **주문가능금액이 아니다**. KIS 는 미수 없는 매수가능수량을 `inquire-psbl-order`(tr_id `TTTC8908R`, `nrcvb_buy_qty`)로 제공하며 종목 증거금률이 반영된다(plan D14 에 이미 적혀 있었으나 미구현 — `KisClient` grep 0건). → **`getBuyableQty(symbol, price)` 를 신규 구현해 매수 수량의 최종 상한으로 삼는다.** 조회 실패·0·업무오류는 **fail-closed**(매수 skip).
+  - 패스 내 로컬 차감은 넣지 않는다 — 수동 주문(`KisTradeController`)·재시작·다중 사용자가 같은 현금을 공유하므로 엔진 지역 변수로는 계좌 단위 불변식이 성립하지 않는다(codex C2). **미수의 최종 방어선은 브로커의 `nrcvb_buy_qty`** 이고, 이것만으로 "예수금 초과 주문 접수"는 막힌다. 완전한 계좌 단위 예약은 `# Deferred`.
+  - 부수 수정: `submitBuy` 가 `DRY_RUN` 이 아닌 **모든** 반환을 접수로 간주해 `FAILED`(브로커 명시 거부)에도 `boughtToday=true` 가 된다(codex C3) → terminal 실패 상태는 `boughtToday` 를 세우지 않는다.
+- **M-B 수동주문 시장시간 게이트**: 엔진은 `marketCalendar.isTradingNow()` 로 막지만 `KisTradeController.placeOrder` 에는 게이트가 없다 → 동일 캘린더를 주입해 **장외 주문은 거부**. ⚠️ 현 캘린더는 평일 09:00~15:30 하드코딩이라 **공휴일·임시휴장을 모른다**(codex M1) — 게이트는 넣되 이 한계를 코드 주석·Report 에 명시하고, `chk-holiday`(CTCA0903R) 연동은 `# Deferred`. (예약주문 `order_resv` 도 범위 밖.)
+- **M-D REST 폴백 캐시·backoff = 엔진 로컬 캐시**(원안의 store 위임 철회). store 에 엔진이 쓰면 `@Scheduled` 폴러와 **writer 가 둘**이 되는데, `addCandle` 의 `put + size + trim` 은 비원자적이고 store 주석 자체가 단일 writer 를 전제한다(codex M2). → 엔진 내부에 per-symbol TTL 캐시를 두고 **store 에는 쓰지 않는다**(단일 writer 유지). 연속 실패 심볼은 지수 backoff.
+  - `MarketDataStore.getLatestTicker` 는 stale 판정이 없어 폴링이 죽으면 낡은 가격으로 매매한다. 단 **store 의 공개 계약을 바꾸면 기존 소비자(SSE·API)까지 영향**받으므로(codex M3), TTL 판정은 store 가 아니라 **엔진이 `ticker.timestamp` 를 보고** 수행한다.
+- **[Critical] 수동주문 `qty` overflow 로 상한 우회**(codex C6): `StockOrderService.validate` 의 `val notional = cmd.qty * buffered` 는 Long×Long 이라 오버플로 시 음수가 되어 `notional > cap` 검사를 통과한다. 검증은 `qty <= 0` 뿐이라 상한이 없다. → `Math.multiplyExact`(또는 `BigInteger`)로 계산하고 오버플로는 검증 실패로 처리 + 수동 주문 수량 상한 추가.
+- **[Explore 발견 · 기존 Critical] REST 폴백 캔들 정렬이 전략 규약과 반대**: `KisClientImpl.getDailyCandles` 는 `.sortedBy { it.date }` 로 **ascending** 반환하는데, 전략·`Indicators` 는 `candles[0]`=최신(**descending**)을 가정한다(`Indicators.kt:11`, `.take(period)`). `MarketDataStore.getCandles` 는 `descendingMap()` 이라 정상이므로 **store 미스 시에만** 지표가 뒤집혀 계산되는 간헐 오류다. M-E 의 "확정봉을 어느 끝에서 제외하나"가 이 순서에 달려 있어 **M-E 의 직접 전제** → 이번 범위에 포함(§3-4 "빌드/테스트를 깨는 직접 원인" 준용). M-D 설계(폴백분을 store 에 적재 후 재조회)를 택하면 정렬이 store 로 일원화돼 근본 해소된다.
+
+# Acceptance
+
+- [x] **C-C(축소)**: 매수 수량이 `inquire-psbl-order` 의 미수 없는 매수가능수량을 넘지 않는다. 검증 — `getBuyableQty` 가 10주를 반환할 때 잔고상 20주가 계산돼도 주문 qty=10. 조회 실패·0 이면 매수 skip(fail-closed).
+- [x] **C-C 부수**: 브로커 명시 거부(`FAILED`)면 `boughtToday` 가 서지 않아 다음 패스에 재시도 가능. 검증 — `submitBuy` 가 FAILED 반환 시 `pos.boughtToday == false`.
+- [x] **M-B**: 장외 시각에 `POST /api/kis/order` 가 주문을 접수하지 않는다. 검증 — `KisMarketCalendar` stub(isTradingNow=false)로 컨트롤러 테스트, WAL INSERT 없음.
+- [x] **M-D**: 엔진 REST 폴백 결과가 TTL 내 재사용된다. 검증 — client mock 호출횟수로 2패스에 1회. store ticker 가 TTL 초과면 stale 로 보고 폴백한다. **store 에는 쓰지 않는다**(단일 writer 유지) — `store.addCandle`/`updateTicker` 가 엔진 경로에서 호출되지 않음을 mock 으로 확인.
+- [x] **정렬 버그**: 폴백 경로가 전략에 넘기는 캔들이 descending(`candles[0]`=최신)이다. 검증 — 폴백 단위테스트에서 첫 원소가 가장 최근 봉.
+- [x] **qty overflow**: 오버플로를 유발하는 qty 가 `maxOrderAmount` 검증을 통과하지 못한다. 검증 — `Long.MAX_VALUE` 근처 qty 로 `StockOrderValidationException`.
+- [x] 전체 `./gradlew test` green — **543 tests / 0 failures / 4 skipped**(baseline 535 + 신규 8) + 문서 동기화(README/PROJECT_ANALYSIS 의 KIS 동작 서술이 바뀌면 갱신)
+
+# Deferred
+
+범위 밖으로 분리한 항목(2026-07-28 codex plan-review 발). **각각 GitHub 이슈로 등록 후 이 목록에서 참조로 대체할 것.**
+
+- **M-E 일봉 whipsaw 전체** — 원안(오늘 봉 일괄 제거)은 전략 의미를 바꾼다. `Indicators.calculateTargetPrice` 는 `today.open + 전일변동폭×k` 이고 `MeanReversion` 은 `candles[0]` 을 오늘 종가·거래량으로 쓴다 → 오늘 봉 제거 시 **VolatilityBreakout·CombinedStrategy·MeanReversion 3종이 다른 전략이 됨**(codex C4, 코드 실측). 올바른 해법은 확정이력과 현재세션을 분리하는 입력 계약(`DailySignalContext`: `confirmedCandlesDesc` + `sessionOpen` + `currentPrice`) 도입인데, **전략 7종 + 백테스트 엔진 전부**에 영향이라 별도 작업. 심각도: 중(잘못된 매매가 아니라 신호 흔들림).
+- **계좌 단위 durable 현금예약** — 엔진 지역 차감으로는 수동주문·재시작·다중 사용자를 못 덮는다(codex C2). WAL 에 예약 컬럼 + 계좌 키 직렬화 + 상태별(PLACED/UNKNOWN/PARTIAL) 예약 규칙 필요(migration 동반). 심각도: 중(브로커 `nrcvb_buy_qty` 가 1차 방어).
+- **재시작 안전성** — `peakPrice`·`boughtToday`·`entryStrategy` 가 메모리 전용이라 재시작 시 트레일링 고점 소실·당일 재진입·진입전략 유실(codex C5). 크립토 `TradingState` durable(#50)과 같은 문제이며 그쪽 해법을 이식할 여지. 심각도: 중~높(실거래 시).
+- **`reconcileNow()` 실패 은폐** — `runPass()` 가 예외를 삼켜 호출자가 실패를 모르고 엔진이 기동한다(codex C5). live 는 fail-closed 여야 함.
+- **`chk-holiday`(CTCA0903R) 연동** — 현 캘린더는 공휴일·임시휴장·단축거래를 모른다(codex M1).
+- **`NEEDS_REVIEW` 수동 해소 API/runbook** — partial unique index 가 활성 슬롯을 점유해 미해결 시 종목이 잠긴다(기존 M-c, codex 도 재지적).
+- **dry-run 예산 시뮬** — 현행 `nominalQty` 는 잔고 무관이라 백테-라이브 정합이 어긋난다.
+
 # Key Files
 
 ## 재사용/참조 (Upbit 패턴 템플릿)
@@ -188,6 +224,20 @@ updated: 2026-07-28
 | M-c | MINOR | NEEDS_REVIEW 활성슬롯 잠금 | **defer→Phase2** 수동해소 API/runbook |
 | M-f | MINOR | 토큰 backoff 미구현 | **defer→Phase2** 현재 예외전파+24h 캐싱으로 완화 |
 
+## 2026-07-28 codex plan-review (D24 범위) — Critical 6 / Major 3
+
+| # | 심각도 | 지적 | 처분 |
+|---|---|---|---|
+| C1 | CRITICAL | C-C 의 현금 원천이 주문가능금액이 아님(예수금≠증거금률 반영) | **fix** `getBuyableQty`(inquire-psbl-order) 신규 + 최종 상한 + fail-closed |
+| C2 | CRITICAL | 패스 내 로컬 차감은 계좌 단위 불변식이 아님(수동주문·재시작·다중사용자) | **defer** → `# Deferred` durable 현금예약. 브로커 `nrcvb_buy_qty` 를 1차 방어선으로 채택 |
+| C3 | CRITICAL | 주문 상태별 차감 규칙 부재 — FAILED 인데 `boughtToday=true` | **fix** `MISSED_BUY_STATUSES`(FAILED/REJECTED)는 진입 슬롯 미소모 |
+| C4 | CRITICAL | M-E 확정봉 일괄 필터가 전략 정의를 바꿈(VolatilityBreakout·CombinedStrategy·MeanReversion) | **defer** → `# Deferred`. 코드 실측으로 확인(`Indicators.calculateTargetPrice` 의 today/yesterday) — 원안 철회 |
+| C5 | CRITICAL | 재시작 안전성이 이미 깨져 있음(peakPrice·boughtToday·entryStrategy 메모리 전용, `reconcileNow` 실패 은폐) | **defer** → `# Deferred` 2건. 이번 범위(블로커 4건) 밖 |
+| C6 | CRITICAL | 수동주문 `qty` 오버플로로 `maxOrderAmount` 우회 | **fix** `Math.multiplyExact` |
+| M1 | MAJOR | 캘린더가 공휴일·임시휴장을 모름 → 게이트 착시 | **부분 fix** 게이트는 넣되 한계를 코드 주석·Report 에 명시, `chk-holiday` 연동은 defer |
+| M2 | MAJOR | store 다중 writer race(`addCandle` put+trim 비원자) | **fix(설계 변경)** 원안(store 위임) 철회 → 엔진 로컬 캐시로 단일 writer 유지 |
+| M3 | MAJOR | `getLatestTicker` 에 TTL 을 넣으면 store 계약·기존 소비자 변경 | **fix(설계 변경)** TTL 판정을 store 가 아니라 엔진에서 수행 |
+
 # Blockers
 
 - ~~**동결**(2026-07-28, #49 큐 3번)~~ — **해소** (2026-07-28 사용자 지시로 재개, D23 에서 KIS 유지 확정).
@@ -195,4 +245,5 @@ updated: 2026-07-28
 - (Phase1 없음 — 머지 가능) 아래는 **실거래 활성화(KIS_LIVE_ENABLED=true) 전 필수 선행**:
   - **실계정 스모크**: KIS inquiry/balance 필수 query 파라미터 집합·tr_cont 연속조회 값·ODNO/org_no 자릿수·토큰 재발급/ rate limit 실값(코드/테스트로 검증 불가 — 실계정 필요).
   - **통합 테스트(M5)**: WAL tx 원자성 + partial unique index 동시성은 단위테스트(mockk passthrough)로 미검증 — Testcontainers-Postgres 또는 수동 Postgres 검증 필요.
-  - **자율엔진 code-review 잔여(2c)**: C-C 계좌단위 현금예약(한 패스 다종목 매수 시 예수금 초과·미수) — 패스 잔고 스냅샷+접수액 차감 or 동시보유 종목수 상한. M-B 수동주문(/api/kis/order) 시장시간 게이트. M-D REST 폴백(현재가/캔들) TTL 캐시·backoff(rate limit). M-E 일봉 장중 미완성봉 whipsaw — 확정봉 신호 or 분봉 전환.
+  - ~~**자율엔진 code-review 잔여(2c)**~~ — **2026-07-28 해소**(D24): C-C 는 `getBuyableQty` 상한+fail-closed 로, M-B 는 컨트롤러 게이트로, M-D 는 엔진 로컬 TTL 캐시+backoff 로 처리. 함께 발견된 정렬 버그·`notional` 오버플로도 수정. **M-E 만 `# Deferred`** — 오늘 봉 일괄 제거는 VolatilityBreakout·CombinedStrategy·MeanReversion 의 정의를 바꾸므로 입력 계약 분리가 선행돼야 한다.
+  - ⚠️ 남은 실거래 선행조건은 위 **실계정 스모크**·**통합 테스트(M5)** 와 `# Deferred` 의 재시작 안전성·`reconcileNow` 실패 은폐다. D24 는 "블로커 4건"을 닫았을 뿐 `KIS_LIVE_ENABLED=true` 를 승인하지 않는다.
