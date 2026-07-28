@@ -2,7 +2,7 @@
 title: stock-bot-kis — KIS(한국투자) 주식 자동매매 봇 기반 + 주문유실 방지(WAL reconcile)
 status: in_progress
 started: 2026-06-14
-updated: 2026-06-19
+updated: 2026-07-28
 ---
 
 # Goal
@@ -26,14 +26,22 @@ updated: 2026-06-19
 - 2026-06-14: 사용자 "이어서 진행해" → **vertical slice 2a: 수동 주식주문 엔드포인트**. `KisTradeController`(POST /api/kis/order, GET /api/kis/orders) — 등록된 유저 KIS 키(forUser)로 `StockOrderService`(WAL) 경유 주문 + 주문조회. RequestValidators.normalizeKisSymbol(6자리), StockOrderIntentRepository.findByUserId. live-enabled=false 면 DRY_RUN, keys 4필드 가드(forUser 500 방지). **403 테스트 0 실패.** code-reviewer subagent 도구오류로 미산출 → 메인 자체 보안점검(인가·실주문가드·검증·유출·WAL정합) 통과. (미push)
 
 - 2026-06-19: **2c 자율엔진 + 2b SPA 구현 완료(MVP, 기본 dry-run)**. design 워크플로(KIS캔들 스펙+크립토매핑+설계+적대적비판) → 안전핵심 메인 직접 작성. marketdata(KisMarketCalendar 장시간게이트·StockCandleAdapter·KisMarketDataService 폴링), engine(StockPosition·StockPositionManager WAL경유 C1/M2/M3·KisStockTradingEngine runLoop·decideSell·StockUserTradingManager 부팅reconcile-후-기동), StockBotController(/api/stock/*), SPA 주식화면. 캔들 API(getDailyCandles FHKST03010100)+getBalance 추가. **425 테스트 0 실패(신규 22).** **code-reviewer(Claude+codex 병행)** → Critical 3/Major 다수. 즉시수정: C-A getBalance rt_cd 검증, C-B inquireDailyConclusions rt_cd 검증, 엔진 잔고조회 실패 시 패스 skip, M-A boughtToday 거래일 리셋, M-C startBot reconcileNow 선행+전략검증. **실거래 전 필수**(Blockers 로 이관): C-C 계좌단위 현금예약(다종목 미수), M-B 수동주문 시장시간 게이트, M-D REST폴백 캐시, M-E 일봉 장중 whipsaw. (미push)
+- 2026-07-28: **동결 → 재조사 → 재개**. (1) #49 큐에서 ❄️동결 결정(존속/폐기 보류). (2) 같은 날 브로커 API 재조사(#59) — 토스증권 Open API 를 후보로 평가하고 Claude 1차 조사 → Codex 교차검증(사실오류 8건) → 스펙 원본 재검증. **결론: KIS 유지 확정**(D23). (3) 사용자 지시로 동결 해제·작업 재개. 코드 변경 없음 — 브랜치는 `2be1fe3` 그대로(clean, origin 과 동일, main 대비 **behind 17 / ahead 10**).
 
-# Next (Phase 2 — 후속 GitHub Issue 로 분리)
+# Next
+
+**즉시 액션: rebase onto origin/main (다른 모든 항목의 선행조건)**
+
+1. **migration renumber** — main 이 `V14__create_trading_states_and_drop_positions.sql` 을 선점(실측). 이 브랜치의 `V14__create_stock_order_intent.sql` / `V15__add_kis_keys.sql` / `V16__bot_state_exchange_and_wal_side.sql` → **V15/V16/V17 로 renumber**. 파일명뿐 아니라 코드·테스트·이 plan 문서의 V14~V16 언급도 동반 수정.
+2. **rebase 충돌 해소** — 예상 충돌: `README.md`, `UserTradingManager.kt`(D22 의 `…AndExchange("UPBIT")` 호출부 좁히기가 main 의 #50 durable 변경과 겹침).
+3. **검증** — `JAVA_HOME=…/jbr-21.0.9 ./gradlew test` (JDK25↔Gradle8.12 비호환). rebase 전 baseline 425 테스트 0 실패 → rebase 후 동일 green 확인.
+4. rebase 후 force push 는 **사용자 확인 후에만**(origin/stock-bot-kis 가 유일한 백업).
+
+**그 다음 (Phase 2 백로그 — 후속 GitHub Issue 로 분리)**
 
 - **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest`(또는 `/api/kis/order`, 주식화면) 로 KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정.
 - **SPA 수동 UI 검증**: 주식화면(babel-standalone, 빌드검증 없음) 브라우저 동작 확인.
 - **D15 해외주식(미국 등)**: `/uapi/overseas-stock/...` 클라이언트 메서드(주문/조회/시세, tr_id·OVRS_EXCG_CD·통화 다름) 추가. 같은 appkey/계좌. 정확 스펙은 공식 문서 대조 후(추측 금지).
-- **체결→positions 반영**(M2-기존): 엔진이 포지션을 소비할 때 idempotent upsert.
-- **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **체결→positions 반영**(M2): 엔진이 포지션을 소비할 때 idempotent upsert.
 - **주문취소 WAL**(D6): CANCEL_REQUESTED/CANCEL_UNKNOWN 상태기계.
 - **NEEDS_REVIEW 수동 해소 API/runbook**(M-c): partial unique index 가 활성 슬롯을 점유하므로 미해결 시 종목 잠김.
@@ -117,6 +125,14 @@ updated: 2026-06-19
 - **구현 분담**: 안전핵심(메인 직접) = A(client/DTO 캔들·헬퍼)+V16+StockOrderService side가드+Reconciler mutex/odno제외+BotState/Upbit+KisMarketCalendar+StockPositionManager+KisStockTradingEngine+StockUserTradingManager. 워크플로 병렬 = KisMarketDataService·StockCandleAdapter·properties·StockBotController·SPA·각 테스트.
 - **code-reviewer 위임 예정(비판 지적)**: tick(호가단위) 보정, 상하한가/거래정지/VI 주문거부 분류, 매수 시장가 슬리피지 버퍼 충분성.
 
+## D23. [2026-07-28] 브로커 재검토 — KIS 유지 확정 + 데이터 계층 분리
+동결 해제에 앞서 토스증권 Open API 를 후보로 재조사(#59). Claude 1차 → Codex 교차검증(사실오류 8건) → 스펙 원본 재검증.
+- **KIS 유지 확정.** `stock-quant-strategy` Phase 0 요구 7건 중 KIS 우위 ④업종지수·⑥모의투자·⑦종목마스터(`.mst`: 시총·상장주수·**업종 대/중/소분류**·KOSPI200섹터) + 약우위 ②수정주가(`ksdinfo_*` 코퍼레이트 액션), 동률 ①⑤, 둘 다 탈락 ③생존편향. **토스가 앞서는 항목 없음.**
+- **토스 탈락 사유(주문 실행은 토스가 우수함에도)**: `clientOrderId` 멱등키가 **10분 TTL** 이라 "장 마감 후 신호 → 익일 개장 집행" 모델에서 WAL/reconcile 을 대체 못 함(스펙 명시). 모의투자 부재로 `stock-quant-strategy` Phase 3(모의 4주 운영) 자체가 불가 → "백테스트 입증 전 live 금지" 철칙과 충돌. 그 외 예약주문·신용주문·시간외·WebSocket·국내 금액주문 부재.
+- **채택한 방향 전환**: 증권사 API 하나로 Phase 0 데이터 요구를 다 풀려는 전제가 잘못됐다 → **KIS 는 주문·잔고·체결 전용, 연구 데이터는 KRX 원천 기반 독립 point-in-time 저장소**(매일 append-only 적재)로 분리. 생존편향(③)은 어느 브로커 API 로도 못 풀고 이 방식으로만 해결된다.
+- ⚠️ 이 결정은 `stock-quant-strategy` plan `# Decisions` 의 **"데이터 소스는 KIS API 한정"** 과 충돌 → 그 plan 재개 시 완화 필요(KRX 공공데이터는 무료라 "유료 외부 데이터 없음" 원칙엔 위배 아님).
+- 확정 사실(부수 수확): 2026년 상장주식 매도세 **KOSPI 0.05%+농특세 0.15% / KOSDAQ 0.20% = 총 0.20%** — `stock-quant-strategy` 미확정 ⑤ 해소(⚠️Codex 제공, 법령 원문 미검증). KIS 일봉 **1회 최대 100건** + 일/주/월/년봉 + 시작~종료일 직접 지정.
+
 # Key Files
 
 ## 재사용/참조 (Upbit 패턴 템플릿)
@@ -173,6 +189,8 @@ updated: 2026-06-19
 
 # Blockers
 
+- ~~**동결**(2026-07-28, #49 큐 3번)~~ — **해소** (2026-07-28 사용자 지시로 재개, D23 에서 KIS 유지 확정).
+- **머지 선행: rebase onto origin/main** — behind 17 / ahead 10. main 이 `V14__create_trading_states_and_drop_positions.sql` 을 선점해 이 브랜치 V14~V16 을 V15~V17 로 renumber 해야 한다. 충돌 예상: `README.md`, `UserTradingManager.kt`. (`# Next` 참조)
 - (Phase1 없음 — 머지 가능) 아래는 **실거래 활성화(KIS_LIVE_ENABLED=true) 전 필수 선행**:
   - **실계정 스모크**: KIS inquiry/balance 필수 query 파라미터 집합·tr_cont 연속조회 값·ODNO/org_no 자릿수·토큰 재발급/ rate limit 실값(코드/테스트로 검증 불가 — 실계정 필요).
   - **통합 테스트(M5)**: WAL tx 원자성 + partial unique index 동시성은 단위테스트(mockk passthrough)로 미검증 — Testcontainers-Postgres 또는 수동 Postgres 검증 필요.
