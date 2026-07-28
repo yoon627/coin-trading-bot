@@ -244,3 +244,9 @@ manual deploy ─> deploy/aws/deploy.sh deploy ──> EC2가 대상 SHA 이미�
 - `collector`, `research`, Kafka, ML/스캘핑/Claude 분석은 현재 애플리케이션에 포함되지 않습니다.
 - `perf/load-test.js`에는 제거된 Prometheus/ML 엔드포인트 검사가 남아 있으므로, 성능 테스트 전에 현재 API에 맞게 시나리오를 갱신해야 합니다.
 - 설계 배경과 경량화 이력은 [`PROJECT_ANALYSIS.md`](PROJECT_ANALYSIS.md)를 참고하세요.
+- 누적 지식베이스(아키텍처 개념·결정 배경·겪은 함정)는 [`wiki/index.md`](wiki/index.md)에 있습니다. 운영 규약은 [`wiki/WIKI.md`](wiki/WIKI.md). 페이지를 고쳤으면 **세 가지를 모두** 돌립니다 — 하나만 돌리면 나머지 위반을 놓칩니다:
+  ```bash
+  uv run --no-project python "$HOME/.claude/skills/wiki/check_links.py" wiki  # 링크·index 동기화
+  bash wiki/verify.sh   # stem·frontmatter·페이지 수
+  bash wiki/smoke.sh    # 대표 질문 응답성 + 진행중 작업 상태 침범
+  ```
