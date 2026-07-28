@@ -18,9 +18,11 @@ updated: 2026-07-28
 
 - 2026-07-28: **후속 2건 사용자 승인 후 적용.** ① repo `CLAUDE.md` 에 "LLM Wiki" 절 + 문서 동기화 표에 `wiki/index.md` 행 추가 — 조회 의무·sources 역참조 갱신·페이지 금지 항목·검증 3종 명문화(§1 운영 자산 수정은 명시 승인 후 수행). ② memory 2단계 저장: 신규 `project_wiki_knowledge_base.md` + `MEMORY.md` 명령형 인덱스 줄. §12 중복 금지에 따라 같은 주제인 기존 `feedback_browser_test_blind_spots.md` 는 신규 생성 대신 **갱신**(2회 재발 사실 + wiki lesson 3개 포인터 추가).
 
+- 2026-07-28: **3차 code-review(P0/P1 0, P2 4) 반영 후 push·PR 완료.** pre-push 게이트가 codegraph MCP 경합으로 2회 타임아웃 → 원인 규명해 **이슈 #60** 분리(수정은 미착수), hook 과 동일 명령을 직접 3회 돌려 리뷰를 받고 전량 반영한 뒤 `CODEX_SKIP=1` 로 push(사용자 승인). **PR #61**, origin `817255e`.
+
 # Next
 
-push(pre-push codex 게이트) → PR. 머지 후 worktree 자동 정리.
+PR #61 리뷰·머지 대기. 머지되면 worktree + 로컬·원격 브랜치 자동 정리(이 repo 규칙). 이후 이슈 #60(pre-push codegraph 경합) 착수 여부 판단.
 
 # Decisions
 
