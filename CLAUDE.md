@@ -55,5 +55,26 @@
 | 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
 | 운영/배포 절차 변경 | `docs/runbook/` (존재 시) 또는 `README.md`의 운영 섹션 |
 | 보안 정책 변경 | `SECURITY.md` (존재 시) |
+| `wiki/pages/` 추가·변경 | `wiki/index.md` 등재 동기화 (누락·잉여 모두 lint 실패) |
 
 내부 리팩터·테스트 전용·invisible 버그 수정은 문서 업데이트 불필요.
+
+## LLM Wiki (`wiki/`)
+
+이 repo 의 누적 지식베이스. 운영 규약의 단일 소스는 **`wiki/WIKI.md`** 이고, 아래는 이 repo 에서 지켜야 할 최소 규칙만 적는다 (글로벌 `~/.claude/CLAUDE.md` §11 의 repo 측 구체화).
+
+- **작업 시작 시 `wiki/index.md` 를 먼저 조회한다.** 관련 페이지가 있으면 읽고 시작하고, 없으면 "wiki 에 없음"이며 추측으로 답하지 않는다.
+- **코드를 바꾸면 그 파일을 `sources` 로 가진 페이지를 함께 갱신한다.** 이건 위 문서 동기화 표와 같은 급의 의무다. 페이지가 **디렉토리**를 `sources` 로 선언하기도 하므로(예: `swing-strategies` 는 `common/.../strategy/`) 파일 경로만 grep 하면 놓친다 — 상위 경로도 함께 본다:
+  ```bash
+  f=common/src/main/kotlin/com/trading/common/strategy/MeanReversion.kt
+  while [ "$f" != "." ]; do grep -rl -- "$f" wiki/pages/; f=$(dirname "$f"); done | sort -u
+  ```
+- **페이지에 넣지 않는 것**: 진행 중 작업의 상태(→ `.claude/plans/`), 열린 이슈의 상태(→ GitHub Issues). 넣으면 이중 소스가 되고 반드시 stale 해진다.
+- **근거 없는 서술 금지**: 문서가 코드와 어긋난 전례가 있다(리스크 파라미터 정반대 기재). 코드로 확인한 것만 쓰고 `sources`·`verified` 에 근거를 남긴다.
+- **검증 3종** — 페이지를 건드렸으면 돌린다:
+  ```bash
+  uv run --no-project python "$HOME/.claude/skills/wiki/check_links.py" wiki
+  bash wiki/verify.sh   # stem 중복·정규식·frontmatter 값 (검증기 미커버분)
+  bash wiki/smoke.sh    # 대표 질문에 답이 되는가 + 진행중 작업 상태 침범 검사
+  ```
+- `wiki/raw/` 는 gitignored 다 — worktree 삭제 시 함께 사라지므로 **재취득 가능한 외부 원문만** 둔다.
