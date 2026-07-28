@@ -135,8 +135,22 @@ codex plan-review (2026-07-28, effort=medium) — Critical 5 / Major 11 / Minor 
 | m3 | "Disposition 기록"은 품질 acceptance 아님 | **fix** — "Critical/Major 미해결 0" 으로 변경 |
 | m4 | `Blockers: 없음` 성급 | **fix** — 결정 필요 항목으로 전환 |
 
+## code-review (codex, 2026-07-28, hook 밖 실행) — P1 2 / P2 5 / P3 1, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P1-a | `verify.sh` false pass — 루프가 통째로 생략돼도 `clean` + exit 0 | **fix** — 서브셸 제거(positional params), "검사한 페이지 수 = 발견 수" 대조, 0건이면 즉시 실패 |
+| P1-b | `exit-gates.md` 가 "진입 시점 스냅샷으로 청산" 이라 단언 — **코드는 스냅샷을 소비하지 않는다**(`TradingState.kt:41` 주석이 "저장·복원 전용, 소비는 Phase 2" 명시) | **fix** — 전용 절로 정정하고 "보유 중 설정 변경이 열린 포지션에 즉시 적용된다"는 실무 함의 명시. **내가 코드를 확인하지 않고 쓴 사실 오류** |
+| P2-a | `claim_state`·`verified` 를 어떤 검증기도 안 봄 | **fix** — `verify.sh` 에 존재·허용값 검사 추가 |
+| P2-b | 라이브(SL→트레일링)와 백테(트레일링→SL) 청산 순서가 다른데 "같은 조건식" 이라 서술 | **fix** — `exit-gates.md`·`backtest-engine.md` 에 순서 대비표 + 의도된 차이의 이유 + "사유 분포 1:1 비교 금지" |
+| P2-c | "워밍업 50봉" 부정확 — 정확히 50봉이면 `buildResult` 가 `chronological[50]` 접근해 예외 | **fix(문서)** — 실질 최소 51봉 명시. **코드 버그 자체는 범위 밖 → 아래 Deferred** |
+| P2-d | `smoke.sh` 검사가 의도보다 약함(부분문자열 index 매칭, frontmatter 포함 매칭, 음성검사가 낱말 하나) | **fix** — `[[stem]]` 정확 매칭, frontmatter 제외 본문 매칭, 음성검사를 **git 브랜치 목록 기반**으로 교체(어휘 기반은 일반 규칙 서술에 오탐) |
+| P2-e | Upbit 주문 파라미터 표 불완전(`side`·`price` 누락) | **fix** — 전체 요청 파라미터로 보완 |
+| P3 | `MarketDataStore` 가 "차트 API 단일 소스" 는 부정확 — `ChartController` 가 DB 폴백 | **fix** — 폴백 경로 명시 |
+
 # Deferred
 
+- **`BacktestEngine` 경계 버그**(범위 밖 발견, 심각도 중): `run()` 은 `size < MIN_CANDLES(50)` 일 때만 null 을 반환해 **정확히 50봉이면 통과**하는데, 시뮬레이션 루프(`for i in 50 until size`)가 한 번도 돌지 않은 채 `buildResult` 가 `chronological[50]` 을 읽어 `IndexOutOfBoundsException`. 파일: `bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt:71,87,180`. 이번 작업은 문서화라 코드를 고치지 않고 wiki 에 한계로 기록 + 이슈 생성 제안.
 - **stale 관리 자동화**(codex M4 잔여): 정기 lint 스케줄·`review_after` 만료 알림·코드 변경 시 sources 역참조 절차. 이번 범위는 `verified` 키 + 규약 문구까지. 후속 GitHub 이슈로 제안.
 - **checker 버전 고정**(codex M11 잔여): 홈 디렉토리 `check_links.py` 의 hash/버전을 repo 가 고정·검증하는 장치. 운영 자산 수정 없이는 부분적으로만 가능.
 

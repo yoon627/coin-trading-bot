@@ -23,7 +23,9 @@ UpbitMarketFeed ──ticker(WS)──┐
 
 ## MarketDataStore
 
-메모리 단일 소스. 봇의 가격, SSE 스트림, 차트 API 가 전부 여기서 나온다([[architecture-overview]]).
+메모리 저장소. 봇의 가격 판단과 SSE 스트림은 여기서 나온다([[architecture-overview]]).
+
+**차트 API 는 store 전용이 아니다** — `ChartController` 는 메모리에 요청 개수만큼 없으면 **DB(`market_candles`)로 완전히 대체**한다(`ChartController.kt:46-53`). 차트 값과 봇이 본 값이 어긋난다면 이 폴백 경로를 먼저 의심한다.
 
 - `latestTickers` — 마켓별 최신 스냅샷
 - `candleBuffers` — `ConcurrentSkipListMap<openTime, Candle>`, 마켓·interval 당 최대 200개. **openTime 키 upsert** 라서 `CandleAggregator` 가 같은 분봉을 반복 갱신해도 중복이 쌓이지 않는다(과거에 중복 누적으로 지표·매수 D1 이 오염된 적이 있다).

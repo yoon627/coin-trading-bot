@@ -19,14 +19,17 @@ sources:
 
 - **단일 티커, 단일 포지션.** 상태는 `position: Boolean` + `buyPrice` 하나다. 종목 분산·부분 익절·동시 보유가 없다.
 - **전액 복리(all-in).** `balance *= (1 + netPnl/100)` — 포지션 사이징 개념이 없다. 초기 잔고 1,000,000.
-- **워밍업 50봉**(`MIN_CANDLES`). 그 이전 구간은 신호를 내지 않는다.
+- **워밍업 50봉**(`MIN_CANDLES`). 시뮬레이션 루프는 `for (i in 50 until size)` 라 51번째 봉부터 신호를 낸다.
+  > [!conflict] `run()` 은 `size < 50` 일 때만 null 을 반환하므로 **정확히 50봉을 넘기면 통과**하는데, 루프가 한 번도 돌지 않은 채 `buildResult` 가 `chronological[50]` 을 읽어 `IndexOutOfBoundsException` 이 난다(`BacktestEngine.kt:71,87,180`). 실질 최소 입력은 **51봉**이다.
 - **look-ahead 방지**: 신호는 봉 `i` 종가까지의 window 로 판단하고, **체결은 다음 봉 `i+1` 시가**로 잡는다.
 - **비용**: `feeRate × 2 × 100` 을 왕복으로 차감(`config.feeRate` 기본 0.0005). 슬리피지는 별도 모델이 없다.
 - **종료 시 미청산 포지션**은 마지막 종가로 `"END"` 청산해 결과에 포함한다.
 
 ## 라이브와의 정합
 
-청산 판정은 `IntrabarExitModel` 로 위임돼 **D1 백테와 M1 replay 가 같은 게이트식을 공유**한다. 그리고 게이트식 자체는 [[exit-gates]] 의 `ExitGates` 를 쓴다 — 라이브(`PositionManager`)와 같은 코드다.
+청산 판정은 `IntrabarExitModel` 로 위임돼 **D1 백테와 M1 replay 가 같은 게이트식을 공유**한다. 트레일링 판정과 `maxHoldDays` 보정은 [[exit-gates]] 의 `ExitGates` 를 써서 라이브와 같은 코드다.
+
+**단 평가 우선순위가 다르다** — 라이브는 손절→트레일링, 백테는 트레일링→손절이다. 봉 붕괴 모델에서 라이브 순서를 그대로 쓰면 트레일링 이익 거래가 손절로 오기록되기 때문에 의도적으로 다르게 뒀다. 그래서 **청산 사유 분포를 라이브와 1:1 비교하면 안 된다.**
 
 정합을 위해 명시적으로 처리된 것들:
 
