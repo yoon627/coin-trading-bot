@@ -15,7 +15,7 @@
 | **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
-| **배포** | AWS EC2 t4g.medium (arm64, 4GB) |
+| **배포** | AWS EC2 t4g.medium (arm64, 4GB) — 현행 / OCI A1.Flex (arm64, 2 OCPU·12GB, Always Free) — 이전 대상 |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
@@ -69,6 +69,7 @@ coin-trading-bot/
 │
 ├── docker-compose.yml               # 로컬 인프라 (app, postgres, redis)
 ├── deploy/aws/                      # AWS 배포 스크립트 + docker-compose.prod.yml
+├── deploy/oci/                      # OCI(Always Free) 배포 스크립트 + docker-compose.prod.yml
 └── perf/                            # k6 부하 테스트
 ```
 
