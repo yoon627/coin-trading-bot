@@ -16,9 +16,11 @@ updated: 2026-07-28
 
 - 2026-07-28: **구현 완료.** `wiki/` 신설(WIKI.md schema 1·index·log·pages 25개·verify.sh·smoke.sh), `.gitignore` 에 `wiki/raw/` 추가, `docs/lessons.md` 를 항목별 매핑 포인터로 축소, README 진입점 추가. 검증 3종 전부 통과(lint clean / 추가 불변식 clean 25페이지 / smoke 9-9). **smoke 의 음성 질의가 실제 규약 위반 1건을 잡았다** — `migration-numbering` 이 특정 브랜치의 V번호 선점 상태를 서술해 "진행 중 작업 상태 이관 금지"(위 Decisions)를 위반 → 확인 절차로 교체. 같은 유형 2건(`marketdata-pipeline`·`rightsizing-history` 의 브랜치명 직접 참조)도 함께 정리.
 
+- 2026-07-28: **후속 2건 사용자 승인 후 적용.** ① repo `CLAUDE.md` 에 "LLM Wiki" 절 + 문서 동기화 표에 `wiki/index.md` 행 추가 — 조회 의무·sources 역참조 갱신·페이지 금지 항목·검증 3종 명문화(§1 운영 자산 수정은 명시 승인 후 수행). ② memory 2단계 저장: 신규 `project_wiki_knowledge_base.md` + `MEMORY.md` 명령형 인덱스 줄. §12 중복 금지에 따라 같은 주제인 기존 `feedback_browser_test_blind_spots.md` 는 신규 생성 대신 **갱신**(2회 재발 사실 + wiki lesson 3개 포인터 추가).
+
 # Next
 
-커밋 → push(pre-push codex 게이트 통과 확인) → PR. 이후 후속 제안 2건은 사용자 판단: ① `MEMORY.md` 에 lesson 인덱스 줄 추가(§13 의 wiki+memory 결합 — 무승인 적립 금지라 제안만) ② repo `CLAUDE.md` 문서 동기화 표에 wiki 행 추가(운영 자산이라 제안만).
+push(pre-push codex 게이트) → PR. 머지 후 worktree 자동 정리.
 
 # Decisions
 
