@@ -240,15 +240,22 @@ review_ref() {
   if [ "${CODEX_ALLOW_SANDBOX_BYPASS:-0}" = "1" ]; then
     sandbox_flag="--dangerously-bypass-approvals-and-sandbox"
   fi
-  echo "[codex-pre-push] running codex exec review --base $base --json (high reasoning)..."
-  # codex review 를 머신 단위 lock 으로 직렬화(codegraph 동시 경합 방지) — codex 실행 직전 획득.
+  # 두 호출 경로(HEAD 일치 / 임시 worktree)가 같은 설정을 쓰도록 한 곳에 모은다 — 한쪽만 고치는 드리프트 방지.
+  # codegraph MCP 비활성화(#60): codex 는 리뷰마다 `codegraph serve --mcp` 를 새로 띄우는데, Claude Code
+  # 세션도 각자 하나씩 띄운다. 인스턴스가 여럿이면 `codegraph_explore` 가 응답하지 않아(#45 에서 실측한
+  # 근본원인) 리뷰가 통째로 타임아웃한다. 아래 lock 은 hook 끼리만 직렬화하므로 세션이 띄운 서버와의
+  # 경합은 막지 못한다. codegraph 없이도 리뷰가 P0/P1 을 잡는 것은 확인됨. upstream(codegraph)이
+  # 다중 인스턴스 경합을 고치면 이 플래그를 되돌린다.
+  codex_cfg="-c model_reasoning_effort=high -c mcp_servers.codegraph.enabled=false"
+  echo "[codex-pre-push] running codex exec review --base $base --json (high reasoning, codegraph off)..."
+  # codex review 를 머신 단위 lock 으로 직렬화 — codex 동시 실행의 자원 경합 방어(#45). codex 실행 직전 획득.
   if ! acquire_codex_lock; then return 1; fi
   if [ "$current_head" = "$local_sha" ] && [ "$working_tree_dirty" -eq 0 ]; then
     run_codex_timeout codex exec review \
         --base "$base" \
         --json \
         $sandbox_flag \
-        -c model_reasoning_effort=high \
+        $codex_cfg \
         --title "pre-push gate ${local_ref}" </dev/null >"$log_file" 2>&1 || review_rc=$?
     release_codex_lock
   else
@@ -262,14 +269,14 @@ review_ref() {
         --base "$base" \
         --json \
         $sandbox_flag \
-        -c model_reasoning_effort=high \
+        $codex_cfg \
         --title "pre-push gate ${local_ref}" </dev/null) >"$log_file" 2>&1 || review_rc=$?
     release_codex_lock
     git worktree remove --force "$worktree_dir" >/dev/null 2>&1 || true
   fi
   if [ "$review_rc" -ne 0 ]; then
     if [ "$review_rc" -eq 124 ]; then
-      echo "[codex-pre-push] FAIL: codex review timed out (>${CODEX_TIMEOUT}s) — likely codegraph MCP hang." >&2
+      echo "[codex-pre-push] FAIL: codex review timed out (>${CODEX_TIMEOUT}s). codegraph MCP 는 비활성(#60) 이므로 다른 원인 — 로그의 마지막 item 을 확인하라." >&2
       echo "[codex-pre-push] Retry, or CODEX_SKIP=1 git push to bypass." >&2
     else
       echo "[codex-pre-push] FAIL: codex exec review exited non-zero (code=$review_rc)." >&2
