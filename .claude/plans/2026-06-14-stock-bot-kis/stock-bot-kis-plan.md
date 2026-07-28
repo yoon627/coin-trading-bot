@@ -27,17 +27,18 @@ updated: 2026-07-28
 
 - 2026-06-19: **2c 자율엔진 + 2b SPA 구현 완료(MVP, 기본 dry-run)**. design 워크플로(KIS캔들 스펙+크립토매핑+설계+적대적비판) → 안전핵심 메인 직접 작성. marketdata(KisMarketCalendar 장시간게이트·StockCandleAdapter·KisMarketDataService 폴링), engine(StockPosition·StockPositionManager WAL경유 C1/M2/M3·KisStockTradingEngine runLoop·decideSell·StockUserTradingManager 부팅reconcile-후-기동), StockBotController(/api/stock/*), SPA 주식화면. 캔들 API(getDailyCandles FHKST03010100)+getBalance 추가. **425 테스트 0 실패(신규 22).** **code-reviewer(Claude+codex 병행)** → Critical 3/Major 다수. 즉시수정: C-A getBalance rt_cd 검증, C-B inquireDailyConclusions rt_cd 검증, 엔진 잔고조회 실패 시 패스 skip, M-A boughtToday 거래일 리셋, M-C startBot reconcileNow 선행+전략검증. **실거래 전 필수**(Blockers 로 이관): C-C 계좌단위 현금예약(다종목 미수), M-B 수동주문 시장시간 게이트, M-D REST폴백 캐시, M-E 일봉 장중 whipsaw. (미push)
 - 2026-07-28: **동결 → 재조사 → 재개**. (1) #49 큐에서 ❄️동결 결정(존속/폐기 보류). (2) 같은 날 브로커 API 재조사(#59) — 토스증권 Open API 를 후보로 평가하고 Claude 1차 조사 → Codex 교차검증(사실오류 8건) → 스펙 원본 재검증. **결론: KIS 유지 확정**(D23). (3) 사용자 지시로 동결 해제·작업 재개. 코드 변경 없음 — 브랜치는 `2be1fe3` 그대로(clean, origin 과 동일, main 대비 **behind 17 / ahead 10**).
+- 2026-07-28: **rebase onto origin/main 완료**. behind 17 → 0. 충돌 3건 해소 — `PROJECT_ANALYSIS.md`/`README.md`(문서, main 재구성분 유지 + KIS 항목 이식), `UserTradingManager.kt`(main 의 `restoreAllRunningBots()` 추출 + SmartLifecycle 구조를 살리고 D22 의 `EXCHANGE="UPBIT"` 스코프 좁히기 4곳을 재적용 — 기존 `companion object` 에 상수 편입). migration **V14~V16 → V15~V17 renumber**(main 이 V14 선점) + 참조 동반 수정(README·PROJECT_ANALYSIS 표에 V15~V17 행 추가·UserEntity/BotStateEntity 주석·WAL 주석의 폐기된 `positions` 참조). rebase 로 합류한 main 테스트가 옛 `findByRunningTrue()` 를 mock 해 컴파일 실패 → `findByRunningTrueAndExchange("UPBIT")` 6곳 정합. **535 테스트 0 실패**(rebase 전 baseline 425 → main 합류 110 증가).
 
 # Next
 
-**즉시 액션: rebase onto origin/main (다른 모든 항목의 선행조건)**
+**rebase 완료(2026-07-28). 다음 액션은 사용자 결정 대기** — 아래 중 택1:
 
-1. **migration renumber** — main 이 `V14__create_trading_states_and_drop_positions.sql` 을 선점(실측). 이 브랜치의 `V14__create_stock_order_intent.sql` / `V15__add_kis_keys.sql` / `V16__bot_state_exchange_and_wal_side.sql` → **V15/V16/V17 로 renumber**. 파일명뿐 아니라 코드·테스트·이 plan 문서의 V14~V16 언급도 동반 수정.
-2. **rebase 충돌 해소** — 예상 충돌: `README.md`, `UserTradingManager.kt`(D22 의 `…AndExchange("UPBIT")` 호출부 좁히기가 main 의 #50 durable 변경과 겹침).
-3. **검증** — `JAVA_HOME=…/jbr-21.0.9 ./gradlew test` (JDK25↔Gradle8.12 비호환). rebase 전 baseline 425 테스트 0 실패 → rebase 후 동일 green 확인.
-4. rebase 후 force push 는 **사용자 확인 후에만**(origin/stock-bot-kis 가 유일한 백업).
+- **(a) 실거래 블로커 4건 해소** — `# Blockers` 의 C-C 계좌단위 현금예약 / M-B 수동주문 시장시간 게이트 / M-D REST 폴백 TTL 캐시·backoff / M-E 일봉 장중 whipsaw. 실거래(`KIS_LIVE_ENABLED=true`) 전 필수라 가장 우선순위 높음.
+- **(b) 실계정 모의투자 스모크** — `KisPaperSmokeTest`(env-gated). 사용자 KIS 모의 자격증명 필요. 미확정 스펙(필수 query 파라미터·tr_cont·ODNO 자릿수·rate limit 실값) 실측 경로.
+- **(c) force push + PR** — rebase 로 히스토리를 재작성했으므로 `--force-with-lease` 필요. **사용자 명시 확인 필수**(origin/stock-bot-kis 가 유일 백업이었음).
+- **(d) 데이터 계층 분리 설계**(D23) — KRX 원천 append-only 적재. `stock-quant-strategy` Phase 0 의 생존편향 해결 경로.
 
-**그 다음 (Phase 2 백로그 — 후속 GitHub Issue 로 분리)**
+**Phase 2 백로그 (후속 GitHub Issue 로 분리)**
 
 - **(진행중) 실계정 모의투자 스모크**: 사용자가 `KisPaperSmokeTest`(또는 `/api/kis/order`, 주식화면) 로 KIS 모의 read/주문 응답 적합성 확인. 실패 항목(필드/파라미터/tr_id) 나오면 KisClientImpl 수정.
 - **SPA 수동 UI 검증**: 주식화면(babel-standalone, 빌드검증 없음) 브라우저 동작 확인.
@@ -152,7 +153,7 @@ updated: 2026-07-28
 - `bot/.../kis/config/KisProperties.kt`
 - `bot/.../kis/order/{StockOrderService,StockOrderReconciler}.kt`
 - `bot/.../persistence/entity/StockOrderIntentEntity.kt` + repository
-- `db/migration/V14__create_stock_order_intent.sql`, `V15__add_kis_keys.sql`(D11)
+- `db/migration/V15__create_stock_order_intent.sql`, `V16__add_kis_keys.sql`(D11), `V17__bot_state_exchange_and_wal_side.sql` — **2026-07-28 rebase 시 V14~V16 → V15~V17 renumber**(main 이 V14 를 `trading_states` 로 선점)
 - 테스트: `bot/src/test/.../kis/` (token 캐싱, client 매핑, WAL 상태전이/reconcile 실패모드, 체결 idempotency)
 
 # Review Disposition
@@ -190,7 +191,7 @@ updated: 2026-07-28
 # Blockers
 
 - ~~**동결**(2026-07-28, #49 큐 3번)~~ — **해소** (2026-07-28 사용자 지시로 재개, D23 에서 KIS 유지 확정).
-- **머지 선행: rebase onto origin/main** — behind 17 / ahead 10. main 이 `V14__create_trading_states_and_drop_positions.sql` 을 선점해 이 브랜치 V14~V16 을 V15~V17 로 renumber 해야 한다. 충돌 예상: `README.md`, `UserTradingManager.kt`. (`# Next` 참조)
+- ~~**머지 선행: rebase onto origin/main**~~ — **해소**(2026-07-28). behind 17 → 0. V14~V16 → V15~V17 renumber 완료, 충돌 3건(`PROJECT_ANALYSIS.md`·`README.md`·`UserTradingManager.kt`) 해소, **535 테스트 0 실패**.
 - (Phase1 없음 — 머지 가능) 아래는 **실거래 활성화(KIS_LIVE_ENABLED=true) 전 필수 선행**:
   - **실계정 스모크**: KIS inquiry/balance 필수 query 파라미터 집합·tr_cont 연속조회 값·ODNO/org_no 자릿수·토큰 재발급/ rate limit 실값(코드/테스트로 검증 불가 — 실계정 필요).
   - **통합 테스트(M5)**: WAL tx 원자성 + partial unique index 동시성은 단위테스트(mockk passthrough)로 미검증 — Testcontainers-Postgres 또는 수동 Postgres 검증 필요.

@@ -116,7 +116,7 @@ coin-trading-bot/
 │       │   ├── security/         # 사용자 API 키 암호화
 │       │   └── stream/           # candle 집계, 영속화, 보존 정책
 │       └── resources/
-│           ├── db/migration/     # Flyway V1~V15
+│           ├── db/migration/     # Flyway V1~V17
 │           └── static/           # login.html, app.html, tide-app/
 ├── deploy/aws/                   # AWS 생성·배포 스크립트와 prod Compose
 ├── perf/                         # k6 시나리오(현재 API와 동기화 여부 확인 필요)

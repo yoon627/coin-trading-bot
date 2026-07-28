@@ -30,7 +30,7 @@ CREATE UNIQUE INDEX uq_stock_order_intent_client_ref ON stock_order_intent(clien
 -- Invariant (D4): at most ONE non-terminal order per (user, exchange, account, symbol).
 -- DB-enforced so @Scheduled reconcile, manual API, or a second app instance cannot violate it
 -- (app-level Mutex does not cover those). Mirrors existing partial-scope uniqueness conventions
--- (positions V11, bot_configs V12).
+-- (bot_configs V12; positions V11 은 V14 에서 trading_states 로 대체됨).
 CREATE UNIQUE INDEX uq_stock_order_intent_active
     ON stock_order_intent(user_id, exchange, account_no, symbol)
     WHERE status IN ('SUBMITTING', 'PLACED', 'PARTIAL', 'UNKNOWN', 'NEEDS_REVIEW');
