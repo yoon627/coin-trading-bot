@@ -1,0 +1,50 @@
+---
+title: 시세 수집 파이프라인 — WS ticker + REST 캔들, 무수신 워치독
+category: concept
+created: 2026-07-28
+updated: 2026-07-28
+claim_state: current
+verified: 2026-07-28 — MarketDataIngestionService.kt 전문, MarketDataStore.kt 전문
+sources:
+  - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
+  - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt
+  - bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt
+---
+
+# 시세 수집 파이프라인
+
+구 collector 모듈(Kafka 발행)을 흡수한 **in-process** 수집기다([[rightsizing-history]]). 단일 JVM 이므로 메시지 버스 없이 직접 fan-out 한다.
+
+```
+UpbitMarketFeed ──ticker(WS)──┐
+                              ├─► MarketDataIngestionService ─┬─► MarketDataStore (메모리)
+                └──candle(REST 60s 폴링)──┘                    └─► MarketDataPersistenceService (DB + 집계)
+```
+
+## MarketDataStore
+
+메모리 단일 소스. 봇의 가격, SSE 스트림, 차트 API 가 전부 여기서 나온다([[architecture-overview]]).
+
+- `latestTickers` — 마켓별 최신 스냅샷
+- `candleBuffers` — `ConcurrentSkipListMap<openTime, Candle>`, 마켓·interval 당 최대 200개. **openTime 키 upsert** 라서 `CandleAggregator` 가 같은 분봉을 반복 갱신해도 중복이 쌓이지 않는다(과거에 중복 누적으로 지표·매수 D1 이 오염된 적이 있다).
+- `tickerSink` — hot multicast `Flux`. SSE 가 이걸 구독하므로 별도 WS 연결이 필요 없다. `autoCancel=false` 로 두어 마지막 구독자가 끊겨도 sink 가 닫히지 않는다.
+
+## 수집 코루틴
+
+- **ticker**: WS flow 를 collect 한다. flow 가 에러로든 정상으로든 끝나면 backoff 후 **재구독**한다. 예전 구현은 catch 후 종료라 한 번 끊기면 수집이 영영 멈췄다.
+- **candle**: 60초마다 M1 을 폴링. 캔들 한 번 요청의 상한과 D1 봉 경계(KST 09:00)는 [[upbit-api]] 참조. 부팅 시 `seedDailyCandles` 가 D1 200개를 store 에 한 번 채운다 — 안 하면 D1 버퍼가 하루 1개씩만 쌓여 최대 ~21일 동안 매 tick REST 폴백을 탄다([[trading-engine-loop]] 의 `MIN_DAILY_CANDLES`).
+- **fan-out 격리**: store 와 persistence 를 각각 독립 try/catch 로 감싼다. 한 sink 실패가 다른 sink 나 수집 코루틴을 죽이지 않게 — 구 Kafka 2-consumer-group 격리와 등가.
+
+## half-open 워치독
+
+TCP 는 살아 있는데 데이터가 안 오는 상태는 flow 재구독으로 풀리지 않는다. `@Scheduled` 워치독(기본 20초 간격)이 `lastTickerAt` 을 보고 임계 초과면 **ticker job 을 취소·재생성**해 새 연결을 만든다.
+
+- mutex 로 재시작을 직렬화하고, cancel 직전 staleness 를 재확인해 TOCTOU(대기 중 tick 도착)를 막는다.
+- 부팅·재시작 시 `lastTickerAt` 을 now 로 리셋해 오발동을 막는다.
+- 워치독은 **수집 복구**가 목적이다. 매매 정확성은 엔진의 30초 staleness 게이트가 따로 보호한다.
+
+## 저장
+
+`MarketDataPersistenceService` 가 `market_tickers`/`market_candles` 로 내린다([[persistence-schema]]). ticker 저장은 **전역 카운터 기반 샘플링**이라 고활동 종목이 저장 슬롯을 독식할 수 있다 — 저활동 종목은 특정 시간창에 행이 아예 없을 수 있으므로, 이 테이블로 시간창 기반 지표(예: 1시간 변화율)를 계산하려면 샘플링 방식을 먼저 확인해야 한다.
+
+`MarketDataStore` 의 `tickerHistory`·`orderBooks`·`getRecentTickers` 는 현재 소비자가 없는 경로다. 정리 작업의 진행 상태는 GitHub 이슈 큐(#49)가 소유한다.
