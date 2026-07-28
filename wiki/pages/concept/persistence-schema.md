@@ -32,7 +32,8 @@ per-(user, ticker) 거래 상태를 durable 하게 보관한다. 이게 없으�
 - `pendingBuyUuid` / `pendingSellUuid` — 미해소 주문. 유실되면 아무도 reconcile 하지 않는 orphan 주문이 남는다.
 - `peakPrice` — 트레일링 스톱의 기준선. 0 에서 다시 쌓이면 이미 발동했어야 할 청산이 안 걸린다.
 - `halted` / `reconcileFailureCount` — 재시작으로 halt 가 풀려 장애 중 재진입하는 것을 막는다.
-- `entryStrategy`, `exitParams` 스냅샷 — 진입 시점 기준으로 청산하기 위해([[exit-gates]]).
+- `entryStrategy` — 진입 전략으로 청산을 평가하기 위해([[exit-gates]]). **실제로 소비되는 건 이 필드뿐이다.**
+- `exitParams` 스냅샷 — 진입 시점 청산 파라미터. **저장·복원만 되고 청산 판정에는 쓰이지 않는다**(소비는 strategy-evolution Phase 2). 보유 중 설정을 바꾸면 열린 포지션에도 즉시 적용된다 — [[exit-gates]] 의 경고 참조.
 
 ## `trade_executions.exchange_order_id` 부분 unique
 

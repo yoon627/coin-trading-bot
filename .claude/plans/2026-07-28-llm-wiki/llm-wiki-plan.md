@@ -148,6 +148,19 @@ codex plan-review (2026-07-28, effort=medium) — Critical 5 / Major 11 / Minor 
 | P2-e | Upbit 주문 파라미터 표 불완전(`side`·`price` 누락) | **fix** — 전체 요청 파라미터로 보완 |
 | P3 | `MarketDataStore` 가 "차트 API 단일 소스" 는 부정확 — `ChartController` 가 DB 폴백 | **fix** — 폴백 경로 명시 |
 
+## code-review 2차 (codex, codegraph 비활성화로 hook 과 동일 명령 실행) — P1 1 / P2 5, 미해결 0
+
+1차 수정 후 `codex exec review --base 48a4389 --json -c mcp_servers.codegraph.enabled=false` 로 재검토. **hook 이 실행하려던 것과 동일한 리뷰**이며 정상 완료(mcp_tool_call 0건).
+
+| # | finding | 처분 |
+|---|---|---|
+| P1 | `persistence-schema.md:35` 가 여전히 "`exitParams` 스냅샷으로 진입 시점 기준 청산" — 1차에서 `exit-gates` 만 고치고 여기를 빠뜨려 **두 페이지가 서로 반대로 말하는 상태** | **fix** — 소비되는 건 `entryStrategy` 뿐임을 명시. `WIKI.md` 한계 목록에 "페이지 간 모순은 검증기가 못 잡는다" 추가 |
+| P2-a | `CLAUDE.md` 의 역참조 `grep` 이 **디렉토리를 sources 로 선언한 페이지**를 놓침(`swing-strategies` 는 디렉토리 등록) | **fix** — 상위 경로까지 훑는 루프로 교체 |
+| P2-b | `prepush-codex-review.md` 가 sources 를 `.git/hooks/pre-push`(untracked 설치본, linked worktree 에선 `.git` 이 파일이라 경로 해석 불가)로 지목. 실제 정본은 `scripts/git-hooks/pre-push` **331줄**, lock 은 flock 이 아니라 **`mkdir` atomic** | **fix** — sources·줄수·lock 방식 정정 + 정본/설치본 구분 명시. **내가 설치본만 보고 쓴 오류** |
+| P2-c | `lesson-deploy-script-pitfalls` 의 `set -e` 설명이 부정확 — 최상위 `a && b` 는 `&&` 왼쪽이라 면제이고, 실제 실패는 그 표현식이 **함수의 마지막 명령**일 때 함수 반환값이 1이 되어 발생 | **fix** — 정확한 메커니즘으로 재서술(잘못된 일반 규칙을 가르치고 있었다) |
+| P2-d | `smoke.sh` 음성검사가 약함 — `github-issues-backlog` 의 `verified` 에 "열린 이슈 11건" 이라는 시점 스냅샷이 이미 들어 있었다 | **fix** — 해당 수치 제거 + 집계 패턴 검사 추가. 잡히지 않는 상태 산문은 한계로 명시 |
+| P2-e | README 가 `verify.sh` 만 안내 — 링크체커·smoke 를 안 돌려도 clean 으로 보인다 | **fix** — 검증 3종 전부 안내 |
+
 # Deferred
 
 - **`BacktestEngine` 경계 버그**(범위 밖 발견, 심각도 중): `run()` 은 `size < MIN_CANDLES(50)` 일 때만 null 을 반환해 **정확히 50봉이면 통과**하는데, 시뮬레이션 루프(`for i in 50 until size`)가 한 번도 돌지 않은 채 `buildResult` 가 `chronological[50]` 을 읽어 `IndexOutOfBoundsException`. 파일: `bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt:71,87,180`. 이번 작업은 문서화라 코드를 고치지 않고 wiki 에 한계로 기록 + 이슈 생성 제안.

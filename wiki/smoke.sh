@@ -57,9 +57,16 @@ for b in $(git branch -a --format='%(refname:short)' 2>/dev/null \
   found=$(grep -rnF -- "$b" "$P" 2>/dev/null || true)
   [ -n "$found" ] && hits="$hits$found"$'\n'
 done
-# plan frontmatter 를 그대로 옮겨온 흔적도 본다.
+# plan frontmatter 를 그대로 옮겨온 흔적.
 inprog=$(grep -rnE "status:[[:space:]]*in_progress" "$P" 2>/dev/null || true)
 [ -n "$inprog" ] && hits="$hits$inprog"$'\n'
+
+# 시점마다 달라지는 집계(열린 이슈 N건 등)는 확정 지식이 아니라 스냅샷이다.
+counts=$(grep -rnE "(열린|미해결|남은)[^ ]* (이슈|PR)[^ ]* [0-9]+[건개]|(이슈|PR) [0-9]+[건개]" "$P" 2>/dev/null || true)
+[ -n "$counts" ] && hits="$hits$counts"$'\n'
+
+# 한계: 브랜치명·정형 문구가 없는 상태 산문("X 는 아직 진행 중")은 이 검사로 못 잡는다.
+#       그런 서술은 리뷰에서 사람이 걸러야 한다(WIKI.md §6).
 
 if [ -n "$hits" ]; then
   echo "FAIL | 음성검사: 특정 작업 브랜치/진행 상태가 wiki 에 있음 (WIKI.md §1 위반)"

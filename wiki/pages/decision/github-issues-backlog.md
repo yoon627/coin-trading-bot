@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-07-28
 claim_state: current
-verified: 2026-07-28 — repo CLAUDE.md "TODO / 백로그 = GitHub Issues" 절, gh issue list 실행(열린 이슈 11건)
+verified: 2026-07-28 — repo CLAUDE.md "TODO / 백로그 = GitHub Issues" 절 대조, gh issue list 로 이슈가 실제 백로그로 쓰이는지 확인 (이슈 개수는 변하므로 기록하지 않는다)
 sources:
   - CLAUDE.md
   - https://github.com/yoon627/coin-trading-bot/issues
