@@ -8,17 +8,19 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V14) |
+| **마이그레이션** | Flyway (V1~V18) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
-| **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
+| **암호화** | AES-GCM 256-bit (사용자별 Upbit/KIS API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
 | **배포** | AWS EC2 t4g.medium (arm64, 4GB) |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
+
+> **KIS 주식 봇 (Phase 1 — 기반)**: 기존 Upbit 크립토 봇과 같은 인프라(보안·R2DBC·config·WebClient) 위에 한국투자증권 OpenAPI 연동 기반이 `bot/kis/`(별도 gradle 모듈 아님)에 추가됐다. Phase 1 범위 = 브로커 클라이언트(token 24h 캐싱·주문·조회·시세) + **주문유실 방지 WAL**(`stock_order_intent` 테이블 + `StockOrderService` write-ahead + `StockOrderReconciler` 상태기계). 전략 루프·주식 시세수집·UI 는 Phase 2(미배선). 안전상 기본 dry-run(`KIS_LIVE_ENABLED=false`). 설계·진행 기록: `.claude/plans/2026-06-14-stock-bot-kis/`.
 
 ---
 
@@ -107,7 +109,7 @@ coin-trading-bot/
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V14)
+### Flyway 마이그레이션 (V1~V18)
 
 | 버전 | 내용 |
 |------|------|
@@ -117,6 +119,10 @@ coin-trading-bot/
 | V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정 |
 | V13 | bot_configs에 `trade_mode` 컬럼 |
 | V14 | `trading_states` — per-(user, ticker) 거래 상태 durable 영속(미해소 주문 uuid·halt·진입 메타). `trade_executions.exchange_order_id` + 부분 unique(재시작 reconcile 멱등). 미사용 `positions` 제거 |
+| V15 | `stock_order_intent` — KIS 주식 주문 WAL(write-ahead log). 비terminal 주문 1건 불변식을 부분 unique 로 DB 강제 |
+| V16 | `users` 에 KIS 자격증명 컬럼(`kis_app_key`/`kis_app_secret` 암호화, `kis_account_no`, `kis_paper`) |
+| V17 | `bot_state` 에 `exchange` 컬럼((user_id, exchange) 별 1행 — Upbit/KIS 동시 운영). WAL 활성 불변식에 `side` 추가 |
+| V18 | `stock_position_state` — 주식 포지션의 durable 스냅샷(트레일링 고점·매수 거래일·진입 전략). 보유수량·평단은 거래소 잔고가 진실이라 저장하지 않는다 |
 
 ### 핵심 테이블
 

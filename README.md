@@ -108,18 +108,22 @@ coin-trading-bot/
 │       │   ├── cache/            # Redis 가격 캐시
 │       │   ├── client/           # Upbit REST 클라이언트
 │       │   ├── engine/           # 매매, 포지션, 백테스트 엔진
+│       │   ├── kis/              # KIS(한국투자) 주식 봇: client(token/주문/조회),
+│       │   │                     #   order(StockOrderService WAL + StockOrderReconciler), domain, config
 │       │   ├── marketdata/       # 시세 수집(WS ticker + REST candle)과 인메모리 저장소·스트림
 │       │   ├── notification/     # Discord 거래·오류 알림
 │       │   ├── persistence/      # R2DBC 엔티티와 repository
 │       │   ├── security/         # 사용자 API 키 암호화
 │       │   └── stream/           # candle 집계, 영속화, 보존 정책
 │       └── resources/
-│           ├── db/migration/     # Flyway V1~V13
+│           ├── db/migration/     # Flyway V1~V18
 │           └── static/           # login.html, app.html, tide-app/
 ├── deploy/aws/                   # AWS 생성·배포 스크립트와 prod Compose
 ├── perf/                         # k6 시나리오(현재 API와 동기화 여부 확인 필요)
 └── docker-compose.yml            # 로컬/단일 호스트용 app, postgres, redis
 ```
+
+> **KIS 주식 봇 (Phase 1 — 기반)**: 한국투자증권 OpenAPI 연동의 기반(브로커 클라이언트 + 주문유실 방지 WAL/reconcile)이 `bot/kis/` 에 추가됐다. 전략 루프·시세수집·UI 는 아직 미배선(후속). 안전상 기본 **dry-run**(`KIS_LIVE_ENABLED=false`) — 실주문은 `KIS_LIVE_ENABLED=true` + 사용자 계좌 `kis_paper=false` 둘 다 명시해야 송신된다. 설계 기록: `.claude/plans/2026-06-14-stock-bot-kis/`.
 
 ## 트레이딩 전략
 
