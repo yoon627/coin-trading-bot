@@ -37,7 +37,7 @@ updated: 2026-07-29
 **완료: 실거래 블로커 해소(D24) + code-review fix loop 1회차** — 552 테스트 0 실패, `# Acceptance` 전 항목 증거 확보. 다음 후보:
 
 - **(b) 실계정 모의투자 스모크** — `KisPaperSmokeTest`(env-gated). 사용자 KIS 모의 자격증명 필요. 미확정 스펙(필수 query 파라미터·tr_cont·ODNO 자릿수·rate limit 실값) 실측 경로.
-- **(c) force push + PR** — rebase 로 히스토리를 재작성했으므로 `--force-with-lease` 필요. **사용자 명시 확인 필수**(origin/stock-bot-kis 가 유일 백업이었음).
+- ~~**(c) force push + PR**~~ — **완료**(2026-07-29). `--force-with-lease` 로 push(구 tip `2be1fe3` → `700d69a`), **PR #63** 생성. pre-push codex 리뷰는 워크스페이스 크레딧 소진으로 `CODEX_SKIP=1` 우회(같은 diff 의 code-review 는 이미 반영).
 - **(d) 데이터 계층 분리 설계**(D23) — KRX 원천 append-only 적재. `stock-quant-strategy` Phase 0 의 생존편향 해결 경로.
 
 **Phase 2 백로그 (후속 GitHub Issue 로 분리)**
@@ -161,15 +161,17 @@ updated: 2026-07-29
 
 # Deferred
 
-범위 밖으로 분리한 항목(2026-07-28 codex plan-review 발). **각각 GitHub 이슈로 등록 후 이 목록에서 참조로 대체할 것.**
+범위 밖으로 분리한 항목. **2026-07-29 전건 GitHub 이슈로 등록 완료** — 상세는 각 이슈가 단일 소스이며 여기서는 중복 서술하지 않는다.
 
-- **M-E 일봉 whipsaw 전체** — 원안(오늘 봉 일괄 제거)은 전략 의미를 바꾼다. `Indicators.calculateTargetPrice` 는 `today.open + 전일변동폭×k` 이고 `MeanReversion` 은 `candles[0]` 을 오늘 종가·거래량으로 쓴다 → 오늘 봉 제거 시 **VolatilityBreakout·CombinedStrategy·MeanReversion 3종이 다른 전략이 됨**(codex C4, 코드 실측). 올바른 해법은 확정이력과 현재세션을 분리하는 입력 계약(`DailySignalContext`: `confirmedCandlesDesc` + `sessionOpen` + `currentPrice`) 도입인데, **전략 7종 + 백테스트 엔진 전부**에 영향이라 별도 작업. 심각도: 중(잘못된 매매가 아니라 신호 흔들림).
-- **계좌 단위 durable 현금예약** — 엔진 지역 차감으로는 수동주문·재시작·다중 사용자를 못 덮는다(codex C2). WAL 에 예약 컬럼 + 계좌 키 직렬화 + 상태별(PLACED/UNKNOWN/PARTIAL) 예약 규칙 필요(migration 동반). 심각도: 중(브로커 `nrcvb_buy_qty` 가 1차 방어).
-- **재시작 안전성** — `peakPrice`·`boughtToday`·`entryStrategy` 가 메모리 전용이라 재시작 시 트레일링 고점 소실·당일 재진입·진입전략 유실(codex C5). 크립토 `TradingState` durable(#50)과 같은 문제이며 그쪽 해법을 이식할 여지. 심각도: 중~높(실거래 시).
-- **`reconcileNow()` 실패 은폐** — `runPass()` 가 예외를 삼켜 호출자가 실패를 모르고 엔진이 기동한다(codex C5). live 는 fail-closed 여야 함.
-- **`chk-holiday`(CTCA0903R) 연동** — 현 캘린더는 공휴일·임시휴장·단축거래를 모른다(codex M1).
-- **`NEEDS_REVIEW` 수동 해소 API/runbook** — partial unique index 가 활성 슬롯을 점유해 미해결 시 종목이 잠긴다(기존 M-c, codex 도 재지적).
-- **dry-run 예산 시뮬** — 현행 `nominalQty` 는 잔고 무관이라 백테-라이브 정합이 어긋난다.
+| 이슈 | 항목 | 심각도 | 실거래 선행? |
+|---|---|---|---|
+| #64 | 재시작 안전성 — `peakPrice`·`boughtToday`·`entryStrategy` 메모리 전용 | 중~높 | **예** |
+| #67 | `reconcileNow()` 실패 은폐 — reconcile 없이 엔진 기동 | 중~높 | **예** |
+| #65 | 일봉 whipsaw — 확정이력/현재세션 입력 계약(`DailySignalContext`) 분리 | 중 | 아니오 |
+| #66 | 계좌 단위 durable 현금예약 | 중 | 아니오 |
+| #69 | `NEEDS_REVIEW` 활성 슬롯 점유 — 수동 해소 API/runbook | 중 | 아니오 |
+| #68 | `chk-holiday` 연동 — 공휴일·임시휴장 미인지 | 낮~중 | 아니오 |
+| #70 | dry-run 예산 시뮬 — 백테–라이브 정합 | 낮~중 | 아니오 |
 
 # Key Files
 
@@ -261,4 +263,4 @@ updated: 2026-07-29
   - **실계정 스모크**: KIS inquiry/balance 필수 query 파라미터 집합·tr_cont 연속조회 값·ODNO/org_no 자릿수·토큰 재발급/ rate limit 실값(코드/테스트로 검증 불가 — 실계정 필요).
   - **통합 테스트(M5)**: WAL tx 원자성 + partial unique index 동시성은 단위테스트(mockk passthrough)로 미검증 — Testcontainers-Postgres 또는 수동 Postgres 검증 필요.
   - ~~**자율엔진 code-review 잔여(2c)**~~ — **2026-07-28 해소**(D24): C-C 는 `getBuyableQty` 상한+fail-closed 로, M-B 는 컨트롤러 게이트로, M-D 는 엔진 로컬 TTL 캐시+backoff 로 처리. 함께 발견된 정렬 버그·`notional` 오버플로도 수정. **M-E 만 `# Deferred`** — 오늘 봉 일괄 제거는 VolatilityBreakout·CombinedStrategy·MeanReversion 의 정의를 바꾸므로 입력 계약 분리가 선행돼야 한다.
-  - ⚠️ 남은 실거래 선행조건은 위 **실계정 스모크**·**통합 테스트(M5)** 와 `# Deferred` 의 재시작 안전성·`reconcileNow` 실패 은폐다. D24 는 "블로커 4건"을 닫았을 뿐 `KIS_LIVE_ENABLED=true` 를 승인하지 않는다.
+  - ⚠️ 남은 실거래 선행조건 4건: **실계정 스모크**·**통합 테스트(M5)**(위 2개) + **#64 재시작 안전성**·**#67 reconcileNow 실패 은폐**. D24 는 "블로커 4건"을 닫았을 뿐 `KIS_LIVE_ENABLED=true` 를 승인하지 않는다.
