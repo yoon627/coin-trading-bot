@@ -114,24 +114,30 @@ class KisStockTradingEngine(
         lastTradingDay = today
     }
 
-    private suspend fun processSymbol(symbol: String, holdings: List<KisHolding>) {
+    internal suspend fun processSymbol(symbol: String, holdings: List<KisHolding>) {
         val pos = positions.computeIfAbsent(symbol) { StockPosition(it) }
-        if (liveEnabled) {
-            val h = holdings.find { it.pdno == symbol }
-            positionManager.syncFromHoldings(pos, h?.heldQty() ?: 0L, h?.avgBuyPrice() ?: 0.0)
-        }
-        val price = currentPrice(symbol) ?: return
+        // 어느 경로로 빠져나가든 durable 변경분은 저장한다 — syncFromHoldings 가 청산을 반영해 고점·진입전략을
+        // 지웠는데 그 뒤 시세 조회가 실패해 early return 하면, 그 사이 재시작 시 옛 메타가 살아남아
+        // 신규 진입이 즉시 트레일링에 걸린다(#64 가 막으려던 바로 그 증상).
+        try {
+            if (liveEnabled) {
+                val h = holdings.find { it.pdno == symbol }
+                positionManager.syncFromHoldings(pos, h?.heldQty() ?: 0L, h?.avgBuyPrice() ?: 0.0)
+            }
+            val price = currentPrice(symbol) ?: return
 
-        if (pos.position) {
-            decideSell(symbol, pos, price)?.let { reason ->
-                positionManager.submitSell(pos, reason, liveEnabled)
+            if (pos.position) {
+                decideSell(symbol, pos, price)?.let { reason ->
+                    positionManager.submitSell(pos, reason, liveEnabled)
+                }
+            } else if (!pos.boughtToday) {
+                if (shouldBuy(symbol, price)) {
+                    positionManager.submitBuy(pos, price, activeStrategy.name, liveEnabled)
+                }
             }
-        } else if (!pos.boughtToday) {
-            if (shouldBuy(symbol, price)) {
-                positionManager.submitBuy(pos, price, activeStrategy.name, liveEnabled)
-            }
+        } finally {
+            flushDurable(pos)
         }
-        flushDurable(pos)
     }
 
     /** 변경이 있을 때만 저장 — 매 tick upsert 는 write 증폭이다(트레일링 고점은 tick 마다 바뀌지 않는다). */
