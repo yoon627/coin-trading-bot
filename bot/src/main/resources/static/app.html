@@ -57,6 +57,7 @@ function App() {
     case 'orders':    return <OrdersPage {...props}/>;
     case 'backtest':  return <BacktestPage {...props}/>;
     case 'wallet':    return <WalletPage {...props}/>;
+    case 'stock':     return <StockScreen {...props}/>;
     case 'settings':  return <SettingsPage {...props}/>;
     default:          return <Dashboard {...props}/>;
   }

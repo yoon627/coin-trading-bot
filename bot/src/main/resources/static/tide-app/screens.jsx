@@ -480,6 +480,12 @@ function WalletPage({ user, setActive }) {
 function SettingsPage({ user, setActive, refreshUser }) {
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
+  const [kisAppKey, setKisAppKey] = React.useState('');
+  const [kisAppSecret, setKisAppSecret] = React.useState('');
+  const [kisCano, setKisCano] = React.useState('');
+  const [kisPrdt, setKisPrdt] = React.useState('01');
+  const [kisPaper, setKisPaper] = React.useState(user?.kis_paper !== false);
+  const [busyKis, setBusyKis] = React.useState(false);
   const [publicProfile, setPublicProfile] = React.useState(!!user?.public_profile);
   const [publicStrategy, setPublicStrategy] = React.useState(!!user?.public_strategy);
   const [discordUrl, setDiscordUrl] = React.useState('');
@@ -498,6 +504,18 @@ function SettingsPage({ user, setActive, refreshUser }) {
       await refreshUser();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusyKeys(false); }
+  };
+
+  const saveKisKeys = async () => {
+    if (!kisAppKey || !kisAppSecret || !kisCano || !kisPrdt) return;
+    setBusyKis(true);
+    try {
+      await TideAPI.saveKisKeys(kisAppKey, kisAppSecret, kisCano, kisPrdt, kisPaper);
+      setToast({ msg: 'KIS 키가 저장되었습니다', tone: 'up' });
+      setKisAppKey(''); setKisAppSecret('');
+      await refreshUser();
+    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
+    finally { setBusyKis(false); }
   };
 
   const saveProfile = async () => {
@@ -549,6 +567,47 @@ function SettingsPage({ user, setActive, refreshUser }) {
       </Card>
 
       <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>KIS (한국투자증권) API 키 · 주식</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-500)', marginBottom: 20 }}>
+          현재 상태: {user?.has_kis_keys ?
+            <Badge tone="live" dot>등록됨 ({user?.kis_paper === false ? '실전' : '모의'})</Badge> :
+            <Badge tone="warn">미등록</Badge>}
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>App Key</div>
+          <input className="tide-input mono" value={kisAppKey} onChange={e => setKisAppKey(e.target.value)} placeholder="••••••••••••••••"/>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>App Secret</div>
+          <input className="tide-input mono" type="password" value={kisAppSecret} onChange={e => setKisAppSecret(e.target.value)} placeholder="••••••••••••••••"/>
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
+          <div style={{ flex: 2 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>계좌번호 앞 8자리 (CANO)</div>
+            <input className="tide-input mono" value={kisCano} onChange={e => setKisCano(e.target.value)} placeholder="12345678"/>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>상품코드 (2자리)</div>
+            <input className="tide-input mono" value={kisPrdt} onChange={e => setKisPrdt(e.target.value)} placeholder="01"/>
+          </div>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, cursor: 'pointer' }}>
+          <div>
+            <div style={{ fontSize: 13.5, fontWeight: 600 }}>모의투자(paper) 계좌</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginTop: 2 }}>켜짐=모의(:29443), 꺼짐=실전(:9443). 모의로 먼저 검증 권장</div>
+          </div>
+          <input type="checkbox" checked={kisPaper} onChange={e => setKisPaper(e.target.checked)} style={{ width: 18, height: 18 }}/>
+        </label>
+
+        <Button onClick={saveKisKeys} disabled={busyKis || !kisAppKey || !kisAppSecret || !kisCano || !kisPrdt} size="lg">{busyKis ? '저장 중…' : 'KIS 키 저장'}</Button>
+
+        <div style={{ marginTop: 24, padding: 16, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 12.5, color: 'var(--tide-primary-ink)' }}>
+          🛡 App Secret 은 AES-GCM으로 암호화되어 저장됩니다. 같은 키로 국내·해외주식 사용. 실전 매매는 서버 KIS_LIVE_ENABLED=true 도 필요.
+        </div>
+      </Card>
+
+      <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>프로필 공개</div>
         <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, cursor: 'pointer' }}>
           <div>
@@ -590,7 +649,127 @@ function SettingsPage({ user, setActive, refreshUser }) {
   );
 }
 
+// ── STOCK (KIS 주식 자동매매 봇 + 수동주문) ───────────────────────────────
+function StockScreen({ user, setActive }) {
+  const status = useAPI(() => TideAPI.stockBotStatus().catch(() => null), [], 3000);
+  const strategies = useAPI(() => TideAPI.strategies().catch(() => []));
+  const orders = useAPI(() => TideAPI.kisOrders().catch(() => []), [], 5000);
+  const [symbols, setSymbols] = React.useState('005930');
+  const [selected, setSelected] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [toast, setToast] = React.useState(null);
+  // 수동주문
+  const [mSymbol, setMSymbol] = React.useState('005930');
+  const [mQty, setMQty] = React.useState('1');
+  const [mPrice, setMPrice] = React.useState('');
+  const [mSide, setMSide] = React.useState('BUY');
+  const [mType, setMType] = React.useState('MARKET');
+
+  React.useEffect(() => {
+    if (!selected && status.data?.strategy) setSelected(status.data.strategy);
+    else if (!selected && strategies.data?.[0]) setSelected(strategies.data[0].name);
+  }, [status.data, strategies.data]);
+
+  const hasKeys = user?.has_kis_keys;
+  const live = status.data?.live === true;
+
+  const start = async () => {
+    setBusy(true);
+    try {
+      await TideAPI.stockBotStart(symbols.split(',').map(s => s.trim()).filter(Boolean), selected);
+      setToast({ msg: '주식 봇이 시작되었습니다', tone: 'up' }); status.reload();
+    } catch (e) { setToast({ msg: e.message, tone: 'down' }); } finally { setBusy(false); }
+  };
+  const stop = async () => {
+    setBusy(true);
+    try { await TideAPI.stockBotStop(); setToast({ msg: '주식 봇이 정지되었습니다', tone: 'warn' }); status.reload(); }
+    catch (e) { setToast({ msg: e.message, tone: 'down' }); } finally { setBusy(false); }
+  };
+  const placeOrder = async () => {
+    setBusy(true);
+    try {
+      const price = mType === 'LIMIT' ? Number(mPrice) : null;
+      const r = await TideAPI.kisOrder(mSymbol.trim(), mSide, mType, Number(mQty), price);
+      setToast({ msg: `주문 접수: ${r.status}${r.odno ? ' / ' + r.odno : ''}`, tone: 'up' });
+      orders.reload();
+    } catch (e) { setToast({ msg: e.message, tone: 'down' }); } finally { setBusy(false); }
+  };
+
+  return (
+    <Shell active="stock" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
+           title="주식 (KIS)" subtitle="한국투자 주식 자동매매 · 정규장 09:00~15:30">
+      {!hasKeys && <div style={{ marginBottom: 16 }}><ApiKeyWarning go={() => setActive('settings')}/></div>}
+      {hasKeys && !live && (
+        <div style={{ marginBottom: 16, padding: 12, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 12.5, color: 'var(--tide-primary-ink)' }}>
+          🧪 DRY-RUN 모드 — 주문은 기록만 되고 실제 전송되지 않습니다. 실거래는 서버 KIS_LIVE_ENABLED=true + 계좌 실전 설정 필요.
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 16 }}>
+        <Card padding={24}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>봇 설정</div>
+            <Badge tone={status.data?.running ? 'live' : 'neutral'} dot>{status.data?.running ? '실행 중' : '정지'}</Badge>
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>종목코드 (6자리, 쉼표 구분)</div>
+            <input className="tide-input mono" value={symbols} onChange={e => setSymbols(e.target.value)} placeholder="005930, 000660"/>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>전략 선택</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+              {(strategies.data || []).map(s => (
+                <div key={s.name} onClick={() => setSelected(s.name)} style={{
+                  padding: 14, border: '1.5px solid', borderColor: selected === s.name ? 'var(--tide-primary)' : 'var(--ink-200)',
+                  borderRadius: 12, cursor: 'pointer', background: selected === s.name ? 'var(--tide-primary-soft)' : '#fff',
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: 24 }}>
+            {status.data?.running
+              ? <Button onClick={stop} variant="danger" icon="pause" disabled={busy} size="lg" full>봇 정지</Button>
+              : <Button onClick={start} icon="play" disabled={busy || !hasKeys} size="lg" full>봇 시작</Button>}
+          </div>
+        </Card>
+
+        <Card padding={20}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>수동 주문</div>
+          <input className="tide-input mono" style={{ marginBottom: 8 }} value={mSymbol} onChange={e => setMSymbol(e.target.value)} placeholder="005930"/>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <select className="tide-input" value={mSide} onChange={e => setMSide(e.target.value)}><option value="BUY">매수</option><option value="SELL">매도</option></select>
+            <select className="tide-input" value={mType} onChange={e => setMType(e.target.value)}><option value="MARKET">시장가</option><option value="LIMIT">지정가</option></select>
+          </div>
+          <input className="tide-input mono" style={{ marginBottom: 8 }} value={mQty} onChange={e => setMQty(e.target.value)} placeholder="수량"/>
+          {mType === 'LIMIT' && <input className="tide-input mono" style={{ marginBottom: 8 }} value={mPrice} onChange={e => setMPrice(e.target.value)} placeholder="지정가(원)"/>}
+          <Button onClick={placeOrder} disabled={busy || !hasKeys} size="md" full>주문</Button>
+        </Card>
+      </div>
+
+      <Card padding={20} style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>주문 내역 (WAL)</div>
+        {!orders.data?.length ? <div style={{ fontSize: 12, color: 'var(--ink-500)' }}>주문이 없습니다</div> : (
+          <div style={{ fontSize: 12 }}>
+            {orders.data.slice(0, 30).map(o => (
+              <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--ink-100)' }}>
+                <span className="mono">{o.symbol} · {o.side} · {o.qty}주</span>
+                <span style={{ fontWeight: 600, color: o.status === 'NEEDS_REVIEW' ? 'var(--down)' : 'var(--ink-700)' }}>
+                  {o.status}{o.executed_qty ? ` (체결 ${o.executed_qty})` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
+    </Shell>
+  );
+}
+
 window.Dashboard = Dashboard;
+window.StockScreen = StockScreen;
 window.BotPage = BotPage;
 window.TradePage = TradePage;
 window.OrdersPage = OrdersPage;
