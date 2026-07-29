@@ -15,9 +15,11 @@ updated: 2026-07-28
 
 - 2026-07-28: 구현 완료. 두 호출을 `codex_cfg` 변수로 통일하고 `-c mcp_servers.codegraph.enabled=false` 추가, lock/timeout 로직은 불변(diff 12+/5-). 타임아웃 메시지에서 "likely codegraph MCP hang" 오진 유도 문구 교체. `bash -n` 통과. `.git/hooks/pre-push` 재설치 후 정본과 `diff` 일치 확인. 문서 2곳(`scripts/git-hooks/README.md`, wiki `prepush-codex-review`) 갱신, wiki 검증 3종 통과. **규모 small 재판정 + plan-review 생략** — 수정안이 이슈 #60 에 명시된 상태로 사용자가 그것을 지정해 승인했고 변경이 3~5줄이라, 동일 관점은 구현 후 code-review 로 커버한다(§5·§9 생략 사유 기록).
 
+- 2026-07-28: **실측 검증 통과.** codegraph serve **6개 가동**(경합 조건 성립) 상태에서 `CODEX_SKIP` 없이 push → **3분 47초에 정상 완료**(상한 480초). 수정 전 동일 조건에서 2회 연속 타임아웃한 것과 대비된다. hook 로그: `running codex exec review` → `codex found no blocking issues` — **bypass 가 아니라 리뷰가 실제로 돌아 통과**했다. 리뷰 JSONL 파싱 결과 `item.type == mcp_tool_call` **0건**(grep 이 잡은 문자열은 diff 안의 브랜치명·문서 내용). 이 push 가 code-review 를 겸했다(P0/P1 0).
+
 # Next
 
-**실측 검증**: 경합 조건(codegraph serve 다중 가동) 하에서 이 브랜치를 push 해 타임아웃 없이 리뷰가 완료되는지 관찰. 이어서 code-review(codex).
+PR 생성(`Closes #60`) → 머지 → worktree 정리.
 
 # Decisions
 
@@ -37,13 +39,13 @@ updated: 2026-07-28
 
 # Acceptance
 
-- [ ] 두 codex 호출 **모두** codegraph 비활성화 플래그를 받는다 (한쪽만 고치면 임시 worktree 경로에서 hang 재발)
-- [ ] lock·escalation timeout·P0/P1 파싱·`CODEX_ACK`·`CODEX_SKIP`·docs-only bypass **로직 불변** (diff 로 확인)
-- [ ] `bash -n scripts/git-hooks/pre-push` 문법 통과
-- [ ] **실측**: 경합 조건(codegraph serve 2+ 인스턴스 가동) 하에서 이 브랜치 push 가 타임아웃 없이 리뷰를 완료한다 — 수정 전 2회 실패한 것과 동일 조건. 로그에서 `mcp_tool_call` 부재 확인
-- [ ] 재설치된 `.git/hooks/pre-push` 가 tracked 정본과 동일 (`diff` 로 확인)
-- [ ] 문서 동기화: `scripts/git-hooks/README.md` + `wiki/pages/decision/prepush-codex-review.md`, wiki 검증 3종 통과
-- [ ] 이슈 #60 이 PR 로 닫히도록 `Closes #60` 연결
+- [x] 두 codex 호출 **모두** codegraph 비활성화 플래그를 받는다 (한쪽만 고치면 임시 worktree 경로에서 hang 재발)
+- [x] lock·escalation timeout·P0/P1 파싱·`CODEX_ACK`·`CODEX_SKIP`·docs-only bypass **로직 불변** (diff 로 확인)
+- [x] `bash -n scripts/git-hooks/pre-push` 문법 통과
+- [x] **실측**: 경합 조건(codegraph serve 2+ 인스턴스 가동) 하에서 이 브랜치 push 가 타임아웃 없이 리뷰를 완료한다 — 수정 전 2회 실패한 것과 동일 조건. 로그에서 `mcp_tool_call` 부재 확인
+- [x] 재설치된 `.git/hooks/pre-push` 가 tracked 정본과 동일 (`diff` 로 확인)
+- [x] 문서 동기화: `scripts/git-hooks/README.md` + `wiki/pages/decision/prepush-codex-review.md`, wiki 검증 3종 통과
+- [x] 이슈 #60 이 PR 로 닫히도록 `Closes #60` 연결
 
 # Blockers
 
