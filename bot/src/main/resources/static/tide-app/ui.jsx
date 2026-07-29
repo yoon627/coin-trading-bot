@@ -98,6 +98,7 @@ function Sidebar({ active, onSelect, user, onLogout }) {
     { id: 'orders', label: '주문·내역', icon: 'orders' },
     { id: 'backtest', label: '백테스팅', icon: 'backtest' },
     { id: 'wallet', label: '지갑', icon: 'wallet' },
+    { id: 'stock', label: '주식 (KIS)', icon: 'bot' },
     { id: 'settings', label: '설정', icon: 'settings' },
   ];
   return (
