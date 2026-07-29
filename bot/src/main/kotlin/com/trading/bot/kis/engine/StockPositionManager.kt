@@ -42,6 +42,10 @@ class StockPositionManager(
         liveEnabled: Boolean,
     ): StockOrderIntentEntity? {
         if (currentPrice <= 0) return null
+        if (!pos.canAttemptBuy()) {
+            log.debug("Skip buy {} — in rejection backoff", pos.symbol)
+            return null
+        }
         val qty = if (liveEnabled) sizeFromBalance(pos.symbol, currentPrice) else nominalQty(currentPrice)
         if (qty <= 0) {
             log.debug("Skip buy {} — qty=0 (insufficient budget or not buyable)", pos.symbol)
@@ -50,12 +54,15 @@ class StockPositionManager(
         val intent = submit(pos.symbol, KisSide.BUY, qty) ?: return null
         if (intent.status == StockOrderStatus.DRY_RUN.name) {
             pos.markBoughtSimulated(currentPrice, strategyName)
-        } else if (intent.status !in MISSED_BUY_STATUSES) {
+        } else if (intent.status == StockOrderStatus.FAILED.name) {
+            // 미접수 확정 — 진입 기회는 남기되, 같은 거부를 tick 마다 재전송하지 않도록 backoff 를 건다.
+            pos.recordBuyRejection()
+        } else {
             // 접수됐거나 접수 여부가 불명(UNKNOWN)이면 당일 재매수 차단. 실보유/평단은 다음 패스 getHoldings 가 확정.
             pos.boughtToday = true
             pos.entryStrategy = strategyName
+            pos.clearBuyRejection()
         }
-        // 미접수 확정(FAILED/REJECTED)은 boughtToday 를 세우지 않는다 — 브로커가 거부했을 뿐 진입 기회는 남아 있다.
         return intent
     }
 
@@ -116,6 +123,8 @@ class StockPositionManager(
 
         val buyable = try {
             client.getBuyableQty(symbol, currentPrice)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("Skip buy {} — buyable qty query failed (fail-closed): {}", symbol, e.message)
             return 0
@@ -147,8 +156,5 @@ class StockPositionManager(
 
     private companion object {
         const val MARKET_SLIPPAGE_BUFFER = 1.1
-
-        /** 매수 미접수가 확정된 상태 — 당일 진입 기회를 소모하지 않는다. */
-        val MISSED_BUY_STATUSES = setOf(StockOrderStatus.FAILED.name, StockOrderStatus.REJECTED.name)
     }
 }

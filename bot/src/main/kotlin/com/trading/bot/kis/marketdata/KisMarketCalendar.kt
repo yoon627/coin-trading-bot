@@ -10,7 +10,7 @@ import java.time.ZoneId
  * 국내 정규장 개장 판단. 장외엔 시세폴링·매매를 skip(plan D17). MVP 는 평일+09:00~15:30(KST) 하드코딩.
  * 임시휴장/단축거래는 chk-holiday(CTCA0903R) 보완이 후속(스펙 응답구조 스모크 확인 필요).
  */
-interface KisMarketCalendar {
+fun interface KisMarketCalendar {
     fun isTradingNow(): Boolean
 }
 

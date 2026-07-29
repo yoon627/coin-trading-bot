@@ -3,6 +3,7 @@ package com.trading.bot.kis.engine
 import com.trading.bot.domain.SellReason
 import com.trading.bot.kis.client.KisClient
 import com.trading.bot.kis.domain.KisHolding
+import com.trading.bot.kis.marketdata.FallbackCache
 import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.marketdata.StockCandleAdapter
 import com.trading.bot.marketdata.MarketDataStore
@@ -16,6 +17,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,9 +46,9 @@ class KisStockTradingEngine(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // REST 폴백 전용 로컬 캐시(M-D). store 는 @Scheduled 폴러가 단독 writer 로 유지한다.
-    private val priceCache = ConcurrentHashMap<String, TimedValue<Long>>()
-    private val candleCache = ConcurrentHashMap<String, TimedValue<List<NormalizedCandle>>>()
-    private val fallbackFailures = ConcurrentHashMap<String, FallbackFailure>()
+    // price/candle 을 분리해야 캔들 실패가 가격 조회를 막거나, 가격 성공이 캔들의 실패 누적을 지우지 않는다.
+    private val priceCache = FallbackCache<Long>(PRICE_TTL_MS)
+    private val candleCache = FallbackCache<List<NormalizedCandle>>(CANDLE_TTL_MS)
 
     @Volatile private var activeSymbols: List<String> = emptyList()
     @Volatile private var activeStrategy: TradingStrategy =
@@ -157,19 +159,21 @@ class KisStockTradingEngine(
         val cached = marketDataStore.getCandles(Exchange.KIS, symbol, CandleInterval.D1, CANDLE_LOOKBACK)
         if (cached.size >= MIN_CANDLES) return cached
 
-        candleCache[symbol]?.takeIf { it.isFresh(CANDLE_TTL_MS) }?.let { return it.value }
-        if (!shouldAttemptFallback(symbol)) return cached
+        candleCache.get(symbol)?.let { return it }
+        if (!candleCache.shouldAttempt(symbol)) return cached
 
         return try {
             val today = LocalDate.now(KST)
             val from = today.minusDays(CANDLE_BACKFILL_DAYS)
             val fetched = client.getDailyCandles(symbol, from.format(YMD), today.format(YMD))
                 .map { StockCandleAdapter.toNormalized(symbol, it, CandleInterval.D1) }
-            candleCache[symbol] = TimedValue(fetched)
-            onFallbackSuccess(symbol)
+            candleCache.put(symbol, fetched)
+            candleCache.recordSuccess(symbol)
             fetched
+        } catch (e: CancellationException) {
+            throw e // 엔진 정지에 의한 취소는 API 실패가 아니다 — backoff 에 기록하지 않는다.
         } catch (e: Exception) {
-            onFallbackFailure(symbol)
+            candleCache.recordFailure(symbol)
             log.warn("candle REST fallback failed {}: {}", symbol, e.message)
             cached
         }
@@ -182,47 +186,27 @@ class KisStockTradingEngine(
             return ticker.price.toLong()
         }
 
-        priceCache[symbol]?.takeIf { it.isFresh(PRICE_TTL_MS) }?.let { return it.value }
-        if (!shouldAttemptFallback(symbol)) return null
+        priceCache.get(symbol)?.let { return it }
+        if (!priceCache.shouldAttempt(symbol)) return null
 
         return try {
             val price = client.getCurrentPrice(symbol)
-            priceCache[symbol] = TimedValue(price)
-            onFallbackSuccess(symbol)
+            priceCache.put(symbol, price)
+            priceCache.recordSuccess(symbol)
             price
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            onFallbackFailure(symbol)
+            priceCache.recordFailure(symbol)
             log.warn("price fetch failed {}: {}", symbol, e.message)
             null
         }
     }
 
-    // ---- REST 폴백 캐시·backoff (M-D) ----
-
-    private class TimedValue<T>(val value: T, private val at: Long = System.currentTimeMillis()) {
-        fun isFresh(ttlMs: Long): Boolean = System.currentTimeMillis() - at < ttlMs
-    }
-
-    private class FallbackFailure(val count: Int, val retryAtMs: Long)
-
-    private fun isFresh(timestamp: Instant, ttlMs: Long): Boolean =
-        System.currentTimeMillis() - timestamp.toEpochMilli() < ttlMs
-
-    /** 연속 실패 심볼은 지수 backoff — rate limit 을 실패 재시도로 더 악화시키지 않는다. */
-    private fun shouldAttemptFallback(symbol: String): Boolean {
-        val f = fallbackFailures[symbol] ?: return true
-        return System.currentTimeMillis() >= f.retryAtMs
-    }
-
-    private fun onFallbackSuccess(symbol: String) {
-        fallbackFailures.remove(symbol)
-    }
-
-    private fun onFallbackFailure(symbol: String) {
-        val prev = fallbackFailures[symbol]?.count ?: 0
-        val count = prev + 1
-        val delay = minOf(BACKOFF_BASE_MS shl minOf(count - 1, BACKOFF_MAX_SHIFT), BACKOFF_CAP_MS)
-        fallbackFailures[symbol] = FallbackFailure(count, System.currentTimeMillis() + delay)
+    /** 외부(store) timestamp 는 단조시계로 바꿀 수 없다 — 대신 미래 시각도 stale 로 본다. */
+    private fun isFresh(timestamp: Instant, ttlMs: Long): Boolean {
+        val age = System.currentTimeMillis() - timestamp.toEpochMilli()
+        return age in 0 until ttlMs
     }
 
     private companion object {
@@ -235,9 +219,6 @@ class KisStockTradingEngine(
         const val PRICE_TTL_MS = 5_000L
         const val CANDLE_TTL_MS = 300_000L
 
-        const val BACKOFF_BASE_MS = 1_000L
-        const val BACKOFF_CAP_MS = 60_000L
-        const val BACKOFF_MAX_SHIFT = 6
 
         val KST: ZoneId = ZoneId.of("Asia/Seoul")
         val YMD: DateTimeFormatter = DateTimeFormatter.BASIC_ISO_DATE

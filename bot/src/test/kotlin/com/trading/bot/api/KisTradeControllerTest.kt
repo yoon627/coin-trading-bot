@@ -2,6 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.kis.client.KisClient
 import com.trading.bot.kis.client.KisClientFactory
+import com.trading.bot.kis.config.KisProperties
 import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.order.StockOrderService
 import com.trading.bot.kis.order.StockOrderValidationException
@@ -39,8 +40,10 @@ class KisTradeControllerTest {
     private val intentRepo = mockk<StockOrderIntentRepository>()
     private val validators = RequestValidators()
     private val marketCalendar = mockk<KisMarketCalendar>()
-    private val controller =
-        KisTradeController(userRepo, kisClientFactory, stockOrderService, intentRepo, validators, marketCalendar)
+    private val controller = KisTradeController(
+        userRepo, kisClientFactory, stockOrderService, intentRepo, validators, marketCalendar,
+        KisProperties(liveEnabled = true),
+    )
 
     init {
         // 기본은 장중 — 게이트 자체를 검증하는 테스트만 false 로 덮는다.

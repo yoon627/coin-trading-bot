@@ -4,6 +4,7 @@ import com.trading.bot.auth.currentUserId
 import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.kis.domain.KisOrderType
 import com.trading.bot.kis.domain.KisSide
+import com.trading.bot.kis.config.KisProperties
 import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.order.StockOrderService
 import com.trading.bot.kis.order.StockOrderValidationException
@@ -34,14 +35,16 @@ class KisTradeController(
     private val stockOrderIntentRepository: StockOrderIntentRepository,
     private val requestValidators: RequestValidators,
     private val marketCalendar: KisMarketCalendar,
+    private val kisProperties: KisProperties,
 ) {
 
     @PostMapping("/order")
     suspend fun placeOrder(@RequestBody req: KisOrderApiRequest): Map<String, Any?> {
-        // 엔진(runLoop)은 같은 캘린더로 장외를 막지만 이 수동 경로엔 게이트가 없었다(M-B).
-        // ⚠️ 현 캘린더는 평일 09:00~15:30 하드코딩이라 공휴일·임시휴장·단축거래를 모른다 —
-        // 장외 주문을 KIS 가 거부하기 전에 로컬에서 1차로 거르는 용도이며, 휴장일 판정은 chk-holiday 연동(후속) 몫이다.
-        if (!marketCalendar.isTradingNow()) {
+        // 빠른 실패용 1차 게이트(실주문일 때만). 최종 불변식은 송신 직전 StockOrderService.validate 가 다시 본다 —
+        // 여기서 통과해도 DB·시세 조회 사이에 장이 닫힐 수 있다.
+        // dry-run 은 실송신이 없으므로 장외에도 허용한다(시뮬레이션 계약 유지).
+        // ⚠️ 현 캘린더는 평일 09:00~15:30 하드코딩이라 공휴일·임시휴장·단축거래를 모른다(chk-holiday 연동은 후속).
+        if (kisProperties.liveEnabled && !marketCalendar.isTradingNow()) {
             throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "market is closed")
         }
         val userId = currentUserId()

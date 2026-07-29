@@ -109,7 +109,7 @@ class StockPositionManagerTest {
     }
 
     @Test
-    fun `broker rejection does not consume the daily entry slot (C3)`() = runTest {
+    fun `broker rejection does not consume the daily entry slot but backs off (C3)`() = runTest {
         coEvery { client.getBalance() } returns KisBalanceResponse(
             rtCd = "0", summary = listOf(KisAccountSummary(dncaTotAmt = "1000000", prvsRcdlExccAmt = "800000")),
         )
@@ -121,6 +121,12 @@ class StockPositionManagerTest {
 
         // FAILED = 미접수 확정. 진입 기회를 소모하면 당일 재시도가 막힌다.
         assertFalse(pos.boughtToday)
+        // 다만 거래정지처럼 반복해도 실패하는 거부가 있어 즉시 재시도하면 tick 마다 재전송된다.
+        assertFalse(pos.canAttemptBuy(), "거부 직후에는 backoff 가 걸려야 한다")
+
+        // backoff 중에는 주문 자체를 시도하지 않는다.
+        pm.submitBuy(pos, currentPrice = 10_000, strategyName = "rsi", liveEnabled = true)
+        coVerify(exactly = 1) { orderService.submit(any(), any()) }
     }
 
     @Test

@@ -2,7 +2,7 @@
 title: stock-bot-kis — KIS(한국투자) 주식 자동매매 봇 기반 + 주문유실 방지(WAL reconcile)
 status: in_progress
 started: 2026-06-14
-updated: 2026-07-28
+updated: 2026-07-29
 ---
 
 # Goal
@@ -30,10 +30,11 @@ updated: 2026-07-28
 - 2026-07-28: **rebase onto origin/main 완료**. behind 17 → 0. 충돌 3건 해소 — `PROJECT_ANALYSIS.md`/`README.md`(문서, main 재구성분 유지 + KIS 항목 이식), `UserTradingManager.kt`(main 의 `restoreAllRunningBots()` 추출 + SmartLifecycle 구조를 살리고 D22 의 `EXCHANGE="UPBIT"` 스코프 좁히기 4곳을 재적용 — 기존 `companion object` 에 상수 편입). migration **V14~V16 → V15~V17 renumber**(main 이 V14 선점) + 참조 동반 수정(README·PROJECT_ANALYSIS 표에 V15~V17 행 추가·UserEntity/BotStateEntity 주석·WAL 주석의 폐기된 `positions` 참조). rebase 로 합류한 main 테스트가 옛 `findByRunningTrue()` 를 mock 해 컴파일 실패 → `findByRunningTrueAndExchange("UPBIT")` 6곳 정합. **535 테스트 0 실패**(rebase 전 baseline 425 → main 합류 110 증가).
 
 - 2026-07-28: **실거래 블로커 해소(D24) 구현 완료 — 543 테스트 0 실패**(직전 535 + 신규 8). dlc structural. plan-review 는 **codex 단독**(Claude subagent 는 이 세션 정책상 미사용 — CLAUDE.md §9 의 "미가용 시 사유 명시" 준용) → Critical 6/Major 3 지적을 코드로 검증해 **범위를 재조정**(사용자 결정 "안전한 것부터"). 구현: ①C-C 축소 — `getBuyableQty`(inquire-psbl-order, TTTC8908R/ORD_DVSN=01) 신규 + 매수수량 최종 상한 + 조회실패 fail-closed ②`FAILED`/`REJECTED` 는 `boughtToday` 미소모(codex C3) ③M-B `KisTradeController` 시장시간 게이트(422, WAL 앞단) ④M-D 엔진 로컬 TTL 캐시(price 5s/candle 300s) + 지수 backoff + store ticker 신선도 판정 ⑤**기존 Critical 정렬 버그** — `getDailyCandles` 가 ascending 이라 store 미스 시 지표가 뒤집혀 계산되던 것을 descending 으로 근본 수정 ⑥`notional` Long 오버플로로 `maxOrderAmount` 우회되던 것을 `multiplyExact` 로 차단(codex C6). **M-E 와 durable 현금예약·재시작 안전성은 `# Deferred`** — 전략 의미 변경/스키마 변경이라 별도 작업.
+- 2026-07-29: **code-review(codex) fix loop 1회차 완료 — 552 테스트 0 실패**(직전 543 + 신규 9). Critical 1/Major 5/Minor 3 전건 반영. 핵심: ①매수가능수량 상한을 엔진 sizing 에서 **공용 경계 `StockOrderService.validate`** 로 옮겨 수동 REST 우회를 차단(C1) ②`FAILED` 즉시 재시도가 tick 마다 재전송되던 **직전 커밋의 회귀**를 `StockPosition` 지수 backoff 로 수정(M3) ③시장시간을 송신 직전 재검증(M4) ④캐시·backoff 를 `FallbackCache` 로 추출해 시간원 주입 → **테스트 불가였던 M-D 를 실제로 검증**(M5 — 이전 Acceptance 체크가 근거 없었음을 정정) ⑤price/candle backoff 분리(M1) ⑥dead `REJECTED` 분기 제거(M2) ⑦DRY_RUN 장외 허용·`CancellationException` re-throw·단조시계 TTL(Minor 3건).
 
 # Next
 
-**완료: 실거래 블로커 해소(D24)** — 543 테스트 0 실패, `# Acceptance` 전 항목 증거 확보. 다음 후보:
+**완료: 실거래 블로커 해소(D24) + code-review fix loop 1회차** — 552 테스트 0 실패, `# Acceptance` 전 항목 증거 확보. 다음 후보:
 
 - **(b) 실계정 모의투자 스모크** — `KisPaperSmokeTest`(env-gated). 사용자 KIS 모의 자격증명 필요. 미확정 스펙(필수 query 파라미터·tr_cont·ODNO 자릿수·rate limit 실값) 실측 경로.
 - **(c) force push + PR** — rebase 로 히스토리를 재작성했으므로 `--force-with-lease` 필요. **사용자 명시 확인 필수**(origin/stock-bot-kis 가 유일 백업이었음).
@@ -156,7 +157,7 @@ updated: 2026-07-28
 - [x] **M-D**: 엔진 REST 폴백 결과가 TTL 내 재사용된다. 검증 — client mock 호출횟수로 2패스에 1회. store ticker 가 TTL 초과면 stale 로 보고 폴백한다. **store 에는 쓰지 않는다**(단일 writer 유지) — `store.addCandle`/`updateTicker` 가 엔진 경로에서 호출되지 않음을 mock 으로 확인.
 - [x] **정렬 버그**: 폴백 경로가 전략에 넘기는 캔들이 descending(`candles[0]`=최신)이다. 검증 — 폴백 단위테스트에서 첫 원소가 가장 최근 봉.
 - [x] **qty overflow**: 오버플로를 유발하는 qty 가 `maxOrderAmount` 검증을 통과하지 못한다. 검증 — `Long.MAX_VALUE` 근처 qty 로 `StockOrderValidationException`.
-- [x] 전체 `./gradlew test` green — **543 tests / 0 failures / 4 skipped**(baseline 535 + 신규 8) + 문서 동기화(README/PROJECT_ANALYSIS 의 KIS 동작 서술이 바뀌면 갱신)
+- [x] 전체 `./gradlew test` green — **552 tests / 0 failures / 4 skipped**(baseline 535 → D24 543 → fix loop 552) + 문서 동기화(README/PROJECT_ANALYSIS 의 KIS 동작 서술이 바뀌면 갱신)
 
 # Deferred
 
@@ -237,6 +238,20 @@ updated: 2026-07-28
 | M1 | MAJOR | 캘린더가 공휴일·임시휴장을 모름 → 게이트 착시 | **부분 fix** 게이트는 넣되 한계를 코드 주석·Report 에 명시, `chk-holiday` 연동은 defer |
 | M2 | MAJOR | store 다중 writer race(`addCandle` put+trim 비원자) | **fix(설계 변경)** 원안(store 위임) 철회 → 엔진 로컬 캐시로 단일 writer 유지 |
 | M3 | MAJOR | `getLatestTicker` 에 TTL 을 넣으면 store 계약·기존 소비자 변경 | **fix(설계 변경)** TTL 판정을 store 가 아니라 엔진에서 수행 |
+
+## 2026-07-29 codex code-review (D24 구현 diff) — Critical 1 / Major 5 / Minor 3
+
+| # | 심각도 | 지적 | 처분 |
+|---|---|---|---|
+| C1 | CRITICAL | 수동 매수(REST)가 `getBuyableQty` 상한을 우회 — 상한을 엔진 sizing 에만 넣었다 | **fix** 공용 경계 `StockOrderService.validate` 로 이동(자동·수동 공통). 엔진 sizing 은 수량 결정용으로 유지 |
+| M1 | MAJOR | price/candle 이 backoff 상태를 공유 — 캔들 실패가 가격 조회를 막고 가격 성공이 캔들 실패를 리셋 | **fix** `FallbackCache` 인스턴스를 종류별로 분리 |
+| M2 | MAJOR | `REJECTED` 미소모 분기가 도달 불가(생성하는 코드 없음) | **fix** dead 분기 제거, `FAILED` 만 처리 |
+| M3 | MAJOR | `FAILED` 를 즉시 재시도 가능하게 만들어 cooldown 없이 tick 마다 재전송 — **직전 커밋이 만든 회귀** | **fix** `StockPosition.recordBuyRejection()` 지수 backoff(1분~30분) |
+| M4 | MAJOR | 시장시간 게이트가 컨트롤러에만 있어 송신 시점엔 미보장(15:29:59 통과 → 15:30 송신) | **fix** `StockOrderService.validate` 에서 송신 직전 재검증 |
+| M5 | MAJOR | 신규 캐시·TTL·backoff 에 테스트가 전혀 없음 — **Acceptance 를 잘못 체크했다** | **fix** private 이라 테스트 불가였던 것이 원인 → `FallbackCache` 로 추출(시간원 주입) + 테스트 5개 |
+| m1 | MINOR | 장외 게이트가 DRY_RUN 까지 차단해 시뮬레이션 계약 파손 | **fix** `liveEnabled` 일 때만 게이트 |
+| m2 | MINOR | 광범위 `catch (Exception)` 이 `CancellationException` 까지 삼킴 | **fix** 먼저 re-throw |
+| m3 | MINOR | wall clock TTL 은 시계 역행 시 만료값이 fresh 로 보임 | **fix** 로컬 TTL 은 `nanoTime`, 외부 timestamp 는 `age in 0 until ttl` |
 
 # Blockers
 

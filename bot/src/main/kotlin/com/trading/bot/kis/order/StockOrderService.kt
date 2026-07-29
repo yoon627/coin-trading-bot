@@ -5,6 +5,7 @@ import com.trading.bot.kis.client.KisClient
 import com.trading.bot.kis.config.KisProperties
 import com.trading.bot.kis.domain.KisOrderRequest
 import com.trading.bot.kis.domain.KisOrderType
+import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.domain.KisSide
 import com.trading.bot.persistence.StockOrderIntentRepository
 import com.trading.bot.persistence.entity.StockOrderIntentEntity
@@ -44,11 +45,12 @@ class StockOrderService(
     private val repository: StockOrderIntentRepository,
     private val kisProperties: KisProperties,
     private val clock: Clock,
+    private val marketCalendar: KisMarketCalendar,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     suspend fun submit(client: KisClient, cmd: SubmitOrderCommand): StockOrderIntentEntity {
-        validate(client, cmd)
+        validate(client, cmd, dryRun = !kisProperties.liveEnabled)
         val accountNo = "${cmd.cano}-${cmd.acntPrdtCd}"
 
         // 사전 가드(흔한 경우, 같은 종목·같은 side). 경합은 DB partial unique index 가 최종 차단.
@@ -143,27 +145,32 @@ class StockOrderService(
         )
     }
 
-    private suspend fun validate(client: KisClient, cmd: SubmitOrderCommand) {
+    /**
+     * 모든 실주문이 지나는 공용 경계. 진입점(자율엔진 / 수동 REST)별로 가드를 흩뿌리면 한쪽이 빠지므로
+     * 계좌 안전 불변식은 여기서 강제한다.
+     */
+    private suspend fun validate(client: KisClient, cmd: SubmitOrderCommand, dryRun: Boolean) {
         if (cmd.qty <= 0) throw StockOrderValidationException("qty must be > 0 (was ${cmd.qty})")
         if (cmd.orderType == KisOrderType.LIMIT && (cmd.price == null || cmd.price <= 0)) {
             throw StockOrderValidationException("limit order requires positive price")
         }
+
+        // 시장가는 현재가 기준 추정. getCurrentPrice 는 0/실패 시 예외(가드 우회 방지).
+        val unitPrice = cmd.price ?: try {
+            client.getCurrentPrice(cmd.symbol)
+        } catch (e: Exception) {
+            throw StockOrderValidationException("cannot determine price for ${cmd.symbol}: ${e.message}")
+        }
+        if (unitPrice <= 0) throw StockOrderValidationException("non-positive price for ${cmd.symbol}")
+
         val cap = kisProperties.maxOrderAmount
         if (cap > 0) {
-            // 시장가는 현재가 기준 추정. getCurrentPrice 는 0/실패 시 예외(가드 우회 방지). 슬리피지 버퍼 적용.
-            val unitPrice = cmd.price ?: try {
-                client.getCurrentPrice(cmd.symbol)
-            } catch (e: Exception) {
-                throw StockOrderValidationException("cannot determine price for ${cmd.symbol}: ${e.message}")
-            }
-            if (unitPrice <= 0) throw StockOrderValidationException("non-positive price for ${cmd.symbol}")
             val buffered = if (cmd.orderType == KisOrderType.MARKET) {
                 (unitPrice * MARKET_SLIPPAGE_BUFFER).toLong()
             } else {
                 unitPrice
             }
             // Long 곱셈 오버플로가 나면 음수·작은 양수로 접혀 cap 검증을 통과한다(수동 주문은 qty 상한이 없다).
-            // multiplyExact 로 오버플로를 검증 실패로 승격한다.
             val notional = try {
                 Math.multiplyExact(cmd.qty, buffered)
             } catch (_: ArithmeticException) {
@@ -171,6 +178,26 @@ class StockOrderService(
             }
             if (notional > cap) {
                 throw StockOrderValidationException("order notional $notional exceeds max-order-amount $cap")
+            }
+        }
+
+        if (dryRun) return // 실송신이 없으므로 아래 계좌·시장 상태 불변식은 적용하지 않는다.
+
+        // 컨트롤러 게이트를 통과한 뒤 DB·시세 조회 사이에 장이 닫힐 수 있다 — 송신 직전에 다시 본다.
+        if (!marketCalendar.isTradingNow()) {
+            throw StockOrderValidationException("market is closed")
+        }
+
+        if (cmd.side == KisSide.BUY) {
+            // 미수 방지의 최종 상한. 엔진 sizing 에도 같은 값을 쓰지만, 수동 REST 는 sizing 을 거치지 않으므로
+            // 여기서 막지 않으면 상한이 통째로 우회된다. 조회 실패는 fail-closed.
+            val buyable = try {
+                client.getBuyableQty(cmd.symbol, unitPrice)
+            } catch (e: Exception) {
+                throw StockOrderValidationException("buyable qty unavailable for ${cmd.symbol}: ${e.message}")
+            }
+            if (cmd.qty > buyable) {
+                throw StockOrderValidationException("qty ${cmd.qty} exceeds buyable $buyable for ${cmd.symbol}")
             }
         }
     }

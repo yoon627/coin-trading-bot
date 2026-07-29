@@ -3,6 +3,7 @@ package com.trading.bot.kis.order
 import com.trading.bot.kis.client.KisApiException
 import com.trading.bot.kis.client.KisClient
 import com.trading.bot.kis.config.KisProperties
+import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.domain.KisOrderAck
 import com.trading.bot.kis.domain.KisOrderType
 import com.trading.bot.kis.domain.KisSide
@@ -43,10 +44,19 @@ class StockOrderServiceTest {
         // save 는 id 부여된 SUBMITTING/DRY_RUN 엔티티 반환.
         every { repository.save(any()) } answers { Mono.just((firstArg() as StockOrderIntentEntity).copy(id = 100L)) }
         every { repository.transition(any(), any(), any(), any(), any(), any(), any()) } returns Mono.just(1L)
+        // 매수 preflight 기본값 — 상한 자체를 검증하는 테스트만 좁은 값으로 덮는다.
+        coEvery { client.getBuyableQty(any(), any()) } returns 1_000_000
     }
 
-    private fun service(liveEnabled: Boolean, maxOrderAmount: Long = 10_000_000) =
-        StockOrderService(repository, KisProperties(liveEnabled = liveEnabled, maxOrderAmount = maxOrderAmount), clock)
+    private val marketCalendar = KisMarketCalendar { true } // 기본 장중 — 게이트 테스트만 false 로 만든다
+
+    private fun service(liveEnabled: Boolean, maxOrderAmount: Long = 10_000_000, tradingNow: Boolean = true) =
+        StockOrderService(
+            repository,
+            KisProperties(liveEnabled = liveEnabled, maxOrderAmount = maxOrderAmount),
+            clock,
+            if (tradingNow) marketCalendar else KisMarketCalendar { false },
+        )
 
     @Test
     fun `dry-run writes DRY_RUN intent and does NOT call placeOrder`() = runTest {
@@ -117,6 +127,47 @@ class StockOrderServiceTest {
             kotlinx.coroutines.runBlocking { service(liveEnabled = true, maxOrderAmount = 500_000).submit(client, cmd) }
         }
         coVerify(exactly = 0) { repository.save(any()) }
+        coVerify(exactly = 0) { client.placeOrder(any()) }
+    }
+
+    @Test
+    fun `manual buy cannot exceed broker buyable qty`() = runTest {
+        // 엔진 sizing 을 거치지 않는 수동 REST 경로도 같은 상한을 지나야 한다 — 진입점별 가드는 반드시 새어나간다.
+        coEvery { client.getBuyableQty(any(), any()) } returns 3
+
+        assertThrows(StockOrderValidationException::class.java) {
+            kotlinx.coroutines.runBlocking { service(liveEnabled = true).submit(client, cmd.copy(qty = 10)) }
+        }
+        coVerify(exactly = 0) { client.placeOrder(any()) }
+    }
+
+    @Test
+    fun `buy is rejected when buyable qty is unavailable (fail-closed)`() = runTest {
+        coEvery { client.getBuyableQty(any(), any()) } throws RuntimeException("psbl-order 5xx")
+
+        assertThrows(StockOrderValidationException::class.java) {
+            kotlinx.coroutines.runBlocking { service(liveEnabled = true).submit(client, cmd) }
+        }
+        coVerify(exactly = 0) { client.placeOrder(any()) }
+    }
+
+    @Test
+    fun `live order is re-checked against market hours at send time`() = runTest {
+        // 컨트롤러 게이트를 통과한 뒤 DB·시세 조회 사이에 장이 닫힐 수 있다.
+        assertThrows(StockOrderValidationException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                service(liveEnabled = true, tradingNow = false).submit(client, cmd)
+            }
+        }
+        coVerify(exactly = 0) { client.placeOrder(any()) }
+    }
+
+    @Test
+    fun `dry-run is allowed outside market hours`() = runTest {
+        // 실송신이 없으므로 장외 시뮬레이션은 막지 않는다.
+        val intent = service(liveEnabled = false, tradingNow = false).submit(client, cmd)
+
+        assertEquals(StockOrderStatus.DRY_RUN.name, intent.status)
         coVerify(exactly = 0) { client.placeOrder(any()) }
     }
 

@@ -14,6 +14,24 @@ class StockPosition(val symbol: String) {
     var boughtToday: Boolean = false
     var entryStrategy: String? = null
 
+    // 브로커가 매수를 거부(FAILED)하면 진입 슬롯을 소모하지 않는 대신, 이 시각까지 재시도를 멈춘다.
+    // 거래정지·계좌제한처럼 반복해도 성공하지 않는 거부가 있어 tick 마다 재전송하면 rate limit·로그가 폭주한다.
+    private var buyRetryBlockedUntilNanos: Long = 0
+    private var buyFailureCount: Int = 0
+
+    fun canAttemptBuy(): Boolean = System.nanoTime() - buyRetryBlockedUntilNanos >= 0
+
+    fun recordBuyRejection() {
+        buyFailureCount += 1
+        val delayMs = minOf(BUY_RETRY_BASE_MS shl minOf(buyFailureCount - 1, BUY_RETRY_MAX_SHIFT), BUY_RETRY_CAP_MS)
+        buyRetryBlockedUntilNanos = System.nanoTime() + delayMs * 1_000_000
+    }
+
+    fun clearBuyRejection() {
+        buyFailureCount = 0
+        buyRetryBlockedUntilNanos = 0
+    }
+
     fun pnlPercent(price: Long): Double {
         if (avgBuyPrice <= 0) return 0.0
         return ((price - avgBuyPrice) / avgBuyPrice) * 100.0
@@ -59,5 +77,11 @@ class StockPosition(val symbol: String) {
         holdQty = 0
         peakPrice = 0.0
         entryStrategy = null
+    }
+
+    private companion object {
+        const val BUY_RETRY_BASE_MS = 60_000L
+        const val BUY_RETRY_CAP_MS = 1_800_000L // 30분 — 거래정지처럼 당일 내내 안 풀리는 거부를 위한 상한
+        const val BUY_RETRY_MAX_SHIFT = 5
     }
 }
