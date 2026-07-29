@@ -7,6 +7,7 @@ import com.trading.bot.kis.marketdata.FallbackCache
 import com.trading.bot.kis.marketdata.KisMarketCalendar
 import com.trading.bot.kis.marketdata.StockCandleAdapter
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.persistence.StockPositionStateService
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
@@ -40,6 +41,7 @@ class KisStockTradingEngine(
     private val marketDataStore: MarketDataStore,
     private val marketCalendar: KisMarketCalendar,
     private val liveEnabled: Boolean,
+    private val positionStateService: StockPositionStateService? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val positions = ConcurrentHashMap<String, StockPosition>()
@@ -102,13 +104,14 @@ class KisStockTradingEngine(
         }
     }
 
-    /** 거래일(KST) 경계에서 boughtToday 리셋 — 전일 매수/매도 후 당일 정상 재평가(M-A). */
+    /**
+     * 거래일(KST) 경계에서 진입 게이트 리셋(M-A). 판정 근거는 메모리 `lastTradingDay` 가 아니라 포지션별
+     * `boughtDate` 다 — 재시작하면 `lastTradingDay` 는 null 이라 무조건 리셋돼 당일 재진입이 뚫린다(#64).
+     */
     internal fun resetDailyIfNeeded() {
         val today = LocalDate.now(KST)
-        if (today != lastTradingDay) {
-            positions.values.forEach { it.boughtToday = false }
-            lastTradingDay = today
-        }
+        positions.values.forEach { it.resetDaily(today) }
+        lastTradingDay = today
     }
 
     private suspend fun processSymbol(symbol: String, holdings: List<KisHolding>) {
@@ -127,6 +130,35 @@ class KisStockTradingEngine(
             if (shouldBuy(symbol, price)) {
                 positionManager.submitBuy(pos, price, activeStrategy.name, liveEnabled)
             }
+        }
+        flushDurable(pos)
+    }
+
+    /** 변경이 있을 때만 저장 — 매 tick upsert 는 write 증폭이다(트레일링 고점은 tick 마다 바뀌지 않는다). */
+    private suspend fun flushDurable(pos: StockPosition) {
+        val svc = positionStateService ?: return
+        if (!pos.durableDirty) return
+        try {
+            svc.upsert(userId, pos)
+            pos.markDurableClean()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 저장 실패로 매매를 멈추지는 않는다(다음 변경 때 재시도). 다만 재시작 시 고점 소실 위험은 알린다.
+            log.warn("durable position state flush failed user={} symbol={}: {}", userId, pos.symbol, e.message)
+        }
+    }
+
+    /** 엔진 기동 **전에** 호출한다 — 복원 없이 루프가 돌면 고점·진입 게이트가 빈 상태로 매매한다. */
+    suspend fun restorePositionState(symbols: List<String>) {
+        val svc = positionStateService ?: return
+        symbols.forEach { positions.computeIfAbsent(it) { s -> StockPosition(s) } }
+        try {
+            svc.loadInto(userId, positions, LocalDate.now(KST))
+            positions.values.forEach { it.markDurableClean() }
+        } catch (e: Exception) {
+            log.error("durable position state restore failed user={}: {}", userId, e.message)
+            throw e // 복원 실패를 삼키면 고점·진입 게이트 없이 매매가 시작된다
         }
     }
 

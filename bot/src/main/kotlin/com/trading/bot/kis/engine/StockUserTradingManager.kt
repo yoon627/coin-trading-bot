@@ -7,6 +7,7 @@ import com.trading.bot.kis.order.StockOrderReconciler
 import com.trading.bot.kis.order.StockOrderService
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.StockPositionStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
@@ -38,6 +39,7 @@ class StockUserTradingManager(
     private val marketDataStore: MarketDataStore,
     private val marketCalendar: KisMarketCalendar,
     private val kisProperties: KisProperties,
+    private val stockPositionStateService: StockPositionStateService,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, KisStockTradingEngine>()
@@ -68,6 +70,7 @@ class StockUserTradingManager(
                         val symbols = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                         val engine = engines.computeIfAbsent(state.userId) { createEngine(user) }
                         engine.setStrategy(state.strategy)
+                        engine.restorePositionState(symbols)
                         engine.start(symbols)
                         log.info("Restored KIS bot user={} strategy={} symbols={}", state.userId, state.strategy, symbols)
                     } catch (e: Exception) {
@@ -99,6 +102,7 @@ class StockUserTradingManager(
 
         val engine = engines.computeIfAbsent(userId) { createEngine(user) }
         strategyName?.let { engine.setStrategy(it) }
+        engine.restorePositionState(symbols)
         engine.start(symbols)
         saveState(userId, true, engine.getActiveStrategyName(), symbols)
         mapOf("status" to "started", "strategy" to engine.getActiveStrategyName(), "live" to kisProperties.liveEnabled)
@@ -175,6 +179,7 @@ class StockUserTradingManager(
             marketDataStore = marketDataStore,
             marketCalendar = marketCalendar,
             liveEnabled = kisProperties.liveEnabled,
+            positionStateService = stockPositionStateService,
         )
     }
 

@@ -11,6 +11,8 @@ import com.trading.bot.kis.order.SubmitOrderCommand
 import com.trading.bot.persistence.entity.StockOrderIntentEntity
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.floor
 import org.slf4j.LoggerFactory
 
@@ -59,8 +61,7 @@ class StockPositionManager(
             pos.recordBuyRejection()
         } else {
             // 접수됐거나 접수 여부가 불명(UNKNOWN)이면 당일 재매수 차단. 실보유/평단은 다음 패스 getHoldings 가 확정.
-            pos.boughtToday = true
-            pos.entryStrategy = strategyName
+            pos.markBoughtAccepted(strategyName, LocalDate.now(KST))
             pos.clearBuyRejection()
         }
         return intent
@@ -156,5 +157,6 @@ class StockPositionManager(
 
     private companion object {
         const val MARKET_SLIPPAGE_BUFFER = 1.1
+        val KST: ZoneId = ZoneId.of("Asia/Seoul")
     }
 }
