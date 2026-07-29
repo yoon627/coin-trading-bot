@@ -1,6 +1,6 @@
 ---
 title: stock-bot-kis — KIS(한국투자) 주식 자동매매 봇 기반 + 주문유실 방지(WAL reconcile)
-status: in_progress
+status: done
 started: 2026-06-14
 updated: 2026-07-29
 ---
@@ -35,11 +35,17 @@ updated: 2026-07-29
 
 # Next
 
+**이 plan 은 done** — PR #63 이 2026-07-29 main 에 squash merge(`49573b3`) 되고 worktree·브랜치를 정리했다. 후속은 전부 GitHub 이슈로 이관됐다: 실거래 선행 **#67**(reconcile 실패 은폐)·통합 테스트·실계정 스모크, 그 외 **#65 #66 #68 #69 #70**. 새 작업은 이 plan 을 잇지 말고 해당 이슈에서 새 worktree 로 시작할 것.
+
+<details><summary>머지 시점 상태(참고)</summary>
+
 **완료: 실거래 블로커 해소(D24) + code-review fix loop 1회차** — 552 테스트 0 실패, `# Acceptance` 전 항목 증거 확보. 다음 후보:
 
 - **(b) 실계정 모의투자 스모크** — `KisPaperSmokeTest`(env-gated). 사용자 KIS 모의 자격증명 필요. 미확정 스펙(필수 query 파라미터·tr_cont·ODNO 자릿수·rate limit 실값) 실측 경로.
 - ~~**(c) force push + PR**~~ — **완료**(2026-07-29). `--force-with-lease` 로 push(구 tip `2be1fe3` → `700d69a`), **PR #63** 생성. pre-push codex 리뷰는 워크스페이스 크레딧 소진으로 `CODEX_SKIP=1` 우회(같은 diff 의 code-review 는 이미 반영).
 - **(d) 데이터 계층 분리 설계**(D23) — KRX 원천 append-only 적재. `stock-quant-strategy` Phase 0 의 생존편향 해결 경로.
+
+</details>
 
 **Phase 2 백로그 (후속 GitHub Issue 로 분리)**
 
