@@ -56,10 +56,22 @@ Leaves an audit line in `.git/codex-pre-push/bypass.log`. Avoid in normal flow.
 The policy explicitly forbids `--no-verify` — use `CODEX_SKIP` instead so the
 bypass is visible.
 
-### Serialization & timeout (codegraph MCP hang 재발방지)
+### codegraph MCP 비활성화 (#60)
 
-여러 worktree 세션이 동시에 push 하면 codex review 가 codegraph MCP(`codegraph_explore`)에서
-경합해 **무한 hang** 할 수 있다(검증됨: codex 단독 exec 는 정상, review 만 hang). 이를 막기 위해:
+codex 호출에 `-c mcp_servers.codegraph.enabled=false` 를 준다. 이유:
+
+codex 는 리뷰마다 `codegraph serve --mcp` 를 새로 띄우는데, **Claude Code 세션도 각자 하나씩 띄운다**.
+인스턴스가 여러 개면 `codegraph_explore` 가 응답하지 않아 리뷰가 통째로 타임아웃한다(#45 에서 실측한
+근본원인이 "다중 세션 경합"이다). 아래 lock 은 **hook 끼리만** 직렬화하므로, 세션이 상시 띄워둔 서버와의
+경합은 막지 못한다 — 세션을 2개 이상 열어두면 재현된다.
+
+- codegraph 없이도 리뷰는 P0/P1 을 잡는다(실측: 같은 커밋 범위에서 P1 2건 포함 8건 검출).
+- **전역 `~/.codex/config.toml` 은 건드리지 않는다** — 다른 프로젝트·대화형 codex 의 codegraph 는 유지된다.
+- 근본 원인인 codegraph 다중 인스턴스 경합은 upstream 문제다. 거기서 고쳐지면 이 플래그를 되돌린다.
+
+### Serialization & timeout
+
+codex 동시 실행의 자원 경합을 막기 위해(원래는 codegraph 경합 방지 목적으로 도입 — #45):
 
 - **직렬화**: codex review 를 머신 단위 lock(`$TMPDIR/codex-pre-push.lock`)으로 순차 실행 —
   다른 세션 review 중이면 대기(최대 `CODEX_LOCK_WAIT`). docs-only·`CODEX_SKIP` 은 lock 전 bypass(불필요 대기 없음).
