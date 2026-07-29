@@ -1,18 +1,25 @@
 package com.trading.bot.api
 
 import com.trading.bot.engine.UserTradingManager
+import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.persistence.UserRepository
+import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.reactor.mono
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.web.server.ResponseStatusException
+import reactor.core.publisher.Mono
 
 class TradingControllerTest {
 
@@ -25,7 +32,8 @@ class TradingControllerTest {
     private val userRepo = mockk<UserRepository>()
     private val validators = RequestValidators()
     private val secrets = mockk<UserSecretsService>()
-    private val controller = TradingController(manager, userRepo, validators, secrets)
+    private val kisClientFactory = mockk<KisClientFactory>(relaxed = true)
+    private val controller = TradingController(manager, userRepo, validators, secrets, kisClientFactory)
 
     private fun <T : Any> authed(block: suspend () -> T): T =
         mono { block() }.contextWrite(authContext).block()!!
@@ -79,5 +87,49 @@ class TradingControllerTest {
         val result = authed { controller.changeStrategy(StrategyRequest("volatility_breakout")) }
         assertEquals("changed", result["status"])
         assertEquals("volatility_breakout", result["strategy"])
+    }
+
+    @Test
+    fun `setKisKeys encrypts, saves and invalidates client cache`() {
+        every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
+        every { secrets.encryptKisKeys(any(), any()) } returns ("enc:ak" to "enc:sk")
+        val saved = slot<UserEntity>()
+        every { userRepo.save(capture(saved)) } answers { Mono.just(saved.captured) }
+
+        val result = authed {
+            controller.setKisKeys(
+                KisKeysRequest(
+                    appKey = "PSAPPKEY1234567890ABCDEF",
+                    appSecret = "SECRET1234567890ABCDEFGHIJKLMNOPQRSTUVWX",
+                    cano = "12345678", acntPrdtCd = "01", paper = true,
+                ),
+            )
+        }
+
+        assertEquals("saved", result["status"])
+        // 평문이 아니라 암호화된 값이 저장돼야 한다.
+        assertEquals("enc:ak", saved.captured.kisAppKey)
+        assertEquals("enc:sk", saved.captured.kisAppSecret)
+        assertEquals("12345678", saved.captured.kisCano)
+        assertTrue(saved.captured.kisPaper)
+        verify { kisClientFactory.invalidate(userId) }
+    }
+
+    @Test
+    fun `setKisKeys rejects malformed cano with 400`() {
+        every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed {
+                controller.setKisKeys(
+                    KisKeysRequest(
+                        appKey = "PSAPPKEY1234567890ABCDEF",
+                        appSecret = "SECRET1234567890ABCDEFGHIJKLMNOPQRSTUVWX",
+                        cano = "123", acntPrdtCd = "01",
+                    ),
+                )
+            }
+        }
+        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
     }
 }

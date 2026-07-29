@@ -82,7 +82,7 @@ class UserTradingManagerTest {
     fun `restore retries when durable state load fails instead of stranding an unstarted engine`() = runTest {
         // loadStates 가 터지면 engines 에는 생성만 되고 기동 안 된 엔진이 남는다. 그 엔진의 존재만으로
         // 다음 시도가 "이미 복원됨" 으로 판단하면 그 유저는 프로세스 수명 내내 영구 미복원(무증상)이 된다.
-        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { mockEngine.isRunning() } returns false
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down") andThen emptyMap()
@@ -114,7 +114,7 @@ class UserTradingManagerTest {
     fun `restore skips a user whose engine is already running`() = runTest {
         engines()[1L] = mockEngine // 사용자가 이미 start 로 개입한 상태 시뮬
         every { mockEngine.isRunning() } returns true
-        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
 
         manager.restoreAllRunningBots()
 
@@ -127,7 +127,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore retries transient DB failure then succeeds`() = runTest {
-        every { botStateRepository.findByRunningTrue() } returnsMany listOf(
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returnsMany listOf(
             Flux.error(RuntimeException("db temporarily down")),
             Flux.just(runningState(1L)),
         )
@@ -141,7 +141,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore logs error after exhausting retries`() = runTest {
-        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
         every { userRepository.findById(1L) } returns Mono.error(RuntimeException("user db down"))
 
         val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
@@ -178,7 +178,7 @@ class UserTradingManagerTest {
     fun `restore does not start engines once shutting down`() = runTest {
         // SmartLifecycle.stop 이 shuttingDown 을 세우면 이후 restore 는 신규 엔진을 기동하지 않는다
         // (backoff 중 SIGTERM → shutdown 후 엔진 기동으로 아무도 stop 안 하는 유령 엔진 방지, M5).
-        every { botStateRepository.findByRunningTrue() } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
 
         manager.stop() // shuttingDown = true
@@ -201,7 +201,7 @@ class UserTradingManagerTest {
     @Test
     fun `restore logs error when all DB queries fail`() = runTest {
         // 모든 attempt 에서 bot state 조회가 실패하면 복원 0건 — pendingUserIds 는 비어 있어도 alert 해야 한다(M2).
-        every { botStateRepository.findByRunningTrue() } returns Flux.error(RuntimeException("db down"))
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.error(RuntimeException("db down"))
 
         val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }

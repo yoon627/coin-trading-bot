@@ -133,7 +133,7 @@ class UserTradingManager(
         var lastQueryFailed = false
         for (attempt in 1..RESTORE_MAX_ATTEMPTS) {
             val states = try {
-                botStateRepository.findByRunningTrue().collectList().awaitSingle()
+                botStateRepository.findByRunningTrueAndExchange(EXCHANGE).collectList().awaitSingle()
             } catch (e: Exception) {
                 log.warn("restore: bot state 조회 실패 (attempt {}/{}): {}", attempt, RESTORE_MAX_ATTEMPTS, e.message)
                 lastQueryFailed = true
@@ -267,7 +267,7 @@ class UserTradingManager(
         userStrategies[userId] = strategyName
         engines[userId]?.setStrategy(strategyName)
 
-        val existing = botStateRepository.findByUserId(userId).awaitSingleOrNull()
+        val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
         if (existing != null) {
             botStateRepository.save(existing.copy(strategy = strategyName, updatedAt = LocalDateTime.now())).awaitSingle()
         }
@@ -337,7 +337,7 @@ class UserTradingManager(
 
     private suspend fun saveState(userId: Long, running: Boolean, strategy: String, tickers: List<String>) {
         try {
-            val existing = botStateRepository.findByUserId(userId).awaitSingleOrNull()
+            val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
             val tickersStr = tickers.joinToString(",").ifEmpty {
                 existing?.tickers ?: tradingProperties.tickers
             }
@@ -347,7 +347,7 @@ class UserTradingManager(
                 ).awaitSingle()
             } else {
                 botStateRepository.save(
-                    BotStateEntity(userId = userId, running = running, strategy = strategy, tickers = tickersStr)
+                    BotStateEntity(userId = userId, exchange = EXCHANGE, running = running, strategy = strategy, tickers = tickersStr)
                 ).awaitSingle()
             }
         } catch (e: Exception) {
@@ -358,5 +358,8 @@ class UserTradingManager(
     companion object {
         private const val RESTORE_MAX_ATTEMPTS = 5
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
+
+        // bot_state 는 (user_id, exchange) 별 1행 — 이 매니저는 Upbit 행만 다룬다(KIS 는 StockUserTradingManager).
+        private const val EXCHANGE = "UPBIT"
     }
 }

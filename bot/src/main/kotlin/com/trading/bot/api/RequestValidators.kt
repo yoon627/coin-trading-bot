@@ -42,6 +42,49 @@ class RequestValidators {
         return normalized
     }
 
+    // KIS appkey/appsecret 은 Upbit 와 길이·문자셋이 달라(특히 appsecret ~180자 + base64류) 별도 검증.
+    // 출력 가능한 ASCII(0x21~0x7E)만 허용 — 정상 KIS 키(base64류)는 통과하고, 비ASCII/공백은 거부.
+    // ASCII 고정으로 char 수 == byte 수가 보장돼 암호화 후 길이가 kis_app_secret VARCHAR(512) 안에 든다.
+    fun normalizeKisAppKey(value: String): String = normalizeKisSecretLike(value, "kisAppKey", 16, 256)
+
+    fun normalizeKisAppSecret(value: String): String = normalizeKisSecretLike(value, "kisAppSecret", 16, 256)
+
+    private fun normalizeKisSecretLike(value: String, field: String, min: Int, max: Int): String {
+        val normalized = value.trim()
+        if (normalized.isBlank()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$field is required")
+        }
+        if (normalized.length !in min..max || normalized.any { it.code !in 0x21..0x7E }) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid $field format")
+        }
+        return normalized
+    }
+
+    /** KIS 국내주식 종목코드 — 6자리 숫자(PDNO). 해외(알파벳)는 Phase 2. */
+    fun normalizeKisSymbol(value: String): String {
+        val normalized = value.trim()
+        if (!KIS_SYMBOL_REGEX.matches(normalized)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "KIS symbol must be 6 digits")
+        }
+        return normalized
+    }
+
+    fun normalizeKisCano(value: String): String {
+        val normalized = value.trim()
+        if (!KIS_CANO_REGEX.matches(normalized)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "cano must be 8 digits")
+        }
+        return normalized
+    }
+
+    fun normalizeKisAcntPrdtCd(value: String): String {
+        val normalized = value.trim()
+        if (!KIS_PRDT_REGEX.matches(normalized)) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "acntPrdtCd must be 2 digits")
+        }
+        return normalized
+    }
+
     fun normalizeMarket(market: String): String {
         val normalized = market.trim().uppercase()
         if (!MARKET_REGEX.matches(normalized)) {
@@ -117,6 +160,9 @@ class RequestValidators {
     companion object {
         private val USERNAME_REGEX = Regex("^[a-z0-9_-]{3,30}$")
         private val API_KEY_REGEX = Regex("^[A-Za-z0-9_-]+$")
+        private val KIS_CANO_REGEX = Regex("^\\d{8}$")
+        private val KIS_PRDT_REGEX = Regex("^\\d{2}$")
+        private val KIS_SYMBOL_REGEX = Regex("^\\d{6}$")
         private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
         private const val MAX_ORDER_AMOUNT = 10_000_000.0  // 1000만원
