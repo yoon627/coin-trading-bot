@@ -1,9 +1,13 @@
 ---
-title: migrate-to-oci — AWS EC2 → Oracle Cloud 서울 Always Free 이전
+title: migrate-to-oci — AWS EC2 탈출 (OCI 시도 → Vultr 서울 2GB 확정)
 status: in_progress
 started: 2026-07-28
-updated: 2026-07-28
+updated: 2026-07-30
 ---
+
+> **방향 전환(2026-07-30)**: OCI 가입이 홈 리전 문제로 막혀(아래 Decisions) **Vultr 서울 2GB**로
+> 목표를 변경했다. 브랜치·slug 은 `migrate-to-oci` 그대로 유지한다(§10 rename 금지).
+> `deploy/oci/` 는 완성 상태로 보존 — 나중에 OCI 서울 계정이 생기면 그대로 쓸 수 있다.
 
 # Goal
 
@@ -42,24 +46,54 @@ updated: 2026-07-28
   `set -e` 와 만나 launch 전 종료, destroy 전 최종 백업 누락 등. 수정 후 신규 CLI 명령 13종
   실존 재확인 + 21개 항목 반영 grep 체크 PASS + shellcheck error 0 + 전체 정적 검증 PASS.
   simplify 체크: 제거 대상 없음(AWS 판과의 중복은 plan 에 기록된 의도적 결정, sunset 조건 있음).
+- 2026-07-30: OCI 가입 2회 실패(이메일 인증 → 홈 리전 춘천 확정)로 **Vultr 서울 2GB 로 방향 전환**.
+  전환 근거로 운영 EC2 실사용량을 실측(818MiB — 4GB 과잉 확인)하고 Azure 총액도 재조사해 탈락 확정.
+  `deploy/vultr/` 신규 작성 — deploy.sh(REST API 프로비저닝·방화벽 멱등 교체·`mem` 커맨드 추가),
+  backup.sh(S3 호환 엔드포인트로 AWS S3/Vultr/R2 지원), compose(2GB 예산 1472m), .env.example, README
+  (cutover·2단계 롤백 포함). 루트 README·PROJECT_ANALYSIS 동기화.
+  **Vultr API 필드·타입은 공식 govultr SDK 소스에서 확정**(`Port string`·`SubnetSize int`·
+  `SSHKeys []string`·`OsID int` 등) — 추측 배제. 정적 검증 8개 항목 PASS(문법·shellcheck error 0·
+  bash 3.2 호환·서브커맨드 9종·API 필드·안전장치 11종·메모리 합계·gitignore) + `docker compose config` OK.
+  ⚠️ **codex 코드 리뷰 미실시 — 크레딧 소진**("workspace is out of credits"). CLAUDE.md §9 규약대로
+  생략하고 자체 검토로 대체(OCI 판 codex 지적 15항목을 체크리스트로 재적용). 자체 검토에서
+  방화벽 규칙 삭제 실패를 `|| true` 로 삼키던 것을 경고로 승격, aws 호출을 `s3()` 헬퍼로 모아
+  빈 배열(`set -u`)·stdin 삼킴을 한 곳에서 차단. `(( failed > 0 )) && ...` 의 set -e 조기종료
+  의심은 **실제 실행으로 오탐 확인**(exit=0) 후 수정하지 않음.
 
 # Next
 
-이번 작업(스크립트 + 정적 검증)은 완료. 아래는 **사용자 계정 준비 후의 후속 작업**이다.
+`deploy/vultr/` 작성 + 정적 검증까지 완료. 아래는 **사용자 계정 준비 후의 후속 작업**이다.
 
-1. OCI 계정 생성 — 홈 리전을 반드시 `South Korea Central (Seoul)` 로(춘천이면 A1 불가, 사후 변경 불가).
-   `oci setup config` 로 API 키 설정.
-2. (선택) codex 재리뷰 2회차 — 수정 폭이 컸으므로 원하면 실행.
-3. `deploy/oci/.env` 작성 — `APP_ENCRYPTION_SECRET` 은 AWS 값 그대로 복사(신규 생성 금지).
-   `UPBIT_*` 는 cutover 전까지 비워둘 것.
-4. `./deploy/oci/deploy.sh setup` → `deploy` 실행 검증(capacity 확보까지 재시도 필요할 수 있음).
-5. README 4절 cutover runbook 대로 데이터 이전 + 단일 실행 보장하에 거래 전환.
-6. 7~14일 안정화 후 AWS destroy(별도 승인).
+1. **Vultr 가입 + API 키 발급** — 콘솔 Account → API. ⚠️ 같은 화면 `Access Control` 에 현재
+   공인 IP 를 반드시 추가(안 하면 모든 API 호출이 401/403).
+2. `deploy/vultr/.env` 작성 — `VULTR_API_KEY` + `APP_ENCRYPTION_SECRET`(AWS 값 그대로 복사).
+   `UPBIT_*` 는 cutover 전까지 비움, `TRADING_AUTO_START=false`.
+3. `./deploy/vultr/deploy.sh setup` → `deploy` → **`mem` 으로 2GB 여유 확인**(설계값 검증).
+4. `deploy/vultr/README.md` 4절 cutover runbook 대로 데이터 이전 + 단일 실행 보장하에 거래 전환.
+5. 7~14일 안정화 후 AWS destroy(별도 승인). 그 전까지 AWS 는 **stop 상태로 유지**(EBS·EIP 요금만).
+6. (선택) 백업 설정 — 현재 AWS 에서도 미설정 상태다. S3 호환 버킷 + 전용 키로 활성화 검토.
 
 # Decisions
 
-- **대상 = Oracle Cloud 서울(ap-seoul-1) Always Free** (이유: $0, 12GB 로 사양 상승, 국내 리전이라
-  업비트 레이턴시·IP 이슈 최소). 차선책 Vultr 서울 $20/월 — 용량 확보 실패 반복 시 전환.
+- **최종 대상 = Vultr 서울(icn) `vc2-1c-2gb` $10/월 로 변경 (2026-07-30)**.
+  이유 3가지: ① OCI 가입이 두 번 막힘 — 1차 이메일 인증 실패, 2차는 가입 폼 기본값 때문에 홈 리전이
+  **춘천(YNY=ap-chuncheon-1)** 으로 확정됐고 춘천은 Ampere A1 생성 제외 리전이라 계획 자체가 불가.
+  홈 리전은 사후 변경 불가. ② **실측으로 4GB 가 과잉임이 확인됨** — 운영 59일차 EC2 에서
+  app 420MiB / postgres 380MiB / redis 3.4MiB / caddy 14MiB = **합계 818MiB**, 호스트 used 874MB,
+  load average 0.00. 2GB 로 충분. ③ Azure 는 총액 재조사 결과 AWS 보다 비쌈(아래).
+  → $39.29 → **$10/월(-75%)**.
+- **Azure 최종 탈락(2026-07-30 총액 재조사)**: Korea Central 기준 VM `B2als_v2` $34.16 +
+  Disk E6 LRS 64GB $5.43 + Standard Static IPv4 $3.65 = **$43.24/월(세금 별도)** 로 AWS($39.29 세금
+  포함)보다 비싸다. 무료 티어의 B1s 는 1GB 라 이 스택(실사용 818MiB + OS)이 안 들어간다.
+- **Oracle 도쿄 미채택**: A1 생성은 가능하지만 **업비트 API 의 해외 IP 허용 여부가 미검증**이라
+  실거래 봇에 얹기엔 위험이 크다(막히면 주문 불가로 전부 무의미). 서울이면 없는 리스크.
+- **아키텍처 전환 arm64 → x86_64**: Vultr `vc2` 는 x86_64 다(Ubuntu 이미지도 x64 만 제공).
+  GHCR 앱 이미지가 multi-arch(amd64+arm64)로 빌드되고 postgres/redis/caddy 도 공식 multi-arch 라
+  그대로 pull 된다. 별도 대응 불필요하나 이전 후 첫 기동에서 확인 대상.
+- **2GB 메모리 예산 재조정**: 실측(app 420·pg 380·redis 3.4·caddy 14 MiB) 기반으로 제한을 낮춘다.
+  AWS/OCI 판의 "AWS 와 동일 유지" 결정은 4GB 박스 전제였으므로 여기선 적용하지 않는다.
+- **(보류) Oracle Cloud 서울 Always Free** — 가입만 뚫리면 $0 에 12GB 라 여전히 최선이다.
+  `deploy/oci/` 를 지우지 않고 보존하는 이유. 나중에 서울 계정이 생기면 재검토.
 - **Azure 탈락** (이유: Retail Prices API 실측상 Korea Central 4GB 급이 AWS 보다 비쌈. B2als_v2
   $34.2/월 + 디스크·IP 별도, ARM 계열은 D2pls_v6 $59.1/월 뿐이고 B2pls_v2 미제공).
 - **`deploy/aws/` 유지** (이유: 롤백 경로). 단 아래 롤백 정의 변경에 따라 **AWS destroy 는 cutover 후
