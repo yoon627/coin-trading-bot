@@ -50,6 +50,12 @@ docker-compose.override.yml
 .env
 deploy/aws/.state
 deploy/aws/*.pem
+deploy/oci/.state
+deploy/oci/*.pem
+deploy/oci/*.pub
+deploy/vultr/.state
+deploy/vultr/*.pem
+deploy/vultr/*.pub
 
 ### OS ###
 .DS_Store

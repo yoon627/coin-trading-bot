@@ -1,0 +1,164 @@
+# Slim production stack for a single Vultr vc2-1c-2gb (1 vCPU x86_64, 2GB).
+# Only what the committed `bot` module actually needs: app + Postgres + Redis.
+# No Kafka / collector / monitoring (those modules are not committed).
+#
+# The app image is built+pushed by GitHub Actions (multi-arch) to GHCR; this file only pulls it.
+# arm64(AWS Graviton) → amd64(Vultr) 전환이지만 이미지가 multi-arch 라 그대로 pull 된다.
+# Postgres/Redis are NOT published to the host — only the app reaches them over the compose network.
+#
+# ── 2GB 예산 (AWS 4GB 판에서 하향) ──
+# 하향 근거는 추정이 아니라 **운영 59일차 EC2 실측**이다:
+#   app 420MiB / postgres 380MiB / redis 3.4MiB / caddy 14MiB = 합계 818MiB (host used 874MB)
+# 제한: caddy 64m + app 832m + postgres 512m + redis 64m = 1472m.
+#   - postgres 는 실측이 380MiB 로 가장 빡빡해 **512m 를 그대로 유지**한다(검증된 값 보존).
+#   - app 은 실사용 420MiB 대비 832m 로 약 2배 여유. JVM heap 은 MaxRAMPercentage=70% → 약 582m.
+#   - redis 는 실사용이 3.4MiB 뿐이라 64m 로 충분(maxmemory 도 함께 하향).
+# 2048MB 중 1472m 사용 + OS/docker ≈ 250MB → 여유 약 320MB.
+# ⚠️ 이 예산은 실측 기반 설계값이다. 배포 후 `docker stats` 로 재측정해 확인할 것.
+
+services:
+  # TLS 종단. 80 으로 Let's Encrypt 인증서를 받아 443 에서 HTTPS 를 종단하고
+  # 평문 HTTP 로 내부 app:8080 에 프록시한다. (왜 필요? prod 프로파일이 항상 Secure
+  # 쿠키를 발급하는데 평문 HTTP 에선 브라우저가 저장하지 않아 로그인이 안 되던 문제 해결)
+  caddy:
+    image: caddy:2-alpine
+    pull_policy: always
+    ports:
+      - "80:80"                # ACME HTTP-01 challenge + HTTP→HTTPS 리다이렉트 (전세계 개방 필요)
+      - "443:443"              # HTTPS 대시보드 / REST / SSE
+    environment:
+      # 예: 141-164-1-2.sslip.io. deploy.sh 가 인스턴스 공인 IP 로 자동 생성해 .env 에 주입.
+      APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required (e.g. 141-164-1-2.sslip.io)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # 발급된 TLS 인증서 영속 — 재시작 시 재발급(LE rate limit) 방지에 필수
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_started   # healthy 대기 안 함 — app 미준비여도 Caddy 는 떠서 ACME·502 처리
+    restart: unless-stopped
+    # 실측 27MiB(TLS 발급 직후). 64m 는 42% 로 여유가 빠듯해 96m 로 올렸다 —
+    # AWS(4GB) 판은 128m 였고, 인증서 갱신 때 순간적으로 더 쓸 수 있다.
+    mem_limit: 96m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  app:
+    image: ghcr.io/yoon627/coin-trading-bot:${APP_VERSION:-latest}
+    pull_policy: always
+    expose:
+      - "8080"                 # Caddy(compose 내부망)만 접근 — 호스트에 직접 노출하지 않음
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=70.0"
+      UPBIT_ACCESS_KEY: ${UPBIT_ACCESS_KEY:-}
+      UPBIT_SECRET_KEY: ${UPBIT_SECRET_KEY:-}
+      TRADING_TICKERS: ${TRADING_TICKERS:-KRW-BTC}
+      TRADING_STRATEGY: ${TRADING_STRATEGY:-combined}
+      TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
+      TRADING_TAKE_PROFIT_PCT: ${TRADING_TAKE_PROFIT_PCT:-2.0}
+      TRADING_MAX_LOSS_PCT: ${TRADING_MAX_LOSS_PCT:-5.0}
+      TRADING_TRAILING_STOP_PCT: ${TRADING_TRAILING_STOP_PCT:-2.0}
+      TRADING_TRAILING_ARM_PCT: ${TRADING_TRAILING_ARM_PCT:-0.0}
+      TRADING_MAX_HOLD_DAYS: ${TRADING_MAX_HOLD_DAYS:-1}
+      TRADING_CHART_EXIT_ENABLED: ${TRADING_CHART_EXIT_ENABLED:-false}
+      TRADING_ROUND_TRIP_FEE_RATE: ${TRADING_ROUND_TRIP_FEE_RATE:-0.001}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      DISCORD_ERROR_ALERT_ENABLED: ${DISCORD_ERROR_ALERT_ENABLED:-false}
+      DISCORD_ERROR_WEBHOOK_URL: ${DISCORD_ERROR_WEBHOOK_URL:-}
+      REDIS_HOST: redis
+      REDIS_ENABLED: "true"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: trading
+      DB_USER: trading
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (prod fails to start without it)}
+      APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:?APP_ENCRYPTION_SECRET is required and must stay stable}
+      # TLS 종단(Caddy/Nginx + Let's Encrypt) 없이 HTTP 만으로 prod 를 잠깐 운영할 때 true.
+      # JWT 쿠키가 평문 HTTP 로 전송됨 — 가능한 한 빨리 TLS 도입 후 false 로 되돌리세요.
+      APP_AUTH_COOKIE_FORCE_INSECURE: ${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
+      # SecurityConfig CORS 가 https://$APP_DOMAIN 을 allowedOrigins 에 추가(없으면 prod 도메인 fetch 가 403).
+      APP_DOMAIN: ${APP_DOMAIN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # graceful shutdown: SIGTERM 후 진행 중이던 tick(주문 후처리 포함)이 끝나도록 대기.
+    # 앱의 spring.lifecycle.timeout-per-shutdown-phase(30s)보다 넉넉히 크게 잡아 강제 kill(SIGKILL)을 피한다.
+    stop_grace_period: 40s
+    mem_limit: 832m
+    mem_reservation: 640m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: trading
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    expose:
+      - "5432"                 # internal only — never published to the host
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=50
+      - -c
+      - effective_cache_size=256MB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    expose:
+      - "6379"                 # internal only — never published to the host
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:

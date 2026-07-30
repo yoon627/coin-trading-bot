@@ -15,7 +15,7 @@
 | **암호화** | AES-GCM 256-bit (사용자별 Upbit/KIS API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
-| **배포** | AWS EC2 t4g.medium (arm64, 4GB) |
+| **배포** | AWS EC2 t4g.medium (arm64, 4GB) — 현행 / Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 이전 대상 / OCI A1.Flex (arm64, 12GB, Always Free) — 보류 |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
@@ -71,6 +71,8 @@ coin-trading-bot/
 │
 ├── docker-compose.yml               # 로컬 인프라 (app, postgres, redis)
 ├── deploy/aws/                      # AWS 배포 스크립트 + docker-compose.prod.yml
+├── deploy/oci/                      # OCI(Always Free) 배포 스크립트 + docker-compose.prod.yml
+├── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
 └── perf/                            # k6 부하 테스트
 ```
 
