@@ -12,12 +12,12 @@ import kotlin.math.sqrt
 // 디폴트는 라이브(TradingProperties)와 정합 — 직접 생성(스윕 등) 베이스라인이 라이브를 대표하도록 (#27).
 // parity 는 BacktestEngineTest 의 `config defaults match live trading defaults` 가 가드한다.
 data class BacktestConfig(
-    val takeProfitPct: Double = 2.0,
+    val takeProfitPct: Double = 5.0,
     val maxLossPct: Double = 5.0,
     val kValue: Double = 0.5,
     val feeRate: Double = 0.0005,
     val trailingStopPct: Double = 2.0,
-    val trailingArmPct: Double = 0.0,
+    val trailingArmPct: Double = 3.0,
     val maxHoldDays: Int = 1,
     val useMarketFilter: Boolean = false,
     val chartExitEnabled: Boolean = false,
