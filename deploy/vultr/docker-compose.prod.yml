@@ -37,7 +37,9 @@ services:
       app:
         condition: service_started   # healthy 대기 안 함 — app 미준비여도 Caddy 는 떠서 ACME·502 처리
     restart: unless-stopped
-    mem_limit: 64m
+    # 실측 27MiB(TLS 발급 직후). 64m 는 42% 로 여유가 빠듯해 96m 로 올렸다 —
+    # AWS(4GB) 판은 128m 였고, 인증서 갱신 때 순간적으로 더 쓸 수 있다.
+    mem_limit: 96m
     logging:
       driver: json-file
       options:

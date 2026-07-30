@@ -59,19 +59,37 @@ updated: 2026-07-30
   방화벽 규칙 삭제 실패를 `|| true` 로 삼키던 것을 경고로 승격, aws 호출을 `s3()` 헬퍼로 모아
   빈 배열(`set -u`)·stdin 삼킴을 한 곳에서 차단. `(( failed > 0 )) && ...` 의 set -e 조기종료
   의심은 **실제 실행으로 오탐 확인**(exit=0) 후 수정하지 않음.
+- 2026-07-30: **Vultr 실행 검증 + cutover 완료.** 인스턴스 `1063c481-…`(icn, vc2-1c-2gb),
+  IP `158.247.242.126`. setup → deploy → HTTPS(Let's Encrypt) 발급까지 1회 성공.
+  실행 중 발견·수정: 신규 스크립트에 **실행 권한 누락**(commit 30f7699), caddy 제한 64m→96m
+  (실측 27MiB 로 42% 였음).
+  **cutover**: 포지션 0건 확인 후 AWS app 정지 → 최종 덤프(8.9MB gz) → Vultr 복원 → 검증 →
+  Upbit 키 이전 → 거래 활성화. `Restored bot for user 4: strategy=combined,
+  tickers=[KRW-BTC,KRW-XRP,KRW-SOL,KRW-ETH]` 로그로 확인.
+  **복원 중 실패 2회와 원인**: ① 원격 명령에 `</dev/null` 을 붙여 `gzip -dc | psql` 파이프가 끊겨
+  psql 이 **빈 입력으로 exit 0** → "복원 완료" 로 오보고. 검증 쿼리도 같은 이유로 침묵.
+  ② Vultr 가 AWS 보다 최신 스키마(`trading_states`·`stock_*`)라 덤프의 `--clean` 이 `users_pkey`
+  FK 의존성에 막힘. 해결: `DROP SCHEMA public CASCADE` 후 AWS 상태를 그대로 복원하고 앱 기동 시
+  Flyway 가 v13→v18 **전진 적용**(5개). 이때 v14 가 `positions` 를 drop 하므로 **포지션 0 이었던
+  것이 결정적**이었다(보유 중이었다면 별도 이관 설계가 필요했음).
+  **2GB 예산 실측 검증**: 데이터 복원 후 app 289MiB/832m · postgres 87MiB/512m · caddy 27MiB/96m ·
+  redis 9MiB/64m, host used 818MB/1962MB(available 1143MB) + swap 5.4GB → 설계값 유효 확인.
+  ⚠️ 내 검증 오류 1건: flyway `max(version)` 을 **문자열 비교**해 양쪽 "9" 로 같다고 판단했으나
+  `"9" > "10"` 이었다(실제로는 Vultr 가 더 최신). 버전 비교는 숫자/행수로 해야 한다.
 
 # Next
 
-`deploy/vultr/` 작성 + 정적 검증까지 완료. 아래는 **사용자 계정 준비 후의 후속 작업**이다.
+**이전은 끝났다** — Vultr 에서 거래 운영 중, AWS 는 app 정지 상태. 남은 것:
 
-1. **Vultr 가입 + API 키 발급** — 콘솔 Account → API. ⚠️ 같은 화면 `Access Control` 에 현재
-   공인 IP 를 반드시 추가(안 하면 모든 API 호출이 401/403).
-2. `deploy/vultr/.env` 작성 — `VULTR_API_KEY` + `APP_ENCRYPTION_SECRET`(AWS 값 그대로 복사).
-   `UPBIT_*` 는 cutover 전까지 비움, `TRADING_AUTO_START=false`.
-3. `./deploy/vultr/deploy.sh setup` → `deploy` → **`mem` 으로 2GB 여유 확인**(설계값 검증).
-4. `deploy/vultr/README.md` 4절 cutover runbook 대로 데이터 이전 + 단일 실행 보장하에 거래 전환.
-5. 7~14일 안정화 후 AWS destroy(별도 승인). 그 전까지 AWS 는 **stop 상태로 유지**(EBS·EIP 요금만).
-6. (선택) 백업 설정 — 현재 AWS 에서도 미설정 상태다. S3 호환 버킷 + 전용 키로 활성화 검토.
+1. **업비트 private API 동작 최종 확인** — 잔고 조회·주문이 실제로 통하는지 로그 관찰 중.
+   ⚠️ 업비트 API 키에 허용 IP 제한을 쓴다면 `158.247.242.126` 등록 필요(미확인).
+2. **AWS 인스턴스 stop** — 현재 app 만 정지고 인스턴스는 running 이라 EC2 요금이 계속 나간다.
+   stop 하면 EBS·EIP 요금(월 $5 내외)만 남고 롤백은 start 로 즉시 가능. 롤백 창구로 7~14일 유지.
+3. **7~14일 안정화 후 AWS destroy** (별도 승인). destroy 전 최종 백업 확보.
+4. (선택) **백업 활성화** — AWS 에서도 미설정이었다. S3 호환 버킷 + 버킷 전용 키로 켜는 것을 권장.
+   `deploy/vultr/README.md` 6절 참조.
+5. `# Deferred` 의 운영 이슈 3건(429 rate limit · stale 시세 · 트레일링 dead) 별도 작업으로 처리.
+6. PR 생성 + 머지 (이 브랜치: deploy/oci + deploy/vultr + 문서).
 
 # Decisions
 
@@ -228,6 +246,25 @@ Report 에서 사용자 판단으로 넘긴다. 대신 수정 반영 여부를 2
   → **fix**(`accept-new` 로 변경) / Minor 2 홈리전 CLI 검증 → **fix** / Minor 3 비용 가드레일 → **fix**(문서)
 
 # Deferred
+
+**이번 cutover 중 발견한 범위 밖 운영 이슈 (이전과 무관 — AWS 에서도 동일하게 발생 중이었음)**
+
+- **업비트 캔들 수집 429 Too Many Requests** (심각도 중) — `MarketDataIngestionService` 가
+  NEAR/SUI/HBAR/AVAX/LINK/SHIB 등 다수 티커의 1분봉을 폴링하며 rate limit 을 초과해 반복 실패.
+  AWS·Vultr 양쪽 동일. 수집 대상 축소 또는 요청 간격·배치 조정 필요.
+  파일: `bot/.../marketdata/MarketDataIngestionService`(정확 경로 미확인).
+- **시세 저장소 stale 경고** (심각도 중) — AWS 에서 `Stale store price for KRW-BTC (age
+  849143658ms)` = 약 9.8일. 매 tick WS/REST 폴백으로 동작 중이라 기능은 유지되나 저장소 갱신
+  경로가 끊긴 상태. 429 와 같은 원인일 가능성 있음(같이 조사).
+- **트레일링 스톱이 사실상 dead** (심각도 중) — 앱이 부팅마다 경고:
+  `takeProfitPct(2.0) <= trailingStopPct(2.0) or trailingArmPct(0.0) — take-profit 이 선행해
+  트레일링이 사실상 도달 불가(dead)`. AWS `.env` 에 해당 값이 없어 앱 기본값으로 운영돼 왔다.
+  리스크 파라미터 재설정 필요(예: takeProfit 을 trailing 보다 크게, 또는 trailingArm 설정).
+- **AWS 배포가 `APP_VERSION=latest`** (심각도 하) — SHA 고정 없이 운영돼 무엇이 돌고 있는지
+  재현 불가했다. Vultr 판은 SHA 고정 + 자동 롤백을 쓴다.
+- **`users_bak_20260602` 테이블 잔존** (심각도 하) — 임시 백업 테이블 3행이 덤프에 포함돼 이전됨.
+
+**조사 관련**
 
 - Hetzner·Contabo 가격 미확인(JS 렌더링). 아시아 리전이 싱가포르뿐이라 제외했으나 Oracle·Vultr 모두
   막히면 재조사.
