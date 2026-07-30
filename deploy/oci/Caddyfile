@@ -1,0 +1,23 @@
+# Caddy reverse proxy — TLS 종단(Let's Encrypt 자동 발급/갱신).
+#
+# {$APP_DOMAIN} 은 compose 의 environment 로 주입(예: 13-125-170-147.sslip.io).
+# Caddy 가 80 포트 HTTP-01 challenge 로 인증서를 받고, 만료 전 자동 갱신한다
+# (→ SG 80 은 상시 개방 유지 필요). 발급된 인증서는 caddy_data 볼륨에 영속.
+# email 미지정 = 익명 ACME (자동 갱신엔 무방, 만료 메일 알림만 없음).
+{$APP_DOMAIN} {
+	# SSE(/api/prices/stream)만 압축에서 제외 — 압축이 끼면 flush 가 지연돼 이벤트가
+	# 묶인다. /api/prices/latest·/status 는 일반 JSON 이라 압축 대상에 포함한다.
+	@compressible {
+		not path /api/prices/stream
+	}
+	encode @compressible zstd gzip
+
+	# app 은 compose 내부망에서만 접근(호스트 미노출).
+	#  - flush_interval -1 : SSE(text/event-stream)를 버퍼링 없이 즉시 스트리밍.
+	#  - header_up X-Forwarded-For {remote_host} : client 위조 XFF 를 신뢰하지 않고
+	#    Caddy 가 본 실제 peer IP 로 덮어써 app 의 IP 기반 rate limit 이 동작하게 한다.
+	reverse_proxy app:8080 {
+		flush_interval -1
+		header_up X-Forwarded-For {remote_host}
+	}
+}

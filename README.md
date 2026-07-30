@@ -119,6 +119,8 @@ coin-trading-bot/
 │           ├── db/migration/     # Flyway V1~V18
 │           └── static/           # login.html, app.html, tide-app/
 ├── deploy/aws/                   # AWS 생성·배포 스크립트와 prod Compose
+├── deploy/oci/                   # Oracle Cloud(Always Free) 생성·배포 스크립트와 prod Compose
+├── deploy/vultr/                 # Vultr 서울 생성·배포 스크립트와 prod Compose (2GB 예산)
 ├── perf/                         # k6 시나리오(현재 API와 동기화 여부 확인 필요)
 └── docker-compose.yml            # 로컬/단일 호스트용 app, postgres, redis
 ```
@@ -231,6 +233,47 @@ cp deploy/aws/.env.example deploy/aws/.env
 중지·재시작은 `stop`/`start`, AWS 리소스 전체 삭제는 `destroy` 명령을 사용합니다. `destroy`는 과금 중단을 위한 파괴적 작업이므로 대상 리소스를 반드시 확인하세요.
 
 `APP_DOMAIN`이 비어 있으면 배포 스크립트가 EC2 공인 IP 기반 `sslip.io` 도메인을 만들고 Caddy가 Let's Encrypt 인증서를 발급합니다. 자세한 설정과 문제 해결은 [`deploy/aws/README.md`](deploy/aws/README.md)를 참고하세요.
+
+## Vultr 배포 (비용 절감 — 월 $10)
+
+AWS 실측 $39.29/월 대비 **-75%**. Vultr 서울(`icn`) `vc2-1c-2gb`(1 vCPU x86_64 / 2GB / 55GB SSD /
+2TB 대역폭)에 같은 스택을 올린다. 공인 IP·디스크·대역폭이 요금에 포함이라 별도 과금이 없다.
+
+2GB로 낮춘 근거는 **운영 59일차 EC2 실측**이다 — app 420MiB / postgres 380MiB / redis 3.4MiB /
+caddy 14MiB = 합계 818MiB, load average 0.00. 컨테이너 제한도 이에 맞춰 조정했다(합계 1472m).
+
+```bash
+install -m 600 deploy/vultr/.env.example deploy/vultr/.env
+# VULTR_API_KEY + APP_ENCRYPTION_SECRET(AWS 값 복사) 입력
+
+./deploy/vultr/deploy.sh setup    # SSH 키 + 방화벽 + 인스턴스
+./deploy/vultr/deploy.sh deploy
+./deploy/vultr/deploy.sh mem      # 2GB 여유 확인
+```
+
+운영 명령과 배포 동작(대상 SHA 고정, 헬스체크 실패 시 자동 롤백)은 AWS 판과 동일하고, 메모리
+실사용을 보는 `mem` 명령이 추가돼 있다. 계정 준비(⚠️ **API Access Control에 공인 IP 등록 필수**),
+AWS→Vultr **cutover 절차**, 거래 활성화 전/후로 나뉘는 **롤백**, S3 호환 백업 설정은
+[`deploy/vultr/README.md`](deploy/vultr/README.md)에 있다.
+
+## Oracle Cloud 배포 (비용 $0 대안)
+
+같은 스택을 OCI 서울 리전의 Always Free 인스턴스(`VM.Standard.A1.Flex`, 2 OCPU ARM / 12GB)에
+올리는 경로입니다. AWS 구성은 실측 **$39.29/월**(2026-06)인 반면 이쪽은 무료 한도 내에서 **$0**이고
+메모리는 4GB → 12GB로 늘어납니다. 컨테이너 메모리 제한은 AWS 판과 동일하게 유지합니다.
+
+```bash
+cp deploy/oci/.env.example deploy/oci/.env
+# ⚠️ APP_ENCRYPTION_SECRET은 자동 생성되지 않습니다 — 이전 시 AWS 값을 그대로 복사하세요.
+
+./deploy/oci/deploy.sh setup    # VCN/NSG + 버킷/IAM + A1.Flex 인스턴스 (capacity 재시도 포함)
+./deploy/oci/deploy.sh deploy
+```
+
+운영 명령(`status`/`logs`/`ssh`/`stop`/`start`/`destroy`)과 배포 동작(대상 SHA 고정, 헬스체크 실패 시
+자동 롤백)은 AWS 판과 동일합니다. 계정 준비 체크리스트(**홈 리전을 반드시 서울로** — 사후 변경 불가),
+AWS→OCI **cutover 절차**(같은 Upbit 계정에 두 봇이 붙지 않도록 하는 단일 실행 보장), 거래 활성화
+전/후로 나뉘는 **롤백 절차**, 무료 티어 리스크는 [`deploy/oci/README.md`](deploy/oci/README.md)에 있습니다.
 
 ## CI/CD
 
