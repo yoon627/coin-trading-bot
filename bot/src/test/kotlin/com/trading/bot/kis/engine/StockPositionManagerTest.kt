@@ -34,7 +34,12 @@ class StockPositionManagerTest {
     fun setup() {
         client = mockk()
         orderService = mockk()
-        pm = StockPositionManager(1L, "12345678", "01", client, orderService, TradingProperties())
+        pm = StockPositionManager(
+            1L, "12345678", "01", client, orderService,
+            // 이 클래스의 게이트 검증은 TP 2.0 / arm 0.0 경계로 쓰여 있다 — 기본값이 바뀌어도
+            // 검증 의도가 유지되도록 값을 명시한다.
+            TradingProperties(takeProfitPct = 2.0, trailingArmPct = 0.0),
+        )
     }
 
     private fun intent(status: StockOrderStatus, side: KisSide, qty: Long) = StockOrderIntentEntity(

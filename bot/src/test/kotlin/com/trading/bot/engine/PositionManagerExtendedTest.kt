@@ -441,11 +441,13 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `checkTrailingStop arm zero preserves current behavior on small profit`() {
-        // 기존 디폴트(arm=0): peak +2.5%, pnl +0.3%, drop 2.15% → 발동 (arm>trail 이면 막혔을 입력의 회귀 핀)
+        // arm=0: peak +2.5%, pnl +0.3%, drop 2.15% → 발동 (arm>trail 이면 막혔을 입력의 회귀 핀).
+        // arm 을 명시한다 — 기본값이 3.0 이 되면서 "디폴트가 0" 전제가 깨졌다.
+        val m = managerWithArm(0.0)
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
         state.updatePeakPrice(51250000.0) // +2.5%
-        assertTrue(manager.checkTrailingStop(state, 50150000.0)) // drop 2.15%, pnl +0.3%
+        assertTrue(m.checkTrailingStop(state, 50150000.0)) // drop 2.15%, pnl +0.3%
     }
 
     @Test
@@ -897,7 +899,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `exit gates stay gross while record is net`() = runTest {
         // 이 PR 의 핵심 불변식: 청산 게이트는 gross(행동 불변), 기록만 net.
-        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L) // takeProfitPct 2.0
+        val mgr = PositionManager(upbitClient, TradingProperties(takeProfitPct = 2.0), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.001", avgBuyPrice = "100000")
         )
