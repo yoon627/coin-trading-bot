@@ -247,10 +247,9 @@ class TradingEngine(
             // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
             if (state.pendingBuyUuid != null) {
-                val reconciled = positionManager.reconcilePendingBuy(ticker, state, currentPrice)
-                if (reconciled != null) {
+                // 체결이 확정되면 PositionManager 가 상태 전이와 감사 기록을 원자 커밋하고 알림까지 끝낸다(#52).
+                if (positionManager.reconcilePendingBuy(ticker, state, currentPrice) != null) {
                     // 매수 확정 tick 은 일반 buy 경로와 동일하게 종료(막 산 포지션에 같은 tick 손절·익절 평가 방지).
-                    onTrade(reconciled)
                     return
                 }
                 if (state.pendingBuyUuid != null) return // 아직 미해소 — 이 tick 매수/매도 평가 skip
@@ -259,11 +258,7 @@ class TradingEngine(
             // 매도판 H8: 미해소 매도 주문(placeOrder 성공 후 체결확인 실패/미확정분)이 있으면 매도/매수 평가 전에 reconcile.
             // 확정되면 청산 기록 후 종료, 미해소면 이 tick 평가 skip(같은 포지션에 이중 매도 주문 방지).
             if (state.pendingSellUuid != null) {
-                val reconciled = positionManager.reconcilePendingSell(ticker, state, currentPrice)
-                if (reconciled != null) {
-                    onTrade(reconciled)
-                    return
-                }
+                if (positionManager.reconcilePendingSell(ticker, state, currentPrice) != null) return
                 if (state.pendingSellUuid != null) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
             }
 
@@ -272,13 +267,7 @@ class TradingEngine(
                 // 이미 발동했어야 할 청산이 안 걸린다. 갱신된 tick 에만 flush(상승 시에만 true).
                 if (state.updatePeakPrice(currentPrice)) positionManager.persistState(state)
                 val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
-                if (reason != null) {
-                    val sellRecord = positionManager.sell(ticker, state, currentPrice, reason)
-                    if (sellRecord != null) {
-                        onTrade(sellRecord)
-                        return
-                    }
-                }
+                if (reason != null && positionManager.sell(ticker, state, currentPrice, reason) != null) return
             }
 
             // 당일 1회 진입: 이미 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
@@ -295,10 +284,7 @@ class TradingEngine(
                 strategy.shouldBuy(candles, currentPrice, tradingProperties)
             }
             if (shouldBuy) {
-                val buyRecord = positionManager.buy(ticker, state, currentPrice, strategy.name)
-                if (buyRecord != null) {
-                    onTrade(buyRecord)
-                }
+                positionManager.buy(ticker, state, currentPrice, strategy.name)
             }
         } catch (e: CancellationException) {
             throw e // 취소 전파(runLoop 와 동일 이유 — 삼키면 loop 가 계속 돌아 join 지연·오탐 ERROR).
@@ -384,15 +370,4 @@ class TradingEngine(
         return if (storeCandles != null && storeCandles.size >= MIN_DAILY_CANDLES) storeCandles else null
     }
 
-    // 체결·상태는 이미 반영됐는데 취소로 이 기록이 스킵되면 TradeRecord·Discord 감사가 유실된다(M1). NonCancellable 로
-    // 완주를 보장한다. 단 pending 해소는 이 호출보다 먼저 durable 에 커밋되므로, 여기서 예외가 나면
-    // reconcile 이 재시도할 근거가 없어 그 기록은 유실된다 — 상태 전이와 감사 기록의 원자화는 별도 작업.
-    private suspend fun onTrade(record: TradeRecord) = withContext(NonCancellable) {
-        tradeExecutionService.saveAndNotify(
-            record = record.copy(userId = userId),
-            client = upbitClient,
-            username = username,
-            discordWebhookUrl = discordWebhookUrl,
-        )
-    }
 }

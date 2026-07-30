@@ -318,7 +318,19 @@ class UserTradingManager(
 
     internal fun createEngine(user: UserEntity): TradingEngine {
         val client = createUpbitClient(user)
-        val positionManager = PositionManager(client, tradingProperties, tradingStateService, user.id!!)
+        // #52: 체결 확정 시 상태 전이 저장과 감사 기록을 한 트랜잭션으로 커밋하고, 커밋 후에만 알림한다.
+        val positionManager = PositionManager(
+            client, tradingProperties, tradingStateService, user.id!!,
+            commitFill = { persistState, record ->
+                tradeExecutionService.commitFill(
+                    persistState = persistState,
+                    record = record,
+                    client = client,
+                    username = user.username,
+                    discordWebhookUrl = user.discordWebhookUrl,
+                )
+            },
+        )
         val dailyResetManager = DailyResetManager(tradingProperties)
 
         return TradingEngine(

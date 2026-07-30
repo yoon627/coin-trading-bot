@@ -164,14 +164,14 @@ class TradeExecutionService(
     }
 
     /**
-     * TradingEngine에서 사용 - 이미 만들어진 TradeRecord를 저장 + Discord 알림
+     * 감사 기록 저장만 수행 — **호출자가 연 트랜잭션에 참여**한다(자체 트랜잭션을 열지 않음).
+     *
+     * 엔진 체결 경로는 `trading_states` pending 해소와 이 저장을 한 트랜잭션으로 묶어야 한다(#52).
+     * 따로 커밋하면 감사 저장이 실패했을 때 재시도 근거(pending)가 이미 사라져 기록이 영구 유실된다.
+     *
+     * @return 실제로 기록했으면 true, 이미 기록된 주문이라 건너뛰었으면 false(멱등).
      */
-    suspend fun saveAndNotify(
-        record: TradeRecord,
-        client: UpbitClient,
-        username: String?,
-        discordWebhookUrl: String?,
-    ) {
+    suspend fun saveAudit(record: TradeRecord): Boolean {
         val userId = record.userId ?: 0
         // #20 멱등: 재시작 후 같은 주문 uuid 를 다시 reconcile 해도 이중 기록/알림하지 않게 skip.
         val orderId = record.exchangeOrderId
@@ -179,30 +179,96 @@ class TradeExecutionService(
             tradeExecutionRepository.existsByUserIdAndExchangeOrderId(userId, orderId).awaitSingle()
         ) {
             log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", userId, record.ticker, orderId)
-            return
+            return false
         }
-        val executionEntity = TradeExecutionEntity(
-            userId = userId,
-            exchange = "UPBIT",
-            market = record.ticker,
-            side = record.side.name,
-            price = record.price,
-            volume = record.volume,
-            totalAmount = record.totalAmount,
-            pnlPercent = record.pnlPercent,
-            reason = record.reason,
-            strategy = record.strategy,
-            exchangeOrderId = record.exchangeOrderId,
-        )
-        // trade_records 와 trade_executions 를 한 트랜잭션으로 묶어 한쪽만 남는 audit 불일치를 방지.
-        // (R2DBC suspend 에선 @Transactional 대신 TransactionalOperator 사용)
-        try {
+        tradeRecordRepository.save(record)
+        tradeExecutionRepository.save(
+            TradeExecutionEntity(
+                userId = userId,
+                exchange = "UPBIT",
+                market = record.ticker,
+                side = record.side.name,
+                price = record.price,
+                volume = record.volume,
+                totalAmount = record.totalAmount,
+                pnlPercent = record.pnlPercent,
+                reason = record.reason,
+                strategy = record.strategy,
+                exchangeOrderId = record.exchangeOrderId,
+            )
+        ).awaitSingle()
+        return true
+    }
+
+    /**
+     * 커밋 후 알림. 잔고 조회·Discord 발송은 외부 IO 라 트랜잭션 밖에서 수행한다.
+     * 여기서 실패해도 이미 커밋된 거래 기록은 되돌리지 않는다(알림은 감사 기록의 부속이다).
+     */
+    suspend fun notifyTrade(
+        record: TradeRecord,
+        client: UpbitClient,
+        username: String?,
+        discordWebhookUrl: String?,
+    ) {
+        val krwBalance = try {
+            client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
+        } catch (_: Exception) {
+            null
+        }
+        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
+    }
+
+    /**
+     * 엔진 체결 경로용 — **상태 전이 저장과 감사 기록을 한 트랜잭션으로 커밋**하고, 성공 후에만 알림한다(#52).
+     *
+     * 이 원자화가 없으면 pending 해소가 먼저 커밋돼, 감사 저장이 transient 실패했을 때 재시도 근거가
+     * 사라진 채 기록만 영구 유실된다(현금흐름은 발생했는데 거래·손익 기록이 없다).
+     *
+     * 실패 시 예외를 그대로 올린다 — 호출자는 **메모리 상태 전이를 적용하지 않아야** 다음 tick reconcile 이
+     * 재시도할 수 있다. 알림은 커밋 후 외부 IO 라 실패해도 거래 기록을 되돌리지 않는다.
+     *
+     * @param persistState 트랜잭션 안에서 실행될 상태 저장(전이가 반영된 사본을 upsert)
+     */
+    suspend fun commitFill(
+        persistState: suspend () -> Unit,
+        record: TradeRecord,
+        client: UpbitClient,
+        username: String?,
+        discordWebhookUrl: String?,
+    ) {
+        val recorded = try {
             transactionalOperator.transactional(
                 mono {
-                    tradeRecordRepository.save(record)
-                    tradeExecutionRepository.save(executionEntity).awaitSingle()
+                    persistState()
+                    saveAudit(record)
                 }
             ).awaitSingle()
+        } catch (e: Exception) {
+            log.error(
+                "Fill commit failed (rolled back — pending kept for reconcile): userId={}, market={}, side={}",
+                record.userId, record.ticker, record.side, e,
+            )
+            throw e
+        }
+        // 멱등 skip 이면 이미 알린 거래다 — 재시도마다 중복 알림이 나가지 않게 여기서 멈춘다.
+        if (!recorded) return
+        notifyTrade(record, client, username, discordWebhookUrl)
+    }
+
+    /**
+     * 수동 주문 경로용 — 자체 트랜잭션으로 감사 기록을 저장하고 알림까지 보낸다.
+     * 엔진 체결 경로는 상태 전이와 원자화가 필요하므로 이 함수가 아니라 `saveAudit`+`notifyTrade` 를 쓴다(#52).
+     */
+    suspend fun saveAndNotify(
+        record: TradeRecord,
+        client: UpbitClient,
+        username: String?,
+        discordWebhookUrl: String?,
+    ) {
+        // trade_records 와 trade_executions 를 한 트랜잭션으로 묶어 한쪽만 남는 audit 불일치를 방지.
+        // (R2DBC suspend 에선 @Transactional 대신 TransactionalOperator 사용)
+        val recorded = try {
+            transactionalOperator.transactional(mono { saveAudit(record) }).awaitSingle()
         } catch (e: Exception) {
             log.error(
                 "Failed to persist trade atomically (rolled back): userId={}, market={}, side={}",
@@ -210,14 +276,8 @@ class TradeExecutionService(
             )
             throw e
         }
-
-        val krwBalance = try {
-            client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
-        } catch (_: Exception) {
-            null
-        }
-
-        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
+        if (!recorded) return
+        notifyTrade(record, client, username, discordWebhookUrl)
     }
 
     /**
