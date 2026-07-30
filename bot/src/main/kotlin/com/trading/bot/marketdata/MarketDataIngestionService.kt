@@ -27,6 +27,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -67,6 +68,15 @@ class MarketDataIngestionService(
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
         // 부팅 시 store D1 버퍼 1회 백필 개수. Upbit /v1/candles/days 최대 200.
         private const val SEED_DAILY_CANDLE_COUNT = 200
+
+        // Upbit candles 그룹 제한은 초당 10회(응답 헤더 `remaining-req: group=candles; min=600; sec=N` 실측).
+        // 마켓 수만큼 요청을 몰아 보내면 그 상한을 넘겨 429 가 쏟아진다 — 요청 사이를 이 간격만큼 벌려
+        // 초당 약 6.7회로 유지한다. 마켓 13개면 한 사이클이 약 2초로, 수집 주기(60s)에 영향이 없다.
+        internal const val CANDLE_REQUEST_SPACING_MS = 150L
+
+        // spacing 을 둬도 다른 호출과 겹치거나 순간 제한이 좁아지면 429 가 날 수 있다. 그때 1분봉을
+        // 그냥 버리지 않고 한 번만 되찾는다. 다음 사이클이 60초 뒤 다시 오므로 길게 물고 있지 않는다.
+        private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
     }
 
     @PostConstruct
@@ -111,17 +121,48 @@ class MarketDataIngestionService(
     private suspend fun collectCandlesPeriodically(markets: List<String>) {
         seedDailyCandles(markets)
         while (true) {
-            for (market in markets) {
-                try {
-                    val candles = upbitMarketFeed.getCandles(market, CandleInterval.M1, 1)
-                    for (candle in candles) ingestCandle(candle)
-                } catch (e: Exception) {
-                    log.warn("Candle collection failed for {}: {}", market, e.message)
-                }
-            }
+            collectCandlesRound(markets)
             delay(CANDLE_COLLECT_INTERVAL_MS)
         }
     }
+
+    // 한 사이클(전 마켓 1회 수집). 무한 루프에서 분리해 테스트가 가능하도록 internal 로 둔다.
+    internal suspend fun collectCandlesRound(markets: List<String>) {
+        for ((index, market) in markets.withIndex()) {
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            try {
+                fetchM1WithRateLimitRetry(market)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.warn("Candle collection failed for {}: {}", market, e.message)
+            }
+        }
+    }
+
+    private suspend fun fetchM1WithRateLimitRetry(market: String) {
+        try {
+            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, 1))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 429 만 재시도한다 — 연결 리셋·파싱 오류 등은 즉시 다시 해도 같은 결과다.
+            if (!isRateLimited(e)) throw e
+            log.debug("Rate limited on {}; retrying in {}ms", market, RATE_LIMIT_RETRY_DELAY_MS)
+            delay(RATE_LIMIT_RETRY_DELAY_MS)
+            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, 1))
+        }
+    }
+
+    private fun ingest(candles: List<NormalizedCandle>) {
+        for (candle in candles) ingestCandle(candle)
+    }
+
+    // WebClient 는 429 를 WebClientResponseException.TooManyRequests 로 던지지만, 래핑되어 올 수도 있어
+    // 상태코드와 메시지를 함께 본다.
+    private fun isRateLimited(e: Throwable): Boolean =
+        (e as? WebClientResponseException)?.statusCode?.value() == 429 ||
+            e.message?.contains("429") == true
 
     // half-open(TCP 살아있으나 무수신) 자동복구: 임계 초과 시 수집 코루틴을 재기동한다. half-open 은 flow 재구독이
     // 아니라 새 연결로만 풀리므로 job 을 취소·재생성한다. 매매 정확성은 TradingEngine staleness 게이팅이 이미 보호하므로
@@ -189,11 +230,16 @@ class MarketDataIngestionService(
     // collectCandlesPeriodically 와 같은 코루틴에서 호출되므로 candle writer 단일성 유지(MarketDataStore trim race 방지).
     // store.addCandle 직접 — ingestCandle 의 persistCandle→aggregator.onMinuteCandle 은 분봉 전용이라 D1 을 오집계함.
     internal suspend fun seedDailyCandles(markets: List<String>) {
-        for (market in markets) {
+        for ((index, market) in markets.withIndex()) {
+            // seed 는 부팅 시 마켓 수만큼 연속 호출돼 429 를 유발하던 두 경로 중 하나다
+            // (그 직후 collectCandlesRound 가 또 도므로 겹친다). 같은 간격으로 벌린다.
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
             try {
                 val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
                 candles.forEach { marketDataStore.addCandle(it) }
                 log.info("Seeded {} D1 candles into store for {}", candles.size, market)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 log.warn("D1 seed failed for {}: {}", market, e.message)
             }
