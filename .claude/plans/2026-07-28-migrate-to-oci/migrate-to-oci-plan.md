@@ -76,20 +76,25 @@ updated: 2026-07-30
   redis 9MiB/64m, host used 818MB/1962MB(available 1143MB) + swap 5.4GB → 설계값 유효 확인.
   ⚠️ 내 검증 오류 1건: flyway `max(version)` 을 **문자열 비교**해 양쪽 "9" 로 같다고 판단했으나
   `"9" > "10"` 이었다(실제로는 Vultr 가 더 최신). 버전 비교는 숫자/행수로 해야 한다.
+- 2026-07-30: **업비트 private API 검증 완료** — 서버 안에서 JWT 를 직접 서명해 `/v1/accounts` 호출,
+  `HTTP 200`. 이 서버 IP 가 허용되며(IP 제한 미사용) 주문 가능 상태. 보유 자산은 KRW 1종(코인 미보유)
+  으로 포지션 0 과 일치. 키는 서버 밖으로 내보내지 않고 잔고 금액도 출력하지 않았다.
+- 2026-07-30: **AWS 정리 1단계** — `docker compose down` 후 EC2 인스턴스 `i-05575e4603c9c1f63` **stop**
+  (삭제 아님). EC2 컴퓨트 요금 중단, EBS·EIP 만 남음(월 $5 내외). EIP `13.125.170.147` 유지되므로
+  롤백 시 IP·도메인이 동일하다. 7~14일 롤백 창구로 두고 그 뒤 destroy.
 
 # Next
 
-**이전은 끝났다** — Vultr 에서 거래 운영 중, AWS 는 app 정지 상태. 남은 것:
+**이전 완료 — Vultr 에서 거래 운영 중, AWS 는 stopped(롤백 대기).** 남은 것:
 
-1. **업비트 private API 동작 최종 확인** — 잔고 조회·주문이 실제로 통하는지 로그 관찰 중.
-   ⚠️ 업비트 API 키에 허용 IP 제한을 쓴다면 `158.247.242.126` 등록 필요(미확인).
-2. **AWS 인스턴스 stop** — 현재 app 만 정지고 인스턴스는 running 이라 EC2 요금이 계속 나간다.
-   stop 하면 EBS·EIP 요금(월 $5 내외)만 남고 롤백은 start 로 즉시 가능. 롤백 창구로 7~14일 유지.
-3. **7~14일 안정화 후 AWS destroy** (별도 승인). destroy 전 최종 백업 확보.
-4. (선택) **백업 활성화** — AWS 에서도 미설정이었다. S3 호환 버킷 + 버킷 전용 키로 켜는 것을 권장.
+1. **PR 생성 + 머지** (진행 중). 머지 후 worktree 정리.
+2. **2026-08-06~13 경 AWS destroy** (별도 승인). 그 전까지 stopped 유지 = 롤백 창구.
+   destroy 전 최종 백업 확보. 복구: `aws ec2 start-instances --instance-ids i-05575e4603c9c1f63`
+   → `./deploy/aws/deploy.sh start` (EIP 유지라 IP·도메인 동일).
+3. (권장) **백업 활성화** — AWS 에서도 미설정이었다(무백업 운영 중). S3 호환 버킷 + 버킷 전용 키.
    `deploy/vultr/README.md` 6절 참조.
-5. `# Deferred` 의 운영 이슈 3건(429 rate limit · stale 시세 · 트레일링 dead) 별도 작업으로 처리.
-6. PR 생성 + 머지 (이 브랜치: deploy/oci + deploy/vultr + 문서).
+4. `# Deferred` 운영 이슈 3건 별도 작업 — 특히 **트레일링 스톱 dead** 는 실거래 리스크 직결.
+5. (보류) Oracle 서울 계정이 생기면 `deploy/oci/` 로 $0 재검토.
 
 # Decisions
 
