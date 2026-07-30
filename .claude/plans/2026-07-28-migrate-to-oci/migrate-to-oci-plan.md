@@ -1,6 +1,6 @@
 ---
 title: migrate-to-oci — AWS EC2 탈출 (OCI 시도 → Vultr 서울 2GB 확정)
-status: in_progress
+status: done
 started: 2026-07-28
 updated: 2026-07-30
 ---
@@ -11,13 +11,12 @@ updated: 2026-07-30
 
 # Goal
 
-월 $39.29(2026-06 실측) AWS EC2 t4g.medium 배포를 Oracle Cloud 서울 리전
-(VM.Standard.A1.Flex, 2 OCPU ARM / 12GB)로 이전해 **Always Free 한도 내 운영($0 목표)** 으로 만든다.
-기존 거래 이력·암호화된 Upbit 키는 전량 보존 이전하며, **거래는 항상 단 하나의 인스턴스에서만**
-활성화한다.
+**달성(2026-07-30)**: 월 $39.29(2026-06 실측) AWS EC2 t4g.medium 배포를 **Vultr 서울 `vc2-1c-2gb`
+(1 vCPU x86_64 / 2GB) 월 $10** 으로 이전 완료 — **-75%**. 거래 이력·`bot_state`·시세 데이터를
+전량 보존 이전했고, **거래는 항상 단 하나의 인스턴스에서만** 활성화한다는 원칙을 지켜 cutover 했다.
 
-> "$0 보장" 이 아니라 "무료 한도 내 목표" — idle 회수·용량 부족·한도 초과 과금 리스크가 실재한다
-> (Decisions 참조). 실거래 자금 규모가 커지면 유료 인스턴스 재검토가 필요하다.
+당초 목표였던 Oracle Cloud 서울 Always Free($0, 12GB)는 가입 단계에서 홈 리전이 춘천으로 확정돼
+불가해졌다(Decisions). `deploy/oci/` 는 실행 미검증 상태로 보존 — 서울 계정이 생기면 재사용 가능.
 
 # Progress
 
@@ -117,8 +116,6 @@ updated: 2026-07-30
   AWS/OCI 판의 "AWS 와 동일 유지" 결정은 4GB 박스 전제였으므로 여기선 적용하지 않는다.
 - **(보류) Oracle Cloud 서울 Always Free** — 가입만 뚫리면 $0 에 12GB 라 여전히 최선이다.
   `deploy/oci/` 를 지우지 않고 보존하는 이유. 나중에 서울 계정이 생기면 재검토.
-- **Azure 탈락** (이유: Retail Prices API 실측상 Korea Central 4GB 급이 AWS 보다 비쌈. B2als_v2
-  $34.2/월 + 디스크·IP 별도, ARM 계열은 D2pls_v6 $59.1/월 뿐이고 B2pls_v2 미제공).
 - **`deploy/aws/` 유지** (이유: 롤백 경로). 단 아래 롤백 정의 변경에 따라 **AWS destroy 는 cutover 후
   최소 7~14일 안정화 기간 경과 + 별도 승인** 후로 미룬다.
 - **`deploy/oci/` 는 복사로 독립 구성** — 단 codex 지적 수용해 **한시적 결정으로 명시**하고
