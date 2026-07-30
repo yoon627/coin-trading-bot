@@ -1,6 +1,6 @@
 ---
 title: fix-ratelimit-trailing — 업비트 캔들 429 해소 + 트레일링 dead 설정 정정
-status: in_progress
+status: done
 started: 2026-07-30
 updated: 2026-07-30
 ---
