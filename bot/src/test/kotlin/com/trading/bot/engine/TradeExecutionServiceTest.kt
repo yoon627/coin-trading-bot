@@ -19,6 +19,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.test.runTest
 import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
@@ -293,5 +294,56 @@ class TradeExecutionServiceTest {
         service.saveAndNotify(record, client, null, null)
 
         coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
+    }
+
+    @Test
+    fun `commitFill keeps audit committed when notification fails`() = runTest {
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fill-1") } returns Mono.just(false)
+        coEvery { client.getAccounts() } returns emptyList()
+        every { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) } throws IllegalStateException("discord down")
+        val statePersisted = AtomicBoolean(false)
+        val record = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, exchangeOrderId = "fill-1", userId = 1L,
+        )
+
+        val recorded = service.commitFill(
+            persistState = { statePersisted.set(true) },
+            record = record,
+        )
+        val notificationFailure = runCatching {
+            service.notifyTrade(record, client, null, null)
+        }.exceptionOrNull()
+
+        assertTrue(recorded)
+        assertTrue(statePersisted.get())
+        assertTrue(notificationFailure is IllegalStateException)
+        coVerify(exactly = 1) { tradeRecordRepository.save(record) }
+        coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
+    }
+
+    @Test
+    fun `manual order reports recorded false when notification fails`() = runTest {
+        coEvery { client.placeOrder(any()) } returns Order(uuid = "notify-fail")
+        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
+        coEvery { client.getAccounts() } returns emptyList()
+        coEvery { tradeRecordRepository.save(any()) } returns TradeRecordEntity(
+            id = 10, ticker = "KRW-BTC", side = "BUY", price = 50000000.0,
+            volume = 0.002, totalAmount = 100000.0, userId = 1L,
+        )
+        every { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) } throws IllegalStateException("discord down")
+
+        val result = service.executeBuy(
+            client = client,
+            market = "KRW-BTC",
+            amount = 100000.0,
+            strategy = "manual",
+            userId = 1L,
+        )
+
+        assertTrue(result.success)
+        assertEquals("notify-fail", result.orderUuid)
+        assertFalse(result.recorded, "주문은 접수됐지만 알림 실패는 수동 후처리 실패로 노출돼야 한다")
+        coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
     }
 }
