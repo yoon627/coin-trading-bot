@@ -8,10 +8,12 @@ import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
+import java.time.LocalDateTime
 import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -24,6 +26,16 @@ class PositionManager(
     private val tradingProperties: TradingProperties,
     private val tradingStateService: TradingStateService,
     private val userId: Long,
+    /**
+     * #52: 체결 확정 시 **상태 전이 저장 + 감사 기록**을 한 트랜잭션으로 커밋한다. 실패하면 예외를 던져
+     * 호출자가 메모리 전이를 적용하지 않게 하고, pending 을 남겨 다음 tick reconcile 이 재시도하게 한다.
+     *
+     * 기본값은 상태 저장만 하는 구현 — 감사 기록이 관심사가 아닌 단위 테스트용이다.
+     * **프로덕션 배선은 `UserTradingManager.createEngine` 이 DB 커밋과 커밋 후 알림을 각각 주입한다.**
+     */
+    private val commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean =
+        { persistState, _ -> persistState(); true },
+    private val notifyTrade: suspend (record: TradeRecord) -> Unit = {},
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -253,16 +265,8 @@ class PositionManager(
         val volume = account?.balanceDouble()?.takeIf { it > 0.0 } ?: executedVolume
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
         val totalAmount = fillPrice * volume
-        // 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
-        state.reconcileFailureCount = 0
-        // replace=true: 거래소 실잔고를 절대값으로 반영해 syncPosition 복원분과 이중계상되지 않게(#20). markBought 가 pendingBuy* clear.
-        state.markBought(fillPrice, volume, strategy, replace = true)
-        // 진입 시점 청산 파라미터 스냅샷. markBought 뒤에 찍는다 — 신규 진입이면 markBought 가 옛 스냅샷을 비우므로
-        // 여기서 현재 설정으로 새로 찍히고, 재시작 복원(기존 포지션 연장)이면 durable 값이 그대로 유지된다.
-        state.exitParams = state.exitParams ?: snapshotExitParams()
-        persist(state)
-        log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
-        return TradeRecord(
+        val record = TradeRecord(
+            userId = userId,
             ticker = ticker,
             side = TradeSide.BUY,
             price = fillPrice,
@@ -271,6 +275,43 @@ class PositionManager(
             strategy = strategy,
             exchangeOrderId = orderUuid,
         )
+        // #52: 전이를 한 곳에 모아 사본과 원본에 각각 적용한다. `now` 를 고정해 두 적용이 동일한 결과를 낸다.
+        val now = LocalDateTime.now(TradingDay.KST)
+        val snapshot = snapshotExitParams()
+        val applyTransition: (TradingState) -> Unit = { s ->
+            // 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
+            s.reconcileFailureCount = 0
+            // replace=true: 거래소 실잔고를 절대값으로 반영해 syncPosition 복원분과 이중계상되지 않게(#20). markBought 가 pendingBuy* clear.
+            s.markBought(fillPrice, volume, strategy, replace = true, now = now)
+            // 진입 시점 청산 파라미터 스냅샷. markBought 뒤에 찍는다 — 신규 진입이면 markBought 가 옛 스냅샷을 비우므로
+            // 여기서 현재 설정으로 새로 찍히고, 재시작 복원(기존 포지션 연장)이면 durable 값이 그대로 유지된다.
+            s.exitParams = s.exitParams ?: snapshot
+        }
+        // 전이가 반영된 사본을 감사 기록과 한 트랜잭션으로 커밋한 뒤 원본 메모리 전이를 적용한다(#52).
+        commitFillAndApply(state, record, applyTransition)
+        log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
+        return record
+    }
+
+    /** DB 커밋 성공 후 메모리 전이를 적용하고, 멱등 skip이 아니면 알림을 best-effort로 보낸다. */
+    private suspend fun commitFillAndApply(
+        state: TradingState,
+        record: TradeRecord,
+        applyTransition: (TradingState) -> Unit,
+    ) {
+        val recorded = commitFill(
+            { tradingStateService.upsert(userId, state.copy().also(applyTransition)) },
+            record,
+        )
+        applyTransition(state)
+        if (!recorded) return
+        try {
+            notifyTrade(record)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Trade notification failed after commit for {}: {}", record.ticker, e.message)
+        }
     }
 
     private fun snapshotExitParams() = ExitParamsSnapshot(
@@ -427,16 +468,16 @@ class PositionManager(
                 // 매도 pending 을 durable 로 먼저 기록(취소·크래시가 placeOrder 와 기록 사이를 끊지 못하게).
                 persistPending(state)
                 val filled = awaitFill(order.uuid)
-                val record = if (filled?.state == "done") {
+                if (filled?.state == "done") {
                     // 즉시 전량 체결 — 주문량(sellable)으로 기록. done 은 upbit 시장가 매도의 정상 종결.
-                    completeSellRecord(ticker, state, currentPrice, sellable, reason)
+                    // #52: 상태 전이 저장과 감사 기록을 원자 커밋하고, 성공 후에만 메모리 전이를 적용한다.
+                    completeSellAtomically(ticker, state, currentPrice, sellable, reason)
                 } else {
                     // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
                     log.warn("Sell not confirmed for {}: state={} — pending kept for reconcile", ticker, filled?.state)
+                    persist(state) // pending 유지 상태 durable 반영
                     null
                 }
-                persist(state) // markSold(done) 또는 pending 유지 상태 durable 반영
-                record
             }
         } catch (e: CancellationException) {
             throw e // 취소는 삼키지 않고 전파(구조적 동시성).
@@ -463,21 +504,30 @@ class PositionManager(
         return when {
             executed > 0.0 -> {
                 // terminal(done 전량 또는 cancel 부분) + 체결분. 미체결 잔량은 취소돼 locked 가 free 로 돌아왔으므로 실잔고가 정확.
+                // buildSellRecord 는 평단이 필요하므로 전이 전에 만든다. 잔고 조회도 트랜잭션 밖에서 끝낸다(#52).
                 val record = buildSellRecord(ticker, state, currentPrice, executed)
                 val account = findAccount(ticker.substringAfter("-"))
                 val remaining = account?.totalBalance() ?: 0.0
-                if (remaining > 0.0) {
+                val recoveredAvg = account?.avgBuyPriceDouble() ?: 0.0
+                val now = LocalDateTime.now(TradingDay.KST)
+                val applyTransition: (TradingState) -> Unit = if (remaining > 0.0) {
                     // 부분 체결 — 잔여 실잔고로 갱신, avgBuyPrice 유지. pending 해소(잔여분은 다음 tick 재매도).
                     // position 을 실측으로 되살린다: 매도 주문에 잠긴 잔고 때문에 복원 시 false 였을 수 있고,
                     // 그대로 두면 잔여 포지션이 청산 평가를 영영 못 받는다.
-                    state.position = true
-                    state.holdVolume = remaining
-                    if (state.avgBuyPrice <= 0.0) state.avgBuyPrice = account?.avgBuyPriceDouble() ?: 0.0
-                    state.clearPendingSell()
+                    { s ->
+                        s.position = true
+                        s.holdVolume = remaining
+                        if (s.avgBuyPrice <= 0.0) s.avgBuyPrice = recoveredAvg
+                        s.clearPendingSell()
+                    }
+                } else {
+                    { s -> s.markSold(now) }
+                }
+                commitFillAndApply(state, record, applyTransition)
+                if (remaining > 0.0) {
                     log.info("SELL {} partial via reconcile: executed={}, remaining={} — position kept", ticker, executed, remaining)
                 } else {
-                    log.info("SELL {} filled via reconcile: volume={}, reason={}", ticker, executed, state.pendingSellReason)
-                    state.markSold()
+                    log.info("SELL {} filled via reconcile: volume={}, reason={}", ticker, executed, record.reason)
                 }
                 record
             }
@@ -510,8 +560,11 @@ class PositionManager(
                     return null
                 }
                 val record = buildSellRecord(ticker, state, currentPrice, volume)
+                val now = LocalDateTime.now(TradingDay.KST)
+                val applyTransition: (TradingState) -> Unit = { s -> s.markSold(now) }
+                // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패 시 pending 이 남아 다음 tick 이 재시도한다.
+                commitFillAndApply(state, record, applyTransition)
                 log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, volume)
-                state.markSold()
                 record
             } else {
                 log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, total)
@@ -526,19 +579,26 @@ class PositionManager(
     }
 
     /** 매도 전량 확정 — 기록 생성 후 markSold. sell() 즉시경로(done) 전용. */
-    private fun completeSellRecord(
+    /**
+     * 매도 체결 확정 — #52 원자 커밋판. `buildSellRecord` 는 평단(avgBuyPrice)이 필요하므로 반드시
+     * `markSold` **이전**에 호출한다. 커밋이 실패하면 예외가 올라가 메모리 전이가 적용되지 않으므로
+     * `pendingSellUuid` 가 살아남아 다음 tick `reconcilePendingSell` 이 재시도한다.
+     */
+    private suspend fun completeSellAtomically(
         ticker: String,
         state: TradingState,
         currentPrice: Double,
-        soldVolume: Double,
-        reason: SellReason,
+        volume: Double,
+        reason: SellReason?,
     ): TradeRecord {
-        val record = buildSellRecord(ticker, state, currentPrice, soldVolume, reason)
+        val record = buildSellRecord(ticker, state, currentPrice, volume, reason)
+        val now = LocalDateTime.now(TradingDay.KST)
+        val applyTransition: (TradingState) -> Unit = { s -> s.markSold(now) }
+        commitFillAndApply(state, record, applyTransition)
         log.info(
             "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
-            ticker, currentPrice, soldVolume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", reason,
+            ticker, currentPrice, volume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", record.reason,
         )
-        state.markSold()
         return record
     }
 
@@ -562,6 +622,7 @@ class PositionManager(
             null
         }
         return TradeRecord(
+            userId = userId,
             ticker = ticker,
             side = TradeSide.SELL,
             price = currentPrice,
