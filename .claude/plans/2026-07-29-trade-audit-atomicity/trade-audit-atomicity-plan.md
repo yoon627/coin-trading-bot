@@ -22,10 +22,11 @@ updated: 2026-08-01
 - 2026-08-02: 검증된 코드·테스트·문서·plan 변경을 `065eb15` (`fix(engine): 체결 감사 커밋 원자성 보장 (#52)`)로 커밋했다. 현재 작업 브랜치는 clean이다.
 - 2026-08-02: pre-push Codex review가 P2를 발견해 push가 차단됐다. 공통 `notifyTrade`가 수동 주문의 `recorded=false` 후처리 계약까지 삼키는 경로이며, 엔진에서는 `PositionManager`가 이미 알림 실패를 격리한다. 수동 경로 회귀 테스트를 추가하고 `notifyTrade` 예외 전파를 복원한다.
 - 2026-08-02: 새 수동 알림 실패 테스트가 기존 코드에서 Red임을 확인한 뒤, `notifyTrade`의 Discord 예외 전파와 `recordOrder`의 `recorded=false` 계약을 복원했다. 관련 테스트·전체 `test`·`compileKotlin`이 JDK 21에서 통과했다.
+- 2026-08-02: P2 fix를 `b80e1f2`로 커밋하고 pre-push Codex review `OK` 후 `origin/trade-audit-atomicity`에 push했다. PR [#78](https://github.com/yoon627/coin-trading-bot/pull/78)을 생성했으며 merge는 사용자 대기 상태다.
 
 # Next
 
-P2 fix와 회귀 테스트를 커밋하고 push한 뒤 PR을 생성한다. merge는 사용자가 진행하며, 이 세션에서는 merge하지 않는다.
+PR #78의 사용자 merge를 기다린다. merge 확인 후 plan status를 `done`으로 갱신하고 안전 조건을 확인해 worktree 정리를 제안한다.
 
 # Decisions
 
