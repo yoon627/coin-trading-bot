@@ -22,10 +22,12 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - 2026-08-02: YAML 계약·embedded shell·`git diff --check`·기존 배포 스크립트 error-level shellcheck를 통과시켰다. Codex reviewer 실행은 hook 출력 과다로 최종 본문을 회수하지 못해 메인 에이전트가 별도 self-review를 수행한다.
 - 2026-08-02: Compose config, Wiki link/extra/smoke 검증과 JDK 21 기반 `./gradlew test`가 통과했다. 기본 JDK 25에서는 Kotlin 2.0.21의 `JavaVersion.parse`가 `25.0.2`를 처리하지 못해 실패했으며, 저장소 문서의 요구사항인 JDK 21로는 성공했다.
 - 2026-08-02: 최종 self-review 후 `15597be`(`ci: add automatic Vultr SSH deployment`)로 작업 브랜치에 커밋했다. Vultr 인스턴스 두 개의 상태도 삭제 직전 확인용으로 재조회했다.
+- 2026-08-02: pre-push Codex 게이트가 P1 호스트 키 미고정과 P2 Compose/workflow 이미지 저장소 drift를 차단했다. 현재 운영 ED25519 fingerprint와 기존 로컬 known_hosts를 대조한 뒤 고정 파일·strict SSH 옵션·`GHCR_IMAGE` Compose 변수로 수정한다.
+- 2026-08-02: P1/P2를 수정하고 workflow 계약·embedded shellcheck·Compose fork-image 해석·`bash -n`/error-level shellcheck·Wiki 검증·JDK 21 `./gradlew test`를 재통과했다.
 
 # Next
 
-1. 사용자 확인 후 branch push/PR/merge를 실행하고, merge된 Actions run과 운영 SHA/health를 관찰한다.
+1. 수정 커밋을 pre-push 게이트 통과 후 push하고 PR/merge를 실행한 뒤, merge된 Actions run과 운영 SHA/health를 관찰한다.
 2. 같은 확인 흐름에서 추가 인스턴스 `6700ff09-…`의 상태를 재조회한 뒤 승인된 경우에만 삭제하고 삭제 후 목록에서 사라짐을 관찰한다.
 
 # Decisions
@@ -37,12 +39,16 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - deploy job은 `test`와 `build-and-push`에 모두 의존하고, PR에서는 실행하지 않으며, `main` push와 main 대상 수동 실행만 허용한다.
 - Actions runner의 임시 파일에는 secret을 쓰되 job 종료 시 명시적인 파일 cleanup을 실행한다. secret 원문은 로그에 출력하지 않는다.
 - `VULTR_DEPLOY_ENV`는 기존 production `.env`의 runtime/GHCR 설정을 받는 multiline secret으로 사용한다. `VULTR_API_KEY`는 deploy-only 경로에서 사용하지 않는다.
+- pre-push P1 처분: 현재 운영 호스트 키를 `deploy/vultr/known_hosts`에 고정하고, workflow 및 `deploy.sh`가 `StrictHostKeyChecking=yes`와 해당 파일을 사용하도록 수정한다. IP/호스트 교체 시 파일을 검증 후 갱신해야 한다.
+- pre-push P2 처분: Compose app image를 `${GHCR_IMAGE:-...}:${APP_VERSION}`으로 변경해 workflow가 push한 저장소와 deploy script가 pull하는 저장소를 일치시킨다.
 - 추가 인스턴스 `6700ff09-…`는 라벨·운영 state·현재 workflow 참조가 없고 운영 인스턴스와 생성/OS/backup feature가 다르다. 초기/실패 provisioning 잔여로 판단하지만, API가 생성 주체를 제공하지 않아 원인은 추정으로 기록한다.
 
 # Key Files
 
 - `.github/workflows/deploy.yml` — test/GHCR 뒤 Vultr deploy job을 추가할 핵심 workflow.
 - `deploy/vultr/deploy.sh` — 기존 수동 배포 계약과 rollback/health check의 단일 구현.
+- `deploy/vultr/docker-compose.prod.yml` — workflow가 주입하는 `GHCR_IMAGE`를 app image에 반영.
+- `deploy/vultr/known_hosts` — 현재 운영 Vultr SSH ED25519 host key pin.
 - `README.md` — CI/CD 공개 동작과 secret/운영 절차.
 - `deploy/vultr/README.md` — Vultr 자동 배포 및 수동 복구 runbook.
 - `wiki/pages/entity/deployment-stack.md` — 운영 배포 소스와 검증 상태.
@@ -54,12 +60,14 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - [x] deploy job이 `deploy/vultr/deploy.sh deploy`를 호출하며 concurrency와 cleanup을 적용한다. (YAML contract check)
 - [x] workflow YAML/embedded shell 및 기존 배포 스크립트가 정적검사를 통과한다. (`yaml_parse`, embedded `shellcheck`, `bash -n`, error-level `shellcheck`)
 - [x] README·Vultr README·deployment wiki가 실제 workflow 동작과 일치한다. (diff/self-review, Wiki checks)
+- [x] CI 및 배포 스크립트가 검증된 운영 host key를 strict checking으로 사용하고, Compose image 저장소가 workflow image와 일치한다. (fingerprint 대조, workflow/Compose checks)
 - [ ] 추가 인스턴스 삭제는 대상 ID·상태를 재확인한 뒤 사용자 승인 후 수행하고, 삭제 후 Vultr 목록에서 사라짐을 관찰한다.
 
 # Review Disposition
 
 - Codex plan/code reviewer 실행은 완료했으나 hook 출력이 최종 결과를 가려 회수하지 못했다. 메인 에이전트가 workflow 조건·secret 경계·rollback state·cleanup·문서 정합성을 직접 재검토한다.
-- `shellcheck`의 기존 warning/info는 유지하고 error-level 결과만 acceptance에 반영한다. 변경 파일에는 새 shellcheck 대상 스크립트를 추가하지 않았다.
+- pre-push Codex finding `[P1]` 호스트 키 미고정과 `[P2]` 이미지 저장소 drift는 고정 known_hosts·strict checking·`GHCR_IMAGE` Compose 변수로 수정 완료했다.
+- `shellcheck`의 기존 warning/info는 유지하고 error-level 결과만 acceptance에 반영한다.
 
 # Blockers
 

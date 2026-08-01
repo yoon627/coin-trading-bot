@@ -104,6 +104,11 @@ SSH로 배포한다. 다음 repository secrets가 필요하다.
 | `VULTR_SSH_PRIVATE_KEY` | `coin-trading-bot-key.pem` 원문 |
 | `VULTR_SSH_USER` | Vultr SSH 사용자(현재 `root`) |
 
+운영 호스트 키는 `deploy/vultr/known_hosts`에 고정되어 Actions와 배포 스크립트가 최초 접속부터
+검증한다. 운영 IP를 재생성하거나 호스트를 교체할 때는 새 호스트 키를 별도 경로로 확인한 뒤
+이 파일을 갱신해야 하며, `accept-new`로 우회하지 않는다. Compose의 `GHCR_IMAGE`도 workflow가
+빌드·push한 저장소와 동일하게 주입된다.
+
 job은 기존 서버의 실행 중인 이미지가 40자리 commit SHA인지 먼저 확인한다. `latest` 또는 digest만
 남아 있으면 직전 정상 버전을 안전하게 특정할 수 없어 배포를 거부한다. 배포 전후의 임시 `.env`,
 `.state`, SSH key는 Actions runner에서 삭제한다. 수동 배포와 Actions 배포를 동시에 실행하지 않는다.

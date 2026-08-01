@@ -102,8 +102,11 @@ jobs:
             "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$VULTR_SSH_USER" >> deploy/vultr/.env
           printf '%s' "$VULTR_SSH_PRIVATE_KEY" > deploy/vultr/coin-trading-bot-key.pem
           chmod 600 deploy/vultr/.env deploy/vultr/coin-trading-bot-key.pem
+          known_hosts_file="$GITHUB_WORKSPACE/deploy/vultr/known_hosts"
+          test -s "$known_hosts_file"
 
-          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+          ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known_hosts_file" -o ConnectTimeout=10 \
             -i deploy/vultr/coin-trading-bot-key.pem)
           current_image="$(ssh "${ssh_opts[@]}" \
             "${VULTR_SSH_USER}@${VULTR_PUBLIC_IP}" \
@@ -118,6 +121,8 @@ jobs:
           chmod 600 deploy/vultr/.state
 
       - name: Deploy to Vultr
+        env:
+          SSH_KNOWN_HOSTS: ${{ github.workspace }}/deploy/vultr/known_hosts
         run: ./deploy/vultr/deploy.sh deploy
 
       - name: Remove Vultr deploy files
