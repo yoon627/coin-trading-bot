@@ -4,12 +4,20 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.trading.bot.client.UpbitClient
+import com.trading.bot.domain.Account
+import com.trading.bot.domain.Order
+import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
+import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.bot.persistence.entity.TradeRecordEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
@@ -19,6 +27,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.spyk
 import io.mockk.verify
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -31,6 +40,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.web.reactive.function.client.WebClient
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import org.springframework.transaction.reactive.TransactionalOperator
 
 class UserTradingManagerTest {
 
@@ -217,5 +227,87 @@ class UserTradingManagerTest {
         } finally {
             logger.detachAppender(appender)
         }
+    }
+
+    @Test
+    fun `createEngine wires actual atomic commit before post-commit notification`() = runTest {
+        val client = mockk<UpbitClient>()
+        val tradeRecordRepository = mockk<TradeRecordRepository>()
+        val tradeExecutionRepository = mockk<TradeExecutionRepository>()
+        val transactionalOperator = mockk<TransactionalOperator>()
+        val auditNotifier = mockk<DiscordNotifier>()
+        val state = TradingState(
+            ticker = "KRW-BTC",
+            pendingBuyUuid = "fill-1",
+            pendingBuyStrategy = "combined",
+        )
+        val notifiedAfterMemory = AtomicBoolean(false)
+
+        every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fill-1") } returns Mono.just(false)
+        every { tradeExecutionRepository.save(any()) } returns Mono.just(
+            TradeExecutionEntity(
+                userId = 1L,
+                exchange = "UPBIT",
+                market = "KRW-BTC",
+                side = "BUY",
+                price = 51_000_000.0,
+                volume = 0.01,
+                totalAmount = 510_000.0,
+                exchangeOrderId = "fill-1",
+            )
+        )
+        coEvery { tradeRecordRepository.save(any()) } returns TradeRecordEntity(
+            ticker = "KRW-BTC",
+            side = "BUY",
+            price = 51_000_000.0,
+            volume = 0.01,
+            totalAmount = 510_000.0,
+            userId = 1L,
+        )
+        coEvery { tradingStateService.upsert(1L, any()) } returns Unit
+        coEvery { client.getOrder("fill-1") } returns Order(
+            uuid = "fill-1",
+            state = "done",
+            executedVolume = "0.01",
+        )
+        coEvery { client.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.01", avgBuyPrice = "50000000"),
+        )
+        every { auditNotifier.sendTradeEmbed(any(), any(), any(), any()) } answers {
+            notifiedAfterMemory.set(state.position)
+            throw IllegalStateException("discord down")
+        }
+
+        val actualTradeExecutionService = TradeExecutionService(
+            tradeRecordRepository,
+            tradeExecutionRepository,
+            auditNotifier,
+            transactionalOperator,
+            TradingProperties(),
+        )
+        manager = spyk(
+            UserTradingManager(
+                userRepository, botStateRepository, actualTradeExecutionService, auditNotifier,
+                emptyList(), TradingProperties(autoStart = true), upbitWebClient,
+                userSecretsService, marketDataStore, tradingStateService,
+            ),
+        )
+        every { manager.createEngine(any()) } answers { callOriginal() }
+        every { manager.createUpbitClient(any()) } returns client
+
+        val engine = manager.createEngine(user(1L))
+        val positionManagerField = TradingEngine::class.java.getDeclaredField("positionManager").apply {
+            isAccessible = true
+        }
+        val positionManager = positionManagerField.get(engine) as PositionManager
+
+        val record = positionManager.reconcilePendingBuy("KRW-BTC", state, 51_000_000.0)
+
+        assertTrue(record != null)
+        assertTrue(state.position)
+        assertTrue(notifiedAfterMemory.get(), "실제 UserTradingManager 배선에서도 알림보다 메모리 전이가 먼저여야 한다")
+        coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
+        verify(exactly = 1) { tradeExecutionRepository.save(any()) }
     }
 }

@@ -37,7 +37,6 @@ class TradingEngineTest {
     private lateinit var upbitClient: UpbitClient
     private lateinit var positionManager: PositionManager
     private lateinit var dailyResetManager: DailyResetManager
-    private lateinit var tradeExecutionService: TradeExecutionService
     private lateinit var strategy: TradingStrategy
     private lateinit var marketDataStore: MarketDataStore
     private val tradingProperties = TradingProperties(intervalSeconds = 1)
@@ -47,7 +46,6 @@ class TradingEngineTest {
         upbitClient = mockk(relaxed = true)
         positionManager = mockk(relaxed = true)
         dailyResetManager = mockk(relaxed = true)
-        tradeExecutionService = mockk(relaxed = true)
         strategy = mockk()
         marketDataStore = mockk(relaxed = true)
         // store miss 기본값 — relaxed mock 이 non-null child mock 을 반환해 store-hit 으로 오작동하는 것 방지
@@ -66,7 +64,6 @@ class TradingEngineTest {
             upbitClient = upbitClient,
             positionManager = positionManager,
             dailyResetManager = dailyResetManager,
-            tradeExecutionService = tradeExecutionService,
             strategies = strategies,
             tradingProperties = props,
             userId = 1L,
@@ -129,29 +126,6 @@ class TradingEngineTest {
         } finally {
             logger.detachAppender(appender)
         }
-    }
-
-    @Test
-    fun `record persistence completes despite cancellation during shutdown`() = runBlocking {
-        // 체결·상태 반영 후 취소가 오면 onTrade(DB 기록·Discord)가 스킵돼 감사 유실 → NonCancellable 완주 검증(M1).
-        val recordSaved = AtomicBoolean(false)
-        val saveEntered = CompletableDeferred<Unit>()
-        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
-        coEvery { upbitClient.getDayCandles(any(), any()) } returns emptyList()
-        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
-        val record = TradeRecord(ticker = "KRW-BTC", side = TradeSide.BUY, price = 100.0, volume = 1.0, totalAmount = 100.0)
-        coEvery { positionManager.buy(any(), any(), any(), any()) } returns record
-        coEvery { tradeExecutionService.saveAndNotify(any(), any(), any(), any()) } coAnswers {
-            saveEntered.complete(Unit)
-            delay(300)
-            recordSaved.set(true)
-        }
-
-        val engine = createEngine()
-        engine.start(listOf("KRW-BTC"))
-        saveEntered.await() // onTrade 의 기록 영속화 진입
-        engine.stop()        // 취소 — NonCancellable 이면 기록이 완주
-        assertTrue(recordSaved.get(), "onTrade 가 취소로 중단돼 기록이 유실됨")
     }
 
     @Test
@@ -519,7 +493,7 @@ class TradingEngineTest {
     @Test
     fun `loadStoreDailyCandles returns null when store absent`() {
         val engine = TradingEngine(
-            upbitClient, positionManager, dailyResetManager, tradeExecutionService,
+            upbitClient, positionManager, dailyResetManager,
             listOf(strategy), tradingProperties,
         )
         assertNull(engine.loadStoreDailyCandles("KRW-BTC"))

@@ -2,12 +2,13 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-01
 claim_state: current
-verified: 2026-07-28 — TradingEngine.kt:173-334, PositionManager.kt:63-138 정독
+verified: 2026-08-01 — c37591a 후속 작업의 TradingEngine.kt:118-294, PositionManager.kt:74-315·420-610, TradeExecutionService.kt:166-287 및 JDK 21 관련 테스트 실행
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
+  - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
   - common/src/main/kotlin/com/trading/common/config/TradingProperties.kt
 ---
 
@@ -57,6 +58,8 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 
 `getOrder` 와 잔고조회가 **둘 다** 실패하는 상황이 `reconcileHaltThreshold`(20회) 연속되면 해당 ticker 를 `halted` 로 두고 신규 진입만 막는다 — 매도·reconcile 은 계속 돌아야 잡힌 포지션이 갇히지 않는다.
 
-## 알려진 갭
+## 체결·감사 원자 커밋
 
-`onTrade`(감사 기록)는 pending 해소가 durable 에 커밋된 **뒤** 실행된다(TradingEngine.kt:387-389 주석이 명시). 여기서 예외가 나면 재시도 근거가 이미 지워져 그 거래 기록이 유실된다 — 실제 현금흐름은 발생했는데 기록만 없는 상태. 이슈 #52 로 추적 중이다.
+체결이 확정되면 `PositionManager`가 전이 결과를 `TradingState.copy()`에 먼저 적용하고, `TradeExecutionService.commitFill` 안에서 `trading_states` upsert와 `trade_records`·`trade_executions` 저장을 한 `TransactionalOperator` 트랜잭션으로 커밋한다. 트랜잭션 성공 뒤에만 원본 메모리 상태를 적용하고 Discord를 알리므로, 감사 저장 실패 시 원본 pending이 남아 다음 tick reconcile의 재시도 근거가 유지된다.
+
+`TradingEngine`은 `processTicker`의 게이트·순서만 조정하며 체결 기록을 별도로 저장하지 않는다. 주문 접수 직후의 pending durable 기록과 즉시 체결 후처리는 `NonCancellable` 구간에서 완주하고, 이후 tick의 reconcile도 같은 `commitFill` 원자 커밋을 사용한다. Discord 알림은 커밋 이후 외부 IO라 실패해도 이미 커밋된 거래 기록을 롤백하지 않는다.
