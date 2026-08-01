@@ -19,10 +19,11 @@ updated: 2026-08-01
 - 2026-08-01: `UserTradingManager.createEngine`의 실제 `TradeExecutionService` 배선 테스트와 취소 전파 assertion을 추가했다. 관련 5개 테스트(`TradeAuditAtomicityTest`, `PositionManagerExtendedTest`, `TradingEngineTest`, `TradeExecutionServiceTest`, `UserTradingManagerTest`), 전체 `test`, `compileKotlin`이 JDK 21에서 다시 통과했다.
 - 2026-08-01: simplify 점검에서 `commitFillAndApply` 공통화와 callback 실패 격리·취소 재전파의 필요성을 확인했다. `wiki/verify.sh`, `wiki/smoke.sh`(10/10), link check가 최종 문서 상태에서 모두 통과했다.
 - 2026-08-02: 사용자가 변경사항 커밋과 PR 생성을 승인했다. merge는 사용자가 직접 진행한다.
+- 2026-08-02: 검증된 코드·테스트·문서·plan 변경을 `065eb15` (`fix(engine): 체결 감사 커밋 원자성 보장 (#52)`)로 커밋했다. 현재 작업 브랜치는 clean이다.
 
 # Next
 
-변경사항을 작업 브랜치에 커밋하고 `origin/trade-audit-atomicity`로 push한 뒤 PR을 생성한다. merge는 사용자가 진행하며, 이 세션에서는 merge하지 않는다.
+`origin/trade-audit-atomicity`로 push한 뒤 PR을 생성한다. merge는 사용자가 진행하며, 이 세션에서는 merge하지 않는다.
 
 # Decisions
 
