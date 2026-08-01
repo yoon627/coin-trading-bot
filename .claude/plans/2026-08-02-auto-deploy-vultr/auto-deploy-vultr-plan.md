@@ -21,12 +21,12 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - 2026-08-02: `deploy-vultr` job과 secret/state bootstrap, concurrency, cleanup을 구현하고 README·Vultr runbook·deployment wiki를 동기화했다.
 - 2026-08-02: YAML 계약·embedded shell·`git diff --check`·기존 배포 스크립트 error-level shellcheck를 통과시켰다. Codex reviewer 실행은 hook 출력 과다로 최종 본문을 회수하지 못해 메인 에이전트가 별도 self-review를 수행한다.
 - 2026-08-02: Compose config, Wiki link/extra/smoke 검증과 JDK 21 기반 `./gradlew test`가 통과했다. 기본 JDK 25에서는 Kotlin 2.0.21의 `JavaVersion.parse`가 `25.0.2`를 처리하지 못해 실패했으며, 저장소 문서의 요구사항인 JDK 21로는 성공했다.
+- 2026-08-02: 최종 self-review 후 `15597be`(`ci: add automatic Vultr SSH deployment`)로 작업 브랜치에 커밋했다. Vultr 인스턴스 두 개의 상태도 삭제 직전 확인용으로 재조회했다.
 
 # Next
 
-1. 변경 diff를 최종 self-review/simplify하고 작업 브랜치에 보존한다.
-2. 외부 작업 직전 사용자 확인 후 branch push/PR/merge를 실행하고, merge된 Actions run과 운영 SHA/health를 관찰한다.
-3. 같은 확인 흐름에서 추가 인스턴스 `6700ff09-…`의 상태를 재조회한 뒤 승인된 경우에만 삭제하고 삭제 후 목록에서 사라짐을 관찰한다.
+1. 사용자 확인 후 branch push/PR/merge를 실행하고, merge된 Actions run과 운영 SHA/health를 관찰한다.
+2. 같은 확인 흐름에서 추가 인스턴스 `6700ff09-…`의 상태를 재조회한 뒤 승인된 경우에만 삭제하고 삭제 후 목록에서 사라짐을 관찰한다.
 
 # Decisions
 
