@@ -217,32 +217,26 @@ coin-trading-bot/
 | `REDIS_ENABLED` | dev `false`, prod Compose `true` | Redis 캐시 활성화 |
 | `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
 
-리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 전체 배포 예시는 [`deploy/aws/.env.example`](deploy/aws/.env.example), 애플리케이션 기본값은 [`application.yml`](bot/src/main/resources/application.yml)에 있습니다.
+리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`application.yml`](bot/src/main/resources/application.yml)에 있습니다.
 
-## AWS 배포
+## AWS 배포 (historical)
 
-현재 운영 구성은 EC2 `t4g.medium`(arm64, 4GB) 한 대에서 Caddy, app, PostgreSQL, Redis를 실행합니다. GitHub Actions는 `main` push와 수동 실행 시 GHCR에 `amd64`/`arm64` 이미지를 push하지만 EC2 배포 자체는 자동으로 수행하지 않습니다.
+AWS EC2 `t4g.medium`은 2026-07-31 Vultr cutover 후 인스턴스·EBS·EIP까지 삭제됐다. `deploy/aws/`는
+구성·복구 설계의 historical reference로 보존하지만 현재 운영 경로가 아니며, AWS 롤백 명령을 실행할
+대상도 없다. 현재 운영은 아래 Vultr 섹션을 따른다.
 
-```bash
-cp deploy/aws/.env.example deploy/aws/.env
-# deploy/aws/.env에서 AWS, 접근 범위, 이미지 설정 확인
-
-./deploy/aws/deploy.sh setup
-./deploy/aws/deploy.sh deploy
-
-./deploy/aws/deploy.sh status
-./deploy/aws/deploy.sh logs
-./deploy/aws/deploy.sh ssh
-```
-
-중지·재시작은 `stop`/`start`, AWS 리소스 전체 삭제는 `destroy` 명령을 사용합니다. `destroy`는 과금 중단을 위한 파괴적 작업이므로 대상 리소스를 반드시 확인하세요.
-
-`APP_DOMAIN`이 비어 있으면 배포 스크립트가 EC2 공인 IP 기반 `sslip.io` 도메인을 만들고 Caddy가 Let's Encrypt 인증서를 발급합니다. 자세한 설정과 문제 해결은 [`deploy/aws/README.md`](deploy/aws/README.md)를 참고하세요.
+자세한 과거 설정은 [`deploy/aws/README.md`](deploy/aws/README.md)를 참고하되 현재 계정 자산에
+대해 `setup`/`start`/`destroy`를 실행하지 마세요.
 
 ## Vultr 배포 (비용 절감 — 월 $10)
 
 AWS 실측 $39.29/월 대비 **-75%**. Vultr 서울(`icn`) `vc2-1c-2gb`(1 vCPU x86_64 / 2GB / 55GB SSD /
 2TB 대역폭)에 같은 스택을 올린다. 공인 IP·디스크·대역폭이 요금에 포함이라 별도 과금이 없다.
+
+현재 `do-anything.cloud`에서 8종목을 거래하고 `TRADING_INVEST_RATIO=0.15`로 운영한다. 기존
+인스턴스 상태는 [Vultr 상태 페이지](https://status.vultr.com/)의 전역 장애·maintenance를 확인한
+뒤 변경한다. 2026-08-01 현재 `ALRT-F83KAW9` 신규 배포 간헐 실패 경보와 2026-08-04 00:00~01:00
+KST 전역 DB cutover가 공지돼 있어, 해당 시간대에는 새 인스턴스 생성·삭제·리사이즈를 하지 않는다.
 
 2GB로 낮춘 근거는 **운영 59일차 EC2 실측**이다 — app 420MiB / postgres 380MiB / redis 3.4MiB /
 caddy 14MiB = 합계 818MiB, load average 0.00. 컨테이너 제한도 이에 맞춰 조정했다(합계 1472m).
@@ -256,9 +250,9 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
 ./deploy/vultr/deploy.sh mem      # 2GB 여유 확인
 ```
 
-운영 명령과 배포 동작(대상 SHA 고정, 헬스체크 실패 시 자동 롤백)은 AWS 판과 동일하고, 메모리
-실사용을 보는 `mem` 명령이 추가돼 있다. 계정 준비(⚠️ **API Access Control에 공인 IP 등록 필수**),
-AWS→Vultr **cutover 절차**, 거래 활성화 전/후로 나뉘는 **롤백**, S3 호환 백업 설정은
+운영 명령과 배포 동작(대상 SHA 고정, 헬스체크 실패 시 자동 롤백)은 historical AWS 판과 동일하고,
+메모리 실사용을 보는 `mem` 명령이 추가돼 있다. 계정 준비(⚠️ **API Access Control에 공인 IP 등록 필수**),
+완료된 AWS→Vultr **cutover 절차**, AWS 삭제 전용 historical rollback, S3 호환 백업 설정은
 [`deploy/vultr/README.md`](deploy/vultr/README.md)에 있다.
 
 ## Oracle Cloud 배포 (비용 $0 대안)
@@ -287,7 +281,7 @@ AWS→OCI **cutover 절차**(같은 Upbit 계정에 두 봇이 붙지 않도록 
 ```text
 Pull request ──> ./gradlew test --parallel
 main push    ──> test ──> multi-arch Docker image ──> GHCR
-manual deploy ─> deploy/aws/deploy.sh deploy ──> EC2가 대상 SHA 이미지 pull(헬스 실패 시 자동 롤백)
+manual deploy ─> deploy/vultr/deploy.sh deploy ──> Vultr가 대상 SHA 이미지 pull(헬스 실패 시 자동 롤백)
 ```
 
 ## 참고 사항

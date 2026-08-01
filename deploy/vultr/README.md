@@ -3,7 +3,11 @@
 AWS EC2 t4g.medium(실측 **$39.29/월** — 2026-06 Cost Explorer)에서 Vultr 서울(`icn`)
 `vc2-1c-2gb`(1 vCPU x86_64 / 2GB / 55GB SSD / 2TB 대역폭)로 옮겨 **월 $10, -75%** 를 목표로 한다.
 
-| | AWS (현행) | Vultr (이전 대상) |
+> **현재 운영 상태(2026-08-01 확인)**: Vultr에서 거래 중이며 AWS 인스턴스·EBS·EIP는
+> 2026-07-31 삭제됐다. 아래 AWS cutover/rollback 절차는 당시 작업의 historical runbook이고,
+> 현재 AWS 롤백 경로로 실행하면 안 된다. 현재 복구의 기준은 Vultr DB 백업이다.
+
+| | AWS (historical) | Vultr (현재 운영) |
 |---|---|---|
 | 사양 | 2 vCPU / 4GB (ARM, 버스트) | 1 vCPU / 2GB (x86_64) |
 | 디스크 | EBS 20GB (별도 과금) | 55GB SSD 포함 |
@@ -31,7 +35,18 @@ OS/docker 약 250MB → 여유 약 320MB. postgres가 실측상 가장 빡빡해
 
 ---
 
-## 0. 계정 준비
+## 0. Vultr 상태·변경 게이트
+
+`setup`, `destroy`, 리사이즈 또는 새 인스턴스 생성 전에는 [Vultr 상태 페이지](https://status.vultr.com/)
+를 확인한다. 공급자 장애나 예정된 maintenance 중에는 인프라 변경 자동화를 일시 중지한다.
+
+2026-08-01 현재 공식 페이지에는 전역 경보 **ALRT-F83KAW9**(신규 구독/인스턴스 배포의
+간헐적 실패)와 2026-08-03 15:00 UTC(한국시간 2026-08-04 00:00) 예정된 전역 DB cutover가
+표시돼 있다. 서울 `icn` 지역 장애는 표시되지 않았고 기존 운영 인스턴스가 healthy라면 앱을
+재시작하거나 재생성하지 않는다. cutover 전후 1시간은 콘솔/API와 리소스 생성·수정·삭제를
+수행하지 않는다.
+
+## 0.1. 계정 준비
 
 1. https://www.vultr.com 가입 후 결제수단 등록.
 2. 콘솔 → **Account → API** 에서 **API Key 발급**.
@@ -47,7 +62,7 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 # VULTR_API_KEY 와 APP_ENCRYPTION_SECRET(AWS 값 복사) 을 채운다
 
 ./deploy.sh setup      # SSH 키 + 방화벽 + 인스턴스 생성
-# cloud-init(도커 설치) 2~4분 대기
+# cloud-init(Docker·AWS CLI 설치) 2~4분 대기
 ./deploy.sh deploy     # GHCR pull + compose 기동 + 헬스체크
 ./deploy.sh mem        # ⚠️ 2GB 여유 확인
 ```
@@ -77,7 +92,7 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 대상 커밋 SHA로 이미지를 고정하고, 헬스체크(180s) 실패 시 직전 정상 SHA로 **자동 롤백**한다.
 단 **DB migration이 포함된 배포**가 실패하면 자동 롤백을 건너뛰고 수동 개입을 안내한다.
 
-## 3. AWS → Vultr 데이터 이전
+## 3. AWS → Vultr 데이터 이전 (완료된 historical runbook)
 
 ```bash
 # 1) AWS 에서 덤프
@@ -118,17 +133,21 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 4. **Upbit에서 미체결 주문·잔고·보유 포지션 스냅샷을 기록한다**(복구 시 대조 기준).
 5. 이 시점에 **최종 `pg_dump`** 를 뜬다(3절). 미리 뜬 덤프는 버린다.
 6. Vultr에 복원하고 3절 검증을 모두 통과시킨다.
-7. Upbit API 키에 허용 IP를 쓰고 있다면 **Vultr IP를 등록**한다(AWS IP는 롤백 대비 당분간 유지).
+7. Upbit API 키에 허용 IP를 쓰고 있다면 **Vultr IP를 등록**한다(당시에는 AWS IP를 rollback 대비 유지).
 8. `.env`에 `UPBIT_*`를 채우고 `./deploy.sh deploy` 후, **UI에서 수동으로** 거래를 켠다.
 9. AWS가 여전히 정지 상태인지 다시 확인한다.
 
-> AWS 인스턴스는 **cutover 후에도 최소 7~14일 정지 상태로 유지**한다. 곧바로 destroy 하지 않는다.
-> (EC2를 stop 하면 인스턴스 요금은 멈추고 EBS·EIP 요금만 남는다 — 월 $5 내외의 보험이다.)
+> **Historical note**: 위 7~14일 롤백 창구는 2026-07-31 AWS 삭제로 종료됐다. 현재 AWS
+> 인스턴스/EBS/EIP를 start하거나 복구 경로로 사용하지 않는다.
 
-## 5. 롤백 — 거래 활성화 전/후가 다르다
+## 5. 롤백 — historical reference (현재 AWS 자산 없음)
 
-AWS를 남겨둔 것만으로는 롤백이 되지 않는다. **Vultr에서 거래가 시작된 뒤로는 AWS DB에 그 거래
-기록이 없기 때문에**, 그냥 AWS를 켜는 것은 롤백이 아니라 데이터 분기다.
+> **현재 적용 불가**: AWS 롤백 자산이 2026-07-31 삭제됐다. 아래 절차는 삭제 전 cutover 당시의
+> historical runbook이다. 현재 장애 복구는 거래 중지·최신 검증 백업 확보·새 Vultr 호스트 복원과
+> 수동 정합성 대조를 별도 승인으로 진행한다.
+
+당시 AWS를 남겨둔 것만으로는 롤백이 되지 않았다. **Vultr에서 거래가 시작된 뒤로는 AWS DB에 그
+거래 기록이 없기 때문에**, AWS를 그냥 켜는 것은 롤백이 아니라 데이터 분기였다.
 
 **① 거래 활성화 _전_ (안전)**
 
@@ -193,7 +212,9 @@ aws s3 cp s3://<버킷>/db-backups/trading-<TS>.sql.gz - | gunzip \
 
 - **API 호출이 전부 401/403**: `Access Control`에 현재 공인 IP를 추가했는지 확인(가장 흔한 원인).
 - **`deploy` 헬스체크 실패**: `./deploy.sh logs`. DB 마이그레이션(Flyway)·시크릿 누락이 흔한 원인.
-- **cloud-init 실패(도커 없음)**: `./deploy.sh ssh` 후 `cat /var/log/cloud-init-output.log`.
+- **cloud-init 실패(Docker 또는 AWS CLI 없음)**: `./deploy.sh ssh` 후
+  `cat /var/log/cloud-init-output.log`. AWS CLI는 [AWS 공식 Linux v2 설치 방식](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)을
+  사용하며, 설치가 끝나야 `/opt/app/.userdata-done` 마커가 생긴다.
 - **컨테이너가 OOM으로 재시작**: `./deploy.sh mem` 으로 확인 후, 부족하면 콘솔에서 상위 플랜으로
   리사이즈한다(`vc2-2c-2gb` $15 / `vc2-2c-4gb` $20). compose 제한도 함께 올릴 것.
 - **HTTPS만 안 됨**: Vultr 방화벽 규칙과 (활성 시) ufw를 함께 확인.
