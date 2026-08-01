@@ -111,6 +111,8 @@ updated: 2026-08-01
   인스턴스에는 외부 변경을 가하지 않았고, 추출 user-data `bash -n`/`shellcheck`, 전체 배포
   스크립트 정적검사, JDK 21 `compileKotlin`·`test`·`build`, Compose·wiki 검증을 통과했다.
   백업 버킷·자격증명 작업은 별도 후속으로 남겼다.
+- 2026-08-01: 위 cloud-init 수정과 문서 동기화 변경을 커밋 `ea72231`에 보존했다. 사용자 요청에
+  따라 이 브랜치를 PR로 올리고 merge한다. 현재 운영 인스턴스에는 재배포하지 않는다.
 
 # Next
 
