@@ -15,7 +15,7 @@
 | **암호화** | AES-GCM 256-bit (사용자별 Upbit/KIS API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
-| **배포** | AWS EC2 t4g.medium (arm64, 4GB) — 현행 / Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 이전 대상 / OCI A1.Flex (arm64, 12GB, Always Free) — 보류 |
+| **배포** | Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 현행 / AWS EC2 t4g.medium (arm64, 4GB) — 2026-07-31 삭제·historical / OCI A1.Flex (arm64, 12GB, Always Free) — 보류 |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
@@ -220,7 +220,9 @@ bot_configs
 ```
 
 - 외부 진입점은 Caddy(:80/:443). `app`은 호스트에 노출되지 않고(`expose` 만) Caddy 가 `app:8080` 으로 리버스 프록시한다(Let's Encrypt 자동 발급).
-- 배포(`deploy/aws/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull, 로컬(`docker-compose.yml`)은 caddy 없이 `build: .` 로컬 빌드(`app:8080` 직접).
+- 운영 배포(`deploy/vultr/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull,
+  AWS/OCI Compose 경로는 historical·보류 자산이다. 로컬(`docker-compose.yml`)은 caddy 없이 `build: .`
+  로컬 빌드(`app:8080` 직접)다.
 
 ---
 

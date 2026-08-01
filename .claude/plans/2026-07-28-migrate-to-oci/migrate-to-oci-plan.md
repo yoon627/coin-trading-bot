@@ -2,7 +2,7 @@
 title: migrate-to-oci — AWS EC2 탈출 (OCI 시도 → Vultr 서울 2GB 확정)
 status: done
 started: 2026-07-28
-updated: 2026-07-30
+updated: 2026-08-01
 ---
 
 > **방향 전환(2026-07-30)**: OCI 가입이 홈 리전 문제로 막혀(아래 Decisions) **Vultr 서울 2GB**로
@@ -81,19 +81,52 @@ updated: 2026-07-30
 - 2026-07-30: **AWS 정리 1단계** — `docker compose down` 후 EC2 인스턴스 `i-05575e4603c9c1f63` **stop**
   (삭제 아님). EC2 컴퓨트 요금 중단, EBS·EIP 만 남음(월 $5 내외). EIP `13.125.170.147` 유지되므로
   롤백 시 IP·도메인이 동일하다. 7~14일 롤백 창구로 두고 그 뒤 destroy.
+- 2026-07-31: **후속 운영 변경 완료** — ① 보유 도메인 `do-anything.cloud` 연결(A 레코드가 이미
+  Vultr 를 가리키고 있었고 `APP_DOMAIN` 만 비어 있었다 → 설정·재배포 후 Let's Encrypt 인증서
+  `CN=do-anything.cloud` 발급, 외부 HTTPS 200) ② 투자비율 0.1→0.15(1회 21,790→32,685원)
+  ③ 거래종목 4→8개(BTC·ETH·XRP·SOL·DOGE·ADA·AVAX·LINK, watchlist 13개 내에서 선택)
+  ④ **AWS 완전 삭제** — 인스턴스·EBS·EIP 전부 제거, 사후 조회 전부 `[]` → AWS 과금 $0
+  (롤백 창구 없어짐, 백업이 유일 안전망) ⑤ 맥 로컬 백업 launchd 등록(매일 03:10) + **복원 시험 통과**.
+  ⚠️ 이 과정에서 **"고쳤는데 반영 안 됨"이 두 번** 났다 — 트레일링(배포 계층 하드코딩)과
+  투자비율(render_server_env·compose 화이트리스트 누락, PR #76). 둘 다 issue #75 의 증상이다.
+  ⚠️ 거래종목은 `bot_state`(DB)가 부팅 시 복원되므로 `.env` 만 바꾸면 안 되고 DB UPDATE 가 필요했다.
+- 2026-08-01: **읽기 전용 운영·저장소 재검증** — Vultr `status` 는 app/caddy/postgres/redis
+  모두 정상( app 이미지 SHA=`2d125f8` ), `do-anything.cloud` A 레코드와 HTTPS 200·Let's Encrypt
+  인증서를 확인했다. 서버 `.env` 에 8종목·`TRADING_INVEST_RATIO=0.15`·TP5/trailing2/arm3 이
+  주입돼 있다. 정확한 `HTTP 429`/`Too Many Requests`/`rate limit` 검색은 0건이었고, `age 429xxms`
+  를 429로 세던 기존 집계는 오탐이었다. stale store fallback 경고는 남아 있다.
+  AWS 구 인스턴스 조회 결과와 EIP 조회 결과는 비어 있었으며, 이 세션에서는 AWS/Vultr/DNS에 쓰기를
+  수행하지 않았다. 로컬 launchd 백업은 성공 덤프 3개 뒤 최신 회차가 `Connection reset by peer` 로
+  실패했고, 원격 S3 백업 설정은 비어 있다. `compileKotlin`, `test`, 배포 스크립트 정적검사와
+  3개 Compose config 검증은 통과했다.
+- 2026-08-01: **Vultr 공급자 경보 확인** — 공식 상태 페이지의 `ALRT-F83KAW9`가 전역
+  `ongoing`으로 표시되어 신규 구독/인스턴스 배포가 간헐적으로 실패할 수 있다. 서울 `icn`에는
+  지역 장애가 표시되지 않았고 현재 운영 인스턴스의 SSH·HTTPS·컨테이너 상태도 정상이다.
+  별도 전역 DB cutover가 2026-08-03 15:00 UTC(한국시간 2026-08-04 00:00)부터 1시간 예정되어
+  콘솔/API와 리소스 생성·수정·삭제를 중단할 수 있다. 이 세션에서는 재배포·재생성·리소스 변경을
+  하지 않았다.
+- 2026-08-01: **cloud-init 보강 완료** — Ubuntu 24.04에서 `apt-get install awscli || true`가
+  실패해도 성공처럼 보이던 경로를 제거했다. 공식 AWS CLI v2 설치 파일을 `amd64`/`arm64`에
+  맞춰 설치하고 `aws --version`까지 확인한 뒤에만 `.userdata-done` 마커를 남긴다. 현재 운영
+  인스턴스에는 외부 변경을 가하지 않았고, 추출 user-data `bash -n`/`shellcheck`, 전체 배포
+  스크립트 정적검사, JDK 21 `compileKotlin`·`test`·`build`, Compose·wiki 검증을 통과했다.
+  백업 버킷·자격증명 작업은 별도 후속으로 남겼다.
 
 # Next
 
-**이전 완료 — Vultr 에서 거래 운영 중, AWS 는 stopped(롤백 대기).** 남은 것:
+**마이그레이션 목표는 완료(`status: done`)이며, 아래는 별도 후속 작업이다.**
 
-1. **PR 생성 + 머지** (진행 중). 머지 후 worktree 정리.
-2. **2026-08-06~13 경 AWS destroy** (별도 승인). 그 전까지 stopped 유지 = 롤백 창구.
-   destroy 전 최종 백업 확보. 복구: `aws ec2 start-instances --instance-ids i-05575e4603c9c1f63`
-   → `./deploy/aws/deploy.sh start` (EIP 유지라 IP·도메인 동일).
-3. (권장) **백업 활성화** — AWS 에서도 미설정이었다(무백업 운영 중). S3 호환 버킷 + 버킷 전용 키.
-   `deploy/vultr/README.md` 6절 참조.
-4. `# Deferred` 운영 이슈 3건 별도 작업 — 특히 **트레일링 스톱 dead** 는 실거래 리스크 직결.
-5. (보류) Oracle 서울 계정이 생기면 `deploy/oci/` 로 $0 재검토.
+1. **오프사이트 백업 도입** — 현재 맥 launchd 는 임시 로컬 백업이다. 성공 덤프가 있어도 최신
+   회차가 SSH 연결 리셋으로 실패할 수 있다. `deploy/vultr/.env` 에 버킷은 설정돼 있지만
+   버킷전용 `BACKUP_ACCESS_KEY_ID`/`BACKUP_SECRET_ACCESS_KEY` 는 비어 있고, 서버에도 백업
+   환경변수가 주입되지 않았다. 버킷·최소권한 키 준비는 사용자 확인이 필요한 외부 작업이다.
+2. **issue #75 후속 설계** — `application.yml`·`TradingProperties`·각 compose·각 deploy.sh에
+   기본값이 중복된다. #76은 누락된 전달만 고쳤고 기본값 단일화는 아직 하지 않았다.
+3. stale store fallback과 `#Deferred`의 `maxHoldDays`/`marketFilter`는 실거래 영향과 백테스트 결과를
+   확인한 별도 작업으로 재검토한다.
+4. **Vultr 공급자 변경 게이트** — `ALRT-F83KAW9`가 ongoing인 동안 새 인스턴스 생성·삭제·리사이즈를
+   실행하지 않는다. 2026-08-04 00:00~01:00 KST 전후에는 공식 상태 페이지를 재확인하고, 자동화된
+   인프라 변경을 일시 중지한다. 현재 기존 인스턴스는 정상이라 앱 재시작은 필요하지 않다.
 
 # Decisions
 
@@ -166,15 +199,27 @@ updated: 2026-07-30
   로 삼키는 구조(70행)는 포팅 시 개선 대상.
 - `deploy/aws/docker-compose.prod.yml` — caddy 128m/app 1280m/pg 512m/redis 192m. **그대로 이식**.
 - `deploy/aws/Caddyfile` — 클라우드 중립. 그대로 복사.
-- `deploy/oci/*` — 이번 작업 산출물.
+- `deploy/oci/*` — OCI 경로 보존 산출물(실행 미검증).
+- `deploy/vultr/deploy.sh` — 현재 운영 배포 경로. render/env 전달, cloud-init, SHA 고정 배포,
+  status/mem/stop/start/destroy 명령을 포함한다.
+- `deploy/vultr/backup.sh`, `deploy/vultr/README.md` — S3 호환 백업 계약과 로컬/오프사이트 백업
+  후속 절차. 현재 서버의 백업 환경변수는 비어 있다.
+- `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt` — #74에서
+  캔들 요청 간격·429 재시도를 고친 수집 경로.
+- `README.md`, `PROJECT_ANALYSIS.md`, `wiki/pages/entity/deployment-stack.md` — 현재 Vultr 운영과
+  삭제된 AWS 경로, 공급자 상태 페이지 변경 게이트를 반영한 문서.
 
 # Blockers
 
-- **reserved public IP 가 Always Free 한도에 포함되는지 미확인** — 공식 Always Free 문서에 명시
-  없음. 구현 전 확인 필요(포함이면 reserved 기본, 아니면 ephemeral + 변경 절차).
-- OCI 계정 미생성 — 홈 리전을 **South Korea Central (Seoul)** 로 지정해 생성해야 함(춘천 선택 시
-  Ampere A1 생성 불가, 사후 변경 사실상 불가). setup 이 CLI 로 홈리전을 조회해 불일치면 hard fail.
-- Always Free ARM 용량 부족("out of host capacity")은 상시 발생 — bounded retry 로 완화하되 보장 불가.
+- 마이그레이션 목표 자체에는 현재 blocker가 없다. OCI의 reserved IP·홈 리전·ARM 용량 항목은
+  현재 Vultr 운영과 무관한 역사적 blocker로 보존한다.
+- 오프사이트 백업은 버킷전용 자격증명과 외부 버킷 준비가 필요하다. 현재 로컬 키 칸이 비어 있어
+  에이전트가 추측하거나 외부 계정을 변경할 수 없다.
+- 로컬 launchd 최신 백업 회차는 `Connection reset by peer`로 실패했다. 원인 확정 전에는
+  복원 가능한 최신 백업을 보장한다고 기록하지 않는다.
+- Vultr 전역 배포 장애 경보(`ALRT-F83KAW9`)와 예정된 전역 DB cutover가 진행 중이다. 서울
+  `icn`의 현재 인스턴스 장애는 확인되지 않았지만, 신규 프로비저닝·삭제·리사이즈와 자동 변경은
+  상태 페이지 해소 확인 전 보류한다.
 
 # Acceptance
 
@@ -194,6 +239,7 @@ updated: 2026-07-30
 | 12 | **cutover runbook** 문서화 | `deploy/oci/README.md` 확인 | 단일 실행 게이트·AWS 정지 확인·최종 dump→복원→검증→수동 활성화 순서 포함 |
 | 13 | **2단계 롤백** 문서화 | 〃 | 거래 활성화 전/후 절차가 분리 기술, 자동 병합 금지 명시 |
 | 14 | 계정 준비 체크리스트 | 〃 | 홈리전 서울 고정, budget/cost alert, 무료 한도(Object Storage 20GB·API 5만/월 포함) 안내 |
+| 15 | Vultr cloud-init 의 AWS CLI 의존성 준비 | `bash -n`·추출 user-data 정적검사·`shellcheck` | `amd64`/`arm64` 공식 CLI v2 설치 경로, 설치 후 `aws --version` 확인, 검증 전 `.userdata-done` 미생성 |
 
 **실행 미검증(후속 작업)**: 실제 setup/deploy 실행, 인스턴스 기동, Caddy TLS 발급, 업비트 IP
 화이트리스트 통과, 데이터 복원 정합성, 백업 복원 시험.
@@ -251,19 +297,17 @@ Report 에서 사용자 판단으로 넘긴다. 대신 수정 반영 여부를 2
 
 **이번 cutover 중 발견한 범위 밖 운영 이슈 (이전과 무관 — AWS 에서도 동일하게 발생 중이었음)**
 
-- **업비트 캔들 수집 429 Too Many Requests** (심각도 중) — `MarketDataIngestionService` 가
-  NEAR/SUI/HBAR/AVAX/LINK/SHIB 등 다수 티커의 1분봉을 폴링하며 rate limit 을 초과해 반복 실패.
-  AWS·Vultr 양쪽 동일. 수집 대상 축소 또는 요청 간격·배치 조정 필요.
-  파일: `bot/.../marketdata/MarketDataIngestionService`(정확 경로 미확인).
+- **[완료, #74] 업비트 캔들 수집 429 Too Many Requests** — 요청 간격과 제한된 429 재시도를
+  적용했고, 현재 Vultr 로그에서 정확한 HTTP 429/rate-limit 문자열은 0건이다. stale fallback 경고는
+  별도 잔여 이슈로 남아 있다.
+  파일: `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt`.
 - **시세 저장소 stale 경고** (심각도 중) — AWS 에서 `Stale store price for KRW-BTC (age
   849143658ms)` = 약 9.8일. 매 tick WS/REST 폴백으로 동작 중이라 기능은 유지되나 저장소 갱신
   경로가 끊긴 상태. 429 와 같은 원인일 가능성 있음(같이 조사).
-- **트레일링 스톱이 사실상 dead** (심각도 중) — 앱이 부팅마다 경고:
-  `takeProfitPct(2.0) <= trailingStopPct(2.0) or trailingArmPct(0.0) — take-profit 이 선행해
-  트레일링이 사실상 도달 불가(dead)`. AWS `.env` 에 해당 값이 없어 앱 기본값으로 운영돼 왔다.
-  리스크 파라미터 재설정 필요(예: takeProfit 을 trailing 보다 크게, 또는 trailingArm 설정).
-- **AWS 배포가 `APP_VERSION=latest`** (심각도 하) — SHA 고정 없이 운영돼 무엇이 돌고 있는지
-  재현 불가했다. Vultr 판은 SHA 고정 + 자동 롤백을 쓴다.
+- **[완료, #74] 트레일링 스톱 dead 설정** — TP5/trailing2/arm3이 코드·배포 예제·실제 Vultr
+  서버에 정합하게 주입됐고, 현재 dead 경고는 0건이다.
+- **[종료, AWS 삭제 완료] AWS 배포가 `APP_VERSION=latest`** — AWS 운영 경로가 제거됐고 현재
+  Vultr는 이미지 SHA=`2d125f8`로 운영한다.
 - **`users_bak_20260602` 테이블 잔존** (심각도 하) — 임시 백업 테이블 3행이 덤프에 포함돼 이전됨.
 
 **조사 관련**

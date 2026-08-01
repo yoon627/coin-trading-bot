@@ -258,7 +258,42 @@ write_userdata() {
 set -ex
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl gnupg jq
+apt-get install -y ca-certificates curl gnupg jq unzip
+
+install_aws_cli() {
+    local deb_arch aws_arch aws_version tmp
+    if command -v aws >/dev/null 2>&1; then
+        aws_version="$(aws --version 2>&1)"
+        case "$aws_version" in
+            aws-cli/2*) printf '%s\n' "$aws_version"; return ;;
+            *) echo "FATAL: AWS CLI v2가 아닌 aws가 이미 설치되어 있습니다"; exit 1 ;;
+        esac
+    fi
+
+    deb_arch="$(dpkg --print-architecture)"
+    case "$deb_arch" in
+        amd64) aws_arch="x86_64" ;;
+        arm64) aws_arch="aarch64" ;;
+        *) echo "FATAL: AWS CLI 미지원 아키텍처: $deb_arch"; exit 1 ;;
+    esac
+
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o "$tmp/awscliv2.zip"
+    unzip -q "$tmp/awscliv2.zip" -d "$tmp"
+    "$tmp/aws/install"
+    trap - EXIT
+    rm -rf "$tmp"
+    command -v aws >/dev/null 2>&1 || { echo "FATAL: AWS CLI 설치 실패"; exit 1; }
+    aws_version="$(aws --version 2>&1)"
+    case "$aws_version" in
+        aws-cli/2*) printf '%s\n' "$aws_version" ;;
+        *) echo "FATAL: AWS CLI v2 설치 확인 실패"; exit 1 ;;
+    esac
+}
+
+# DB 백업이 S3 호환 스토리지로 업로드할 때 쓴다. 설치 실패를 숨기지 않는다.
+install_aws_cli
 
 # Docker 공식 저장소 (Ubuntu 는 기본 repo 의 docker.io 대신 docker-ce 를 쓴다 — compose plugin 포함)
 install -m 0755 -d /etc/apt/keyrings
@@ -271,9 +306,6 @@ apt-get update
 apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
 systemctl enable --now docker
-
-# DB 백업이 S3 호환 스토리지로 업로드할 때 쓴다(백업을 안 쓰면 그냥 남아있을 뿐).
-apt-get install -y awscli || true
 
 # Vultr 클라우드 방화벽이 앞단에서 막지만, 이미지에 ufw 가 켜져 있는 경우를 대비해 함께 연다.
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
@@ -353,7 +385,7 @@ do_setup() {
     log "Setup 완료"
     echo "  공인 IP: $PUBLIC_IP"
     echo "  SSH:     ssh -i $KEY_PEM ${SSH_USER}@${PUBLIC_IP}"
-    echo "  cloud-init(도커 설치) 완료까지 2~4분 대기 후: ./deploy/vultr/deploy.sh deploy"
+    echo "  cloud-init(Docker·AWS CLI 설치) 완료까지 2~4분 대기 후: ./deploy/vultr/deploy.sh deploy"
 }
 
 # StrictHostKeyChecking=accept-new: 최초 접속만 자동 수용, 이후 호스트키 변경은 거부.
@@ -363,7 +395,7 @@ ssh_inst() {
 }
 
 wait_for_docker() {
-    log "인스턴스 준비 대기 (cloud-init + docker)"
+    log "인스턴스 준비 대기 (cloud-init + Docker·AWS CLI)"
     local i
     for i in $(seq 1 40); do
         if ssh_inst 'test -f /opt/app/.userdata-done && docker info' >/dev/null 2>&1; then
@@ -371,7 +403,7 @@ wait_for_docker() {
         fi
         sleep 10
     done
-    echo "ERROR: docker 준비 타임아웃. cloud-init 로그 확인:"
+    echo "ERROR: cloud-init 의존성 준비 타임아웃. 로그 확인:"
     echo "  ./deploy/vultr/deploy.sh ssh   후  cat /var/log/cloud-init-output.log"
     exit 1
 }
