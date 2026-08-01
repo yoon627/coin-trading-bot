@@ -19,6 +19,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.test.runTest
 import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
@@ -292,6 +293,29 @@ class TradeExecutionServiceTest {
 
         service.saveAndNotify(record, client, null, null)
 
+        coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
+    }
+
+    @Test
+    fun `commitFill keeps audit committed when notification fails`() = runTest {
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fill-1") } returns Mono.just(false)
+        coEvery { client.getAccounts() } returns emptyList()
+        every { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) } throws IllegalStateException("discord down")
+        val statePersisted = AtomicBoolean(false)
+        val record = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, exchangeOrderId = "fill-1", userId = 1L,
+        )
+
+        val recorded = service.commitFill(
+            persistState = { statePersisted.set(true) },
+            record = record,
+        )
+        service.notifyTrade(record, client, null, null)
+
+        assertTrue(recorded)
+        assertTrue(statePersisted.get())
+        coVerify(exactly = 1) { tradeRecordRepository.save(record) }
         coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
     }
 }

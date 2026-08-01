@@ -10,6 +10,10 @@ import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
 import io.mockk.mockk
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -48,11 +52,20 @@ class TradeAuditAtomicityTest {
     }
 
     /** 커밋이 성공하는 배선 — persistState 를 실행해 staged 사본을 캡처한다. */
-    private fun succeedingManager() = PositionManager(
+    private fun managerWithCommitFill(
+        commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean,
+        notifyTrade: suspend (record: TradeRecord) -> Unit = {},
+    ) = PositionManager(
         upbitClient, properties, stateService, USER_ID,
+        commitFill = commitFill,
+        notifyTrade = notifyTrade,
+    )
+
+    private fun succeedingManager() = managerWithCommitFill(
         commitFill = { persistState, record ->
             committedRecords += record
             persistState()
+            true
         },
     )
 
@@ -74,6 +87,30 @@ class TradeAuditAtomicityTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.01", avgBuyPrice = "50000000"),
         )
+    }
+
+    @Test
+    fun `감사 커밋 후 메모리 전이를 적용하고 알림 실패를 격리한다`() = runTest {
+        stubFilledBuy()
+        val state = buyPendingState()
+        val memoryAppliedWhenNotified = AtomicBoolean(false)
+        val manager = managerWithCommitFill(
+            commitFill = { persistState, _ ->
+                persistState()
+                true
+            },
+            notifyTrade = {
+                memoryAppliedWhenNotified.set(state.position)
+                throw IllegalStateException("discord down")
+            },
+        )
+
+        val record = manager.reconcilePendingBuy(TICKER, state, PRICE)
+
+        assertNotNull(record)
+        assertTrue(memoryAppliedWhenNotified.get(), "알림 실패 전에도 커밋된 메모리 전이가 먼저 적용돼야 한다")
+        assertTrue(state.position)
+        assertNull(state.pendingBuyUuid)
     }
 
     // --- 매수 체결 ---
@@ -110,6 +147,39 @@ class TradeAuditAtomicityTest {
         assertEquals(1, stagedStates.size)
         assertNull(stagedStates.single().pendingBuyUuid)
         assertTrue(stagedStates.single().position)
+    }
+
+    @Test
+    fun `매수 후처리는 취소되어도 감사 커밋을 완주한다`() = runTest {
+        stubFilledBuy()
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "KRW", balance = "1000000"),
+            Account(currency = "BTC", balance = "0.01", avgBuyPrice = "50000000"),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = BUY_UUID)
+        val commitEntered = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+        val committed = AtomicBoolean(false)
+        val manager = managerWithCommitFill(
+            commitFill = { persistState, _ ->
+                commitEntered.complete(Unit)
+                releaseCommit.await()
+                persistState()
+                committed.set(true)
+                true
+            },
+        )
+        val state = TradingState(ticker = TICKER)
+
+        val job = async { manager.buy(TICKER, state, PRICE, "combined") }
+        commitEntered.await()
+        job.cancel()
+        releaseCommit.complete(Unit)
+        assertThrows<kotlinx.coroutines.CancellationException> { job.await() }
+
+        assertTrue(committed.get(), "주문 후처리가 취소로 중단되면 감사 기록이 유실된다")
+        assertTrue(state.position)
+        assertNull(state.pendingBuyUuid)
     }
 
     // --- 매도 체결 ---
@@ -158,8 +228,8 @@ class TradeAuditAtomicityTest {
         assertEquals(USER_ID, record!!.userId)
         assertFalse(state.position)
         assertNull(state.pendingSellUuid)
-        assertEquals(1, stagedStates.size)
-        assertFalse(stagedStates.single().position, "트랜잭션에 실린 사본도 청산이 반영돼야 한다")
+        assertEquals(2, stagedStates.size, "주문 접수 직후 pending 저장과 원자 커밋의 상태 저장을 구분한다")
+        assertFalse(stagedStates.last().position, "트랜잭션에 실린 사본도 청산이 반영돼야 한다")
     }
 
     private companion object {

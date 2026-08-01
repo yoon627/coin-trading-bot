@@ -322,13 +322,10 @@ class UserTradingManager(
         val positionManager = PositionManager(
             client, tradingProperties, tradingStateService, user.id!!,
             commitFill = { persistState, record ->
-                tradeExecutionService.commitFill(
-                    persistState = persistState,
-                    record = record,
-                    client = client,
-                    username = user.username,
-                    discordWebhookUrl = user.discordWebhookUrl,
-                )
+                tradeExecutionService.commitFill(persistState, record)
+            },
+            notifyTrade = { record ->
+                tradeExecutionService.notifyTrade(record, client, user.username, user.discordWebhookUrl)
             },
         )
         val dailyResetManager = DailyResetManager(tradingProperties)
@@ -337,7 +334,6 @@ class UserTradingManager(
             upbitClient = client,
             positionManager = positionManager,
             dailyResetManager = dailyResetManager,
-            tradeExecutionService = tradeExecutionService,
             strategies = strategies,
             tradingProperties = tradingProperties,
             userId = user.id!!,

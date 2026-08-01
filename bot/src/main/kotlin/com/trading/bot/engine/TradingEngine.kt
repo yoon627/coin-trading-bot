@@ -2,7 +2,6 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.SellReason
-import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
@@ -17,7 +16,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -25,14 +23,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
 class TradingEngine(
     private val upbitClient: UpbitClient,
     private val positionManager: PositionManager,
     private val dailyResetManager: DailyResetManager,
-    private val tradeExecutionService: TradeExecutionService,
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
     private val userId: Long = 0,
@@ -284,6 +280,7 @@ class TradingEngine(
                 strategy.shouldBuy(candles, currentPrice, tradingProperties)
             }
             if (shouldBuy) {
+                // 체결 확정·상태 전이·감사 기록·커밋 후 알림은 PositionManager.commitFill 이 담당한다(#52).
                 positionManager.buy(ticker, state, currentPrice, strategy.name)
             }
         } catch (e: CancellationException) {

@@ -31,10 +31,11 @@ class PositionManager(
      * 호출자가 메모리 전이를 적용하지 않게 하고, pending 을 남겨 다음 tick reconcile 이 재시도하게 한다.
      *
      * 기본값은 상태 저장만 하는 구현 — 감사 기록이 관심사가 아닌 단위 테스트용이다.
-     * **프로덕션 배선은 `UserTradingManager.createEngine` 이 `TradeExecutionService.commitFill` 을 주입한다.**
+     * **프로덕션 배선은 `UserTradingManager.createEngine` 이 DB 커밋과 커밋 후 알림을 각각 주입한다.**
      */
-    private val commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Unit =
-        { persistState, _ -> persistState() },
+    private val commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean =
+        { persistState, _ -> persistState(); true },
+    private val notifyTrade: suspend (record: TradeRecord) -> Unit = {},
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -286,12 +287,31 @@ class PositionManager(
             // 여기서 현재 설정으로 새로 찍히고, 재시작 복원(기존 포지션 연장)이면 durable 값이 그대로 유지된다.
             s.exitParams = s.exitParams ?: snapshot
         }
-        // 전이가 반영된 사본을 감사 기록과 한 트랜잭션으로 커밋. 실패 시 예외가 올라가 아래 전이가 적용되지 않으므로
-        // 원본 state 의 pendingBuyUuid 가 살아남아 다음 tick reconcile 이 재시도한다(#52).
-        commitFill({ tradingStateService.upsert(userId, state.copy().also(applyTransition)) }, record)
-        applyTransition(state)
+        // 전이가 반영된 사본을 감사 기록과 한 트랜잭션으로 커밋한 뒤 원본 메모리 전이를 적용한다(#52).
+        commitFillAndApply(state, record, applyTransition)
         log.info("BUY {} filled: volume={}, avgPrice={}, amount={}", ticker, volume, fillPrice, totalAmount)
         return record
+    }
+
+    /** DB 커밋 성공 후 메모리 전이를 적용하고, 멱등 skip이 아니면 알림을 best-effort로 보낸다. */
+    private suspend fun commitFillAndApply(
+        state: TradingState,
+        record: TradeRecord,
+        applyTransition: (TradingState) -> Unit,
+    ) {
+        val recorded = commitFill(
+            { tradingStateService.upsert(userId, state.copy().also(applyTransition)) },
+            record,
+        )
+        applyTransition(state)
+        if (!recorded) return
+        try {
+            notifyTrade(record)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Trade notification failed after commit for {}: {}", record.ticker, e.message)
+        }
     }
 
     private fun snapshotExitParams() = ExitParamsSnapshot(
@@ -503,8 +523,7 @@ class PositionManager(
                 } else {
                     { s -> s.markSold(now) }
                 }
-                commitFill({ tradingStateService.upsert(userId, state.copy().also(applyTransition)) }, record)
-                applyTransition(state)
+                commitFillAndApply(state, record, applyTransition)
                 if (remaining > 0.0) {
                     log.info("SELL {} partial via reconcile: executed={}, remaining={} — position kept", ticker, executed, remaining)
                 } else {
@@ -544,8 +563,7 @@ class PositionManager(
                 val now = LocalDateTime.now(TradingDay.KST)
                 val applyTransition: (TradingState) -> Unit = { s -> s.markSold(now) }
                 // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패 시 pending 이 남아 다음 tick 이 재시도한다.
-                commitFill({ tradingStateService.upsert(userId, state.copy().also(applyTransition)) }, record)
-                applyTransition(state)
+                commitFillAndApply(state, record, applyTransition)
                 log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, volume)
                 record
             } else {
@@ -576,8 +594,7 @@ class PositionManager(
         val record = buildSellRecord(ticker, state, currentPrice, volume, reason)
         val now = LocalDateTime.now(TradingDay.KST)
         val applyTransition: (TradingState) -> Unit = { s -> s.markSold(now) }
-        commitFill({ tradingStateService.upsert(userId, state.copy().also(applyTransition)) }, record)
-        applyTransition(state)
+        commitFillAndApply(state, record, applyTransition)
         log.info(
             "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
             ticker, currentPrice, volume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", record.reason,

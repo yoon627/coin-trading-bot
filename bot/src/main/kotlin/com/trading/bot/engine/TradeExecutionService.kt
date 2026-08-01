@@ -10,6 +10,7 @@ import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.common.config.TradingProperties
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
@@ -212,30 +213,35 @@ class TradeExecutionService(
     ) {
         val krwBalance = try {
             client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
-        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
+        try {
+            discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Trade notification failed for {}: {}", record.ticker, e.message)
+        }
     }
 
     /**
-     * 엔진 체결 경로용 — **상태 전이 저장과 감사 기록을 한 트랜잭션으로 커밋**하고, 성공 후에만 알림한다(#52).
+     * 엔진 체결 경로용 — **상태 전이 저장과 감사 기록을 한 트랜잭션으로 커밋**한다(#52).
      *
      * 이 원자화가 없으면 pending 해소가 먼저 커밋돼, 감사 저장이 transient 실패했을 때 재시도 근거가
      * 사라진 채 기록만 영구 유실된다(현금흐름은 발생했는데 거래·손익 기록이 없다).
      *
      * 실패 시 예외를 그대로 올린다 — 호출자는 **메모리 상태 전이를 적용하지 않아야** 다음 tick reconcile 이
-     * 재시도할 수 있다. 알림은 커밋 후 외부 IO 라 실패해도 거래 기록을 되돌리지 않는다.
+     * 재시도할 수 있다. 반환값은 새 audit 행을 기록했는지이며, 알림은 호출자가 메모리 전이를 적용한 뒤 실행한다.
      *
      * @param persistState 트랜잭션 안에서 실행될 상태 저장(전이가 반영된 사본을 upsert)
      */
     suspend fun commitFill(
         persistState: suspend () -> Unit,
         record: TradeRecord,
-        client: UpbitClient,
-        username: String?,
-        discordWebhookUrl: String?,
-    ) {
+    ): Boolean {
         val recorded = try {
             transactionalOperator.transactional(
                 mono {
@@ -243,6 +249,8 @@ class TradeExecutionService(
                     saveAudit(record)
                 }
             ).awaitSingle()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.error(
                 "Fill commit failed (rolled back — pending kept for reconcile): userId={}, market={}, side={}",
@@ -250,9 +258,7 @@ class TradeExecutionService(
             )
             throw e
         }
-        // 멱등 skip 이면 이미 알린 거래다 — 재시도마다 중복 알림이 나가지 않게 여기서 멈춘다.
-        if (!recorded) return
-        notifyTrade(record, client, username, discordWebhookUrl)
+        return recorded
     }
 
     /**
