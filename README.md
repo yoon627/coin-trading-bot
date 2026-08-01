@@ -280,9 +280,19 @@ AWS→OCI **cutover 절차**(같은 Upbit 계정에 두 봇이 붙지 않도록 
 
 ```text
 Pull request ──> ./gradlew test --parallel
-main push    ──> test ──> multi-arch Docker image ──> GHCR
-manual deploy ─> deploy/vultr/deploy.sh deploy ──> Vultr가 대상 SHA 이미지 pull(헬스 실패 시 자동 롤백)
+main push    ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
+main manual  ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
 ```
+
+Vultr 자동 배포는 `test`와 GHCR push가 모두 성공한 뒤에만 실행된다. Actions repository secrets에
+`VULTR_DEPLOY_ENV`(운영 배포용 `.env`), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`,
+`VULTR_SSH_USER`를 등록해야 한다. `VULTR_API_KEY`는 기존 인스턴스에 SSH로 배포하는 경로에서는
+사용하지 않는다. job은 배포 전에 원격 app 컨테이너의 40자리 commit SHA를 읽어 rollback 기준으로
+사용하고, `deploy.sh`의 migration gate와 180초 health check를 그대로 적용한다. PR에서는 배포하지
+않으며, 동시 배포는 하나만 허용한다.
+
+자동화가 멈추면 Actions 로그의 실패 단계와 Vultr에서 `./deploy/vultr/deploy.sh status` 결과를 먼저
+확인한다. 수동 복구가 필요하면 운영용 `.env`와 SSH key를 로컬에 준비한 뒤 기존 명령을 직접 실행한다.
 
 ## 참고 사항
 

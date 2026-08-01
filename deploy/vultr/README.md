@@ -88,9 +88,25 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 ./deploy.sh destroy  # 삭제 (과금 중단)
 ```
 
-새 버전 배포: `main` push → Actions 빌드 완료 → `./deploy.sh deploy`.
+새 버전 배포: `main` push → Actions 테스트/이미지 push → Vultr SSH deploy job → `./deploy.sh deploy`.
 대상 커밋 SHA로 이미지를 고정하고, 헬스체크(180s) 실패 시 직전 정상 SHA로 **자동 롤백**한다.
 단 **DB migration이 포함된 배포**가 실패하면 자동 롤백을 건너뛰고 수동 개입을 안내한다.
+
+### GitHub Actions 자동 배포
+
+`.github/workflows/deploy.yml`의 `deploy-vultr` job은 인스턴스 생성·삭제 없이 현재 운영 호스트에만
+SSH로 배포한다. 다음 repository secrets가 필요하다.
+
+| Secret | 내용 |
+|---|---|
+| `VULTR_DEPLOY_ENV` | 운영 `.env` 내용(multiline) |
+| `VULTR_PUBLIC_IP` | 현재 운영 인스턴스 공인 IP |
+| `VULTR_SSH_PRIVATE_KEY` | `coin-trading-bot-key.pem` 원문 |
+| `VULTR_SSH_USER` | Vultr SSH 사용자(현재 `root`) |
+
+job은 기존 서버의 실행 중인 이미지가 40자리 commit SHA인지 먼저 확인한다. `latest` 또는 digest만
+남아 있으면 직전 정상 버전을 안전하게 특정할 수 없어 배포를 거부한다. 배포 전후의 임시 `.env`,
+`.state`, SSH key는 Actions runner에서 삭제한다. 수동 배포와 Actions 배포를 동시에 실행하지 않는다.
 
 ## 3. AWS → Vultr 데이터 이전 (완료된 historical runbook)
 
