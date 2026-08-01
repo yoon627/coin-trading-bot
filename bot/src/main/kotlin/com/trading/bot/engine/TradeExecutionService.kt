@@ -203,7 +203,8 @@ class TradeExecutionService(
 
     /**
      * 커밋 후 알림. 잔고 조회·Discord 발송은 외부 IO 라 트랜잭션 밖에서 수행한다.
-     * 여기서 실패해도 이미 커밋된 거래 기록은 되돌리지 않는다(알림은 감사 기록의 부속이다).
+     * Discord 발송 예외는 호출자에게 전파한다. 수동 주문은 이를 recorded=false 로 노출하고,
+     * 엔진 체결은 PositionManager가 이미 적용한 메모리 전이를 유지한 채 격리한다.
      */
     suspend fun notifyTrade(
         record: TradeRecord,
@@ -218,13 +219,7 @@ class TradeExecutionService(
         } catch (_: Exception) {
             null
         }
-        try {
-            discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("Trade notification failed for {}: {}", record.ticker, e.message)
-        }
+        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
     }
 
     /**

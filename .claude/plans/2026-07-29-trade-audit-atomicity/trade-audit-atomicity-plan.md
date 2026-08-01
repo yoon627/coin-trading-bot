@@ -20,10 +20,12 @@ updated: 2026-08-01
 - 2026-08-01: simplify 점검에서 `commitFillAndApply` 공통화와 callback 실패 격리·취소 재전파의 필요성을 확인했다. `wiki/verify.sh`, `wiki/smoke.sh`(10/10), link check가 최종 문서 상태에서 모두 통과했다.
 - 2026-08-02: 사용자가 변경사항 커밋과 PR 생성을 승인했다. merge는 사용자가 직접 진행한다.
 - 2026-08-02: 검증된 코드·테스트·문서·plan 변경을 `065eb15` (`fix(engine): 체결 감사 커밋 원자성 보장 (#52)`)로 커밋했다. 현재 작업 브랜치는 clean이다.
+- 2026-08-02: pre-push Codex review가 P2를 발견해 push가 차단됐다. 공통 `notifyTrade`가 수동 주문의 `recorded=false` 후처리 계약까지 삼키는 경로이며, 엔진에서는 `PositionManager`가 이미 알림 실패를 격리한다. 수동 경로 회귀 테스트를 추가하고 `notifyTrade` 예외 전파를 복원한다.
+- 2026-08-02: 새 수동 알림 실패 테스트가 기존 코드에서 Red임을 확인한 뒤, `notifyTrade`의 Discord 예외 전파와 `recordOrder`의 `recorded=false` 계약을 복원했다. 관련 테스트·전체 `test`·`compileKotlin`이 JDK 21에서 통과했다.
 
 # Next
 
-`origin/trade-audit-atomicity`로 push한 뒤 PR을 생성한다. merge는 사용자가 진행하며, 이 세션에서는 merge하지 않는다.
+P2 fix와 회귀 테스트를 커밋하고 push한 뒤 PR을 생성한다. merge는 사용자가 진행하며, 이 세션에서는 merge하지 않는다.
 
 # Decisions
 
@@ -122,6 +124,7 @@ if (recorded) notifyTrade(record)                     // 커밋 후 알림
 
 - `fix`: 첫 코드 리뷰의 Major — 알림 실패 시 메모리 전이가 누락될 수 있던 순서를 `commitFill` → 메모리 적용 → `notifyTrade`로 분리했고, 알림 실패 격리 테스트를 추가했다.
 - `fix`: 재리뷰의 Major — 실제 `UserTradingManager.createEngine`의 `TradeExecutionService` callback 배선과 `CancellationException` 호출자 전파 assertion을 추가했고 관련 테스트가 통과했다.
+- `fix`: pre-push review의 P2 — 엔진 알림 실패 격리를 위해 `notifyTrade`가 수동 `recordOrder`의 `recorded=false` 계약을 깨던 문제를 수동 알림 실패 회귀 테스트와 예외 전파로 수정했고, 관련 테스트가 통과했다.
 
 # Deferred
 
