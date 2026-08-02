@@ -39,6 +39,10 @@ sources:
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.
   최초 실행은 healthy 컨테이너에서만 rollback 기준을 bootstrap하며, queued stale SHA는 배포하지 않는다.
+- GitHub-hosted runner의 동적 출발 IP 때문에 Vultr cloud firewall의 `ctb-ssh-github-actions` 22/tcp
+  `0.0.0.0/0` 규칙이 필요하며, 운영 SSH는 password 금지·root key-only로 hardening되어 있다.
+- 수동 SSH는 `SSH_ALLOW_CIDR`로 제한하고, `setup_firewall`은 전용 규칙이 잘못되거나 중복되면
+  실패한다. Actions는 추적된 `known_hosts`와 strict host-key checking을 사용한다.
 - 배포 스크립트 자체의 셸 함정 두 가지가 수정된 채 보관돼 있다 — 되돌리지 않도록 [[lesson-deploy-script-pitfalls]] 확인.
 - 인프라 변경 전에는 [Vultr 상태 페이지](https://status.vultr.com/)의 전역 장애·maintenance를 확인한다.
 - 보안그룹이 단일 IP 로 잠겨 있으면 다른 디바이스에서 접근이 안 된다([[lesson-single-point-verification]]).

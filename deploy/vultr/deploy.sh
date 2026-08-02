@@ -237,7 +237,21 @@ setup_firewall() {
     # "규칙이 하나라도 있으면 통과" 로 판정하면 SSH 대역이 바뀌었을 때 옛 규칙이 남아 위험하다.
     api GET "/firewalls/${FIREWALL_ID}/rules?per_page=500"
     local old_ids rid stale=0
-    old_ids="$(printf '%s' "$API_BODY" | jq -r '.firewall_rules[]? | select((.notes // "") | startswith("ctb-")) | .id')"
+    local actions_rule_count actions_rule_invalid
+    actions_rule_count="$(printf '%s' "$API_BODY" | jq '[.firewall_rules[]? | select((.notes // "") == "ctb-ssh-github-actions")] | length')"
+    actions_rule_invalid="$(printf '%s' "$API_BODY" | jq '[.firewall_rules[]? | select((.notes // "") == "ctb-ssh-github-actions") | select((.ip_type // "") != "v4" or (.protocol // "") != "tcp" or (((.port // "") | tostring) != "22") or (.subnet // "") != "0.0.0.0" or (.subnet_size // -1) != 0)] | length')"
+    if (( actions_rule_invalid > 0 )); then
+        echo "ERROR: ctb-ssh-github-actions 규칙이 22/tcp, 0.0.0.0/0 형식이 아닙니다. Vultr 콘솔/API에서 수정 후 재실행하세요." >&2
+        exit 1
+    fi
+    if (( actions_rule_count > 1 )); then
+        echo "ERROR: ctb-ssh-github-actions 규칙이 중복됩니다. Vultr 콘솔/API에서 하나만 남긴 후 재실행하세요." >&2
+        exit 1
+    fi
+    if (( actions_rule_count == 0 )); then
+        echo "  WARN: ctb-ssh-github-actions 규칙이 없습니다 — GitHub Actions SSH 배포는 timeout됩니다." >&2
+    fi
+    old_ids="$(printf '%s' "$API_BODY" | jq -r '.firewall_rules[]? | select((.notes // "") | startswith("ctb-") and . != "ctb-ssh-github-actions") | .id')"
     for rid in $old_ids; do
         # 삭제 실패를 삼키면 옛 규칙(예: 이전 집 IP 로 열린 SSH)이 남은 채 새 규칙이 더해져
         # 접근 범위가 의도보다 넓어진다 — 조용히 넘기지 않고 경고한다.

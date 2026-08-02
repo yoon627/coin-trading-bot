@@ -1,6 +1,6 @@
 ---
 title: auto-deploy-vultr — main push Vultr SSH 자동 배포
-status: in_progress
+status: done
 started: 2026-08-02
 updated: 2026-08-02
 ---
@@ -26,11 +26,15 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - 2026-08-02: P1/P2를 수정하고 workflow 계약·embedded shellcheck·Compose fork-image 해석·`bash -n`/error-level shellcheck·Wiki 검증·JDK 21 `./gradlew test`를 재통과했다.
 - 2026-08-02: 재검토에서 stopped app 컨테이너를 `ps -q`가 놓치는 P1을 발견했다. rollback 기준 조회를 `docker compose ps -aq app`로 보강해 장애 후 복구 배포가 사전검사에서 막히지 않게 수정한다.
 - 2026-08-02: 재검토에서 concurrency queue 순서 미보장과 stopped/실패 SHA를 `LAST_GOOD_SHA`로 오인할 수 있는 P1을 발견했다. 최신 `origin/main` guard와 원격 성공 SHA 파일(`/opt/app/.last-good-sha`)로 수정한다.
+- 2026-08-02: PR #79를 merge했지만 main Actions run `30729505959`의 SSH 접속이 timeout됐다. Vultr cloud firewall의 SSH 규칙이 `203.251.147.201/32`만 허용하는 것을 확인했고, GitHub Actions CIDR 목록은 약 7,297개라 정적 allowlist가 부적합하다.
+- 2026-08-02: 운영 SSH 설정을 read-only 점검한 결과 `passwordauthentication yes`, `permitrootlogin yes`, `fail2ban inactive`였다. cloud firewall 공개 전 key-only hardening이 필요하므로 사용자 확인 blocker로 전환한다.
+- 2026-08-02: 사용자 확인 후 SSH를 `passwordauthentication no`, `kbdinteractiveauthentication no`, `permitrootlogin prohibit-password`로 harden하고 `sshd -t`·reload·재접속을 확인했다. Vultr firewall에는 `ctb-ssh-github-actions` 22/tcp `0.0.0.0/0`을 추가한 뒤 기존 local-only rule을 제거했다.
+- 2026-08-02: Actions attempt 3 성공(`30729505959`): test/GHCR/deploy/cleanup 모두 통과, 대상 SHA `db57ece…`, app/DB/Redis healthy, HTTPS health `UP`, remote `.last-good-sha` 일치.
+- 2026-08-02: 추가 인스턴스 `6700ff09-…`를 삭제했고 API GET이 404를 반환했다. 운영 인스턴스 `1063c481-…`는 `active/running`으로 유지됨을 재확인했다.
 
 # Next
 
-1. 수정 커밋을 pre-push 게이트 통과 후 push하고 PR/merge를 실행한 뒤, merge된 Actions run과 운영 SHA/health를 관찰한다.
-2. 같은 확인 흐름에서 추가 인스턴스 `6700ff09-…`의 상태를 재조회한 뒤 승인된 경우에만 삭제하고 삭제 후 목록에서 사라짐을 관찰한다.
+없음 — SSH 배포 자동화, 운영 반영, health 확인, 추가 인스턴스 삭제까지 완료했다.
 
 # Decisions
 
@@ -45,6 +49,7 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - pre-push P2 처분: Compose app image를 `${GHCR_IMAGE:-...}:${APP_VERSION}`으로 변경해 workflow가 push한 저장소와 deploy script가 pull하는 저장소를 일치시킨다.
 - queued 실행이 `origin/main`과 다른 SHA이면 deploy steps를 skip한다. `cancel-in-progress: false`를 유지해 현재 배포를 중단하지 않으면서 stale 실행의 역전 배포를 막는다.
 - rollback 기준은 remote `/opt/app/.last-good-sha`에 health 성공 후에만 기록한다. 파일이 없는 최초 bootstrap은 현재 app container health와 SHA를 함께 검증한다.
+- GitHub-hosted runner는 동적 IP를 사용하므로 cloud firewall에 `ctb-ssh-github-actions` 22/tcp `0.0.0.0/0`을 유지한다. 공개 전 SSH를 key-only로 harden하고 `setup_firewall` 재실행 시 전용 규칙을 보존한다.
 - 추가 인스턴스 `6700ff09-…`는 라벨·운영 state·현재 workflow 참조가 없고 운영 인스턴스와 생성/OS/backup feature가 다르다. 초기/실패 provisioning 잔여로 판단하지만, API가 생성 주체를 제공하지 않아 원인은 추정으로 기록한다.
 
 # Key Files
@@ -65,12 +70,16 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - [x] workflow YAML/embedded shell 및 기존 배포 스크립트가 정적검사를 통과한다. (`yaml_parse`, embedded `shellcheck`, `bash -n`, error-level `shellcheck`)
 - [x] README·Vultr README·deployment wiki가 실제 workflow 동작과 일치한다. (diff/self-review, Wiki checks)
 - [x] CI 및 배포 스크립트가 검증된 운영 host key를 strict checking으로 사용하고, Compose image 저장소가 workflow image와 일치한다. (fingerprint 대조, workflow/Compose checks)
-- [ ] queued stale SHA가 배포되지 않고, 성공 확인 SHA가 원격 persistent state로 보존되어 연속 실패에도 rollback 기준이 유지된다. (merge 후 Actions 관찰 필요)
-- [ ] 추가 인스턴스 삭제는 대상 ID·상태를 재확인한 뒤 사용자 승인 후 수행하고, 삭제 후 Vultr 목록에서 사라짐을 관찰한다.
+- [x] queued stale SHA가 배포되지 않고, 성공 확인 SHA가 원격 persistent state로 보존되어 연속 실패에도 rollback 기준이 유지된다. (Actions attempt 3, remote `.last-good-sha` 대조)
+- [x] 추가 인스턴스 삭제는 대상 ID·상태를 재확인한 뒤 사용자 승인 후 수행하고, 삭제 후 Vultr 목록에서 사라짐을 관찰한다. (DELETE 204, GET 404; production instance retained)
+
+- [x] SSH key-only hardening과 GitHub-hosted runner용 cloud firewall 규칙을 적용하고 재접속/Actions 배포를 확인한다. (effective `sshd -T`, firewall API, Actions attempt 3)
 
 # Review Disposition
 
 - Codex plan/code reviewer 실행은 완료했으나 hook 출력이 최종 결과를 가려 회수하지 못했다. 메인 에이전트가 workflow 조건·secret 경계·rollback state·cleanup·문서 정합성을 직접 재검토한다.
+- 후속 Codex code review의 Minor 지적 2건은 전용 firewall 규칙 형식·중복 검증과 SSH hardening 적용/검증 명령 문서화로 수정 완료했다.
+- 후속 Codex code review의 Minor 지적 처분: firewall 규칙 검증은 `fix`, hardening runbook 보강은 `fix`.
 - pre-push Codex finding `[P1]` 호스트 키 미고정과 `[P2]` 이미지 저장소 drift는 고정 known_hosts·strict checking·`GHCR_IMAGE` Compose 변수로 수정 완료했다.
 - 추가 pre-push finding `[P1]` stopped app 컨테이너 조회 누락은 `docker compose ps -aq app`로 수정한다.
 - 추가 pre-push findings `[P1]` concurrency 순서 drift와 실패 SHA 오인은 최신 `origin/main` guard 및 `/opt/app/.last-good-sha` 성공 후 기록으로 수정한다.
@@ -78,6 +87,4 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 
 # Blockers
 
-- 코드 구현 자체 blocker 없음.
-- live Actions 배포 관찰은 branch push/PR/merge 이후 가능하다.
-- 추가 인스턴스 삭제는 되돌리기 어려운 외부 변경이므로 구현·검증 완료 후 실행 직전 사용자 확인 필요.
+없음.
