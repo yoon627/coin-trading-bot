@@ -110,7 +110,7 @@ jobs:
             -i deploy/vultr/coin-trading-bot-key.pem)
           current_image="$(ssh "${ssh_opts[@]}" \
             "${VULTR_SSH_USER}@${VULTR_PUBLIC_IP}" \
-            'cd /opt/app && cid="$(docker compose ps -q app)" && test -n "$cid" && docker inspect --format "{{.Config.Image}}" "$cid"')"
+            'cd /opt/app && cid="$(docker compose ps -aq app | head -n 1)" && test -n "$cid" && docker inspect --format "{{.Config.Image}}" "$cid"')"
           last_good_sha="${current_image##*:}"
           if ! [[ "$last_good_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "ERROR: current Vultr app image is not a commit SHA; refusing automatic rollback setup" >&2

@@ -24,6 +24,7 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - 2026-08-02: 최종 self-review 후 `15597be`(`ci: add automatic Vultr SSH deployment`)로 작업 브랜치에 커밋했다. Vultr 인스턴스 두 개의 상태도 삭제 직전 확인용으로 재조회했다.
 - 2026-08-02: pre-push Codex 게이트가 P1 호스트 키 미고정과 P2 Compose/workflow 이미지 저장소 drift를 차단했다. 현재 운영 ED25519 fingerprint와 기존 로컬 known_hosts를 대조한 뒤 고정 파일·strict SSH 옵션·`GHCR_IMAGE` Compose 변수로 수정한다.
 - 2026-08-02: P1/P2를 수정하고 workflow 계약·embedded shellcheck·Compose fork-image 해석·`bash -n`/error-level shellcheck·Wiki 검증·JDK 21 `./gradlew test`를 재통과했다.
+- 2026-08-02: 재검토에서 stopped app 컨테이너를 `ps -q`가 놓치는 P1을 발견했다. rollback 기준 조회를 `docker compose ps -aq app`로 보강해 장애 후 복구 배포가 사전검사에서 막히지 않게 수정한다.
 
 # Next
 
@@ -67,6 +68,7 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 
 - Codex plan/code reviewer 실행은 완료했으나 hook 출력이 최종 결과를 가려 회수하지 못했다. 메인 에이전트가 workflow 조건·secret 경계·rollback state·cleanup·문서 정합성을 직접 재검토한다.
 - pre-push Codex finding `[P1]` 호스트 키 미고정과 `[P2]` 이미지 저장소 drift는 고정 known_hosts·strict checking·`GHCR_IMAGE` Compose 변수로 수정 완료했다.
+- 추가 pre-push finding `[P1]` stopped app 컨테이너 조회 누락은 `docker compose ps -aq app`로 수정한다.
 - `shellcheck`의 기존 warning/info는 유지하고 error-level 결과만 acceptance에 반영한다.
 
 # Blockers
