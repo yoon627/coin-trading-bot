@@ -25,6 +25,7 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - 2026-08-02: pre-push Codex 게이트가 P1 호스트 키 미고정과 P2 Compose/workflow 이미지 저장소 drift를 차단했다. 현재 운영 ED25519 fingerprint와 기존 로컬 known_hosts를 대조한 뒤 고정 파일·strict SSH 옵션·`GHCR_IMAGE` Compose 변수로 수정한다.
 - 2026-08-02: P1/P2를 수정하고 workflow 계약·embedded shellcheck·Compose fork-image 해석·`bash -n`/error-level shellcheck·Wiki 검증·JDK 21 `./gradlew test`를 재통과했다.
 - 2026-08-02: 재검토에서 stopped app 컨테이너를 `ps -q`가 놓치는 P1을 발견했다. rollback 기준 조회를 `docker compose ps -aq app`로 보강해 장애 후 복구 배포가 사전검사에서 막히지 않게 수정한다.
+- 2026-08-02: 재검토에서 concurrency queue 순서 미보장과 stopped/실패 SHA를 `LAST_GOOD_SHA`로 오인할 수 있는 P1을 발견했다. 최신 `origin/main` guard와 원격 성공 SHA 파일(`/opt/app/.last-good-sha`)로 수정한다.
 
 # Next
 
@@ -42,6 +43,8 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - `VULTR_DEPLOY_ENV`는 기존 production `.env`의 runtime/GHCR 설정을 받는 multiline secret으로 사용한다. `VULTR_API_KEY`는 deploy-only 경로에서 사용하지 않는다.
 - pre-push P1 처분: 현재 운영 호스트 키를 `deploy/vultr/known_hosts`에 고정하고, workflow 및 `deploy.sh`가 `StrictHostKeyChecking=yes`와 해당 파일을 사용하도록 수정한다. IP/호스트 교체 시 파일을 검증 후 갱신해야 한다.
 - pre-push P2 처분: Compose app image를 `${GHCR_IMAGE:-...}:${APP_VERSION}`으로 변경해 workflow가 push한 저장소와 deploy script가 pull하는 저장소를 일치시킨다.
+- queued 실행이 `origin/main`과 다른 SHA이면 deploy steps를 skip한다. `cancel-in-progress: false`를 유지해 현재 배포를 중단하지 않으면서 stale 실행의 역전 배포를 막는다.
+- rollback 기준은 remote `/opt/app/.last-good-sha`에 health 성공 후에만 기록한다. 파일이 없는 최초 bootstrap은 현재 app container health와 SHA를 함께 검증한다.
 - 추가 인스턴스 `6700ff09-…`는 라벨·운영 state·현재 workflow 참조가 없고 운영 인스턴스와 생성/OS/backup feature가 다르다. 초기/실패 provisioning 잔여로 판단하지만, API가 생성 주체를 제공하지 않아 원인은 추정으로 기록한다.
 
 # Key Files
@@ -62,6 +65,7 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - [x] workflow YAML/embedded shell 및 기존 배포 스크립트가 정적검사를 통과한다. (`yaml_parse`, embedded `shellcheck`, `bash -n`, error-level `shellcheck`)
 - [x] README·Vultr README·deployment wiki가 실제 workflow 동작과 일치한다. (diff/self-review, Wiki checks)
 - [x] CI 및 배포 스크립트가 검증된 운영 host key를 strict checking으로 사용하고, Compose image 저장소가 workflow image와 일치한다. (fingerprint 대조, workflow/Compose checks)
+- [ ] queued stale SHA가 배포되지 않고, 성공 확인 SHA가 원격 persistent state로 보존되어 연속 실패에도 rollback 기준이 유지된다. (merge 후 Actions 관찰 필요)
 - [ ] 추가 인스턴스 삭제는 대상 ID·상태를 재확인한 뒤 사용자 승인 후 수행하고, 삭제 후 Vultr 목록에서 사라짐을 관찰한다.
 
 # Review Disposition
@@ -69,6 +73,7 @@ Vultr의 라벨 없는 추가 인스턴스는 운영 대상과 분리해 확인�
 - Codex plan/code reviewer 실행은 완료했으나 hook 출력이 최종 결과를 가려 회수하지 못했다. 메인 에이전트가 workflow 조건·secret 경계·rollback state·cleanup·문서 정합성을 직접 재검토한다.
 - pre-push Codex finding `[P1]` 호스트 키 미고정과 `[P2]` 이미지 저장소 drift는 고정 known_hosts·strict checking·`GHCR_IMAGE` Compose 변수로 수정 완료했다.
 - 추가 pre-push finding `[P1]` stopped app 컨테이너 조회 누락은 `docker compose ps -aq app`로 수정한다.
+- 추가 pre-push findings `[P1]` concurrency 순서 drift와 실패 SHA 오인은 최신 `origin/main` guard 및 `/opt/app/.last-good-sha` 성공 후 기록으로 수정한다.
 - `shellcheck`의 기존 warning/info는 유지하고 error-level 결과만 acceptance에 반영한다.
 
 # Blockers

@@ -109,9 +109,11 @@ SSH로 배포한다. 다음 repository secrets가 필요하다.
 이 파일을 갱신해야 하며, `accept-new`로 우회하지 않는다. Compose의 `GHCR_IMAGE`도 workflow가
 빌드·push한 저장소와 동일하게 주입된다.
 
-job은 기존 서버의 실행 중인 이미지가 40자리 commit SHA인지 먼저 확인한다. `latest` 또는 digest만
-남아 있으면 직전 정상 버전을 안전하게 특정할 수 없어 배포를 거부한다. 배포 전후의 임시 `.env`,
-`.state`, SSH key는 Actions runner에서 삭제한다. 수동 배포와 Actions 배포를 동시에 실행하지 않는다.
+job은 원격 `/opt/app/.last-good-sha`의 성공 확인 SHA를 rollback 기준으로 사용한다. 파일이 없는
+최초 실행은 현재 app 컨테이너가 healthy이고 40자리 commit SHA일 때만 bootstrap하며, `latest`·digest·
+중지/비정상 컨테이너만 남아 있으면 배포를 거부한다. 성공한 배포와 rollback은 이 파일을 갱신한다.
+또한 queued 실행의 SHA가 최신 `origin/main`과 다르면 오래된 배포를 건너뛴다. 배포 전후의 임시
+`.env`, `.state`, SSH key는 Actions runner에서 삭제한다. 수동 배포와 Actions 배포를 동시에 실행하지 않는다.
 
 ## 3. AWS → Vultr 데이터 이전 (완료된 historical runbook)
 

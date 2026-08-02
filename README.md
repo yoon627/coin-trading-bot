@@ -287,9 +287,12 @@ main manual  ──> test ──> multi-arch Docker image ──> GHCR ──> S
 Vultr 자동 배포는 `test`와 GHCR push가 모두 성공한 뒤에만 실행된다. Actions repository secrets에
 `VULTR_DEPLOY_ENV`(운영 배포용 `.env`), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`,
 `VULTR_SSH_USER`를 등록해야 한다. `VULTR_API_KEY`는 기존 인스턴스에 SSH로 배포하는 경로에서는
-사용하지 않는다. job은 배포 전에 원격 app 컨테이너의 40자리 commit SHA를 읽어 rollback 기준으로
-사용하고, `deploy.sh`의 migration gate와 180초 health check를 그대로 적용한다. PR에서는 배포하지
-않으며, 동시 배포는 하나만 허용한다.
+사용하지 않는다. job은 성공 확인 SHA를 원격 `/opt/app/.last-good-sha`에 저장해 rollback 기준으로
+사용한다. 최초 실행 때만 현재 app
+컨테이너가 healthy인 경우에 한해 bootstrap한다. 상태 파일이 없고 컨테이너도 healthy가 아니면 배포를
+거부한다. `deploy.sh`의 migration gate와 180초 health check를 그대로 적용한다. PR에서는 배포하지
+않으며, 동시 배포는 하나만 허용한다. queued 실행이 오래된 SHA이면 `origin/main`과 일치하지 않아
+배포하지 않는다.
 
 자동화가 멈추면 Actions 로그의 실패 단계와 Vultr에서 `./deploy/vultr/deploy.sh status` 결과를 먼저
 확인한다. 수동 복구가 필요하면 운영용 `.env`와 SSH key를 로컬에 준비한 뒤 기존 명령을 직접 실행한다.

@@ -512,6 +512,8 @@ docker compose pull
 docker compose up -d --remove-orphans
 echo "헬스체크 대기 (~180s)..."
 if health_ok; then
+    printf '%s\n' "$TARGET_SHA" > /opt/app/.last-good-sha
+    chmod 600 /opt/app/.last-good-sha
     echo "App healthy! ($TARGET_SHA)"
     docker compose ps
     tls_ok=false
@@ -552,6 +554,8 @@ if ! APP_VERSION="$LAST_GOOD_SHA" docker compose up -d --remove-orphans --pull m
     exit 3
 fi
 if health_ok; then
+    printf '%s\n' "$LAST_GOOD_SHA" > /opt/app/.last-good-sha
+    chmod 600 /opt/app/.last-good-sha
     sed -i "s|^APP_VERSION=.*|APP_VERSION=${LAST_GOOD_SHA}|" .env || true
     echo "롤백 성공: $LAST_GOOD_SHA 로 복구됨."
     docker compose ps || true

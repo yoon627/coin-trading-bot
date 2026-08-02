@@ -72,7 +72,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check deployment commit is current main
+        id: main-head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          current_main="$(git rev-parse origin/main)"
+          if [[ "$current_main" == "$GITHUB_SHA" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo "Skipping stale deployment for $GITHUB_SHA; origin/main is $current_main"
+          fi
+
       - name: Prepare Vultr deploy files
+        if: steps.main-head.outputs.current == 'true'
         env:
           VULTR_DEPLOY_ENV: ${{ secrets.VULTR_DEPLOY_ENV }}
           VULTR_PUBLIC_IP: ${{ secrets.VULTR_PUBLIC_IP }}
@@ -108,12 +123,12 @@ jobs:
           ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$known_hosts_file" -o ConnectTimeout=10 \
             -i deploy/vultr/coin-trading-bot-key.pem)
-          current_image="$(ssh "${ssh_opts[@]}" \
+          remote_last_good="$(ssh "${ssh_opts[@]}" \
             "${VULTR_SSH_USER}@${VULTR_PUBLIC_IP}" \
-            'cd /opt/app && cid="$(docker compose ps -aq app | head -n 1)" && test -n "$cid" && docker inspect --format "{{.Config.Image}}" "$cid"')"
-          last_good_sha="${current_image##*:}"
+            'cd /opt/app && if test -s .last-good-sha; then tr -d "[:space:]" < .last-good-sha; else cid="$(docker compose ps -aq app | head -n 1)" && test -n "$cid" && test "$(docker inspect --format "{{.State.Health.Status}}" "$cid")" = healthy && docker inspect --format "{{.Config.Image}}" "$cid"; fi')"
+          last_good_sha="${remote_last_good##*:}"
           if ! [[ "$last_good_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "ERROR: current Vultr app image is not a commit SHA; refusing automatic rollback setup" >&2
+            echo "ERROR: no valid persisted/healthy Vultr rollback SHA; refusing automatic deployment" >&2
             exit 1
           fi
           printf 'PUBLIC_IP=%s\nLAST_GOOD_SHA=%s\n' "$VULTR_PUBLIC_IP" "$last_good_sha" \
@@ -121,6 +136,7 @@ jobs:
           chmod 600 deploy/vultr/.state
 
       - name: Deploy to Vultr
+        if: steps.main-head.outputs.current == 'true'
         env:
           SSH_KNOWN_HOSTS: ${{ github.workspace }}/deploy/vultr/known_hosts
         run: ./deploy/vultr/deploy.sh deploy
