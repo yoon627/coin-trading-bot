@@ -47,7 +47,7 @@ services:
         max-file: "3"
 
   app:
-    image: ghcr.io/yoon627/coin-trading-bot:${APP_VERSION:-latest}
+    image: ${GHCR_IMAGE:-ghcr.io/yoon627/coin-trading-bot}:${APP_VERSION:-latest}
     pull_policy: always
     expose:
       - "8080"                 # Caddy(compose 내부망)만 접근 — 호스트에 직접 노출하지 않음

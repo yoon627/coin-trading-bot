@@ -88,9 +88,32 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 ./deploy.sh destroy  # 삭제 (과금 중단)
 ```
 
-새 버전 배포: `main` push → Actions 빌드 완료 → `./deploy.sh deploy`.
+새 버전 배포: `main` push → Actions 테스트/이미지 push → Vultr SSH deploy job → `./deploy.sh deploy`.
 대상 커밋 SHA로 이미지를 고정하고, 헬스체크(180s) 실패 시 직전 정상 SHA로 **자동 롤백**한다.
 단 **DB migration이 포함된 배포**가 실패하면 자동 롤백을 건너뛰고 수동 개입을 안내한다.
+
+### GitHub Actions 자동 배포
+
+`.github/workflows/deploy.yml`의 `deploy-vultr` job은 인스턴스 생성·삭제 없이 현재 운영 호스트에만
+SSH로 배포한다. 다음 repository secrets가 필요하다.
+
+| Secret | 내용 |
+|---|---|
+| `VULTR_DEPLOY_ENV` | 운영 `.env` 내용(multiline) |
+| `VULTR_PUBLIC_IP` | 현재 운영 인스턴스 공인 IP |
+| `VULTR_SSH_PRIVATE_KEY` | `coin-trading-bot-key.pem` 원문 |
+| `VULTR_SSH_USER` | Vultr SSH 사용자(현재 `root`) |
+
+운영 호스트 키는 `deploy/vultr/known_hosts`에 고정되어 Actions와 배포 스크립트가 최초 접속부터
+검증한다. 운영 IP를 재생성하거나 호스트를 교체할 때는 새 호스트 키를 별도 경로로 확인한 뒤
+이 파일을 갱신해야 하며, `accept-new`로 우회하지 않는다. Compose의 `GHCR_IMAGE`도 workflow가
+빌드·push한 저장소와 동일하게 주입된다.
+
+job은 원격 `/opt/app/.last-good-sha`의 성공 확인 SHA를 rollback 기준으로 사용한다. 파일이 없는
+최초 실행은 현재 app 컨테이너가 healthy이고 40자리 commit SHA일 때만 bootstrap하며, `latest`·digest·
+중지/비정상 컨테이너만 남아 있으면 배포를 거부한다. 성공한 배포와 rollback은 이 파일을 갱신한다.
+또한 queued 실행의 SHA가 최신 `origin/main`과 다르면 오래된 배포를 건너뛴다. 배포 전후의 임시
+`.env`, `.state`, SSH key는 Actions runner에서 삭제한다. 수동 배포와 Actions 배포를 동시에 실행하지 않는다.
 
 ## 3. AWS → Vultr 데이터 이전 (완료된 historical runbook)
 
