@@ -109,6 +109,32 @@ SSH로 배포한다. 다음 repository secrets가 필요하다.
 이 파일을 갱신해야 하며, `accept-new`로 우회하지 않는다. Compose의 `GHCR_IMAGE`도 workflow가
 빌드·push한 저장소와 동일하게 주입된다.
 
+GitHub-hosted runner의 SSH 출발 IP는 실행마다 바뀌므로 Vultr cloud firewall에
+`ctb-ssh-github-actions` 규칙(22/tcp, `0.0.0.0/0`)을 유지한다. 이 규칙을 열기 전에 운영 SSH는
+`PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`
+인 key-only 상태여야 한다. `setup_firewall`을 다시 실행해도 이 전용 규칙은 보존되지만, SSH 설정을
+되돌리거나 규칙을 삭제하면 Actions 배포가 timeout된다.
+
+현재 SSH 세션을 유지한 채 운영 호스트에서 hardening을 적용하고 확인한다. `sshd -t`가 실패하면
+reload하지 않는다.
+
+```bash
+ssh -i deploy/vultr/coin-trading-bot-key.pem root@<VULTR_PUBLIC_IP> 'sudo tee /etc/ssh/sshd_config.d/00-coin-trading-bot-hardening.conf >/dev/null <<"EOF"
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+EOF
+sudo sshd -t && sudo systemctl reload ssh
+sudo sshd -T | grep -E "^(passwordauthentication|kbdinteractiveauthentication|permitemptypasswords|permitrootlogin|pubkeyauthentication) "'
+```
+
+기대값은 `passwordauthentication no`, `kbdinteractiveauthentication no`, `permitemptypasswords no`,
+`permitrootlogin without-password`, `pubkeyauthentication yes`다. 전용 규칙이 없거나 형식이
+`22/tcp`, `0.0.0.0/0`과 다르면 `setup_firewall`은 경고 또는 실패하므로 Vultr 콘솔/API에서 먼저
+하나의 정확한 규칙만 만든다.
+
 job은 원격 `/opt/app/.last-good-sha`의 성공 확인 SHA를 rollback 기준으로 사용한다. 파일이 없는
 최초 실행은 현재 app 컨테이너가 healthy이고 40자리 commit SHA일 때만 bootstrap하며, `latest`·digest·
 중지/비정상 컨테이너만 남아 있으면 배포를 거부한다. 성공한 배포와 rollback은 이 파일을 갱신한다.
@@ -224,10 +250,12 @@ aws s3 cp s3://<버킷>/db-backups/trading-<TS>.sql.gz - | gunzip \
 - **TLS 종단**: Caddy가 443에서 HTTPS를 종단(Let's Encrypt 자동 발급/갱신)하고 내부 `app:8080`으로
   프록시한다. 인증서 자동 갱신(ACME HTTP-01)을 위해 **80은 상시 개방**이 필요하다.
 - **Vultr 클라우드 방화벽**을 쓴다(AWS security group과 같은 의미). 규칙 없이 그룹만 붙이면 모든
-  인바운드가 차단되므로 22/80/443을 명시한다. SSH는 **본인 공인 IP/32**에만 열린다.
+  인바운드가 차단되므로 22/80/443을 명시한다. 수동 SSH는 `SSH_ALLOW_CIDR`로 제한하고,
+  GitHub Actions는 `ctb-ssh-github-actions` 전용 22/tcp `0.0.0.0/0` 규칙을 사용한다.
 - 스크립트가 관리하는 규칙(`notes`가 `ctb-`로 시작)만 교체하므로, SSH 대역이 바뀌어도 옛 규칙이
   남지 않는다. 사람이 직접 추가한 규칙은 건드리지 않는다.
-- SSH는 `StrictHostKeyChecking=accept-new` — 최초 접속만 자동 수용, 이후 호스트키 변경은 거부.
+- 수동 배포 SSH는 `StrictHostKeyChecking=accept-new`, Actions 배포는 추적 중인
+  `deploy/vultr/known_hosts`와 `StrictHostKeyChecking=yes`를 사용한다.
 - PostgreSQL/Redis는 호스트에 노출하지 않는다(compose 내부망 전용).
 - `.env`는 로컬·서버 모두 `600`. 절대 커밋하지 말 것(`.gitignore` 처리됨).
 
