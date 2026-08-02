@@ -294,6 +294,11 @@ Vultr 자동 배포는 `test`와 GHCR push가 모두 성공한 뒤에만 실행�
 않으며, 동시 배포는 하나만 허용한다. queued 실행이 오래된 SHA이면 `origin/main`과 일치하지 않아
 배포하지 않는다.
 
+GitHub-hosted runner 접근을 위해 Vultr cloud firewall에 `ctb-ssh-github-actions` 22/tcp
+`0.0.0.0/0` 규칙이 필요하며, 운영 SSH는 key-only로 hardening되어 있어야 한다. 상세 절차와
+재실행 시 보존·검증 규칙은 [`deploy/vultr/README.md`](deploy/vultr/README.md)를 따른다. 수동
+SSH는 `SSH_ALLOW_CIDR`로 제한하고 Actions 전용 규칙만 동적 runner IP를 위해 공개한다.
+
 자동화가 멈추면 Actions 로그의 실패 단계와 Vultr에서 `./deploy/vultr/deploy.sh status` 결과를 먼저
 확인한다. 수동 복구가 필요하면 운영용 `.env`와 SSH key를 로컬에 준비한 뒤 기존 명령을 직접 실행한다.
 
