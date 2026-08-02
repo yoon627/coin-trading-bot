@@ -52,6 +52,13 @@ KEY_NAME="${APP_NAME}-key"
 KEY_PEM="$SCRIPT_DIR/${KEY_NAME}.pem"
 KEY_PUB="$SCRIPT_DIR/${KEY_NAME}.pub"
 
+if [[ -n "${SSH_KNOWN_HOSTS:-}" ]]; then
+    [[ -r "$SSH_KNOWN_HOSTS" ]] || { echo "ERROR: SSH_KNOWN_HOSTS 파일을 읽을 수 없습니다: $SSH_KNOWN_HOSTS"; exit 1; }
+    SSH_HOST_KEY_OPTIONS=(-o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$SSH_KNOWN_HOSTS")
+else
+    SSH_HOST_KEY_OPTIONS=(-o StrictHostKeyChecking=accept-new)
+fi
+
 save_state() { echo "$1=$2" >> "$STATE_FILE"; }
 update_state() {
     local key="$1" val="$2"
@@ -388,9 +395,10 @@ do_setup() {
     echo "  cloud-init(Docker·AWS CLI 설치) 완료까지 2~4분 대기 후: ./deploy/vultr/deploy.sh deploy"
 }
 
-# StrictHostKeyChecking=accept-new: 최초 접속만 자동 수용, 이후 호스트키 변경은 거부.
+# 기본은 최초 접속을 자동 수용하고 이후 호스트키 변경을 거부한다. CI는
+# SSH_KNOWN_HOSTS로 검증된 호스트키 파일을 지정해 최초 접속도 고정한다.
 ssh_inst() {
-    ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -i "$KEY_PEM" \
+    ssh "${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM" \
         "${SSH_USER}@${PUBLIC_IP}" "$@"
 }
 
@@ -466,7 +474,7 @@ do_deploy() {
     trap "rm -f '$tmp_env'" EXIT
     render_server_env "$tmp_env"
     ssh_inst 'mkdir -p /opt/app'
-    local scp_opts=(-o StrictHostKeyChecking=accept-new -i "$KEY_PEM")
+    local scp_opts=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM")
     scp "${scp_opts[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
     scp "${scp_opts[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/Caddyfile
     scp "${scp_opts[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
@@ -504,6 +512,8 @@ docker compose pull
 docker compose up -d --remove-orphans
 echo "헬스체크 대기 (~180s)..."
 if health_ok; then
+    printf '%s\n' "$TARGET_SHA" > /opt/app/.last-good-sha
+    chmod 600 /opt/app/.last-good-sha
     echo "App healthy! ($TARGET_SHA)"
     docker compose ps
     tls_ok=false
@@ -544,6 +554,8 @@ if ! APP_VERSION="$LAST_GOOD_SHA" docker compose up -d --remove-orphans --pull m
     exit 3
 fi
 if health_ok; then
+    printf '%s\n' "$LAST_GOOD_SHA" > /opt/app/.last-good-sha
+    chmod 600 /opt/app/.last-good-sha
     sed -i "s|^APP_VERSION=.*|APP_VERSION=${LAST_GOOD_SHA}|" .env || true
     echo "롤백 성공: $LAST_GOOD_SHA 로 복구됨."
     docker compose ps || true
@@ -575,7 +587,7 @@ REMOTE
 }
 
 # ── utils ──
-do_ssh()    { load_state; ssh -o StrictHostKeyChecking=accept-new -i "$KEY_PEM" "${SSH_USER}@${PUBLIC_IP}"; }
+do_ssh()    { load_state; ssh "${SSH_HOST_KEY_OPTIONS[@]}" -i "$KEY_PEM" "${SSH_USER}@${PUBLIC_IP}"; }
 do_status() { load_state; echo "공인 IP: ${PUBLIC_IP:-none}"; [[ -n "${PUBLIC_IP:-}" ]] && ssh_inst 'cd /opt/app && docker compose ps' 2>/dev/null || echo "(unreachable)"; }
 do_logs()   { load_state; ssh_inst 'cd /opt/app && docker compose logs --tail=120 app'; }
 do_stop()   { load_state; ssh_inst 'cd /opt/app && docker compose down && echo 중지'; }
