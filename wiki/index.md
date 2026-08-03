@@ -11,7 +11,9 @@
 - [[exit-gates]] — 손절·트레일링·익절·차트청산·보유상한의 판정식과 비자명한 지점
 - [[swing-strategies]] — `TradingStrategy` 인터페이스와 전략 7종, 기본 `combined` 의 3조건
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집, `MarketDataStore`, half-open 워치독
-- [[persistence-schema]] — Flyway V1~V14, `trading_states` 가 무엇을 살리는가
+- [[kis-stock-trading-flow]] — KIS 국내주식 봇의 시작·시세·신호·포지션 사이클
+- [[kis-order-lifecycle]] — KIS 수동·자동 주문의 검증·WAL·API 송신·체결 reconcile
+- [[persistence-schema]] — Flyway V1~V18, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가
 - [[backtest-engine]] — 단일티커·all-in 구조와 라이브 정합의 한계
 
 ## decision — 이 repo 가 내린 결정

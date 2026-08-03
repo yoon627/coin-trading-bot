@@ -18,7 +18,14 @@
 - `bot` — Spring Boot 메인 애플리케이션 (실거래 봇 + REST API + SPA + in-process 시세 수집, port 8080). Upbit WS ticker + REST 캔들 폴링을 `marketdata/` 에서 직접 수집(구 collector/Kafka 흡수).
 - `common` — 공용 도메인 모델(`NormalizedTicker`/`NormalizedCandle` 등), 인디케이터, 스윙 전략 7개.
 
-> 거래소는 Upbit only. 구 `collector`·`research` 모듈, Kafka, ML/스캘핑/Claude 분석은 경량화(rightsizing) 과정에서 제거됨.
+> **거래소는 둘이다 — Upbit(코인)과 KIS(한국투자증권, 국내주식).** KIS 경로는 `bot/.../kis/`
+> (`client`·`config`·`domain`·`engine`·`marketdata`·`order`)에 있고 진입점은 `api/StockBotController`,
+> 엔진은 `kis/engine/KisStockTradingEngine`, 주문은 `kis/order/StockOrderService`(WAL + reconcile)다.
+> 스키마는 V15~V18(`stock_order_intent`·KIS 키·거래소별 `bot_state`·`stock_position_state`).
+> 두 경로는 별도 엔진·별도 포지션 매니저이며 `common` 의 전략·인디케이터를 공유한다.
+> 흐름 상세는 wiki `kis-stock-trading-flow`·`kis-order-lifecycle` 참조.
+>
+> 구 `collector`·`research` 모듈, Kafka, ML/스캘핑/Claude 분석은 경량화(rightsizing) 과정에서 제거됨.
 
 ## 스펙 문서
 

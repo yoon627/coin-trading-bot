@@ -13,6 +13,8 @@ sources:
 
 # 시세 수집 파이프라인
 
+이 페이지는 Upbit WS/REST 수집 경로다. KIS 국내주식은 별도 `KisMarketDataService`의 3초 현재가·300초 일봉 폴링과 엔진별 REST 폴백을 사용하며, 그 매매 연결은 [[kis-stock-trading-flow]]에 기록한다.
+
 구 collector 모듈(Kafka 발행)을 흡수한 **in-process** 수집기다([[rightsizing-history]]). 단일 JVM 이므로 메시지 버스 없이 직접 fan-out 한다.
 
 ```
