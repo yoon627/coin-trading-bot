@@ -2,9 +2,9 @@
 title: 시세 수집 파이프라인 — WS ticker + REST 캔들, 무수신 워치독
 category: concept
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-03
 claim_state: current
-verified: 2026-07-28 — MarketDataIngestionService.kt 전문, MarketDataStore.kt 전문
+verified: 2026-08-03 — MarketDataIngestionService.kt 전문, MarketDataStore.kt 전문
 sources:
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt
@@ -49,4 +49,4 @@ TCP 는 살아 있는데 데이터가 안 오는 상태는 flow 재구독으로 
 
 `MarketDataPersistenceService` 가 `market_tickers`/`market_candles` 로 내린다([[persistence-schema]]). ticker 저장은 **전역 카운터 기반 샘플링**이라 고활동 종목이 저장 슬롯을 독식할 수 있다 — 저활동 종목은 특정 시간창에 행이 아예 없을 수 있으므로, 이 테이블로 시간창 기반 지표(예: 1시간 변화율)를 계산하려면 샘플링 방식을 먼저 확인해야 한다.
 
-`MarketDataStore` 의 `tickerHistory`·`orderBooks`·`getRecentTickers` 는 현재 소비자가 없는 경로다. 정리 작업의 진행 상태는 GitHub 이슈 큐(#49)가 소유한다.
+이전의 `tickerHistory`·`orderBooks`·`getRecentTickers`·`getOrderBook` 경로는 소비자가 없어 제거됐다. Store 는 최신 ticker 스냅샷·캔들 버퍼·ticker 스트림만 보유한다.

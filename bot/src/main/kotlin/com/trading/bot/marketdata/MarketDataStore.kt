@@ -3,7 +3,6 @@ package com.trading.bot.marketdata
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
-import com.trading.common.domain.NormalizedOrderBook
 import com.trading.common.domain.NormalizedTicker
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
@@ -11,7 +10,6 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Sinks
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.ConcurrentSkipListMap
 
 @Component
@@ -19,9 +17,7 @@ class MarketDataStore {
 
     private val log = LoggerFactory.getLogger(javaClass)
     private val latestTickers = ConcurrentHashMap<String, NormalizedTicker>()
-    private val tickerHistory = ConcurrentHashMap<String, ConcurrentLinkedDeque<NormalizedTicker>>()
     private val candleBuffers = ConcurrentHashMap<String, ConcurrentSkipListMap<Instant, NormalizedCandle>>()
-    private val orderBooks = ConcurrentHashMap<String, NormalizedOrderBook>()
 
     // 최신 스냅샷(latestTickers)에 더해, ticker 갱신을 실시간으로 밀어내는 hot multicast 스트림.
     // SSE(PriceStreamController) 가 이 스트림을 구독 → 별도 WS 연결 없이 store 하나가 스냅샷+스트림 단일 소스.
@@ -31,7 +27,6 @@ class MarketDataStore {
 
     companion object {
         private const val MAX_CANDLE_BUFFER_SIZE = 200
-        private const val MAX_TICKER_HISTORY_SIZE = 100
         private const val TICKER_STREAM_BUFFER = 256
     }
 
@@ -41,23 +36,12 @@ class MarketDataStore {
         val key = "${ticker.exchange}:${ticker.market}"
         latestTickers[key] = ticker
 
-        val history = tickerHistory.computeIfAbsent(key) { ConcurrentLinkedDeque() }
-        history.addFirst(ticker)
-        while (history.size > MAX_TICKER_HISTORY_SIZE) {
-            history.removeLast()
-        }
-
         // 비블로킹 emit — 수집 hot path 를 막지 않는다. 구독자 없음(FAIL_ZERO_SUBSCRIBER)은 정상(스냅샷은 유지),
         // 실제 backpressure/overflow 만 가시화.
         val emit = tickerSink.tryEmitNext(ticker)
         if (emit.isFailure && emit != Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER) {
             log.warn("Dropped ticker stream emit {} ({})", key, emit)
         }
-    }
-
-    fun updateOrderBook(orderBook: NormalizedOrderBook) {
-        val key = "${orderBook.exchange}:${orderBook.market}"
-        orderBooks[key] = orderBook
     }
 
     fun addCandle(candle: NormalizedCandle) {
@@ -89,17 +73,4 @@ class MarketDataStore {
         return buffer.descendingMap().values.take(count) // 최신 openTime 먼저
     }
 
-    fun getRecentTickers(exchange: Exchange, market: String, count: Int): List<NormalizedTicker> {
-        val key = "$exchange:$market"
-        val history = tickerHistory[key] ?: return emptyList()
-        return history.take(count)
-    }
-
-    fun getOrderBook(exchange: Exchange, market: String): NormalizedOrderBook? {
-        return orderBooks["$exchange:$market"]
-    }
-
-    fun hasData(exchange: Exchange, market: String): Boolean {
-        return latestTickers.containsKey("$exchange:$market")
-    }
 }
