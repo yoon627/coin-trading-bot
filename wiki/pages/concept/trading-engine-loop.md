@@ -14,6 +14,8 @@ sources:
 
 # 매매 루프
 
+이 페이지는 Upbit `TradingEngine`의 `processTicker` 순서를 설명한다. KIS 국내주식 엔진은 별도 클래스와 주문 WAL을 사용하므로 [[kis-stock-trading-flow]]와 [[kis-order-lifecycle]]를 함께 읽어야 한다.
+
 `TradingEngine.runLoop()` 이 `intervalSeconds`(기본 10초)마다 활성 ticker 를 순회하며 `processTicker` 를 호출한다. 루프 진입 전 각 ticker 에 `syncPosition` 을 한 번 돌려 거래소 실잔고와 맞춘다.
 
 ## processTicker 의 순서 (TradingEngine.kt:231-308)

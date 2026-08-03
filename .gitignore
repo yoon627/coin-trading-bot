@@ -83,3 +83,9 @@ replay_pid*
 # 외부 원문 보관소. 페이지(wiki/pages/)는 추적하되 원문 덤프는 추적하지 않는다.
 # 주의: gitignored 라 worktree 삭제 시 함께 사라진다 — 재취득 가능한 원문만 둘 것 (wiki/WIKI.md §5).
 wiki/raw/
+
+### 로컬 에이전트 도구 상태 ###
+# 머신마다 다른 로컬 설정·캐시라 공유하지 않는다. 프로젝트 지침(AGENTS.md·CLAUDE.md)은
+# 추적 대상이지만, 아래는 도구가 생성하는 로컬 상태다.
+.serena/
+.codex/

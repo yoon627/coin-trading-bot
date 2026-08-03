@@ -13,6 +13,8 @@ sources:
 
 # 청산 게이트
 
+이 페이지의 구현 인용은 Upbit `PositionManager` 기준이다. KIS도 손절·트레일링·익절·선택적 차트 청산의 의미와 우선순위를 별도 `StockPositionManager`에서 유지한다. 실제 KIS 루프의 호출 순서는 [[kis-stock-trading-flow]]를 참조한다.
+
 일부 청산 판정식이 `common` 의 `ExitGates` 에 공용화돼 있다 — 라이브(`PositionManager`)와 백테스트(`BacktestEngine`)가 각각 구현하면 백테 결과가 라이브를 대변하지 못하기 때문이다([[backtest-engine]]).
 
 **단, 공용화된 것은 트레일링 판정과 `maxHoldDays` 보정뿐이고 평가 순서는 두 곳이 다르다** — 아래 "라이브와 백테의 순서 차이" 참조.
