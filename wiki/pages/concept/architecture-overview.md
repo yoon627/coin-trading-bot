@@ -23,8 +23,6 @@ Gradle 멀티모듈이지만 배포 단위는 **JVM 프로세스 하나**다. `s
 
 거래 경로는 **Upbit와 국내주식 KIS** 두 가지다. Upbit 엔진은 `engine/`에, KIS 엔진·시세·주문은 `kis/`에 분리돼 있지만 공용 전략과 일부 도메인을 함께 쓴다. KIS 자동매매의 전체 순서는 [[kis-stock-trading-flow]], 주문 유실 방지와 체결 확정은 [[kis-order-lifecycle]]에 있다. 별도 collector 프로세스나 메시지 브로커는 없다 — 예전에 있었고 의도적으로 제거했다([[rightsizing-history]]).
 
-> [!conflict] `AGENTS.md`의 환경 설명에는 거래소가 Upbit only라고 남아 있지만, 현재 코드에는 `bot/kis/`와 KIS 전용 DB·REST 경로가 존재한다. 이 페이지는 현재 코드를 기준으로 서술한다.
-
 ## `bot` 내부 패키지
 
 | 패키지 | 담당 |

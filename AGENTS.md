@@ -39,7 +39,7 @@
 
 ## plan 버전관리 (이 repo 고유)
 
-- `~/.Codex/AGENTS.md` §10 의 `.Codex/plans/` 를 이 repo 는 **git 추적**한다 (`.gitignore` 의 `!.Codex/plans/` — `.Codex/tasks/` 와 동일 negation 패턴). worktree 삭제 시 plan 소실 방지가 목적.
+- `~/.Codex/AGENTS.md` §10 의 plan 을 이 repo 는 **`.claude/plans/` 에 두고 git 추적**한다 (`.gitignore` 의 `!.claude/plans/` — `!.claude/tasks/` 와 동일 negation 패턴). worktree 삭제 시 plan 소실 방지가 목적. **경로는 `.claude/` 다 — `.codex/` 아래에 plan 을 만들지 않는다**(그 경로엔 ignore 예외가 없어 유실된다).
 - ⚠️ 글로벌 `/e`·`/c`·`/wt` skill 은 plans/ 가 **gitignored 라고 전제**한다 (예: `/e` 의 "plan 이 worktree 내부면 삭제 제안 생략", worktree 삭제 전 main 백업). 이 repo 에선 그 전제가 어긋난다 — plan 이 git 에 보존되므로 worktree 삭제 전 별도 백업이 불필요하다.
 - 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`) 하거나 작업 커밋에 포함한다.
 
@@ -75,7 +75,7 @@
   f=common/src/main/kotlin/com/trading/common/strategy/MeanReversion.kt
   while [ "$f" != "." ]; do grep -rl -- "$f" wiki/pages/; f=$(dirname "$f"); done | sort -u
   ```
-- **페이지에 넣지 않는 것**: 진행 중 작업의 상태(→ `.Codex/plans/`), 열린 이슈의 상태(→ GitHub Issues). 넣으면 이중 소스가 되고 반드시 stale 해진다.
+- **페이지에 넣지 않는 것**: 진행 중 작업의 상태(→ `.claude/plans/`), 열린 이슈의 상태(→ GitHub Issues). 넣으면 이중 소스가 되고 반드시 stale 해진다.
 - **근거 없는 서술 금지**: 문서가 코드와 어긋난 전례가 있다(리스크 파라미터 정반대 기재). 코드로 확인한 것만 쓰고 `sources`·`verified` 에 근거를 남긴다.
 - **검증 3종** — 페이지를 건드렸으면 돌린다:
   ```bash
