@@ -1,6 +1,6 @@
 ---
 title: wiki-llm-alpha-lesson — LLM 트레이딩 알파 검증 설계를 wiki 에 적립
-status: in_progress
+status: done
 started: 2026-08-03
 updated: 2026-08-03
 ---
@@ -17,9 +17,11 @@ updated: 2026-08-03
 - 2026-08-03 검증 3종 통과 — `check_links` clean / `verify.sh` clean(26 pages) / `smoke.sh` 10 pass 0 fail(음성검사 포함). 인용 줄번호 5건 재대조 완료.
 - 2026-08-03 커밋 `3b5e731`(wiki 4파일) + `f09bf2a`(plan) → push → **PR #83** 생성. pre-push codex 리뷰 통과.
 
+- 2026-08-03 CI 통과(`test` pass, build/deploy 는 docs-only 라 skip) → PR #83 머지 → worktree·로컬·원격 브랜치 정리.
+
 # Next
 
-PR #83 리뷰·머지. 머지되면 `status: done` 으로 바꾸고 worktree(+로컬·원격 브랜치) 정리.
+없음 — 완료. 후속 작업(마켓 폭 확대 검토, shadow mode 프로토타입)은 별도 worktree 에서 새 plan 으로 시작한다.
 
 # Decisions
 
