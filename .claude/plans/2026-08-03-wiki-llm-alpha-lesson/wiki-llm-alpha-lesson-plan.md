@@ -15,10 +15,11 @@ updated: 2026-08-03
 - 2026-08-03 페이지 작성 + `rightsizing-history` 에 inbound 링크 추가 + `index.md` 등재.
 
 - 2026-08-03 검증 3종 통과 — `check_links` clean / `verify.sh` clean(26 pages) / `smoke.sh` 10 pass 0 fail(음성검사 포함). 인용 줄번호 5건 재대조 완료.
+- 2026-08-03 커밋 `3b5e731`(wiki 4파일) + `f09bf2a`(plan) → push → **PR #83** 생성. pre-push codex 리뷰 통과.
 
 # Next
 
-커밋 → push → PR. (작업 산출물은 완성·검증 완료 상태이며 남은 것은 머지 절차뿐.)
+PR #83 리뷰·머지. 머지되면 `status: done` 으로 바꾸고 worktree(+로컬·원격 브랜치) 정리.
 
 # Decisions
 
