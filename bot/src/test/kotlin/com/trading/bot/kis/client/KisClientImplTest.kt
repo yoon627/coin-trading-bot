@@ -65,6 +65,19 @@ class KisClientImplTest {
     }
 
     @Test
+    fun `daily candles map adjusted flag to KIS adjusted-price parameter`() = runTest {
+        server.enqueue(
+            MockResponse().setBody("""{"rt_cd":"0","output2":[]}""")
+                .addHeader("Content-Type", "application/json"),
+        )
+
+        client.getDailyCandles("005930", "20260601", "20260615", adjusted = true)
+
+        val req = server.takeRequest()
+        assertTrue(req.path!!.contains("FID_ORG_ADJ_PRC=0"), "expected adjusted-price flag, path=${req.path}")
+    }
+
+    @Test
     fun `buyable qty is read from nrcvb_buy_qty`() = runTest {
         server.enqueue(
             MockResponse().setBody("""{"rt_cd":"0","output":{"nrcvb_buy_qty":"12","nrcvb_buy_amt":"840000"}}""")
