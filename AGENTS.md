@@ -24,7 +24,7 @@
 > 스키마는 V15~V18(`stock_order_intent`·KIS 키·거래소별 `bot_state`·`stock_position_state`).
 > 두 경로는 별도 엔진·별도 포지션 매니저이며 `common` 의 전략·인디케이터를 공유한다.
 >
-> 구 `collector`·`research` 모듈, Kafka, ML/스캘핑/Codex 분석은 경량화(rightsizing) 과정에서 제거됨.
+> 구 `collector`·`research` 모듈, Kafka, ML/스캘핑/Claude 분석은 경량화(rightsizing) 과정에서 제거됨.
 
 ## 스펙 문서
 
@@ -40,7 +40,7 @@
 ## plan 버전관리 (이 repo 고유)
 
 - `~/.Codex/AGENTS.md` §10 의 plan 을 이 repo 는 **`.claude/plans/` 에 두고 git 추적**한다 (`.gitignore` 의 `!.claude/plans/` — `!.claude/tasks/` 와 동일 negation 패턴). worktree 삭제 시 plan 소실 방지가 목적. **경로는 `.claude/` 다 — `.codex/` 아래에 plan 을 만들지 않는다**(그 경로엔 ignore 예외가 없어 유실된다).
-- ⚠️ 글로벌 `/e`·`/c`·`/wt` skill 은 plans/ 가 **gitignored 라고 전제**한다 (예: `/e` 의 "plan 이 worktree 내부면 삭제 제안 생략", worktree 삭제 전 main 백업). 이 repo 에선 그 전제가 어긋난다 — plan 이 git 에 보존되므로 worktree 삭제 전 별도 백업이 불필요하다.
+- ⚠️ plan 이 gitignored 라고 전제하는 도구(예: worktree 삭제 전 plan 을 main 에 백업하려는 자동화)는 이 repo 에서 전제가 어긋난다 — plan 이 git 에 보존되므로 **worktree 삭제 전 별도 백업이 불필요**하다. 다만 **미커밋 plan 변경은 `git worktree remove` 가 거부하므로 삭제 전에 커밋·push 로 보존**한다.
 - 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`) 하거나 작업 커밋에 포함한다.
 
 ## 머지 후 main 동기화 (이 repo 고유)
@@ -79,7 +79,7 @@
 - **근거 없는 서술 금지**: 문서가 코드와 어긋난 전례가 있다(리스크 파라미터 정반대 기재). 코드로 확인한 것만 쓰고 `sources`·`verified` 에 근거를 남긴다.
 - **검증 3종** — 페이지를 건드렸으면 돌린다:
   ```bash
-  uv run --no-project python "$HOME/.Codex/skills/wiki/check_links.py" wiki
+  uv run --no-project python "$HOME/.claude/skills/wiki/check_links.py" wiki
   bash wiki/verify.sh   # stem 중복·정규식·frontmatter 값 (검증기 미커버분)
   bash wiki/smoke.sh    # 대표 질문에 답이 되는가 + 진행중 작업 상태 침범 검사
   ```
