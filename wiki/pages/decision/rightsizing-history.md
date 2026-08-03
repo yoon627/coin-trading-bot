@@ -19,7 +19,7 @@ sources:
 
 - **단일 JVM 에서 메시지 버스는 순비용이다.** collector→Kafka→bot 은 프로세스 경계가 있을 때만 값을 한다. 같은 프로세스 안이면 직접 fan-out 으로 충분하고, 실제로 `MarketDataIngestionService` 가 store/persistence 두 sink 를 **독립 try/catch 로 격리**해 구 Kafka 2-consumer-group 과 등가의 성질을 유지한다([[marketdata-pipeline]]).
 - **운영 비용이 실제로 부팅을 막았다.** 5컨테이너 구성은 소형 EC2 에서 OOM 으로 뜨지 못했다([[lesson-ec2-sizing-oom]]).
-- ML·스캘핑·Claude 분석은 수익 기여가 입증되지 않은 채 유지비만 발생했다.
+- ML·스캘핑·Claude 분석은 수익 기여가 입증되지 않은 채 유지비만 발생했다. 이건 **미검증이지 반증이 아니다** — 재도입하려면 무엇을 어떤 순서로 증명해야 하는지는 [[lesson-llm-alpha-verification]] 에 있다.
 
 ## 남은 흔적을 만나면
 
