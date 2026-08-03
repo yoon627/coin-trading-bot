@@ -12,11 +12,12 @@ COPY bot ./bot
 RUN gradle :bot:bootJar --no-daemon -x test
 
 FROM eclipse-temurin:21-jre-alpine
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl && adduser -D -u 1001 app
 WORKDIR /app
 COPY --from=build /app/bot/build/libs/*.jar app.jar
 EXPOSE 8080
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:8080/actuator/health || exit 1
+USER app
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar app.jar"]

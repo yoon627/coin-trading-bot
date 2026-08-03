@@ -1,9 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.client.UpbitWebSocketClient
 import com.trading.bot.domain.SellReason
-import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
@@ -14,26 +12,28 @@ import com.trading.common.domain.NormalizedCandle
 import com.trading.common.strategy.TradingStrategy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 
 class TradingEngine(
     private val upbitClient: UpbitClient,
     private val positionManager: PositionManager,
     private val dailyResetManager: DailyResetManager,
-    private val tradeExecutionService: TradeExecutionService,
     private val strategies: List<TradingStrategy>,
     private val tradingProperties: TradingProperties,
     private val userId: Long = 0,
     private val username: String = "",
     private val discordWebhookUrl: String? = null,
-    private val webSocketClient: UpbitWebSocketClient? = null,
     private val marketDataStore: MarketDataStore? = null,
     private val exchange: Exchange = Exchange.UPBIT,
 ) {
@@ -41,7 +41,7 @@ class TradingEngine(
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
-        // store/WS 공통 가격 신선도 한계 — 초과분은 다음 폴백(WS→REST)으로.
+        // store 가격 신선도 한계 — 초과분은 REST 폴백으로.
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
         // stale 폴백 WARN 은 ticker 당 1분 1회 — 피드 장애 시 tick(기본 10s)마다 반복되는 스팸 방지.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
@@ -67,9 +67,24 @@ class TradingEngine(
             ?: strategies.firstOrNull()
     }
 
-    fun start(tickers: List<String> = tradingProperties.tickerList()) {
+    fun start(
+        tickers: List<String> = tradingProperties.tickerList(),
+        initialStates: Map<String, TradingState> = emptyMap(),
+    ) {
         if (running.compareAndSet(false, true)) {
             activeTickers = tickers
+            // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
+            // 이번 실행의 활성 ticker 만 — 과거 ticker 까지 실으면 tick 이 안 도는 상태가 getStates·일일 리셋에 섞인다.
+            initialStates.filterKeys { it in tickers }.forEach { (ticker, state) -> states[ticker] = state }
+            // 드롭한 ticker 에 미해소 주문이 남아 있으면 아무도 reconcile 하지 않는다 — 사람이 알아야 한다.
+            initialStates.filterKeys { it !in tickers }
+                .filterValues { it.pendingBuyUuid != null || it.pendingSellUuid != null }
+                .forEach { (ticker, state) ->
+                    log.error(
+                        "비활성 ticker {} 에 미해소 주문이 남아 있습니다(buy={}, sell={}) — 이 실행에서는 reconcile 되지 않습니다.",
+                        ticker, state.pendingBuyUuid, state.pendingSellUuid,
+                    )
+                }
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
             loopJob = scope.launch { runLoop() }
@@ -93,18 +108,52 @@ class TradingEngine(
         }
     }
 
-    fun stop() {
+    // stop 동시호출(shutdownAll ↔ reload/stopBot)을 직렬화해 CAS 실패자도 같은 loopJob 을 join 하게 한다(M4).
+    private val stopMutex = Mutex()
+
+    suspend fun stop() = stopMutex.withLock {
+        val job = loopJob
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
-            // 실행 중인 루프 코루틴을 즉시 취소해 delay 대기/리소스 잔존 방지 (scope 는 재시작 위해 유지).
-            loopJob?.cancel()
+            // 취소 후 완료까지 대기(join). 진행 중이던 tick 의 주문 후처리(PositionManager NonCancellable 구간)가
+            // 끝난 뒤 반환한다. cancel 만 하고 즉시 새 엔진을 기동하면(reload) 구 루프와 경합해 이중 매매가 된다. scope 는 재시작 위해 유지.
+            job?.cancelAndJoin()
             loopJob = null
+        } else {
+            // 이미 다른 호출자가 stop 수행/완료 중 — 같은 loop 완료를 함께 기다려 조기 반환(미드레이닝)을 막는다.
+            job?.join()
         }
     }
 
     fun isRunning(): Boolean = running.get()
 
     fun getStates(): Map<String, TradingState> = states.toMap()
+
+    /** #19: halt 된 ticker 목록(status 노출용). */
+    fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
+
+    /**
+     * #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false.
+     * durable 기록이 실패하면 메모리 해제를 되돌리고 예외를 올린다 — 성공으로 응답하면 사용자는 풀린 줄 알지만
+     * 재시작 시 halt 가 되살아난다.
+     */
+    suspend fun clearHalt(ticker: String): Boolean {
+        val state = states[ticker] ?: return false
+        if (!state.halted) return false
+        val reason = state.haltReason
+        val failureCount = state.reconcileFailureCount
+        state.clearHalt()
+        try {
+            positionManager.persistStateOrThrow(state)
+        } catch (e: Exception) {
+            state.halted = true
+            state.haltReason = reason
+            state.reconcileFailureCount = failureCount
+            throw e
+        }
+        log.info("Halt cleared for {} ({})", ticker, username)
+        return true
+    }
 
     fun getActiveTickers(): List<String> = activeTickers.toList()
 
@@ -128,7 +177,10 @@ class TradingEngine(
 
         while (running.get() && scope.isActive) {
             try {
-                dailyResetManager.checkAndReset(states)
+                if (dailyResetManager.checkAndReset(states)) {
+                    // 9AM 리셋(boughtToday=false)을 durable 로 flush — 리셋 직후 재시작 시 boughtToday=true 복원으로 당일 재진입이 재차단되는 것 방지.
+                    states.values.forEach { positionManager.persistState(it) }
+                }
 
                 for (ticker in activeTickers) {
                     if (!running.get()) break
@@ -136,6 +188,8 @@ class TradingEngine(
                 }
 
                 delay(tradingProperties.intervalSeconds * 1000)
+            } catch (e: CancellationException) {
+                throw e // stop/reload 의 취소는 정상 종료 — 삼키면 ERROR 로그(Discord 스팸)로 둔갑하고 delay 재진입으로 join 이 지연된다.
             } catch (e: Exception) {
                 log.error("Trading loop error (user {}): {}", userId, e.message, e)
                 delay(ERROR_RETRY_DELAY_MS)
@@ -156,49 +210,60 @@ class TradingEngine(
             }
             if (now - (staleWarnAtMs[ticker] ?: 0L) >= STALE_WARN_INTERVAL_MS) {
                 staleWarnAtMs[ticker] = now
-                log.warn("Stale store price for {} (age {}ms) — falling back to WS/REST", ticker, ageMs)
+                log.warn("Stale store price for {} (age {}ms) — falling back to REST", ticker, ageMs)
             }
         }
 
-        // Fallback to WebSocket
-        val wsPrice = webSocketClient?.latestPrice(ticker)
-        if (wsPrice != null && System.currentTimeMillis() - wsPrice.timestamp < PRICE_STALE_THRESHOLD_MS) {
-            return wsPrice.tradePrice
-        }
+        // store 미보유(watchlist 밖 티커)·stale 이면 null 반환 → processTicker 가 REST(upbitClient.getTicker)로 폴백.
         return null
     }
 
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
         val strategy = activeStrategy ?: return
+        processTicker(ticker, state, strategy)
+    }
 
+    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
         try {
             val currentPrice = getRealtimePrice(ticker)
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
                 ?: return
 
+            // 시작 시 syncPosition(runLoop) 이 실패했으면(unsynced) 매수 평가 전에 재시도. 성공 시 해소,
+            // 실패 지속 시 buy() 초입 가드가 신규 진입을 막아 이중 포지션을 방지한다.
+            if (state.unsynced) {
+                positionManager.syncPosition(ticker, state)
+            }
+
+            // pending durable 기록이 실패해 매수가 막힌 상태면 매 tick 재기록을 시도한다 — buy() 초입 가드가
+            // 재기록 경로까지 막아버려서, 여기서 풀어주지 않으면 그 ticker 는 영영 매수 불가로 남는다.
+            positionManager.retryPendingPersistIfNeeded(state)
+
             // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
             if (state.pendingBuyUuid != null) {
-                val reconciled = positionManager.reconcilePendingBuy(ticker, state, currentPrice)
-                if (reconciled != null) {
+                // 체결이 확정되면 PositionManager 가 상태 전이와 감사 기록을 원자 커밋하고 알림까지 끝낸다(#52).
+                if (positionManager.reconcilePendingBuy(ticker, state, currentPrice) != null) {
                     // 매수 확정 tick 은 일반 buy 경로와 동일하게 종료(막 산 포지션에 같은 tick 손절·익절 평가 방지).
-                    onTrade(reconciled)
                     return
                 }
                 if (state.pendingBuyUuid != null) return // 아직 미해소 — 이 tick 매수/매도 평가 skip
             }
 
+            // 매도판 H8: 미해소 매도 주문(placeOrder 성공 후 체결확인 실패/미확정분)이 있으면 매도/매수 평가 전에 reconcile.
+            // 확정되면 청산 기록 후 종료, 미해소면 이 tick 평가 skip(같은 포지션에 이중 매도 주문 방지).
+            if (state.pendingSellUuid != null) {
+                if (positionManager.reconcilePendingSell(ticker, state, currentPrice) != null) return
+                if (state.pendingSellUuid != null) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
+            }
+
             if (state.position) {
-                state.updatePeakPrice(currentPrice)
+                // 신고점은 트레일링 스톱의 기준선 — 영속 안 하면 재시작 후 peak 이 0 에서 다시 쌓여
+                // 이미 발동했어야 할 청산이 안 걸린다. 갱신된 tick 에만 flush(상승 시에만 true).
+                if (state.updatePeakPrice(currentPrice)) positionManager.persistState(state)
                 val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
-                if (reason != null) {
-                    val sellRecord = positionManager.sell(ticker, state, currentPrice, reason)
-                    if (sellRecord != null) {
-                        onTrade(sellRecord)
-                        return
-                    }
-                }
+                if (reason != null && positionManager.sell(ticker, state, currentPrice, reason) != null) return
             }
 
             // 당일 1회 진입: 이미 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
@@ -215,18 +280,18 @@ class TradingEngine(
                 strategy.shouldBuy(candles, currentPrice, tradingProperties)
             }
             if (shouldBuy) {
-                val buyRecord = positionManager.buy(ticker, state, currentPrice, strategy.name)
-                if (buyRecord != null) {
-                    onTrade(buyRecord)
-                }
+                // 체결 확정·상태 전이·감사 기록·커밋 후 알림은 PositionManager.commitFill 이 담당한다(#52).
+                positionManager.buy(ticker, state, currentPrice, strategy.name)
             }
+        } catch (e: CancellationException) {
+            throw e // 취소 전파(runLoop 와 동일 이유 — 삼키면 loop 가 계속 돌아 join 지연·오탐 ERROR).
         } catch (e: Exception) {
             log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
         }
     }
 
-    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 가 없으면(재시작 syncPosition 복원분 — 메모리 상태라
-    // 재시작 시 유실되는 알려진 한계) 또는 전략 목록에서 사라졌으면 활성 전략으로 폴백. 후자는 청산 기준이 진입과 달라지므로 WARN.
+    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 는 durable 복원되지만, 전략이 목록에서 사라졌으면
+    // (전략 제거/rename) 활성 전략으로 폴백한다. 폴백은 청산 기준이 진입과 달라지므로 WARN.
     internal fun resolveExitStrategy(state: TradingState, fallback: TradingStrategy): TradingStrategy {
         val entry = state.entryStrategy ?: return fallback
         return strategies.find { it.name == entry } ?: run {
@@ -259,11 +324,14 @@ class TradingEngine(
         strategy: TradingStrategy,
     ): Boolean {
         if (!tradingProperties.chartExitEnabled) return false
-        return runCatching { evaluateChartExit(ticker, currentPrice, strategy) }
-            .getOrElse {
-                log.debug("chartExit evaluation failed for {}: {}", ticker, it.message)
-                false
-            }
+        return try {
+            evaluateChartExit(ticker, currentPrice, strategy)
+        } catch (e: CancellationException) {
+            throw e // 취소 전파 — runCatching 은 CE 까지 삼켜 종료 중에도 후속 매수/청산 평가가 계속된다.
+        } catch (e: Exception) {
+            log.debug("chartExit evaluation failed for {}: {}", ticker, e.message)
+            false
+        }
     }
 
     /**
@@ -299,12 +367,4 @@ class TradingEngine(
         return if (storeCandles != null && storeCandles.size >= MIN_DAILY_CANDLES) storeCandles else null
     }
 
-    private suspend fun onTrade(record: TradeRecord) {
-        tradeExecutionService.saveAndNotify(
-            record = record.copy(userId = userId),
-            client = upbitClient,
-            username = username,
-            discordWebhookUrl = discordWebhookUrl,
-        )
-    }
 }

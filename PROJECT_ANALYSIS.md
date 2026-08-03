@@ -8,17 +8,19 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V13) |
+| **마이그레이션** | Flyway (V1~V18) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
-| **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
+| **암호화** | AES-GCM 256-bit (사용자별 Upbit/KIS API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
-| **배포** | AWS EC2 t4g.medium (arm64, 4GB) |
+| **배포** | Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 현행 / AWS EC2 t4g.medium (arm64, 4GB) — 2026-07-31 삭제·historical / OCI A1.Flex (arm64, 12GB, Always Free) — 보류 |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
+
+> **KIS 주식 봇 (Phase 1 — 기반)**: 기존 Upbit 크립토 봇과 같은 인프라(보안·R2DBC·config·WebClient) 위에 한국투자증권 OpenAPI 연동 기반이 `bot/kis/`(별도 gradle 모듈 아님)에 추가됐다. Phase 1 범위 = 브로커 클라이언트(token 24h 캐싱·주문·조회·시세) + **주문유실 방지 WAL**(`stock_order_intent` 테이블 + `StockOrderService` write-ahead + `StockOrderReconciler` 상태기계). 전략 루프·주식 시세수집·UI 는 Phase 2(미배선). 안전상 기본 dry-run(`KIS_LIVE_ENABLED=false`). 설계·진행 기록: `.claude/plans/2026-06-14-stock-bot-kis/`.
 
 ---
 
@@ -50,16 +52,15 @@ coin-trading-bot/
 ├── common/                          # 공유 도메인 + 인디케이터 + 스윙 전략
 │   └── src/main/kotlin/com/trading/common/
 │       ├── domain/                  # NormalizedCandle, NormalizedTicker, OrderBook, Exchange, MarketPair
-│       ├── indicator/               # Indicators (RSI, MACD, BB, MA, EMA)
-│       └── strategy/                # TradingStrategy 인터페이스 + 스윙 전략 7개
+│       └── strategy/                # Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + 스윙 전략 7개
 │                                    #   (@Bean 등록은 :bot/config/StrategyConfig)
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
 │   └── src/main/kotlin/com/trading/bot/
-│       ├── api/                     # REST 컨트롤러 12개 + UpbitErrorHandlerAdvice
+│       ├── api/                     # REST 컨트롤러 10개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
-│       ├── client/                  # UpbitClient (REST 주문), UpbitWebSocketClient
-│       ├── marketdata/              # in-process 시세 수집 (구 collector 흡수)
+│       ├── client/                  # UpbitClient (REST 주문/조회)
+│       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
 │       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager, BacktestEngine
 │       ├── stream/                  # CandleAggregator, MarketDataPersistenceService, DataRetentionService
 │       ├── cache/                   # PriceCacheService (Redis)
@@ -70,6 +71,8 @@ coin-trading-bot/
 │
 ├── docker-compose.yml               # 로컬 인프라 (app, postgres, redis)
 ├── deploy/aws/                      # AWS 배포 스크립트 + docker-compose.prod.yml
+├── deploy/oci/                      # OCI(Always Free) 배포 스크립트 + docker-compose.prod.yml
+├── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
 └── perf/                            # k6 부하 테스트
 ```
 
@@ -102,21 +105,26 @@ coin-trading-bot/
 | MeanReversion | 평균 회귀 (MA20 대비 -3% + 낮은 변동성) |
 | CombinedStrategy | 변동성 돌파 + 추세 + RSI 복합 |
 
-**리스크 관리:** 손절 -3% / 익절 +5% / 트레일링 스탑 고점 대비 -2% / 최대 보유 7일 / 50일 MA 아래 매수 차단 / 09:00 KST 일일 리셋.
+**리스크 관리:** 익절 +2% / 손절 -5% / 트레일링 스탑 고점 대비 -2% / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋. 50일 MA 아래 매수 차단은 **백테스트 전용**(`useMarketFilter` opt-in, 기본 off)이며 라이브 봇 매수 경로에는 적용되지 않는다.
 
 ---
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V13)
+### Flyway 마이그레이션 (V1~V18)
 
 | 버전 | 내용 |
 |------|------|
 | V1~V9 | trade_records, users, bot_state, public_profile, discord_webhook, price_snapshots, admin_role, indexes |
 | V10 | `market_tickers`, `market_candles` — 시계열 시세 데이터 |
-| V11 | `trade_executions`, `positions`, `strategy_signals` — 매매 기록 |
+| V11 | `trade_executions`, `positions`(V14 에서 제거), `strategy_signals` — 매매 기록 |
 | V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정 |
 | V13 | bot_configs에 `trade_mode` 컬럼 |
+| V14 | `trading_states` — per-(user, ticker) 거래 상태 durable 영속(미해소 주문 uuid·halt·진입 메타). `trade_executions.exchange_order_id` + 부분 unique(재시작 reconcile 멱등). 미사용 `positions` 제거 |
+| V15 | `stock_order_intent` — KIS 주식 주문 WAL(write-ahead log). 비terminal 주문 1건 불변식을 부분 unique 로 DB 강제 |
+| V16 | `users` 에 KIS 자격증명 컬럼(`kis_app_key`/`kis_app_secret` 암호화, `kis_account_no`, `kis_paper`) |
+| V17 | `bot_state` 에 `exchange` 컬럼((user_id, exchange) 별 1행 — Upbit/KIS 동시 운영). WAL 활성 불변식에 `side` 추가 |
+| V18 | `stock_position_state` — 주식 포지션의 durable 스냅샷(트레일링 고점·매수 거래일·진입 전략). 보유수량·평단은 거래소 잔고가 진실이라 저장하지 않는다 |
 
 ### 핵심 테이블
 
@@ -183,7 +191,7 @@ bot_configs
 | 그룹 | 컨트롤러 | 대표 경로 |
 |------|----------|-----------|
 | 인증 | AuthController | `/api/auth/{register,login,logout}` |
-| 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy}` |
+| 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy,halt/clear}` |
 | 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
 | 사용자 | TradingController/LeaderboardController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/ManualTrade/TradeHistory | `/api/{portfolio,account,trade/buy,trade/sell,trades}` |
@@ -212,7 +220,9 @@ bot_configs
 ```
 
 - 외부 진입점은 Caddy(:80/:443). `app`은 호스트에 노출되지 않고(`expose` 만) Caddy 가 `app:8080` 으로 리버스 프록시한다(Let's Encrypt 자동 발급).
-- 배포(`deploy/aws/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull, 로컬(`docker-compose.yml`)은 caddy 없이 `build: .` 로컬 빌드(`app:8080` 직접).
+- 운영 배포(`deploy/vultr/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull,
+  AWS/OCI Compose 경로는 historical·보류 자산이다. 로컬(`docker-compose.yml`)은 caddy 없이 `build: .`
+  로컬 빌드(`app:8080` 직접)다.
 
 ---
 

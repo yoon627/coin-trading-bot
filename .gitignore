@@ -50,6 +50,12 @@ docker-compose.override.yml
 .env
 deploy/aws/.state
 deploy/aws/*.pem
+deploy/oci/.state
+deploy/oci/*.pem
+deploy/oci/*.pub
+deploy/vultr/.state
+deploy/vultr/*.pem
+deploy/vultr/*.pub
 
 ### OS ###
 .DS_Store
@@ -72,3 +78,8 @@ replay_pid*
 
 ### Worktrees ###
 .worktrees/
+
+### LLM Wiki ###
+# 외부 원문 보관소. 페이지(wiki/pages/)는 추적하되 원문 덤프는 추적하지 않는다.
+# 주의: gitignored 라 worktree 삭제 시 함께 사라진다 — 재취득 가능한 원문만 둘 것 (wiki/WIKI.md §5).
+wiki/raw/
