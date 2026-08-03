@@ -1,8 +1,8 @@
 ---
 title: dead-path-cleanup — 경량화 잔재 제거 (무소비 저장 경로·죽은 캐시·시세 3중 수집)
-status: blocked
+status: in_progress
 started: 2026-07-08
-updated: 2026-07-10
+updated: 2026-08-03
 ---
 
 # Goal
@@ -13,10 +13,13 @@ updated: 2026-07-10
 
 - 2026-07-08: 전방위 감사(멀티에이전트 워크플로 + 메인 세션 grep spot-check) 기반 plan 작성. spot-check: PriceCacheService 프로덕션 호출자 0, getRecentTickers/getOrderBook 소비자 0, MarketTickerRepository.findRecent(3-arg) 소비자 0(ChartController 의 findRecent 는 MarketCandleRepository 4-arg 로 별개 확인).
 - 2026-07-10: plan-review(Claude subagent + codex 병행) 반영 — **major 교정 2건**: ① findRecent(LIMIT 기반)로는 1h 변화율 계산 불가 → recorded_at 시간범위 쿼리 신설로 Decision 수정. ② market_tickers 저장이 전역 10-tick 카운터 샘플링(MarketDataPersistenceService.kt:22-27)이라 고활동 종목이 독식 — 저활동 종목의 1h 창 데이터 존재 보장 없음 → per-market 샘플링 전환 추가. 선행 의존 사유 보강(파일 충돌 아닌 기능 신뢰성), DataRetentionService 문구 교정, status: blocked 로 정정(§10 — 선행 머지 대기).
+- 2026-08-03: `origin/main`에 marketdata-consolidation 1·2·3단계가 모두 반영된 사실을 확인(`a44782a`, `78ad3fc`, `5338572`, `b829a93` 모두 조상)하고, 깨끗한 브랜치에 `origin/main`을 로컬 병합(`12f1253`)했다. 선행 blocker를 해소해 status를 `in_progress`로 전환하고, 첫 정리 단계의 참조 검색·무논쟁 삭제를 시작한다.
+- 2026-08-03: 참조 검색에서 `PriceCacheService`·전용 테스트, `MarketDataStore`의 `tickerHistory`·`orderBooks`·`getRecentTickers`·`getOrderBook`·`updateOrderBook`·`hasData`, `NormalizedOrderBook`의 프로덕션/테스트 소비자가 없음을 확인했다. 세 경로와 전용 테스트/도메인 파일을 삭제하고, 각 삭제 직후 JDK 21로 `compileKotlin`을 통과시켰다. `:bot:test --tests com.trading.bot.marketdata.MarketDataStoreTest` 및 전체 `./gradlew test`가 통과했고, 삭제 심볼 검색도 결과 0건이었다(기본 JDK 25 실행은 `25.0.2` 오류로 실패해 프로젝트 요구 JDK 21로 재실행).
+- 2026-08-03: `PROJECT_ANALYSIS.md`와 `wiki/pages/concept/marketdata-pipeline.md`에서 삭제된 cache/orderbook 경로와 Redis 용도를 동기화했다. `wiki` 링크 검사·추가 검증·smoke가 모두 통과했다.
 
 # Next
 
-marketdata-consolidation 머지 대기. 머지 확인 후 첫 작업: 무논쟁 삭제부터 — PriceCacheService+전용 테스트, MarketDataStore 의 tickerHistory/orderBooks/getRecentTickers/hasData, common 의 NormalizedOrderBook. 각 삭제 후 compileKotlin 즉시 확인.
+다음 단계 착수 전: `PriceCollector`·`WatchlistController`·`PriceSnapshotRepository`/entity 호출 그래프와 최신 Flyway 번호를 다시 확인해 `price_snapshots` 제거·watchlist 1h 지표 전환의 테스트/마이그레이션 범위를 구체화한다. 이후 `market_tickers` per-market 샘플링과 시간범위 조회를 함께 구현한다.
 
 # Decisions
 
@@ -32,9 +35,10 @@ marketdata-consolidation 머지 대기. 머지 확인 후 첫 작업: 무논쟁 
 
 # Key Files
 
-- `bot/src/main/kotlin/com/trading/bot/cache/PriceCacheService.kt` + `bot/src/test/.../cache/PriceCacheServiceTest.kt` — 삭제
-- `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt` — :33-43(tickerHistory·orderBooks), :74-86(무소비 getter)
-- `common/.../domain/NormalizedOrderBook.kt` — producer/consumer 0, 삭제
+- `bot/src/main/kotlin/com/trading/bot/cache/PriceCacheService.kt` + `bot/src/test/.../cache/PriceCacheServiceTest.kt` — 참조 0 확인 후 삭제
+- `bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt` — tickerHistory·orderBooks·무소비 getter/update 경로 삭제, latestTickers/candleBuffers/tickerSink 유지
+- `common/.../domain/NormalizedOrderBook.kt` — producer/consumer 0 확인 후 삭제
+- `wiki/pages/concept/marketdata-pipeline.md` — 현재 MarketDataStore 저장 경로로 문서 동기화
 - `bot/src/main/kotlin/com/trading/bot/engine/PriceCollector.kt` + `persistence/PriceSnapshotRepository`+entity — 제거
 - `bot/src/main/kotlin/com/trading/bot/api/WatchlistController.kt` — :26-53(1h 변화율 전환 지점)
 - `bot/src/main/kotlin/com/trading/bot/stream/MarketDataPersistenceService.kt` — :22-27(per-market 샘플링 전환)
@@ -53,4 +57,4 @@ marketdata-consolidation 머지 대기. 머지 확인 후 첫 작업: 무논쟁 
 
 # Blockers
 
-- **marketdata-consolidation 머지 선행** — 기능 신뢰성 의존(워치독) + 파일 인접(위 Decisions). 해소 시 status: in_progress 로 전환.
+- **없음** — marketdata-consolidation 1·2·3단계가 `origin/main`에 반영된 것을 확인했고, 현재 브랜치에 병합했다.

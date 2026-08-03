@@ -40,7 +40,7 @@
 
 [분석 — REST]
   PostgreSQL ──→ Chart API (멀티 타임프레임 캔들)
-  Redis      ──→ 가격/지표 캐시
+  Redis      ──→ 선택적 분산 rate limiting
 ```
 
 ---
@@ -51,7 +51,7 @@
 coin-trading-bot/
 ├── common/                          # 공유 도메인 + 인디케이터 + 스윙 전략
 │   └── src/main/kotlin/com/trading/common/
-│       ├── domain/                  # NormalizedCandle, NormalizedTicker, OrderBook, Exchange, MarketPair
+│       ├── domain/                  # NormalizedCandle, NormalizedTicker, Exchange, MarketPair
 │       └── strategy/                # Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + 스윙 전략 7개
 │                                    #   (@Bean 등록은 :bot/config/StrategyConfig)
 │
@@ -63,7 +63,6 @@ coin-trading-bot/
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
 │       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager, BacktestEngine
 │       ├── stream/                  # CandleAggregator, MarketDataPersistenceService, DataRetentionService
-│       ├── cache/                   # PriceCacheService (Redis)
 │       ├── config/                  # AppConfig, StrategyConfig, RedisConfig, RateLimitFilter 등
 │       ├── persistence/             # R2DBC Entity/Repository
 │       ├── security/                # SecretsCrypto (AES-GCM), UserSecretsService
@@ -214,7 +213,7 @@ bot_configs
 
 ┌──────────────┬──────────────┬────────────────┬───────────────┐
 │  caddy :443  │   app :8080  │ postgres :5432 │  redis :6379  │
-│  (TLS 종단)  │  (수집+매매  │   (PG 17)      │   (캐시)      │
+│  (TLS 종단)  │  (수집+매매  │   (PG 17)      │ (rate limit)  │
 │  (LE 자동)   │   +REST+SPA) │                │               │
 └──────────────┴──────────────┴────────────────┴───────────────┘
 ```
