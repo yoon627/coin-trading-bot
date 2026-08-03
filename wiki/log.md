@@ -37,3 +37,23 @@
 - `check_links.py` → clean (초기 orphan 2건 수정 후)
 - `wiki/verify.sh` → clean (25페이지, stem 유니크·정규식·frontmatter 값)
 - `wiki/smoke.sh` → 9/9 pass. **음성 질의가 실제로 위반 1건을 잡았다** — `migration-numbering` 이 특정 브랜치의 번호 선점 상태를 적고 있어 §1(백로그 침범)에 걸렸고, 확인 절차로 교체했다.
+
+---
+
+## [2026-08-03] ingest | lesson-llm-alpha-verification 1페이지 추가
+
+"LLM 을 트레이딩에 붙여 수익을 낼 수 있나" 조사 결과를 적립. 구현은 하지 않았고 검증 설계만 고정했다.
+
+- **decision/lesson +1**: `lesson-llm-alpha-verification`
+- `rightsizing-history` 에 inbound 링크 1줄 추가(기각 사유 → 재도입 조건). 이 페이지의 고아 방지도 겸한다.
+
+핵심 주장과 근거:
+
+| 주장 | 근거 |
+|---|---|
+| 기각 사유는 미검증이지 반증이 아님 | `rightsizing-history.md:22` 인용 |
+| 원 구현 복원 불가 | `git log --all --diff-filter=D` 231커밋 전수 → LLM 관련 경로 0건 |
+| 지표는 전부 가격 파생 → LLM 재입력은 정보량 0 | `CombinedStrategy.kt` 전문(3조건) |
+| 과거 백테스트 무효 | 모델 학습 오염은 `BacktestEngine.kt:98`(다음 봉 시가 체결)이 막는 층위가 아님 |
+| 텍스트 수집 경로 부재 | `common`·`bot/src/main` grep 0건, 스키마에 텍스트 테이블 없음 |
+| 구독 토큰으로 서버 자동화 불가 | Anthropic Consumer Terms — API 키 외 자동·비인간 접근 금지 |
