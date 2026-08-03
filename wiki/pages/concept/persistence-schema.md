@@ -1,18 +1,19 @@
 ---
-title: DB 스키마 — Flyway V1~V14 와 핵심 테이블
+title: DB 스키마 — Flyway V1~V18 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-02
 claim_state: current
-verified: 2026-07-28 — bot/src/main/resources/db/migration/ 파일 목록 실측, PROJECT_ANALYSIS.md 표 대조
+verified: 2026-08-02 — bot/src/main/resources/db/migration/ V1~V18 및 KIS persistence 코드 실측
 sources:
   - bot/src/main/resources/db/migration/
   - PROJECT_ANALYSIS.md
+  - bot/src/main/kotlin/com/trading/bot/persistence/
 ---
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V14** 다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V18** 이다.
 
 | 버전 | 내용 |
 |---|---|
@@ -22,6 +23,10 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정 |
 | V13 | `bot_configs.trade_mode` 컬럼 |
 | V14 | `trading_states` 신설 + `trade_executions.exchange_order_id` + 부분 unique. 미사용 `positions` 제거 |
+| V15 | KIS 주문 WAL인 `stock_order_intent`와 활성 주문 partial unique index |
+| V16 | 사용자별 KIS 키·계좌번호·모의투자 여부(`users.kis_*`) |
+| V17 | `bot_state` 거래소별 분리 + KIS WAL 활성 unique key에 `side` 추가 |
+| V18 | KIS 포지션 메타데이터(`stock_position_state`) durable snapshot |
 
 다음 마이그레이션 번호를 정하는 규칙은 [[migration-numbering]] 에 있다 — 미머지 브랜치가 번호를 선점하는 문제가 실제로 있었다.
 
@@ -38,6 +43,14 @@ per-(user, ticker) 거래 상태를 durable 하게 보관한다. 이게 없으�
 ## `trade_executions.exchange_order_id` 부분 unique
 
 재시작 후 reconcile 이 같은 체결을 다시 기록하는 것을 DB 레벨에서 막는 **멱등 키**다. 다만 이건 *중복 insert* 만 막고, *기록이 아예 없었던* 방향은 막지 못한다 — 감사 기록 유실 경로는 [[trading-engine-loop]] 의 "알려진 갭" 참조.
+
+## KIS 주문·포지션 상태
+
+KIS 주문은 `stock_order_intent`에 송신 전에 기록한다. `SUBMITTING`, `PLACED`, `PARTIAL`, `UNKNOWN`, `NEEDS_REVIEW` 같은 비종료 상태를 남겨 프로세스가 주문 직후 죽어도 [[kis-order-lifecycle]]의 reconcile이 이어받을 수 있게 한다. V17의 `side` 포함 partial unique index는 같은 종목의 활성 BUY와 SELL을 각각 하나씩 허용하고 같은 side 중복만 막는다.
+
+`stock_position_state`에는 거래소 잔고가 아닌 엔진 메타데이터만 저장한다. 보유수량·평단은 재시작 시 KIS `getHoldings()`가 진실이므로 저장하지 않고, 트레일링 고점(`peak_price`), 당일 매수 근거(`bought_date`), 진입 전략(`entry_strategy`)만 복원한다([[kis-stock-trading-flow]]).
+
+KIS 앱 키·시크릿은 사용자별로 암호화 저장하고, `kis_paper`가 모의투자 도메인·tr_id 선택을 결정한다. 서버의 `KIS_LIVE_ENABLED=false`는 주문을 KIS에 송신하지 않고 WAL에 `DRY_RUN`만 기록하는 별도 안전축이다.
 
 ## 성질
 

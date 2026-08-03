@@ -40,6 +40,19 @@
 
 ---
 
+## [2026-08-02] ingest | KIS 주식 자동매매·주문 수명주기
+
+현재 KIS 코드를 기준으로 재사용 가능한 두 흐름을 영속 페이지로 기록했다.
+
+- `kis-stock-trading-flow`: `/api/stock/bot/start` → 사용자별 엔진 → 장시간·시세·신호·포지션 수량 계산 → durable 포지션 메타데이터.
+- `kis-order-lifecycle`: 자동·수동 공통 `StockOrderService` → 검증 → WAL tx1 → KIS 송신 → 상태 tx2 → 당일 체결조회 reconcile → audit/`NEEDS_REVIEW`.
+- `architecture-overview`를 현재 코드의 Upbit·KIS 이중 경로와 KIS 패키지에 맞게 보정했다.
+- `persistence-schema`를 V14 기준에서 V18 기준으로 갱신하고 V15~V18 KIS 주문·키·포지션 마이그레이션을 추가했다.
+
+근거: KIS controller/engine/marketdata/order/client/reconcile 구현, `application.yml`, V15~V18 migration. Wiki 구조·frontmatter·링크 검증은 ingest 후 실행한다.
+
+---
+
 ## [2026-08-03] ingest | lesson-llm-alpha-verification 1페이지 추가
 
 "LLM 을 트레이딩에 붙여 수익을 낼 수 있나" 조사 결과를 적립. 구현은 하지 않았고 검증 설계만 고정했다.
