@@ -1,6 +1,9 @@
 spring:
   application:
     name: coin-trading-bot
+  # SIGTERM 시 진행 중이던 웹 요청·트레이딩 tick 이 끝나도록 대기(강제 종료 방지). server.shutdown=graceful 과 짝.
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   jackson:
     property-naming-strategy: SNAKE_CASE
     deserialization:
@@ -20,6 +23,9 @@ spring:
     password: ${DB_PASSWORD:trading}
     locations: classpath:db/migration
 
+server:
+  shutdown: graceful
+
 management:
   endpoints:
     web:
@@ -31,17 +37,42 @@ upbit:
   secret-key: ${UPBIT_SECRET_KEY:}
   base-url: https://api.upbit.com
 
+# KIS(한국투자증권) 주식 봇. 실주문 2축 안전장치:
+#  - live-enabled=false(기본): 주문을 실제로 보내지 않고 WAL 에 DRY_RUN 으로만 기록.
+#  - 사용자별 kis_paper(users): 실전(:9443) vs 모의(:29443) 환경/tr_id 선택.
+kis:
+  real-base-url: ${KIS_REAL_BASE_URL:https://openapi.koreainvestment.com:9443}
+  paper-base-url: ${KIS_PAPER_BASE_URL:https://openapivts.koreainvestment.com:29443}
+  cust-type: ${KIS_CUST_TYPE:P}
+  # 전역(단일 계정) 자격증명 — .env 로 주입. 비우면 미설정. 같은 키로 국내/해외 공용.
+  app-key: ${KIS_APP_KEY:}
+  app-secret: ${KIS_APP_SECRET:}
+  cano: ${KIS_CANO:}
+  acnt-prdt-cd: ${KIS_ACNT_PRDT_CD:}
+  paper: ${KIS_PAPER:true}
+  live-enabled: ${KIS_LIVE_ENABLED:false}
+  max-order-amount: ${KIS_MAX_ORDER_AMOUNT:10000000}
+  token-refresh-skew-seconds: ${KIS_TOKEN_REFRESH_SKEW_SECONDS:600}
+  reconcile-interval-ms: ${KIS_RECONCILE_INTERVAL_MS:15000}
+  reconcile-grace-seconds: ${KIS_RECONCILE_GRACE_SECONDS:120}
+  reconcile-stale-seconds: ${KIS_RECONCILE_STALE_SECONDS:1800}
+  # 주식 시세수집(전역 .env 계정으로 watchlist 폴링 → store). 비우면 비활성(엔진 REST 폴백).
+  marketdata:
+    symbols: ${KIS_MARKETDATA_SYMBOLS:}
+    price-poll-seconds: ${KIS_MARKETDATA_PRICE_POLL_SECONDS:3}
+    candle-refresh-seconds: ${KIS_MARKETDATA_CANDLE_REFRESH_SECONDS:300}
+
 trading:
   tickers: ${TRADING_TICKERS:KRW-BTC}
   strategy: ${TRADING_STRATEGY:combined}
   invest-ratio: ${TRADING_INVEST_RATIO:0.1}
   max-invest-amount: ${TRADING_MAX_INVEST_AMOUNT:100000}
   k-value: ${TRADING_K_VALUE:0.5}
-  take-profit-pct: ${TRADING_TAKE_PROFIT_PCT:2.0}
+  take-profit-pct: ${TRADING_TAKE_PROFIT_PCT:5.0}
   max-loss-pct: ${TRADING_MAX_LOSS_PCT:5.0}
   trailing-stop-pct: ${TRADING_TRAILING_STOP_PCT:2.0}
   # 트레일링 arm 임계(%) — 고점 수익률 도달 후에만 트레일링 평가. 0=수익 중 즉시(현행). trail 보다 클 때만 실효.
-  trailing-arm-pct: ${TRADING_TRAILING_ARM_PCT:0.0}
+  trailing-arm-pct: ${TRADING_TRAILING_ARM_PCT:3.0}
   # 보유 상한(거래일, KST 09:00 경계) — 1=현행 일일리셋.
   max-hold-days: ${TRADING_MAX_HOLD_DAYS:1}
   # 왕복 수수료 비율(기록용 net pnl 차감) — Upbit 0.05%×2.
@@ -58,6 +89,16 @@ app:
 
 watchlist:
   tickers: ${WATCHLIST_TICKERS:KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR}
+
+# 시세 수집 WS 무수신(half-open) 자동복구 워치독. 매매 정확성은 별도 staleness 게이팅이 보호하므로 피드 복구용 —
+# 재연결 폭주 등 오작동 시 enabled=false 로 즉시 비활성(kill-switch). stale-ms 는 watchlist 유동성에 맞춰 조정.
+marketdata:
+  watchdog:
+    enabled: ${MARKETDATA_WATCHDOG_ENABLED:true}
+    stale-ms: ${MARKETDATA_WATCHDOG_STALE_MS:60000}
+    interval-ms: ${MARKETDATA_WATCHDOG_INTERVAL_MS:20000}
+    initial-delay-ms: ${MARKETDATA_WATCHDOG_INITIAL_DELAY_MS:30000}
+    restart-backoff-ms: ${MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS:1000}
 
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}

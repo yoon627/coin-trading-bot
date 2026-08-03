@@ -1,5 +1,7 @@
 package com.trading.bot.domain
 
+import java.time.LocalDate
+import java.time.LocalDateTime
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -23,6 +25,30 @@ class TradingStateTest {
     fun `pnlPercent returns 0 when avgBuyPrice is 0`() {
         val state = TradingState("KRW-BTC")
         assertEquals(0.0, state.pnlPercent(50000000.0))
+    }
+
+    @Test
+    fun `markBought stamps the trading date, not the calendar date`() {
+        // 08:00 매수는 거래일 기준 전날(09:00 리셋 전)에 속한다 — 달력일로 찍으면 다음 tick 의
+        // 리셋이 boughtToday 를 즉시 해제해 같은 거래일에 재진입이 뚫린다.
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, now = LocalDateTime.of(2026, 6, 11, 8, 0))
+        assertEquals(LocalDate.of(2026, 6, 10), state.boughtDate)
+
+        val afterReset = TradingState("KRW-ETH")
+        afterReset.markBought(3000000.0, 0.01, now = LocalDateTime.of(2026, 6, 11, 9, 0))
+        assertEquals(LocalDate.of(2026, 6, 11), afterReset.boughtDate)
+    }
+
+    @Test
+    fun `resetDaily clears boughtToday only when the trading date rolled over`() {
+        val state = TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11))
+
+        state.resetDaily(LocalDate.of(2026, 6, 11))
+        assertTrue(state.boughtToday)
+
+        state.resetDaily(LocalDate.of(2026, 6, 12))
+        assertFalse(state.boughtToday)
     }
 
     @Test
@@ -102,9 +128,10 @@ class TradingStateTest {
     }
 
     @Test
-    fun `resetDaily clears boughtToday flag`() {
+    fun `resetDaily clears boughtToday when the state has no recorded trading date`() {
+        // boughtDate = null 은 이 컬럼 이전에 저장된 상태 — 거래일을 모르므로 보수적으로 해제한다.
         val state = TradingState("KRW-BTC", boughtToday = true)
-        state.resetDaily()
+        state.resetDaily(LocalDate.of(2026, 6, 11))
         assertFalse(state.boughtToday)
     }
 
@@ -139,5 +166,61 @@ class TradingStateTest {
         state.markBought(50000000.0, 0.001, "macd_cross")
         state.markSold()
         assertNull(state.entryStrategy)
+    }
+
+    @Test
+    fun `markBought replace does not double-count an already-synced position`() {
+        // 재시작 복원 시나리오: durable pendingBuyUuid 복원 + syncPosition 이 거래소 잔고를 이미 반영
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            avgBuyPrice = 50_000_000.0,
+            holdVolume = 0.001,
+            entryStrategy = "macd_cross",
+            buyDate = LocalDate.of(2026, 7, 19),
+            pendingBuyUuid = "uuid-1",
+            pendingBuyStrategy = "macd_cross",
+        )
+
+        // reconcile completeBuy 는 거래소 실잔고(절대값)로 확정 — averaging 이 아니라 절대 세팅이어야 이중계상이 안 난다.
+        state.markBought(50_000_000.0, 0.001, "macd_cross", replace = true)
+
+        assertEquals(0.001, state.holdVolume, 1e-9) // 0.002 (2×) 가 아니라 0.001 유지
+        assertEquals(50_000_000.0, state.avgBuyPrice, 0.01)
+        assertNull(state.pendingBuyUuid) // pending 해소
+    }
+
+    @Test
+    fun `markBought replace preserves durable buyDate and entryStrategy`() {
+        val entryDate = LocalDate.of(2026, 7, 19)
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            avgBuyPrice = 50_000_000.0,
+            holdVolume = 0.001,
+            entryStrategy = "macd_cross",
+            buyDate = entryDate,
+            pendingBuyUuid = "uuid-1",
+        )
+
+        // 다음 거래일 재시작 시점에 확정되어도 진입일/진입전략은 최초 값을 유지(now 로 덮지 않음).
+        state.markBought(50_000_000.0, 0.001, "golden_cross", replace = true)
+
+        assertEquals(entryDate, state.buyDate)
+        assertEquals("macd_cross", state.entryStrategy)
+    }
+
+    @Test
+    fun `clearHalt resets halt state`() {
+        val state = TradingState(
+            "KRW-BTC",
+            halted = true,
+            haltReason = "reconcile failures exceeded",
+            reconcileFailureCount = 5,
+        )
+        state.clearHalt()
+        assertFalse(state.halted)
+        assertNull(state.haltReason)
+        assertEquals(0, state.reconcileFailureCount)
     }
 }

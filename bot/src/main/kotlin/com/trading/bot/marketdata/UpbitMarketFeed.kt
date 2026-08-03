@@ -51,6 +51,7 @@ class UpbitMarketFeed(
         val reconnectAttempts = AtomicInteger(0)
         val running = AtomicBoolean(true)
         val disposable = AtomicReference<Disposable?>(null)
+        val reconnectThread = AtomicReference<Thread?>(null)
 
         fun connect() {
             if (!running.get()) return
@@ -88,25 +89,30 @@ class UpbitMarketFeed(
                             .coerceAtMost(MAX_RECONNECT_DELAY_MS)
                         log.info("Upbit WS reconnecting in {}ms (attempt {})", delay, attempt)
                         // 재연결 대기를 netty 신호 스레드에서 Thread.sleep 하면 이벤트 루프를 점유한다.
-                        // 별도 daemon 스레드로 분리 (bot UpbitWebSocketClient 와 동일 패턴).
-                        Thread {
+                        // 별도 daemon 스레드로 분리 (netty 이벤트 루프 스레드 점유 방지).
+                        val thread = Thread {
                             try {
                                 Thread.sleep(delay)
                                 connect()
                             } catch (_: InterruptedException) {
                                 // shutdown
                             }
-                        }.apply { isDaemon = true; start() }
+                        }.apply { isDaemon = true }
+                        reconnectThread.set(thread)
+                        thread.start()
                     }
                 }
                 .subscribe()
             disposable.set(subscription)
+            // subscribe 직후 running 재확인 — awaitClose 와 race 시 방금 연 연결을 즉시 정리해 좀비 WS 방지.
+            if (!running.get()) subscription.dispose()
         }
 
         connect()
 
         awaitClose {
             running.set(false)
+            reconnectThread.get()?.interrupt() // sleep 중인 지연 재연결 스레드를 깨워 새 연결 생성 차단
             disposable.get()?.dispose()
             log.info("Upbit ticker flow closed")
         }
@@ -165,7 +171,7 @@ class UpbitMarketFeed(
         return objectMapper.writeValueAsString(listOf(ticket, type))
     }
 
-    private fun parseTickerMessage(message: String): NormalizedTicker? {
+    internal fun parseTickerMessage(message: String): NormalizedTicker? {
         return try {
             val node = objectMapper.readTree(message)
             if (!node.has("type") || node["type"].asText() != "ticker") return null
@@ -184,7 +190,13 @@ class UpbitMarketFeed(
                 lowPrice24h = node["low_price"]?.asDouble() ?: 0.0,
                 timestamp = Instant.ofEpochMilli(node["timestamp"]?.asLong() ?: System.currentTimeMillis()),
             )
+        } catch (e: com.fasterxml.jackson.core.JacksonException) {
+            // 비-ticker/연결 ACK 등 파싱 불가 프레임 — 흔하므로 debug.
+            log.debug("Skipped non-parsable ticker frame: {}", e.message)
+            null
         } catch (e: Exception) {
+            // 스키마 변경·예상치 못한 구조는 가시화해야 디버깅 가능.
+            log.warn("Failed to parse ticker message: {}", e.message)
             null
         }
     }

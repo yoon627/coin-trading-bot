@@ -23,6 +23,7 @@ git config core.hooksPath scripts/git-hooks
 
 - `codex` CLI on PATH (tested against 0.116.0)
 - `python3` on PATH (JSONL parsing)
+- `perl` on PATH (codex 호출 timeout wrapper — macOS 에 `gtimeout` 부재)
 - `~/.codex/config.toml` configured (model + trust_level for this repo)
 
 ### Policy
@@ -54,6 +55,47 @@ CODEX_SKIP=1 git push
 Leaves an audit line in `.git/codex-pre-push/bypass.log`. Avoid in normal flow.
 The policy explicitly forbids `--no-verify` — use `CODEX_SKIP` instead so the
 bypass is visible.
+
+### codegraph MCP 비활성화 (#60)
+
+codex 호출에 `-c mcp_servers.codegraph.enabled=false` 를 준다. 이유:
+
+codex 는 리뷰마다 `codegraph serve --mcp` 를 새로 띄우는데, **Claude Code 세션도 각자 하나씩 띄운다**.
+인스턴스가 여러 개면 `codegraph_explore` 가 응답하지 않아 리뷰가 통째로 타임아웃한다(#45 에서 실측한
+근본원인이 "다중 세션 경합"이다). 아래 lock 은 **hook 끼리만** 직렬화하므로, 세션이 상시 띄워둔 서버와의
+경합은 막지 못한다 — 세션을 2개 이상 열어두면 재현된다.
+
+- codegraph 없이도 리뷰는 P0/P1 을 잡는다(실측: 같은 커밋 범위에서 P1 2건 포함 8건 검출).
+- **전역 `~/.codex/config.toml` 은 건드리지 않는다** — 다른 프로젝트·대화형 codex 의 codegraph 는 유지된다.
+- 근본 원인인 codegraph 다중 인스턴스 경합은 upstream 문제다. 거기서 고쳐지면 이 플래그를 되돌린다.
+
+### Serialization & timeout
+
+codex 동시 실행의 자원 경합을 막기 위해(원래는 codegraph 경합 방지 목적으로 도입 — #45):
+
+- **직렬화**: codex review 를 머신 단위 lock(`$TMPDIR/codex-pre-push.lock`)으로 순차 실행 —
+  다른 세션 review 중이면 대기(최대 `CODEX_LOCK_WAIT`). docs-only·`CODEX_SKIP` 은 lock 전 bypass(불필요 대기 없음).
+- **timeout**: codex 호출에 escalation timeout(`TERM`→grace→`KILL`, process group). 초과 시 exit 124
+  → BLOCK + `CODEX_SKIP` 안내. 무한 hang 을 유한화(자식이 `TERM` 을 무시해도 `KILL` 로 유한 리턴).
+
+환경변수(기본값):
+
+| var | default | 설명 |
+|-----|---------|------|
+| `CODEX_TIMEOUT` | 480 | codex 호출 상한(초) |
+| `CODEX_KILL_GRACE` | 10 | `TERM` 후 `KILL` 까지(초) |
+| `CODEX_LOCK_WAIT` | 600 | lock 획득 대기 상한(초) |
+| `CODEX_STALE_AGE` | 600 | pid 없는 lock 을 stale 로 볼 age(초) |
+
+### Rollback (hook 오동작 시)
+
+실행본은 untracked `.git/hooks/pre-push`(설치본), 소스는 tracked `scripts/git-hooks/pre-push`.
+
+```bash
+git show <good-rev>:scripts/git-hooks/pre-push > .git/hooks/pre-push   # 이전 정상본 복구
+chmod +x .git/hooks/pre-push
+rm -rf "${TMPDIR:-/tmp}/codex-pre-push.lock"                            # 잔존 lock 정리
+```
 
 ### Known limitations (open work)
 

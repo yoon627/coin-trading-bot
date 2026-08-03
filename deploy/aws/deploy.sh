@@ -52,6 +52,15 @@ else
 fi
 
 save_state() { echo "$1=$2" >> "$STATE_FILE"; }
+# 값이 바뀌는 키(LAST_GOOD_SHA 등) 갱신용 — 기존 라인 제거 후 재기록해 .state 증식을 막는다.
+update_state() {
+    local key="$1" val="$2"
+    if [[ -f "$STATE_FILE" ]]; then
+        grep -v "^${key}=" "$STATE_FILE" > "$STATE_FILE.tmp" || true
+        mv "$STATE_FILE.tmp" "$STATE_FILE"
+    fi
+    echo "${key}=${val}" >> "$STATE_FILE"
+}
 load_state() { if [[ -f "$STATE_FILE" ]]; then source "$STATE_FILE"; fi; }
 load_state
 log() { echo -e "\n=== $1 ==="; }
@@ -89,8 +98,17 @@ render_server_env() {
 APP_VERSION=${APP_VERSION:-latest}
 UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY:-}
 UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY:-}
+KIS_APP_KEY=${KIS_APP_KEY:-}
+KIS_APP_SECRET=${KIS_APP_SECRET:-}
+KIS_CANO=${KIS_CANO:-}
+KIS_ACNT_PRDT_CD=${KIS_ACNT_PRDT_CD:-01}
+KIS_PAPER=${KIS_PAPER:-true}
+KIS_LIVE_ENABLED=${KIS_LIVE_ENABLED:-false}
+KIS_MAX_ORDER_AMOUNT=${KIS_MAX_ORDER_AMOUNT:-10000000}
 TRADING_TICKERS=${TRADING_TICKERS:-KRW-BTC}
 TRADING_STRATEGY=${TRADING_STRATEGY:-combined}
+TRADING_INVEST_RATIO=${TRADING_INVEST_RATIO:-0.1}
+TRADING_MAX_INVEST_AMOUNT=${TRADING_MAX_INVEST_AMOUNT:-100000}
 TRADING_AUTO_START=${TRADING_AUTO_START:-false}
 TRADING_TAKE_PROFIT_PCT=${TRADING_TAKE_PROFIT_PCT:-2.0}
 TRADING_MAX_LOSS_PCT=${TRADING_MAX_LOSS_PCT:-5.0}
@@ -107,6 +125,11 @@ JWT_SECRET=${JWT_SECRET}
 APP_ENCRYPTION_SECRET=${APP_ENCRYPTION_SECRET}
 APP_AUTH_COOKIE_FORCE_INSECURE=${APP_AUTH_COOKIE_FORCE_INSECURE:-false}
 APP_DOMAIN=${domain}
+BACKUP_S3_BUCKET=${BACKUP_S3_BUCKET:-}
+BACKUP_S3_PREFIX=${BACKUP_S3_PREFIX:-db-backups}
+BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
+BACKUP_S3_SSE=${BACKUP_S3_SSE:-AES256}
+AWS_REGION=${AWS_REGION:-ap-northeast-2}
 EOF
 }
 
@@ -282,6 +305,35 @@ do_deploy() {
     [[ -z "${EC2_PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
     ensure_secrets
     local domain="${APP_DOMAIN:-${EC2_PUBLIC_IP//./-}.sslip.io}"
+
+    # ── O4: 배포 대상 SHA 고정 + 자동 롤백 판정 ──
+    # CI 는 :latest 와 :<full-sha> 를 push(.github/workflows/deploy.yml). latest 대신 SHA 로 고정해
+    # 무엇을 배포/롤백하는지 재현 가능하게 한다. APP_VERSION=<sha> 인자로 특정 커밋 배포도 가능.
+    local repo_root; repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+    [[ -z "$repo_root" ]] && { echo "ERROR: git 저장소가 아님 — deploy.sh 는 repo 체크아웃 안에서 실행하세요."; exit 1; }
+    git -C "$repo_root" fetch origin main --quiet 2>/dev/null || true
+    local target_sha="${APP_VERSION:-}"
+    if [[ -z "$target_sha" || "$target_sha" == "latest" ]]; then
+        target_sha="$(git -C "$repo_root" rev-parse origin/main 2>/dev/null || true)"
+        [[ -z "$target_sha" ]] && { echo "ERROR: 대상 SHA 확인 실패(git rev-parse origin/main). APP_VERSION=<sha> 로 지정하세요."; exit 1; }
+    fi
+    APP_VERSION="$target_sha"   # render_server_env → .env → compose image 태그로 고정
+    local ghcr_image="ghcr.io/yoon627/coin-trading-bot"
+
+    # 자동 롤백 게이트: 롤백 대상(LAST_GOOD_SHA) 유무 + DB migration 포함 여부(Flyway forward-compat).
+    # migration 포함 배포가 실패하면 신규 스키마가 이미 적용됐을 수 있어 구버전 앱 자동 복귀는 위험 → 제외(수동).
+    local last_good="${LAST_GOOD_SHA:-}"
+    local migration_gate="rollback-ok"
+    if [[ -z "$last_good" || "$last_good" == "$target_sha" ]]; then
+        migration_gate="blocked"                                   # 롤백 대상 없음(최초 배포 또는 동일 SHA 재배포)
+    elif ! git -C "$repo_root" cat-file -e "${last_good}^{commit}" 2>/dev/null \
+      || ! git -C "$repo_root" cat-file -e "${target_sha}^{commit}" 2>/dev/null; then
+        migration_gate="blocked"                                   # 두 커밋 중 하나라도 로컬 부재 → migration 판정 불가 → 안전측
+    elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
+        migration_gate="blocked"                                   # migration 포함 → 자동 롤백 제외(plan-review)
+    fi
+    log "대상 SHA=${target_sha:0:12}  LAST_GOOD=${last_good:0:12}  자동롤백=$migration_gate"
+
     log "SG 규칙 보장(80/443) + 도메인 확인"
     ensure_sg_rules
     preflight_domain
@@ -294,59 +346,119 @@ do_deploy() {
     trap "rm -f '$tmp_env'" EXIT
     render_server_env "$tmp_env"
     ssh_ec2 'mkdir -p /opt/app'
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$COMPOSE_FILE"         ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/Caddyfile" ec2-user@"$EC2_PUBLIC_IP":/opt/app/Caddyfile
-    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$tmp_env"              ec2-user@"$EC2_PUBLIC_IP":/opt/app/.env
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$COMPOSE_FILE"          ec2-user@"$EC2_PUBLIC_IP":/opt/app/docker-compose.yml
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/Caddyfile"  ec2-user@"$EC2_PUBLIC_IP":/opt/app/Caddyfile
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$SCRIPT_DIR/backup.sh"  ec2-user@"$EC2_PUBLIC_IP":/opt/app/backup.sh
+    scp -o StrictHostKeyChecking=no -i "$KEY_PEM" "$tmp_env"               ec2-user@"$EC2_PUBLIC_IP":/opt/app/.env
     rm -f "$tmp_env"; trap - EXIT
+    ssh_ec2 'chmod +x /opt/app/backup.sh'
 
-    log "컨테이너 배포 (GHCR pull)"
-    ssh_ec2 "APP_DOMAIN='$domain' GHCR_USERNAME='${GHCR_USERNAME:-}' GHCR_TOKEN='${GHCR_TOKEN:-}' bash -s" <<'REMOTE'
+    log "컨테이너 배포 (GHCR pull, SHA=${target_sha:0:12})"
+    local deploy_rc=0
+    ssh_ec2 "APP_DOMAIN='$domain' GHCR_USERNAME='${GHCR_USERNAME:-}' GHCR_TOKEN='${GHCR_TOKEN:-}' GHCR_IMAGE='$ghcr_image' TARGET_SHA='$target_sha' LAST_GOOD_SHA='$last_good' MIGRATION_GATE='$migration_gate' bash -s" <<'REMOTE' || deploy_rc=$?
 set -e
 cd /opt/app
+: "${TARGET_SHA:?TARGET_SHA 필요}"
 # private GHCR 패키지면 토큰으로 로그인. public 이면 생략 가능.
 if [ -n "$GHCR_TOKEN" ]; then
     echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 fi
+
+# app 은 호스트에 8080 을 노출하지 않으므로(Caddy 경유) 컨테이너 내부에서 헬스 확인. 최대 36×5s=180s.
+# `</dev/null` 필수: 이 스크립트는 ssh 가 `bash -s` 의 stdin(파이프)로 흘려보낸다. `exec -T` 는 TTY 만
+# 끄고 stdin 은 attach 하므로, </dev/null 이 없으면 exec 가 파이프에 남은 나머지 스크립트(실패/롤백 처리)를
+# 통째로 drain → 헬스실패 경로가 사라지고 원격 bash 가 exit 0 을 반환(실패를 성공으로 오인).
+health_ok() {
+    for _ in $(seq 1 36); do
+        if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health </dev/null > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 5
+    done
+    return 1
+}
+
+echo "배포: SHA=$TARGET_SHA"
 docker compose pull
 docker compose up -d --remove-orphans
-echo "헬스체크 대기..."
-healthy=false
-for i in $(seq 1 36); do
-    # app 은 호스트에 8080 을 노출하지 않으므로(Caddy 경유) 컨테이너 내부에서 확인.
-    if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health > /dev/null 2>&1; then
-        echo "App healthy!"; healthy=true; break
+echo "헬스체크 대기 (~180s)..."
+if health_ok; then
+    echo "App healthy! ($TARGET_SHA)"
+    docker compose ps
+    # Caddy TLS 종단 e2e: 도메인 SNI 로 로컬 Caddy(127.0.0.1:443)에 HTTPS 요청이 app 까지 닿는지
+    # 확인(EIP hairpin 회피 위해 --resolve). 인증서 발급 지연 시 실패해도 배포는 유지하되 로그 노출.
+    tls_ok=false
+    for _ in $(seq 1 18); do
+        if curl -fsS --max-time 5 --resolve "${APP_DOMAIN}:443:127.0.0.1" \
+            "https://${APP_DOMAIN}/actuator/health" > /dev/null 2>&1; then
+            echo "HTTPS e2e OK: https://${APP_DOMAIN}"; tls_ok=true; break
+        fi
+        sleep 5
+    done
+    [ "$tls_ok" = "false" ] && { echo "WARN: HTTPS e2e 미확인 (인증서 발급 지연 가능). caddy 로그:"; docker compose logs --tail=60 caddy || true; }
+    # 성공 정리: 현재 SHA(=다음 배포의 롤백 대상)와 :latest 만 남기고 이전 app 이미지 제거 + dangling 정리.
+    # (SHA 태그 이미지는 prune -f 로 안 지워지므로 명시 제거하지 않으면 디스크가 무한 증가.)
+    docker images "$GHCR_IMAGE" --format '{{.Repository}}:{{.Tag}}' \
+        | grep -vE ":(${TARGET_SHA}|latest)\$" | xargs -r docker rmi > /dev/null 2>&1 || true
+    docker image prune -f > /dev/null 2>&1 || true
+    exit 0
+fi
+
+# ── 헬스체크 실패 경로 ──
+echo "ERROR: 180s 내 헬스체크 실패 (SHA=$TARGET_SHA)"
+docker compose ps || true
+docker compose logs --tail=120 app || true
+
+if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
+    if [ -z "$LAST_GOOD_SHA" ]; then
+        echo "자동 롤백 제외: 직전 정상 배포(LAST_GOOD) 없음."
+    else
+        echo "자동 롤백 제외: DB migration 포함 배포 — 신규 스키마가 이미 적용됐을 수 있어 구버전 앱 자동 복귀는 위험."
     fi
-    sleep 5
-done
-docker compose ps
-if [ "$healthy" = "false" ]; then
-    echo "ERROR: 180s 내 헬스체크 실패"
-    docker compose logs --tail=120 app || true
+    echo "--- 수동 개입 필요 ---"
+    echo "  1) docker compose logs app  로 원인 확인"
+    echo "  2) DB migration 적용 여부 점검, 필요 시 백업 복원(O2)"
+    echo "  3) 수동 롤백: cd /opt/app && APP_VERSION=<이전정상SHA> docker compose up -d --pull missing"
     exit 1
 fi
 
-# Caddy TLS 종단 e2e: 도메인 SNI 로 로컬 Caddy(127.0.0.1:443)에 HTTPS 요청이 app 까지
-# 닿는지 확인(EIP hairpin 회피 위해 --resolve). 인증서 발급 ~30초 → 재시도. 실패해도
-# 배포는 중단하지 않되(인증서 지연 가능) caddy 로그로 원인을 노출한다.
-tls_ok=false
-for i in $(seq 1 18); do
-    if curl -fsS --max-time 5 --resolve "${APP_DOMAIN}:443:127.0.0.1" \
-        "https://${APP_DOMAIN}/actuator/health" > /dev/null 2>&1; then
-        echo "HTTPS e2e OK: https://${APP_DOMAIN}"; tls_ok=true; break
-    fi
-    sleep 5
-done
-if [ "$tls_ok" = "false" ]; then
-    echo "WARN: HTTPS e2e 미확인 (인증서 발급 지연 가능). caddy 로그:"
-    docker compose logs --tail=60 caddy || true
+echo "자동 롤백 → LAST_GOOD_SHA=$LAST_GOOD_SHA"
+# --pull missing: 로컬 보존 이미지 우선, prune 등으로 없으면 GHCR(CI 가 :<sha> push)에서 재pull.
+if ! APP_VERSION="$LAST_GOOD_SHA" docker compose up -d --remove-orphans --pull missing; then
+    echo "ERROR: 롤백 기동 실패 (LAST_GOOD 이미지 확보 불가). 수동 개입 필요."
+    exit 3
 fi
-docker image prune -f
+if health_ok; then
+    # 서버 .env 의 APP_VERSION 도 LAST_GOOD 으로 맞춰 이후 `start`/수동 up 이 실패 SHA 로 안 돌아가게.
+    sed -i "s|^APP_VERSION=.*|APP_VERSION=${LAST_GOOD_SHA}|" .env || true
+    echo "롤백 성공: $LAST_GOOD_SHA 로 복구됨. 새 SHA($TARGET_SHA) 배포 실패 원인 조사 필요."
+    docker compose ps || true
+    exit 2
+fi
+echo "ERROR: 롤백 후에도 unhealthy. 수동 개입 필요."
+docker compose logs --tail=120 app || true
+exit 3
 REMOTE
 
     echo ""
-    log "배포 완료"
-    echo "  App: https://$domain  (Caddy 가 Let's Encrypt 인증서 발급까지 최대 ~30초)"
-    echo "  최초 접속이 인증서 경고면 1~2분 후 재시도 (발급 진행 중)."
+    case "$deploy_rc" in
+        0)
+            update_state LAST_GOOD_SHA "$target_sha"
+            log "배포 완료 (SHA=${target_sha:0:12} — LAST_GOOD 갱신)"
+            echo "  App: https://$domain  (Caddy 가 Let's Encrypt 인증서 발급까지 최대 ~30초)"
+            echo "  최초 접속이 인증서 경고면 1~2분 후 재시도 (발급 진행 중)."
+            ;;
+        2)
+            log "자동 롤백됨 → 이전 정상 SHA(${last_good:0:12}) 로 복구 (LAST_GOOD 유지)"
+            echo "  새 SHA(${target_sha:0:12}) 배포가 헬스체크 실패해 직전 정상본으로 되돌렸습니다."
+            echo "  원인 조사 후 재배포하세요. App: https://$domain"
+            exit 2
+            ;;
+        *)
+            echo "ERROR: 배포 실패 (rc=$deploy_rc) — 위 원격 로그/안내 참조. LAST_GOOD 미변경."
+            exit 1
+            ;;
+    esac
 }
 
 # ── utils ──
@@ -362,6 +474,23 @@ do_destroy() {
     load_state
     echo "=== 모든 AWS 리소스 삭제 (과금 중단) ==="
     read -rp "'yes' 입력: " confirm; [[ "$confirm" != "yes" ]] && { echo "취소"; exit 0; }
+
+    # 삭제 전 최종 DB 백업 (BACKUP_S3_BUCKET 설정 + 인스턴스 접근 가능할 때만).
+    # 거래이력·암호화 Upbit 키가 볼륨과 함께 영구 소멸하므로 마지막 스냅샷을 S3 로 남긴다.
+    # 백업을 명시 설정(BACKUP_S3_BUCKET)했는데 실패하면 — 데이터 영구 소멸을 막기 위해 destroy 중단.
+    if [[ -n "${EC2_PUBLIC_IP:-}" && -n "${BACKUP_S3_BUCKET:-}" ]]; then
+        log "최종 DB 백업 → S3"
+        # BACKUP_S3_BUCKET/AWS_REGION 을 인라인 전달 — 구버전 배포로 /opt/app/.env 에 해당 키가
+        # 없어도 로컬(권위) 값으로 백업이 동작하게 한다(백업 스크립트가 .env 에 있으면 그 값이 우선).
+        if ! ssh_ec2 "cd /opt/app && BACKUP_S3_BUCKET='$BACKUP_S3_BUCKET' AWS_REGION='${AWS_REGION:-ap-northeast-2}' ./backup.sh"; then
+            echo "ERROR: 최종 백업 실패 — 데이터 영구 소멸을 막기 위해 destroy 를 중단합니다."
+            echo "  원인(backup.sh 부재/권한/DB) 해결 후 재시도하거나,"
+            echo "  백업 없이 삭제하려면 deploy/aws/.env 의 BACKUP_S3_BUCKET 를 비우고 다시 실행하세요."
+            exit 1
+        fi
+    elif [[ -n "${EC2_PUBLIC_IP:-}" ]]; then
+        echo "WARN: BACKUP_S3_BUCKET 미설정 → 최종 DB 백업 생략. 거래이력·암호화키가 소멸됩니다."
+    fi
 
     [[ -n "${INSTANCE_ID:-}" ]] && {
         log "EC2 종료"

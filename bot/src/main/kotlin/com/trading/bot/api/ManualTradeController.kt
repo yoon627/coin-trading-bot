@@ -47,7 +47,8 @@ class ManualTradeController(
         if (!result.success) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, result.error)
         }
-        return mapOf("status" to "success", "order_uuid" to (result.orderUuid ?: ""))
+        // 주문 접수 성공. recorded=false 면 주문은 나갔으나 기록/알림 후처리가 실패한 상태 — 재주문 대신 경고로 노출.
+        return mapOf("status" to "success", "order_uuid" to (result.orderUuid ?: ""), "recorded" to result.recorded)
     }
 
     @PostMapping("/sell")
@@ -93,7 +94,8 @@ class ManualTradeController(
         if (!result.success) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, result.error)
         }
-        return mapOf("status" to "success", "order_uuid" to (result.orderUuid ?: ""))
+        // 주문 접수 성공. recorded=false 면 주문은 나갔으나 기록/알림 후처리가 실패한 상태 — 재주문 대신 경고로 노출.
+        return mapOf("status" to "success", "order_uuid" to (result.orderUuid ?: ""), "recorded" to result.recorded)
     }
 }
 

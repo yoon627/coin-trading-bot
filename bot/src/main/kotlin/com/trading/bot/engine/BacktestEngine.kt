@@ -12,13 +12,12 @@ import kotlin.math.sqrt
 // 디폴트는 라이브(TradingProperties)와 정합 — 직접 생성(스윕 등) 베이스라인이 라이브를 대표하도록 (#27).
 // parity 는 BacktestEngineTest 의 `config defaults match live trading defaults` 가 가드한다.
 data class BacktestConfig(
-    val investRatio: Double = 1.0,
-    val takeProfitPct: Double = 2.0,
+    val takeProfitPct: Double = 5.0,
     val maxLossPct: Double = 5.0,
     val kValue: Double = 0.5,
     val feeRate: Double = 0.0005,
     val trailingStopPct: Double = 2.0,
-    val trailingArmPct: Double = 0.0,
+    val trailingArmPct: Double = 3.0,
     val maxHoldDays: Int = 1,
     val useMarketFilter: Boolean = false,
     val chartExitEnabled: Boolean = false,
@@ -81,6 +80,9 @@ class BacktestEngine(
         config: BacktestConfig,
     ): SimulationState {
         val state = SimulationState()
+        // 신호(shouldBuy/shouldSell)는 config 의 신호 파라미터를 반영해야 진입 파라미터 백테 비교가 유효(#31).
+        // 전략이 신호에서 읽는 config 필드는 kValue 뿐이라, 라이브 baseline 에 kValue 만 덮어 신호 판단에 넘긴다.
+        val signalProps = tradingProperties.copy(kValue = config.kValue)
 
         for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
@@ -88,13 +90,13 @@ class BacktestEngine(
             val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
 
             if (state.position) {
-                processExit(state, strategy, i, currentPrice, window, config)
+                processExit(state, strategy, i, chronological[i], window, config, signalProps)
             } else {
                 // 체결은 다음 봉(i+1) 시가로.
                 val fillIndex = i + 1
                 if (fillIndex >= chronological.size) continue
                 val fillPrice = chronological[fillIndex].openingPrice
-                processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config)
+                processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config, signalProps)
             }
         }
 
@@ -106,30 +108,28 @@ class BacktestEngine(
         state: SimulationState,
         strategy: TradingStrategy,
         index: Int,
-        currentPrice: Double,
+        bar: Candle,
         window: List<Candle>,
         config: BacktestConfig,
+        signalProps: TradingProperties,
     ) {
-        state.peakPrice = max(state.peakPrice, currentPrice)
-        val pnl = ((currentPrice - state.buyPrice) / state.buyPrice) * 100.0
-        val peakPnl = ((state.peakPrice - state.buyPrice) / state.buyPrice) * 100.0
-        val dropFromPeak = ((state.peakPrice - currentPrice) / state.peakPrice) * 100.0
         val holdDays = index - state.buyIndex
+        val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
+        val buyPrice = state.buyPrice
 
-        // 실거래(TradingEngine.decideSell)와 동일 우선순위: 손익% 안전망 > chartExit > 시간청산.
-        // 트레일링은 라이브와 같은 ExitGates 조건식, maxHoldDays coerce 도 라이브(DailyResetManager)와 대칭.
-        val reason = when {
-            pnl <= -config.maxLossPct -> "STOP_LOSS"
-            ExitGates.isTrailingStopTriggered(pnl, peakPnl, dropFromPeak, config.trailingStopPct, config.trailingArmPct) -> "TRAILING_STOP"
-            pnl >= config.takeProfitPct -> "TAKE_PROFIT"
-            config.chartExitEnabled && strategy.shouldSell(window, currentPrice, tradingProperties) -> "CHART_EXIT"
-            holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays) -> "TIME_EXIT"
-            else -> null
-        } ?: return
+        // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
+        // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
+        val armPeak = state.peakPrice
+        state.peakPrice = IntrabarExitModel.updatedPeak(state.peakPrice, bar, atHoldLimit)
+        val chartExitSignal = config.chartExitEnabled && !atHoldLimit &&
+            strategy.shouldSell(window, bar.tradePrice, signalProps)
+        val (reason, sellPrice) = IntrabarExitModel
+            .evaluate(bar, buyPrice, armPeak, atHoldLimit, config, chartExitSignal)
+            ?.let { it.reason to it.sellPrice } ?: return
 
-        val netPnl = pnl - (config.feeRate * 2 * 100)
+        val netPnl = ((sellPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         state.balance *= (1 + netPnl / 100.0)
-        state.trades.add(BacktestTrade(state.buyIndex, index, state.buyPrice, currentPrice, netPnl, holdDays, reason))
+        state.trades.add(BacktestTrade(state.buyIndex, index, buyPrice, sellPrice, netPnl, holdDays, reason))
         state.returns.add(netPnl)
         state.peakBalance = max(state.peakBalance, state.balance)
         state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
@@ -144,6 +144,7 @@ class BacktestEngine(
         fillPrice: Double,
         window: List<Candle>,
         config: BacktestConfig,
+        signalProps: TradingProperties,
     ) {
         if (fillPrice <= 0) return
         if (config.useMarketFilter) {
@@ -152,7 +153,7 @@ class BacktestEngine(
         }
 
         // 신호는 봉 i 종가(signalPrice)로 판단, 체결가는 다음 봉 시가(fillPrice).
-        if (strategy.shouldBuy(window, signalPrice, tradingProperties)) {
+        if (strategy.shouldBuy(window, signalPrice, signalProps)) {
             state.buyPrice = fillPrice
             state.peakPrice = fillPrice
             state.buyIndex = fillIndex
