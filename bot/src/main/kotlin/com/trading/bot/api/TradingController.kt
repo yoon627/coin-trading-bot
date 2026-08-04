@@ -1,6 +1,8 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
+import com.trading.bot.engine.reloadFailureMessage
+import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.persistence.UserRepository
@@ -93,7 +95,11 @@ class TradingController(
         userRepository.save(
             user.copy(upbitAccessKey = encryptedAccessKey, upbitSecretKey = encryptedSecretKey)
         ).awaitSingle()
-        userTradingManager.reloadUserRuntime(userId)
+        try {
+            userTradingManager.reloadUserRuntime(userId)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
         return mapOf("status" to "saved")
     }
 

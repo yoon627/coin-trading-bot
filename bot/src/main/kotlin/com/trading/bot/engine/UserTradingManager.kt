@@ -20,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
@@ -28,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -297,12 +299,38 @@ class UserTradingManager(
         val initialStates = if (wasRunning) {
             try {
                 tradingStateService.loadStates(userId)
+            } catch (e: CancellationException) {
+                // 취소여도 stop() 은 이미 일어났다 — 복구를 건너뛰면 정지된 엔진이 남아 손절이
+                // 무기한 멈추고, 이후 reload 는 wasRunning=false 로 보아 되살리지도 않는다.
+                // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다.
+                withContext(NonCancellable) {
+                    runCatching { existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap()) }
+                        .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
+                }
+                throw e
             } catch (e: Exception) {
                 // 교체 실패는 정지 의도가 아니다 — 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
-                // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살리고 알린다.
+                // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살린다.
                 log.error("reload: user {} durable 상태 로드 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
-                existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
-                return@withLock
+                try {
+                    existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
+                } catch (restoreFailure: CancellationException) {
+                    throw restoreFailure
+                } catch (restoreFailure: Exception) {
+                    // 되살리기마저 실패 — 엔진이 정지된 채 남는다. "이전 설정으로 거래 중" 과 정반대
+                    // 상황이라 호출자가 다른 문구를 쓰도록 구분해 알린다.
+                    log.error("reload: user {} 기존 엔진 복귀 실패 — 엔진이 정지 상태로 남는다", userId, restoreFailure)
+                    // 정지된 옛 엔진을 맵에 남기면 안내대로 /api/bot/start 를 눌렀을 때 그 엔진이
+                    // 재사용돼 옛 자격증명·webhook 으로 거래가 재개된다 — #51 이 고치려던 바로 그 상황.
+                    // 제거해 두면 다음 start 가 저장된 새 설정으로 엔진을 만든다.
+                    engines.remove(userId, existing)
+                    restoreFailure.addSuppressed(e)
+                    throw RuntimeReloadFailedException(userId, restoreFailure, engineRestored = false)
+                }
+                // 되살린 엔진은 교체 전 자격증명·webhook 을 그대로 쓴다. 조용히 반환하면 호출자가
+                // 키 교체를 성공으로 응답해, 사용자는 이전 계정에서 계속 주문되는 것을 모른다(#51).
+                // 재기동을 마친 뒤에 던져야 손절 연속성이 유지된다.
+                throw RuntimeReloadFailedException(userId, e, engineRestored = true)
             }
         } else {
             emptyMap()

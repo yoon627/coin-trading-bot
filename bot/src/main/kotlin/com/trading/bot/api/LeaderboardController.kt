@@ -1,6 +1,8 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
+import com.trading.bot.engine.reloadFailureMessage
+import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.UserRepository
@@ -116,7 +118,11 @@ class LeaderboardController(
                 discordWebhookUrl = nextWebhook,
             )
         ).awaitSingle()
-        userTradingManager.reloadUserRuntime(userId)
+        try {
+            userTradingManager.reloadUserRuntime(userId)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
         return mapOf(
             "public_profile" to saved.publicProfile,
             "public_strategy" to saved.publicStrategy,
