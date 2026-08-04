@@ -152,18 +152,6 @@ render_server_env() {
 APP_VERSION=${APP_VERSION:-latest}
 UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY:-}
 UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY:-}
-TRADING_TICKERS=${TRADING_TICKERS:-KRW-BTC}
-TRADING_STRATEGY=${TRADING_STRATEGY:-combined}
-TRADING_INVEST_RATIO=${TRADING_INVEST_RATIO:-0.1}
-TRADING_MAX_INVEST_AMOUNT=${TRADING_MAX_INVEST_AMOUNT:-100000}
-TRADING_AUTO_START=${TRADING_AUTO_START:-false}
-TRADING_TAKE_PROFIT_PCT=${TRADING_TAKE_PROFIT_PCT:-2.0}
-TRADING_MAX_LOSS_PCT=${TRADING_MAX_LOSS_PCT:-5.0}
-TRADING_TRAILING_STOP_PCT=${TRADING_TRAILING_STOP_PCT:-2.0}
-TRADING_TRAILING_ARM_PCT=${TRADING_TRAILING_ARM_PCT:-0.0}
-TRADING_MAX_HOLD_DAYS=${TRADING_MAX_HOLD_DAYS:-1}
-TRADING_CHART_EXIT_ENABLED=${TRADING_CHART_EXIT_ENABLED:-false}
-TRADING_ROUND_TRIP_FEE_RATE=${TRADING_ROUND_TRIP_FEE_RATE:-0.001}
 DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
 DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
 DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
@@ -177,7 +165,38 @@ BACKUP_PREFIX=${BACKUP_PREFIX:-db-backups}
 BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
 OCI_REGION=${OCI_REGION}
 EOF
+    append_trading_overrides "$1"
     chmod 600 "$1"
+}
+
+# TRADING_* 의 기본값은 TradingProperties 가 유일한 정의처다(#75). 여기서 폴백을 주면 앱 기본값을
+# 덮어써 두 값이 갈린다 — .env 에 실제로 설정된 키만 넘기고, 없으면 줄 자체를 쓰지 않는다.
+# 빈 문자열을 넘기는 것도 안 된다: Spring 이 "정의됨"으로 보고 Double 바인딩에서 기동에 실패한다.
+TRADING_OVERRIDE_KEYS=(
+    TRADING_TICKERS TRADING_STRATEGY TRADING_INVEST_RATIO TRADING_MAX_INVEST_AMOUNT
+    TRADING_AUTO_START TRADING_TAKE_PROFIT_PCT TRADING_MAX_LOSS_PCT TRADING_TRAILING_STOP_PCT
+    TRADING_TRAILING_ARM_PCT TRADING_MAX_HOLD_DAYS TRADING_CHART_EXIT_ENABLED
+    TRADING_ROUND_TRIP_FEE_RATE TRADING_K_VALUE TRADING_INTERVAL_SECONDS
+)
+# 변수에 담아야 [[ =~ ]] 가 공백을 패턴의 일부로 읽는다(따옴표로 감싸면 리터럴이 된다).
+# `-` 는 범위로 해석되지 않도록 클래스 끝에 둔다. 개행은 ^…$ 가 걸러낸다.
+TRADING_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
+
+append_trading_overrides() {
+    local key value
+    for key in "${TRADING_OVERRIDE_KEYS[@]}"; do
+        value="${!key:-}"
+        [[ -z "$value" ]] && continue
+        # dotenv 는 quoting 규칙이 제각각이라 값을 그대로 쓴다 — 개행은 파일을 깨고 #·$·따옴표는
+        # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV·전략명뿐이므로 그 형태만 허용한다.
+        # 공백은 허용한다: TradingProperties.tickerList() 가 "KRW-BTC, KRW-ETH" 를 trim 해 받는다.
+        if [[ ! "$value" =~ $TRADING_VALUE_PATTERN ]]; then
+            echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , - 공백)." >&2
+            exit 1
+        fi
+        printf '%s=%s\n' "$key" "$value" >> "$1"
+    done
+    return 0
 }
 
 # ── SSH 키 ──

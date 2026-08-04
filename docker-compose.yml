@@ -5,31 +5,33 @@ services:
     ports:
       - "8080:8080"
     environment:
-      SPRING_PROFILES_ACTIVE: prod
-      UPBIT_ACCESS_KEY: ${UPBIT_ACCESS_KEY:-}
-      UPBIT_SECRET_KEY: ${UPBIT_SECRET_KEY:-}
-      KIS_APP_KEY: ${KIS_APP_KEY:-}
-      KIS_APP_SECRET: ${KIS_APP_SECRET:-}
-      KIS_CANO: ${KIS_CANO:-}
-      KIS_ACNT_PRDT_CD: ${KIS_ACNT_PRDT_CD:-01}
-      KIS_PAPER: ${KIS_PAPER:-true}
-      KIS_LIVE_ENABLED: ${KIS_LIVE_ENABLED:-false}
-      KIS_MAX_ORDER_AMOUNT: ${KIS_MAX_ORDER_AMOUNT:-10000000}
-      TRADING_TICKERS: ${TRADING_TICKERS:-KRW-BTC}
-      TRADING_STRATEGY: ${TRADING_STRATEGY:-combined}
-      TRADING_AUTO_START: ${TRADING_AUTO_START:-false}
-      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
-      DISCORD_ERROR_ALERT_ENABLED: ${DISCORD_ERROR_ALERT_ENABLED:-false}
-      DISCORD_ERROR_WEBHOOK_URL: ${DISCORD_ERROR_WEBHOOK_URL:-}
-      REDIS_HOST: redis
-      REDIS_ENABLED: "true"
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: trading
-      DB_USER: trading
-      DB_PASSWORD: ${DB_PASSWORD:-trading}
-      JWT_SECRET: ${JWT_SECRET:-}
-      APP_ENCRYPTION_SECRET: ${APP_ENCRYPTION_SECRET:-}
+      - SPRING_PROFILES_ACTIVE=prod
+      - UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY:-}
+      - UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY:-}
+      - KIS_APP_KEY=${KIS_APP_KEY:-}
+      - KIS_APP_SECRET=${KIS_APP_SECRET:-}
+      - KIS_CANO=${KIS_CANO:-}
+      - KIS_ACNT_PRDT_CD=${KIS_ACNT_PRDT_CD:-01}
+      - KIS_PAPER=${KIS_PAPER:-true}
+      - KIS_LIVE_ENABLED=${KIS_LIVE_ENABLED:-false}
+      - KIS_MAX_ORDER_AMOUNT=${KIS_MAX_ORDER_AMOUNT:-10000000}
+      # TRADING_* 는 값 없이 이름만 적는다(#75) — .env 에 있으면 전달되고, 없으면 compose 가 변수를
+      # 컨테이너에서 제거해 TradingProperties 기본값이 적용된다. 여기에 기본값을 쓰면 앱과 갈린다.
+      - TRADING_TICKERS
+      - TRADING_STRATEGY
+      - TRADING_AUTO_START
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
+      - DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
+      - REDIS_HOST=redis
+      - REDIS_ENABLED=true
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=trading
+      - DB_USER=trading
+      - DB_PASSWORD=${DB_PASSWORD:-trading}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - APP_ENCRYPTION_SECRET=${APP_ENCRYPTION_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
