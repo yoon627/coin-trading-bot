@@ -1,6 +1,6 @@
 ---
 title: risk-defaults-single-source — 리스크 파라미터 기본값 단일화 (#75)
-status: in_progress
+status: done
 started: 2026-08-04
 updated: 2026-08-04
 ---
@@ -22,14 +22,12 @@ updated: 2026-08-04
 
 # Next
 
-**PR [#87](https://github.com/yoon627/coin-trading-bot/pull/87) 머지 대기.** pre-push codex 통과, 사람 리뷰만 남았다.
+**코드 작업은 끝났다(PR #87 머지 → main `43a5038`, 자동 배포 3 job 전부 success).** 남은 것은 사용자 액션 1건뿐이며, 이제는 **아무 때나 안전하게** 할 수 있다(새 `deploy.sh` 에 폴백이 없으므로 순서 제약이 해소됐다):
 
-**⚠️ 순서 고정 — secret 정리를 머지보다 먼저 하면 안 된다**:
-1. **머지** → GitHub Actions 자동 배포 관찰. 이 시점엔 secret 의 6줄이 그대로 전달되지만 값이 앱 기본값과 같아 동작 변화 0.
-2. **그 다음** `VULTR_DEPLOY_ENV` secret 에서 앱 기본값과 같은 6개(`TAKE_PROFIT_PCT`·`MAX_LOSS_PCT`·`TRAILING_STOP_PCT`·`TRAILING_ARM_PCT`·`MAX_HOLD_DAYS`·`ROUND_TRIP_FEE_RATE`) 줄 삭제 → 재배포. 운영 고유값(`TICKERS` 8종·`STRATEGY`·`INVEST_RATIO 0.15`·`AUTO_START true`)은 남긴다.
-3. 배포 후 서버 `/opt/app/.env` 와 부팅 로그에 트레일링 dead 경고가 없는지 확인(`scratchpad/check_server_env.sh`).
+1. `VULTR_DEPLOY_ENV` secret 에서 앱 기본값과 값이 같은 6줄 삭제 — `TAKE_PROFIT_PCT`·`MAX_LOSS_PCT`·`TRAILING_STOP_PCT`·`TRAILING_ARM_PCT`·`MAX_HOLD_DAYS`·`ROUND_TRIP_FEE_RATE`. 운영 고유값(`TICKERS` 8종·`STRATEGY`·`INVEST_RATIO 0.15`·`AUTO_START true`)은 남긴다. 지워도 값이 같아 동작 변화는 0이고, 이후 `TradingProperties.kt` 변경이 운영에 자동 반영된다.
+2. (선택) `scratchpad/check_server_env.sh` 로 서버 `/opt/app/.env`·부팅 로그 확인 — 세션에서는 SSH 가 권한 분류기에 차단돼 **끝내 미검증으로 남았다**.
 
-**역순이면 실제 사고가 난다**: 구 `deploy.sh` 에는 `${TRADING_TAKE_PROFIT_PCT:-2.0}` 폴백이 살아 있어, 머지 전에 secret 에서 키를 지우면 그 폴백이 발동해 TP 2.0 / arm 0.0 이 진짜로 적용된다.
+> 순서 제약은 머지 전에만 유효했다: 구 `deploy.sh` 의 `${TRADING_TAKE_PROFIT_PCT:-2.0}` 폴백 때문에 secret 을 먼저 지웠다면 TP 2.0 / arm 0.0 이 실제로 적용됐을 것이다. 머지가 끝나 그 위험은 사라졌다.
 
 # Decisions
 
@@ -84,7 +82,8 @@ updated: 2026-08-04
 - [x] **정의처 grep(전 14키)**: `verify_single_source.sh` — 실행 경로(`application.yml`·compose 4종·deploy.sh 3종)에 기본값 정의 0건
 - [x] **빌드·테스트**: JDK 21 `./gradlew build` — **581 tests, 0 failures**
 - [x] **문서 동기화**: `README.md` 표 값이 앱 기본값과 일치(drift 없었음) + 단일 소스 경로·배포 주의 추가. `wiki/pages/entity/deployment-stack.md` 배포 계약 갱신, wiki 검증 3종 통과(link clean / 28 pages / smoke 10-0)
-- [ ] **운영 반영**: `VULTR_DEPLOY_ENV` secret 정리 + 배포 후 서버 `.env`·부팅 로그 확인 — **사용자 액션 필요, 미완**
+- [x] **배포**: PR #87 머지(main `43a5038`) → CI/CD 워크플로 `test`·`build-and-push`·`deploy-vultr` 3 job 전부 success
+- [ ] **운영 반영 마무리**: `VULTR_DEPLOY_ENV` secret 6줄 정리 + 서버 `.env`·부팅 로그 확인 — **사용자 액션 필요, 미완**(SSH 차단으로 세션에서 검증 불가)
 
 # Review Disposition
 
