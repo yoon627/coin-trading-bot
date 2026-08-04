@@ -79,6 +79,8 @@ codex code-review (2026-08-04, effort=high) — P0 0 / P1 2 / P2 3, 미해결 0.
 |---|---|---|
 | P1 | 취소 재전파가 폴백 복구를 건너뛴다 — `existing.stop()` 이후 `loadStates` 에서 취소가 나면 정지된 엔진이 남고, durable 상태는 running 이라 손절이 무기한 멈춘다. 이후 reload 도 `wasRunning=false` 로 보아 되살리지 않는다 | **fix** — 복구를 `withContext(NonCancellable)` 로 수행한 뒤 취소를 재전파. **P2-a 를 고치다 내가 만든 회귀**였다(취소를 존중하려다 PR #50 이 막으려던 결함을 되살림). 테스트를 "복구 안 함" → "복구하되 취소는 전파" 로 정정 |
 
+| P1(2차) | 복구 실패 시 정지 엔진이 `engines` 에 남아, 안내대로 누른 `/api/bot/start` 가 `computeIfAbsent` 로 그것을 재사용 → **옛 자격증명·webhook 으로 거래 재개** | **fix** — 복구 실패 시 `engines.remove(userId, existing)`. 안내 문구가 유도하는 행동이 #51 이 고치려던 상황을 만들던 자기모순이었다 |
+
 # Deferred` + 후속 이슈 제안 |
 | P1-b | 되살리기(`existing.start`) 자체가 실패하면 원래 예외가 그대로 전파돼 컨트롤러 catch 를 비껴가고(500), 엔진은 **정지된 채** 남는다 | **fix** — `start` 를 try 로 감싸 `engineRestored=false` 로 구분해 던진다. 원인 유실 방지로 `addSuppressed`. 이 상황은 "이전 설정으로 거래 중" 과 정반대라 **별도 문구**(`RELOAD_FAILED_ENGINE_STOPPED_MESSAGE`)를 쓴다 — 사용자가 할 조치가 다르다 |
 | P2-a | `catch (e: Exception)` 이 `CancellationException` 을 삼켜, 취소된 요청이 복구 작업을 수행하고 일반 실패로 보고된다 | **fix** — `CancellationException` 을 먼저 잡아 재전파. ⚠️ 첫 수정은 복구까지 건너뛰어 **새 결함을 만들었다**(아래 pre-push P1) |
@@ -90,6 +92,8 @@ codex code-review (2026-08-04, effort=high) — P0 0 / P1 2 / P2 3, 미해결 0.
 | # | finding | 처분 |
 |---|---|---|
 | P1 | 취소 재전파가 폴백 복구를 건너뛴다 — `existing.stop()` 이후 `loadStates` 에서 취소가 나면 정지된 엔진이 남고, durable 상태는 running 이라 손절이 무기한 멈춘다. 이후 reload 도 `wasRunning=false` 로 보아 되살리지 않는다 | **fix** — 복구를 `withContext(NonCancellable)` 로 수행한 뒤 취소를 재전파. **P2-a 를 고치다 내가 만든 회귀**였다(취소를 존중하려다 PR #50 이 막으려던 결함을 되살림). 테스트를 "복구 안 함" → "복구하되 취소는 전파" 로 정정 |
+
+| P1(2차) | 복구 실패 시 정지 엔진이 `engines` 에 남아, 안내대로 누른 `/api/bot/start` 가 `computeIfAbsent` 로 그것을 재사용 → **옛 자격증명·webhook 으로 거래 재개** | **fix** — 복구 실패 시 `engines.remove(userId, existing)`. 안내 문구가 유도하는 행동이 #51 이 고치려던 상황을 만들던 자기모순이었다 |
 
 # Deferred
 

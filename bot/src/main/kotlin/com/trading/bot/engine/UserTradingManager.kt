@@ -320,6 +320,10 @@ class UserTradingManager(
                     // 되살리기마저 실패 — 엔진이 정지된 채 남는다. "이전 설정으로 거래 중" 과 정반대
                     // 상황이라 호출자가 다른 문구를 쓰도록 구분해 알린다.
                     log.error("reload: user {} 기존 엔진 복귀 실패 — 엔진이 정지 상태로 남는다", userId, restoreFailure)
+                    // 정지된 옛 엔진을 맵에 남기면 안내대로 /api/bot/start 를 눌렀을 때 그 엔진이
+                    // 재사용돼 옛 자격증명·webhook 으로 거래가 재개된다 — #51 이 고치려던 바로 그 상황.
+                    // 제거해 두면 다음 start 가 저장된 새 설정으로 엔진을 만든다.
+                    engines.remove(userId, existing)
                     restoreFailure.addSuppressed(e)
                     throw RuntimeReloadFailedException(userId, restoreFailure, engineRestored = false)
                 }

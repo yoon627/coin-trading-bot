@@ -35,6 +35,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -187,6 +188,8 @@ class UserTradingManagerTest {
         assertSame(restoreFailure, thrown.cause)
         // 원래 실패 원인도 잃지 않는다 — 진단에 둘 다 필요하다.
         assertSame(loadFailure, thrown.cause!!.suppressed.single())
+        // 정지 엔진이 남으면 안내대로 누른 /api/bot/start 가 그것을 재사용해 옛 키로 거래를 재개한다.
+        assertNull(engines()[1L], "복귀 실패 시 정지된 옛 엔진은 맵에서 제거돼야 한다")
     }
 
     @Test
