@@ -2,9 +2,9 @@
 title: 배포 스택 — Vultr 서울 + Caddy TLS + GHCR
 category: entity
 created: 2026-07-28
-updated: 2026-08-02
+updated: 2026-08-04
 claim_state: current
-verified: 2026-08-02 — PROJECT_ANALYSIS.md·deploy/vultr/ 대조, `./deploy/vultr/deploy.sh status`·HTTPS health 확인 및 자동 배포 workflow 정적 검증; live Actions 배포는 merge 후 관찰 예정
+verified: 2026-08-04 — 배포 계층 기본값 제거(#75)를 `docker compose config` 실측(미설정 키가 `null` 로 렌더 = 컨테이너 미주입)과 `append_trading_overrides` 격리 실행으로 확인. 인프라 구성은 2026-08-02 확인분 유지; live Actions 배포 관찰은 여전히 merge 후 과제
 sources:
   - PROJECT_ANALYSIS.md
   - deploy/vultr/
@@ -35,6 +35,7 @@ sources:
 
 ## 배포 시 주의
 
+- **배포 계층은 앱 설정의 기본값을 갖지 않는다**(#75, 2026-08-04). `deploy.sh` 의 `render_server_env` 는 로컬 `.env` 에 실제로 설정된 `TRADING_*` 만 서버 `.env` 에 쓰고, compose 는 그 키들을 **값 없이 이름만**(`- TRADING_TAKE_PROFIT_PCT`) 선언한다 — 값이 해결되지 않으면 compose 가 변수를 컨테이너에서 제거하므로 `TradingProperties` 기본값이 적용된다. 배포 스크립트에 `${VAR:-기본값}` 폴백을 되살리면 앱 기본값과 갈려 2026-07-30 사고가 재발한다.
 - **앱 코드 변경은 이미지 재빌드가 있어야 반영된다.** `deploy.sh deploy`(pull)만으로는 안 바뀐다([[lesson-cors-origin-rebuild]]).
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.

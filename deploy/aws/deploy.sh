@@ -105,18 +105,6 @@ KIS_ACNT_PRDT_CD=${KIS_ACNT_PRDT_CD:-01}
 KIS_PAPER=${KIS_PAPER:-true}
 KIS_LIVE_ENABLED=${KIS_LIVE_ENABLED:-false}
 KIS_MAX_ORDER_AMOUNT=${KIS_MAX_ORDER_AMOUNT:-10000000}
-TRADING_TICKERS=${TRADING_TICKERS:-KRW-BTC}
-TRADING_STRATEGY=${TRADING_STRATEGY:-combined}
-TRADING_INVEST_RATIO=${TRADING_INVEST_RATIO:-0.1}
-TRADING_MAX_INVEST_AMOUNT=${TRADING_MAX_INVEST_AMOUNT:-100000}
-TRADING_AUTO_START=${TRADING_AUTO_START:-false}
-TRADING_TAKE_PROFIT_PCT=${TRADING_TAKE_PROFIT_PCT:-2.0}
-TRADING_MAX_LOSS_PCT=${TRADING_MAX_LOSS_PCT:-5.0}
-TRADING_TRAILING_STOP_PCT=${TRADING_TRAILING_STOP_PCT:-2.0}
-TRADING_TRAILING_ARM_PCT=${TRADING_TRAILING_ARM_PCT:-0.0}
-TRADING_MAX_HOLD_DAYS=${TRADING_MAX_HOLD_DAYS:-1}
-TRADING_CHART_EXIT_ENABLED=${TRADING_CHART_EXIT_ENABLED:-false}
-TRADING_ROUND_TRIP_FEE_RATE=${TRADING_ROUND_TRIP_FEE_RATE:-0.001}
 DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
 DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
 DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
@@ -131,6 +119,33 @@ BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-14}
 BACKUP_S3_SSE=${BACKUP_S3_SSE:-AES256}
 AWS_REGION=${AWS_REGION:-ap-northeast-2}
 EOF
+    append_trading_overrides "$1"
+}
+
+# TRADING_* 의 기본값은 TradingProperties 가 유일한 정의처다(#75). 여기서 폴백을 주면 앱 기본값을
+# 덮어써 두 값이 갈린다 — .env 에 실제로 설정된 키만 넘기고, 없으면 줄 자체를 쓰지 않는다.
+# 빈 문자열을 넘기는 것도 안 된다: Spring 이 "정의됨"으로 보고 Double 바인딩에서 기동에 실패한다.
+TRADING_OVERRIDE_KEYS=(
+    TRADING_TICKERS TRADING_STRATEGY TRADING_INVEST_RATIO TRADING_MAX_INVEST_AMOUNT
+    TRADING_AUTO_START TRADING_TAKE_PROFIT_PCT TRADING_MAX_LOSS_PCT TRADING_TRAILING_STOP_PCT
+    TRADING_TRAILING_ARM_PCT TRADING_MAX_HOLD_DAYS TRADING_CHART_EXIT_ENABLED
+    TRADING_ROUND_TRIP_FEE_RATE TRADING_K_VALUE TRADING_INTERVAL_SECONDS
+)
+
+append_trading_overrides() {
+    local key value
+    for key in "${TRADING_OVERRIDE_KEYS[@]}"; do
+        value="${!key:-}"
+        [[ -z "$value" ]] && continue
+        # dotenv 는 quoting 규칙이 제각각이라 값을 그대로 쓴다 — 개행은 파일을 깨고 #·$·따옴표는
+        # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV·전략명뿐이므로 그 형태만 허용한다.
+        if [[ ! "$value" =~ ^[A-Za-z0-9._,-]+$ ]]; then
+            echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , -)." >&2
+            exit 1
+        fi
+        printf '%s=%s\n' "$key" "$value" >> "$1"
+    done
+    return 0
 }
 
 # SG 인바운드 1건 멱등 추가. 이미 있으면(Duplicate) 통과하되, 그 외 에러(권한 부족·잘못된
