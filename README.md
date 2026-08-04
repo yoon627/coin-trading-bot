@@ -153,6 +153,8 @@ coin-trading-bot/
 | 차트 기반 청산 | 비활성 | `TRADING_CHART_EXIT_ENABLED` |
 | 기록용 왕복 수수료율 | 0.001 | `TRADING_ROUND_TRIP_FEE_RATE` |
 
+기본값의 정의처는 `common/src/main/kotlin/com/trading/common/config/TradingProperties.kt` 하나입니다(#75). `application.yml`·`docker-compose*.yml`·`deploy/*/deploy.sh` 는 기본값을 갖지 않으며, 환경변수를 설정하지 않으면 위 값이 그대로 적용됩니다.
+
 매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다. 50일 이동평균 시장 필터는 백테스트 전용입니다.
 
 > **익절·트레일링 값의 관계**: 익절(`TAKE_PROFIT`)이 트레일링 폭·활성 수익률보다 **커야** 트레일링이 실효합니다.
@@ -217,7 +219,9 @@ coin-trading-bot/
 | `REDIS_ENABLED` | dev `false`, prod Compose `true` | Redis 캐시 활성화 |
 | `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
 
-리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`application.yml`](bot/src/main/resources/application.yml)에 있습니다.
+리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
+
+> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_STRATEGY`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지).
 
 ## AWS 배포 (historical)
 
