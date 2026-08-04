@@ -22,11 +22,14 @@ updated: 2026-08-04
 
 # Next
 
-**사용자 액션 2건 → 그 뒤 머지**:
-1. **`VULTR_DEPLOY_ENV` GitHub secret 정리**(codex P1) — 운영 `.env` 는 이 secret 에서 생성되므로 코드만 고쳐서는 앱 기본값에 위임되지 않는다. 앱 기본값과 값이 같은 6개(`TAKE_PROFIT_PCT`·`MAX_LOSS_PCT`·`TRAILING_STOP_PCT`·`TRAILING_ARM_PCT`·`MAX_HOLD_DAYS`·`ROUND_TRIP_FEE_RATE`) 줄을 지우고, 운영 고유값(`TICKERS` 8종·`STRATEGY`·`INVEST_RATIO 0.15`·`AUTO_START true`)은 남긴다.
-2. **서버 현황 확인**(선택) — `scratchpad/check_server_env.sh` 를 직접 실행해 배포 전 상태를 기록.
+**PR [#87](https://github.com/yoon627/coin-trading-bot/pull/87) 머지 대기.** pre-push codex 통과, 사람 리뷰만 남았다.
 
-머지 후: GitHub Actions 자동 배포 관찰 → 서버 `/opt/app/.env` 와 부팅 로그에 트레일링 dead 경고가 없는지 확인.
+**⚠️ 순서 고정 — secret 정리를 머지보다 먼저 하면 안 된다**:
+1. **머지** → GitHub Actions 자동 배포 관찰. 이 시점엔 secret 의 6줄이 그대로 전달되지만 값이 앱 기본값과 같아 동작 변화 0.
+2. **그 다음** `VULTR_DEPLOY_ENV` secret 에서 앱 기본값과 같은 6개(`TAKE_PROFIT_PCT`·`MAX_LOSS_PCT`·`TRAILING_STOP_PCT`·`TRAILING_ARM_PCT`·`MAX_HOLD_DAYS`·`ROUND_TRIP_FEE_RATE`) 줄 삭제 → 재배포. 운영 고유값(`TICKERS` 8종·`STRATEGY`·`INVEST_RATIO 0.15`·`AUTO_START true`)은 남긴다.
+3. 배포 후 서버 `/opt/app/.env` 와 부팅 로그에 트레일링 dead 경고가 없는지 확인(`scratchpad/check_server_env.sh`).
+
+**역순이면 실제 사고가 난다**: 구 `deploy.sh` 에는 `${TRADING_TAKE_PROFIT_PCT:-2.0}` 폴백이 살아 있어, 머지 전에 secret 에서 키를 지우면 그 폴백이 발동해 TP 2.0 / arm 0.0 이 진짜로 적용된다.
 
 # Decisions
 
