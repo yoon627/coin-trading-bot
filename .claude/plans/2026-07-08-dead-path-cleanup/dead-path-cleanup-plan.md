@@ -2,7 +2,7 @@
 title: dead-path-cleanup — 경량화 잔재 제거 (무소비 저장 경로·죽은 캐시·시세 3중 수집)
 status: in_progress
 started: 2026-07-08
-updated: 2026-08-03
+updated: 2026-08-04
 ---
 
 # Goal
@@ -16,6 +16,8 @@ updated: 2026-08-03
 - 2026-08-03: `origin/main`에 marketdata-consolidation 1·2·3단계가 모두 반영된 사실을 확인(`a44782a`, `78ad3fc`, `5338572`, `b829a93` 모두 조상)하고, 깨끗한 브랜치에 `origin/main`을 로컬 병합(`12f1253`)했다. 선행 blocker를 해소해 status를 `in_progress`로 전환하고, 첫 정리 단계의 참조 검색·무논쟁 삭제를 시작한다.
 - 2026-08-03: 참조 검색에서 `PriceCacheService`·전용 테스트, `MarketDataStore`의 `tickerHistory`·`orderBooks`·`getRecentTickers`·`getOrderBook`·`updateOrderBook`·`hasData`, `NormalizedOrderBook`의 프로덕션/테스트 소비자가 없음을 확인했다. 세 경로와 전용 테스트/도메인 파일을 삭제하고, 각 삭제 직후 JDK 21로 `compileKotlin`을 통과시켰다. `:bot:test --tests com.trading.bot.marketdata.MarketDataStoreTest` 및 전체 `./gradlew test`가 통과했고, 삭제 심볼 검색도 결과 0건이었다(기본 JDK 25 실행은 `25.0.2` 오류로 실패해 프로젝트 요구 JDK 21로 재실행).
 - 2026-08-03: `PROJECT_ANALYSIS.md`와 `wiki/pages/concept/marketdata-pipeline.md`에서 삭제된 cache/orderbook 경로와 Redis 용도를 동기화했다. `wiki` 링크 검사·추가 검증·smoke가 모두 통과했다.
+- 2026-08-03: 1단계(무논쟁 삭제)가 PR [#81](https://github.com/yoon627/coin-trading-bot/pull/81)로 squash merge 됐다(main `c7078c0`).
+- 2026-08-04: 잔재 정리 — 브랜치 코드가 main 과 동일함을 확인한 뒤 로컬 `dead-path-cleanup`(tip `570b366`)과 원격 `dead-path-cleanup`(`8dcddb9`)·`dead-path-cleanup-pr`(`570b366`)를 삭제했다. **남은 단계는 main 기준으로 새 worktree 에서 재개한다**(아래 `# Next`).
 
 # Next
 
