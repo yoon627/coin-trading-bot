@@ -112,6 +112,12 @@ codex plan-review (2026-08-04, effort=medium) — Critical 3 / Major 6 / Minor 3
 | P2-c | 테스트가 `hasFailed()` 만 보고 일부 필드만 검증 | **fix** — 실패를 `BindException` + `'trading.take-profit-pct'` 스택으로 특정하고, 14개 키 전량의 오버라이드·기본값 검증 추가. rootCause 는 `IllegalArgumentException`(primitive null) 이라 체인 단언으로 교정 |
 | P3 | `.env.example` 주석화로 신규 사용자가 값을 모름 | **fix** — 값 중복 없이 `TradingProperties.kt` 경로 + README 표 포인터를 4개 파일에 추가 |
 
+## pre-push codex review (2026-08-04, high) — P2 1건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P2 | 값 검증 정규식이 공백을 거부해 `TRADING_TICKERS="KRW-BTC, KRW-ETH"` 형태로 배포가 즉시 실패. `tickerList()` 는 `split(",").map { it.trim() }` 이라 그 형태를 지원한다 | **fix** — 패턴에 공백 추가(`^[A-Za-z0-9._, -]+$`). bash `[[ =~ ]]` 는 따옴표로 감싼 패턴을 리터럴로 보므로 `TRADING_VALUE_PATTERN` 변수에 담아 사용. 개행·`$()`·`#` 은 여전히 거부됨을 회귀 테스트로 고정(개행 거부는 `.env` 에 `DB_PASSWORD=` 를 주입하는 경로를 막는다) |
+
 # Deferred
 
 - **`BacktestConfig` 기본값 이중 정의**(codex C3, 사용자 결정으로 범위 제외): `bot/.../engine/BacktestEngine.kt` 의 `BacktestConfig` 가 `takeProfitPct`·`trailingStopPct`·`trailingArmPct`·`maxHoldDays` 기본값을 따로 갖는다. `TradingProperties` 를 바꿔도 자동 동기화되지 않는다. 백테스트는 독립 실험 파라미터를 쓰는 것이 의도이므로 통합하지 않되, parity 테스트가 drift 를 잡는지 확인할 것. 후속 이슈 제안 대상.

@@ -178,6 +178,9 @@ TRADING_OVERRIDE_KEYS=(
     TRADING_TRAILING_ARM_PCT TRADING_MAX_HOLD_DAYS TRADING_CHART_EXIT_ENABLED
     TRADING_ROUND_TRIP_FEE_RATE TRADING_K_VALUE TRADING_INTERVAL_SECONDS
 )
+# 변수에 담아야 [[ =~ ]] 가 공백을 패턴의 일부로 읽는다(따옴표로 감싸면 리터럴이 된다).
+# `-` 는 범위로 해석되지 않도록 클래스 끝에 둔다. 개행은 ^…$ 가 걸러낸다.
+TRADING_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
 
 append_trading_overrides() {
     local key value
@@ -186,8 +189,9 @@ append_trading_overrides() {
         [[ -z "$value" ]] && continue
         # dotenv 는 quoting 규칙이 제각각이라 값을 그대로 쓴다 — 개행은 파일을 깨고 #·$·따옴표는
         # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV·전략명뿐이므로 그 형태만 허용한다.
-        if [[ ! "$value" =~ ^[A-Za-z0-9._,-]+$ ]]; then
-            echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , -)." >&2
+        # 공백은 허용한다: TradingProperties.tickerList() 가 "KRW-BTC, KRW-ETH" 를 trim 해 받는다.
+        if [[ ! "$value" =~ $TRADING_VALUE_PATTERN ]]; then
+            echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , - 공백)." >&2
             exit 1
         fi
         printf '%s=%s\n' "$key" "$value" >> "$1"
