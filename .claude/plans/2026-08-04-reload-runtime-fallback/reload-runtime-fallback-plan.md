@@ -1,6 +1,6 @@
 ---
 title: reload-runtime-fallback — reloadUserRuntime 폴백이 거짓 성공을 반환하는 문제 (#51)
-status: in_progress
+status: done
 started: 2026-08-04
 updated: 2026-08-04
 ---
@@ -19,11 +19,13 @@ updated: 2026-08-04
 - 2026-08-04: 사용자 결정 — ① 실패 시 **503 + 상황 설명 메시지** ② 범위는 **loadStates 폴백만**(다른 조기 return 경로는 유지).
 - 2026-08-04: TDD Red(예외 타입 미존재로 컴파일 실패) → 구현 → Green. `RuntimeReloadFailedException` + 컨트롤러 2곳 503 매핑.
 - 2026-08-04: WebFlux 통합 테스트에서 body `message` 가 비어 실패 → 원인은 `bindToController` 하네스가 `SafeErrorAttributes` 를 안 쓰기 때문. 상태코드 검증과 문구 계약 검증을 분리해 해결(문구 노출은 기존 `SafeErrorAttributesTest` 가 보장).
+- 2026-08-04: **pre-push codex 가 P1 2건을 추가 검출 — 둘 다 내가 수정 과정에서 만든 결함이었다.** ① 취소 재전파가 복구를 건너뛰어 정지 엔진이 남음(P2-a 수정의 회귀) ② 복구 실패 시 정지 엔진이 맵에 남아 안내대로 누른 `/api/bot/start` 가 옛 자격증명을 재사용(안내가 #51 상황을 재현하는 자기모순). 각각 `withContext(NonCancellable)` 복구와 `engines.remove` 로 수정.
+- 2026-08-04: PR #90 머지(main `14dd16c`), 이슈 #51 종결.
 - 2026-08-04: codex code-review(high) P0 0 / P1 2 / P2 3 → 전량 처분. **P1-b 가 실질 결함**이었다 — 되살리기 자체가 실패하면 500 이 나가고 봇이 정지된 채 남는데, 그 상황에 "이전 설정으로 거래 중" 문구를 쓰면 정반대 안내가 된다. 589 tests green.
 
 # Next
 
-**PR 생성·머지 대기.** 구현·리뷰·검증 완료(589 tests green, codex P0 0).
+없음 — PR #90 머지(main `14dd16c`), 이슈 #51 종결. Deferred 의 KIS 건은 별도 이슈로 분리.
 
 # Decisions
 
@@ -97,4 +99,4 @@ codex code-review (2026-08-04, effort=high) — P0 0 / P1 2 / P2 3, 미해결 0.
 
 # Deferred
 
-- **KIS 키 변경이 실행 중 엔진에 반영되지 않는다**(codex P1-a, 범위 밖): `/api/user/kis-keys`(`TradingController.kt:106-128`)가 `kisClientFactory.invalidate(userId)` 만 호출한다. 이미 생성된 `KisStockTradingEngine` 은 자체 `client` 를 들고 있어 새 키가 반영되지 않은 채 200 이 나간다. `StockUserTradingManager.reloadUserRuntime`(:149)이 존재하지만 **호출자가 없고**, 그 구현은 `restorePositionState` 없이 엔진을 교체해 포지션 복원이 빠진다. → 엔진 교체 + 포지션 복원 + 실패 시 503 계약을 함께 설계하는 별도 작업으로 이슈 제안.
+- **KIS 키 변경이 실행 중 엔진에 반영되지 않는다**(codex P1-a, 범위 밖): `/api/user/kis-keys`(`TradingController.kt:106-128`)가 `kisClientFactory.invalidate(userId)` 만 호출한다. 이미 생성된 `KisStockTradingEngine` 은 자체 `client` 를 들고 있어 새 키가 반영되지 않은 채 200 이 나간다. `StockUserTradingManager.reloadUserRuntime`(:149)이 존재하지만 **호출자가 없고**, 그 구현은 `restorePositionState` 없이 엔진을 교체해 포지션 복원이 빠진다. → 엔진 교체 + 포지션 복원 + 실패 시 503 계약을 함께 설계하는 별도 작업. **이슈 [#91](https://github.com/yoon627/coin-trading-bot/issues/91) 로 분리됨(2026-08-04).**
