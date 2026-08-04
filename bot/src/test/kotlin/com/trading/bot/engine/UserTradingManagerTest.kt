@@ -21,6 +21,7 @@ import com.trading.bot.persistence.entity.TradeRecordEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
+import io.mockk.Ordering
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -29,8 +30,11 @@ import io.mockk.spyk
 import io.mockk.verify
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -113,11 +117,93 @@ class UserTradingManagerTest {
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
 
-        manager.reloadUserRuntime(1L)
+        // 되살리기는 하되 호출자에게 알린다 — 조용히 성공을 반환하면 옛 자격증명으로 계속
+        // 거래하는 것을 사용자가 알 수 없다(#51).
+        assertThrows(RuntimeReloadFailedException::class.java) {
+            runBlocking { manager.reloadUserRuntime(1L) }
+        }
 
         assertSame(mockEngine, engines()[1L], "로드 실패 시 교체 엔진이 등록되면 안 된다")
         verify(exactly = 0) { manager.createEngine(any()) }
         coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), emptyMap()) } // 옛 엔진 재기동
+    }
+
+    @Test
+    fun `reload rethrows only after the old engine is back up`() = runTest {
+        // 순서가 뒤바뀌면 stop 된 엔진만 남아 PR #50 이 막으려던 결함이 되살아난다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+
+        runCatching { manager.reloadUserRuntime(1L) }
+
+        coVerify(ordering = Ordering.ORDERED) {
+            mockEngine.stop()
+            mockEngine.start(listOf("KRW-BTC"), emptyMap())
+        }
+    }
+
+    @Test
+    fun `reload failure carries the original cause`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        val cause = RuntimeException("db down")
+        coEvery { tradingStateService.loadStates(1L) } throws cause
+
+        val thrown = assertThrows(RuntimeReloadFailedException::class.java) {
+            runBlocking { manager.reloadUserRuntime(1L) }
+        }
+
+        assertSame(cause, thrown.cause)
+        assertEquals(1L, thrown.userId)
+        assertTrue(thrown.engineRestored, "옛 엔진 재기동에 성공했으면 restored=true 여야 한다")
+    }
+
+    @Test
+    fun `restore failure is reported as engine stopped`() = runTest {
+        // 되살리기마저 실패하면 엔진이 정지된 채 남는다 — "이전 설정으로 거래 중" 과 정반대라
+        // 호출자가 다른 문구를 쓸 수 있게 구분돼야 한다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        val loadFailure = RuntimeException("db down")
+        coEvery { tradingStateService.loadStates(1L) } throws loadFailure
+        val restoreFailure = RuntimeException("engine start failed")
+        coEvery { mockEngine.start(any(), any()) } throws restoreFailure
+
+        val thrown = assertThrows(RuntimeReloadFailedException::class.java) {
+            runBlocking { manager.reloadUserRuntime(1L) }
+        }
+
+        assertFalse(thrown.engineRestored, "복귀 실패면 restored=false 여야 한다")
+        assertSame(restoreFailure, thrown.cause)
+        // 원래 실패 원인도 잃지 않는다 — 진단에 둘 다 필요하다.
+        assertSame(loadFailure, thrown.cause!!.suppressed.single())
+    }
+
+    @Test
+    fun `cancellation is not converted into a reload failure`() = runTest {
+        // CancellationException 을 삼키면 취소된 요청이 복구 작업을 계속하고 일반 실패로 보고된다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled")
+
+        assertThrows(CancellationException::class.java) {
+            runBlocking { manager.reloadUserRuntime(1L) }
+        }
+
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) } // 복구를 시도하지 않는다
     }
 
     @Test

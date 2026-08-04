@@ -297,12 +297,27 @@ class UserTradingManager(
         val initialStates = if (wasRunning) {
             try {
                 tradingStateService.loadStates(userId)
+            } catch (e: CancellationException) {
+                throw e // 취소는 실패가 아니다 — 복구를 시도하지 않고 그대로 전파한다.
             } catch (e: Exception) {
                 // 교체 실패는 정지 의도가 아니다 — 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
-                // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살리고 알린다.
+                // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살린다.
                 log.error("reload: user {} durable 상태 로드 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
-                existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
-                return@withLock
+                try {
+                    existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
+                } catch (restoreFailure: CancellationException) {
+                    throw restoreFailure
+                } catch (restoreFailure: Exception) {
+                    // 되살리기마저 실패 — 엔진이 정지된 채 남는다. "이전 설정으로 거래 중" 과 정반대
+                    // 상황이라 호출자가 다른 문구를 쓰도록 구분해 알린다.
+                    log.error("reload: user {} 기존 엔진 복귀 실패 — 엔진이 정지 상태로 남는다", userId, restoreFailure)
+                    restoreFailure.addSuppressed(e)
+                    throw RuntimeReloadFailedException(userId, restoreFailure, engineRestored = false)
+                }
+                // 되살린 엔진은 교체 전 자격증명·webhook 을 그대로 쓴다. 조용히 반환하면 호출자가
+                // 키 교체를 성공으로 응답해, 사용자는 이전 계정에서 계속 주문되는 것을 모른다(#51).
+                // 재기동을 마친 뒤에 던져야 손절 연속성이 유지된다.
+                throw RuntimeReloadFailedException(userId, e, engineRestored = true)
             }
         } else {
             emptyMap()
