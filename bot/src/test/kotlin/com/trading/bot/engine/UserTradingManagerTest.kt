@@ -190,8 +190,9 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `cancellation is not converted into a reload failure`() = runTest {
-        // CancellationException 을 삼키면 취소된 요청이 복구 작업을 계속하고 일반 실패로 보고된다.
+    fun `cancellation still restores the old engine before propagating`() = runTest {
+        // 취소를 그대로 전파하면 stop() 된 엔진만 남아 손절이 무기한 멈추고, 이후 reload 는
+        // wasRunning=false 로 보아 되살리지도 않는다. 복구는 하되 취소는 삼키지 않는다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
@@ -203,7 +204,8 @@ class UserTradingManagerTest {
             runBlocking { manager.reloadUserRuntime(1L) }
         }
 
-        coVerify(exactly = 0) { mockEngine.start(any(), any()) } // 복구를 시도하지 않는다
+        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), emptyMap()) } // 복구는 수행
+        assertSame(mockEngine, engines()[1L], "취소 시 엔진이 교체되면 안 된다")
     }
 
     @Test

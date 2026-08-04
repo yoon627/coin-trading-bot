@@ -20,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
@@ -28,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -298,7 +300,14 @@ class UserTradingManager(
             try {
                 tradingStateService.loadStates(userId)
             } catch (e: CancellationException) {
-                throw e // 취소는 실패가 아니다 — 복구를 시도하지 않고 그대로 전파한다.
+                // 취소여도 stop() 은 이미 일어났다 — 복구를 건너뛰면 정지된 엔진이 남아 손절이
+                // 무기한 멈추고, 이후 reload 는 wasRunning=false 로 보아 되살리지도 않는다.
+                // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다.
+                withContext(NonCancellable) {
+                    runCatching { existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap()) }
+                        .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
+                }
+                throw e
             } catch (e: Exception) {
                 // 교체 실패는 정지 의도가 아니다 — 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
                 // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살린다.

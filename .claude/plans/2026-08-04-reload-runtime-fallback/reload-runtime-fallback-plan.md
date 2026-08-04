@@ -73,11 +73,23 @@ codex code-review (2026-08-04, effort=high) — P0 0 / P1 2 / P2 3, 미해결 0.
 
 | # | finding | 처분 |
 |---|---|---|
-| P1-a | `/api/user/kis-keys` 는 `KisClientFactory` 캐시만 무효화 — 실행 중 `KisStockTradingEngine` 은 옛 client 를 계속 보유하고 200 반환. `StockUserTradingManager.reloadUserRuntime` 은 **호출자가 없다** | **defer** — #51 은 Upbit 경로 대상이고, KIS 는 엔진 교체 시 포지션 복원(`restorePositionState`)까지 함께 설계해야 해 범위가 다르다. 아래 `# Deferred` + 후속 이슈 제안 |
+| P1-a | `/api/user/kis-keys` 는 `KisClientFactory` 캐시만 무효화 — 실행 중 `KisStockTradingEngine` 은 옛 client 를 계속 보유하고 200 반환. `StockUserTradingManager.reloadUserRuntime` 은 **호출자가 없다** | **defer** — #51 은 Upbit 경로 대상이고, KIS 는 엔진 교체 시 포지션 복원(`restorePositionState`)까지 함께 설계해야 해 범위가 다르다. 아래 `## pre-push codex review (2026-08-04, high) — P1 1건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P1 | 취소 재전파가 폴백 복구를 건너뛴다 — `existing.stop()` 이후 `loadStates` 에서 취소가 나면 정지된 엔진이 남고, durable 상태는 running 이라 손절이 무기한 멈춘다. 이후 reload 도 `wasRunning=false` 로 보아 되살리지 않는다 | **fix** — 복구를 `withContext(NonCancellable)` 로 수행한 뒤 취소를 재전파. **P2-a 를 고치다 내가 만든 회귀**였다(취소를 존중하려다 PR #50 이 막으려던 결함을 되살림). 테스트를 "복구 안 함" → "복구하되 취소는 전파" 로 정정 |
+
+# Deferred` + 후속 이슈 제안 |
 | P1-b | 되살리기(`existing.start`) 자체가 실패하면 원래 예외가 그대로 전파돼 컨트롤러 catch 를 비껴가고(500), 엔진은 **정지된 채** 남는다 | **fix** — `start` 를 try 로 감싸 `engineRestored=false` 로 구분해 던진다. 원인 유실 방지로 `addSuppressed`. 이 상황은 "이전 설정으로 거래 중" 과 정반대라 **별도 문구**(`RELOAD_FAILED_ENGINE_STOPPED_MESSAGE`)를 쓴다 — 사용자가 할 조치가 다르다 |
-| P2-a | `catch (e: Exception)` 이 `CancellationException` 을 삼켜, 취소된 요청이 복구 작업을 수행하고 일반 실패로 보고된다 | **fix** — `CancellationException` 을 먼저 잡아 재전파(복구 시도 안 함). 테스트로 고정 |
+| P2-a | `catch (e: Exception)` 이 `CancellationException` 을 삼켜, 취소된 요청이 복구 작업을 수행하고 일반 실패로 보고된다 | **fix** — `CancellationException` 을 먼저 잡아 재전파. ⚠️ 첫 수정은 복구까지 건너뛰어 **새 결함을 만들었다**(아래 pre-push P1) |
 | P2-b | WebFlux 테스트가 문구를 실제 응답에서 검증하지 않아, 컨트롤러가 다른 reason 을 써도 통과 | **fix(부분)** — `reloadFailureMessage()` 를 컨트롤러가 쓰는 유일한 경로로 만들고 그 분기를 테스트로 고정. body 의 `message` 노출은 `SafeErrorAttributesTest`(`ResponseStatusException reason is exposed as message`)가 이미 보장하므로 중복 검증하지 않는다 |
 | P2-c | 폴백 테스트가 성공 경로·재호출·취소를 검증하지 않음 | **fix(부분)** — 취소 경로와 복구 실패 경로를 추가. 성공 경로는 `런타임 교체가 성공하면 종전대로 200` 이 커버. 재호출은 mutex 동작이라 이번 변경과 무관 |
+
+## pre-push codex review (2026-08-04, high) — P1 1건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P1 | 취소 재전파가 폴백 복구를 건너뛴다 — `existing.stop()` 이후 `loadStates` 에서 취소가 나면 정지된 엔진이 남고, durable 상태는 running 이라 손절이 무기한 멈춘다. 이후 reload 도 `wasRunning=false` 로 보아 되살리지 않는다 | **fix** — 복구를 `withContext(NonCancellable)` 로 수행한 뒤 취소를 재전파. **P2-a 를 고치다 내가 만든 회귀**였다(취소를 존중하려다 PR #50 이 막으려던 결함을 되살림). 테스트를 "복구 안 함" → "복구하되 취소는 전파" 로 정정 |
 
 # Deferred
 
