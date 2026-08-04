@@ -2,7 +2,7 @@
 title: stock-quant-strategy — KIS 주식 자동매매 차트 기반 퀀트 전략 레이어 (백테스트 입증 → 점진 실거래)
 status: in_progress
 started: 2026-07-08
-updated: 2026-08-03
+updated: 2026-08-04
 ---
 
 # Goal
@@ -17,6 +17,8 @@ stock-bot-kis 기반(KIS client·WAL 주문·자율엔진 MVP) 위에 차트(기
 - 2026-08-03: 병합된 stock-bot-kis plan D23을 반영해 **KIS는 주문·잔고·체결 전용, 연구 데이터는 KRX 원천 기반 point-in-time append-only 저장소**로 분리하는 결정을 채택. 공식 KIS 샘플은 `FHKST03010100`이 호출당 최대 100건이며 `FID_INPUT_DATE_1/2` 날짜 창을 직접 받는다고 명시하고, `FID_ORG_ADJ_PRC`는 `0=수정주가`, `1=원주가`로 정의한다. 따라서 일봉 연속조회는 `tr_cont`가 아니라 날짜 창을 뒤로 이동하는 collector로 설계하며, KIS 현재 종목마스터/상장일정 API만으로 과거 상폐 종목·point-in-time 유니버스를 보장할 수 있는지는 미확정으로 남긴다.
 - 2026-08-03: collector를 테스트 우선으로 구현하고 조정주가 플래그·중복 제거·최신순 정렬·빈/희소 날짜창의 과거 이동을 mock으로 검증했다. 1차 code review의 sparse-window P2를 창 경계 이동으로 수정했고, 수정 후 targeted code review에서 확정 버그 없음 판정을 받았다.
 - 2026-08-03: JDK 21 기준 `./gradlew compileKotlin`, `./gradlew test`, `./gradlew build`가 모두 성공했다. 실계정·모의 자격증명, 외부 KRX 데이터 승인, live 전환·실주문은 수행하지 않았다.
+- 2026-08-03: 일봉 collector 가 PR [#82](https://github.com/yoon627/coin-trading-bot/pull/82)로 squash merge 됐다(main `e1a12c9`).
+- 2026-08-04: 잔재 정리 — 브랜치 코드가 main 과 동일함을 확인한 뒤 로컬 `stock-quant-strategy`(tip `21fa42d`)와 원격 `stock-quant-strategy`(`e284c63`)·`stock-quant-strategy-pr`(`21fa42d`)를 삭제했다. **남은 단계는 main 기준으로 새 worktree 에서 재개한다**(아래 `# Next`).
 
 # Next
 

@@ -1,8 +1,8 @@
 ---
 title: trade-audit-atomicity — pending 해소와 감사 기록의 원자화 (#52)
-status: in_progress
+status: done
 started: 2026-07-29
-updated: 2026-08-01
+updated: 2026-08-04
 ---
 
 # Goal
@@ -23,10 +23,12 @@ updated: 2026-08-01
 - 2026-08-02: pre-push Codex review가 P2를 발견해 push가 차단됐다. 공통 `notifyTrade`가 수동 주문의 `recorded=false` 후처리 계약까지 삼키는 경로이며, 엔진에서는 `PositionManager`가 이미 알림 실패를 격리한다. 수동 경로 회귀 테스트를 추가하고 `notifyTrade` 예외 전파를 복원한다.
 - 2026-08-02: 새 수동 알림 실패 테스트가 기존 코드에서 Red임을 확인한 뒤, `notifyTrade`의 Discord 예외 전파와 `recordOrder`의 `recorded=false` 계약을 복원했다. 관련 테스트·전체 `test`·`compileKotlin`이 JDK 21에서 통과했다.
 - 2026-08-02: P2 fix를 `b80e1f2`로 커밋하고 pre-push Codex review `OK` 후 `origin/trade-audit-atomicity`에 push했다. PR [#78](https://github.com/yoon627/coin-trading-bot/pull/78)을 생성했으며 merge는 사용자 대기 상태다.
+- 2026-08-02: PR #78이 squash merge 됐다(main `2e7a01c`). 당시 worktree 충돌로 `--delete-branch`의 정리 단계가 실패해 브랜치가 남았다.
+- 2026-08-04: 잔재 정리 — 브랜치 코드가 main 과 동일함을 확인(diff 는 plan·wiki 문서뿐이며 모두 main 이 더 최신)한 뒤 로컬·원격 `trade-audit-atomicity`를 삭제했다(삭제 tip `91643e1`, 복구 가능). status 를 `done`으로 정정.
 
 # Next
 
-PR #78의 사용자 merge를 기다린다. merge 확인 후 plan status를 `done`으로 갱신하고 안전 조건을 확인해 worktree 정리를 제안한다.
+없음 — PR #78 머지 완료, 브랜치 정리 완료.
 
 # Decisions
 

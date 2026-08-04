@@ -1,8 +1,8 @@
 ---
 title: llm-wiki — 영속 프로젝트 메모리 wiki/ 부트스트랩 + 기존 지식 광범위 이관
-status: in_progress
+status: done
 started: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-04
 ---
 
 # Goal
@@ -20,9 +20,11 @@ updated: 2026-07-28
 
 - 2026-07-28: **3차 code-review(P0/P1 0, P2 4) 반영 후 push·PR 완료.** pre-push 게이트가 codegraph MCP 경합으로 2회 타임아웃 → 원인 규명해 **이슈 #60** 분리(수정은 미착수), hook 과 동일 명령을 직접 3회 돌려 리뷰를 받고 전량 반영한 뒤 `CODEX_SKIP=1` 로 push(사용자 승인). **PR #61**, origin `817255e`.
 
+- 2026-07-28: **PR #61 머지 완료**(main `d75a0cf`). 분리했던 이슈 #60(pre-push codegraph 경합)도 이후 CLOSED.
+
 # Next
 
-PR #61 리뷰·머지 대기. 머지되면 worktree + 로컬·원격 브랜치 자동 정리(이 repo 규칙). 이후 이슈 #60(pre-push codegraph 경합) 착수 여부 판단.
+없음 — PR #61 머지 완료, 이슈 #60 종결.
 
 # Decisions
 
