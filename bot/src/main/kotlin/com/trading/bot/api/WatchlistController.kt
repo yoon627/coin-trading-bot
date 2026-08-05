@@ -48,13 +48,14 @@ class WatchlistController(
 
                 // 1h 기준점만 DB 에서 1건 읽는다. 기존 구현은 창에 **2건 이상**일 때만 변화율을
                 // 냈으므로(`snapshots.size > 1`), 관측이 하나뿐이면 null 이어야 한다. 기준점이
-                // 현재값과 같은 관측이면(메모리가 비어 DB 폴백을 탄 경우 그럴 수 있다) 비교
-                // 대상이 없는 것이다 — 시각으로 구분한다. 가격만 같은 건 정상적인 0.0 이다.
+                // 현재값과 **같은 행**이면(메모리가 비어 DB 폴백을 탄 경우) 비교 대상이 없다.
+                // recorded_at 은 ms 라 서로 다른 관측이 같은 시각을 가질 수 있어 행 id 로 판정한다.
+                // 메모리에서 온 현재값은 id 가 없으므로 항상 다른 관측으로 본다.
                 val oldest = marketTickerRepository
                     .findOldestInRange(EXCHANGE, normalized, oneHourAgo, now)
                     .awaitSingleOrNull()
                 val hourChange = oldest
-                    ?.takeIf { it.price > 0 && it.recordedAt.isBefore(latest.at) }
+                    ?.takeIf { it.price > 0 && (latest.sourceRowId == null || it.id != latest.sourceRowId) }
                     ?.let { ((latest.price - it.price) / it.price) * 100.0 }
 
                 mapOf(
@@ -83,6 +84,8 @@ class WatchlistController(
         val changeRate: Double,
         val quoteVolume: Double,
         val at: Instant,
+        /** DB 행에서 왔을 때의 식별자. 메모리 스냅샷이면 null. */
+        val sourceRowId: Long? = null,
     )
 
     private fun NormalizedTicker.toView() =
@@ -97,6 +100,7 @@ class WatchlistController(
         changeRate = changeRate24h ?: 0.0,
         quoteVolume = quoteVolume24h ?: 0.0,
         at = recordedAt,
+        sourceRowId = id,
     )
 
     private companion object {

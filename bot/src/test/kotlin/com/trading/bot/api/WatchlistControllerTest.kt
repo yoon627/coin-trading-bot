@@ -40,8 +40,8 @@ class WatchlistControllerTest {
         timestamp = now,
     )
 
-    private fun row(market: String, price: Double) = MarketTickerEntity(
-        exchange = "UPBIT", market = market, price = price, recordedAt = now.minusSeconds(3000),
+    private fun row(market: String, price: Double, id: Long = 1L) = MarketTickerEntity(
+        id = id, exchange = "UPBIT", market = market, price = price, recordedAt = now.minusSeconds(3000),
     )
 
     /** 두 종목 모두 메모리에 있고, ETH 는 1h 기준점이 없는 기본 상태. */
