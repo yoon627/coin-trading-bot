@@ -16,7 +16,8 @@ updated: 2026-08-05
 - 2026-08-05: Explore 완료. 아래 Decisions 의 사실을 코드로 확인.
 - 2026-08-05: **함정 발견 — 테스트가 잡았다.** `market_tickers.market` 은 정규화 형식(`BTC/KRW`)인데(`UpbitMarketFeed.kt:182` 가 `MarketPair.normalize` 를 거쳐 저장) watchlist 설정은 Upbit 형식(`KRW-BTC`)이다. 조회 시 변환하지 않으면 **에러 없이 항상 빈 결과**가 된다. parity 테스트를 먼저 써둔 덕에 구현 직후 잡혔다.
 - 2026-08-05: 구현 완료 — `findByTimeRange` 신설, `WatchlistController` 전환(정규화 변환 포함), per-market 샘플링, `PriceCollector`·`PriceSnapshotRepository`·`PriceSnapshotEntity` 삭제. wiki `marketdata-pipeline` 에 정규화 함정·샘플링 변경 적립.
-- 2026-08-05: codex code-review(high) **P0 0** / P1 1 / P2 3 / P3 1 → 전량 처분. 601 tests green.
+- 2026-08-05: codex code-review(high) **P0 0** / P1 1 / P2 3 / P3 1 → 전량 처분.
+- 2026-08-05: **pre-push codex 가 P1 을 추가 검출 — 설계를 바꿨다.** 샘플링 때문에 조용한 종목이 1h 창에 행이 없어 watchlist 에서 사라진다(구 REST 는 5분마다 기록해 항상 노출). 현재값·목록은 `MarketDataStore` 메모리에서, DB 는 1h 기준값 1건만 읽도록 전환 — 같은 수정으로 P2(1h 전체 적재)도 해소. 599 tests green.
 
 # Next
 
@@ -86,7 +87,21 @@ codex code-review (2026-08-05, effort=high) — P0 0 / P1 1 / P2 3 / P3 1, 미�
 | P2-a | 동일 `recorded_at` 다건이면 `first()`/`last()` 가 비결정적이라 `change_1h` 가 실행마다 달라진다 | **fix** — `ORDER BY recorded_at DESC, id DESC` tie-breaker |
 | P2-b | parity 테스트가 동어반복(같은 식을 양쪽에 써서 구현이 틀려도 통과). 컨트롤러 테스트 fixture 의 `market` 값도 실제 저장 형식이 아니었다 | **fix** — 동어반복 테스트를 정규화 멱등성 검증으로 교체하고, `verify` 로 **실제 호출 인자**(`BTC/KRW`)를 고정 + `KRW-BTC` 로 불리지 않음까지 단언. fixture 를 저장 형식으로 정정. `updated_at` KST·nullable 테스트 추가 |
 | P2-c | `tickerSaveCounts` 가 키를 지우지 않아 동적 market 유입 시 무한 증가 | **wontfix(근거 주석)** — 구독 목록은 `MarketDataIngestionService.start` 가 부팅 시 한 번 정해 고정된다(codex 도 현재 call graph 에서 누수 없음 확인). 런타임 유입 경로가 생기면 정리가 필요하다는 조건을 코드 주석에 남김 |
-| P3 | `PriceCollector` 삭제로 `price_snapshots` 의 7일 정리 스케줄도 사라졌다 | **defer(2단계)** — 새 writer 가 없어 증가하지 않고, 기존 행은 2단계 DROP 에서 테이블째 사라진다. `# Deferred` 에 명시 |
+| P3 | `PriceCollector` 삭제로 `price_snapshots` 의 7일 정리 스케줄도 사라졌다 | **defer(2단계)** — 새 writer 가 없어 증가하지 않고, 기존 행은 2단계 DROP 에서 테이블째 사라진다. `## pre-push codex review (2026-08-05, high) — P1 1 / P2 1, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P1 | **거래가 드문 종목이 watchlist 에서 사라진다** — 종목별 10 tick 샘플링이라 조용한 종목은 1h 창에 행이 없다. 구 REST 수집은 5분마다 무조건 기록해 항상 노출됐으므로 명백한 회귀 | **fix(설계 변경)** — 현재값·종목 목록은 `MarketDataStore` 메모리 스냅샷에서 읽고, DB 는 1h 기준값에만 쓴다. 내 acceptance "데이터 없는 종목은 빠진다" 자체가 잘못된 기준이었다 |
+| P2 | 1h 창 전체를 `collectList()` 로 적재하는데 계산엔 2건만 필요 — 활발한 종목에서 수천 행 | **fix** — `findByTimeRange` → `findOldestInRange`(`LIMIT 1`). 최신값은 메모리에서 오므로 DB 는 1행만 읽는다. P1 수정과 함께 해결 |
+
+# Deferred` 에 명시 |
+
+## pre-push codex review (2026-08-05, high) — P1 1 / P2 1, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P1 | **거래가 드문 종목이 watchlist 에서 사라진다** — 종목별 10 tick 샘플링이라 조용한 종목은 1h 창에 행이 없다. 구 REST 수집은 5분마다 무조건 기록해 항상 노출됐으므로 명백한 회귀 | **fix(설계 변경)** — 현재값·종목 목록은 `MarketDataStore` 메모리 스냅샷에서 읽고, DB 는 1h 기준값에만 쓴다. 내 acceptance "데이터 없는 종목은 빠진다" 자체가 잘못된 기준이었다 |
+| P2 | 1h 창 전체를 `collectList()` 로 적재하는데 계산엔 2건만 필요 — 활발한 종목에서 수천 행 | **fix** — `findByTimeRange` → `findOldestInRange`(`LIMIT 1`). 최신값은 메모리에서 오므로 DB 는 1행만 읽는다. P1 수정과 함께 해결 |
 
 # Deferred
 

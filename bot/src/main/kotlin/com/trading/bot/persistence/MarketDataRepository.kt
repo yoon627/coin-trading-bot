@@ -14,15 +14,17 @@ interface MarketTickerRepository : ReactiveCrudRepository<MarketTickerEntity, Lo
     @Query("SELECT * FROM market_tickers WHERE exchange = :exchange AND market = :market ORDER BY recorded_at DESC LIMIT :limit")
     fun findRecent(exchange: String, market: String, limit: Int): Flux<MarketTickerEntity>
 
-    // watchlist 의 1h 변화율은 "최근 N건" 이 아니라 시간 창이 필요하다 — LIMIT 기반 findRecent 로는
-    // 종목별 tick 빈도가 달라 같은 시간을 대표하지 못한다.
+    // 1h 변화율의 기준점 — 창 안에서 **가장 오래된 1건**만 필요하다. 창 전체를 읽으면 활발한
+    // 종목에서 수천 행이 매 요청 메모리에 올라오는데, 계산에 쓰이는 건 이 한 건뿐이다.
+    // 동일 recorded_at 다건에서 결과가 흔들리지 않도록 id 로 tie-break 한다.
     @Query("""
         SELECT * FROM market_tickers
         WHERE exchange = :exchange AND market = :market
         AND recorded_at BETWEEN :from AND :to
-        ORDER BY recorded_at DESC, id DESC
+        ORDER BY recorded_at ASC, id ASC
+        LIMIT 1
     """)
-    fun findByTimeRange(exchange: String, market: String, from: Instant, to: Instant): Flux<MarketTickerEntity>
+    fun findOldestInRange(exchange: String, market: String, from: Instant, to: Instant): Mono<MarketTickerEntity>
 
     @Query("DELETE FROM market_tickers WHERE recorded_at < :before")
     fun deleteOlderThan(before: Instant): Mono<Long>

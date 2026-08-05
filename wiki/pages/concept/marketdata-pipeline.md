@@ -50,7 +50,10 @@ TCP 는 살아 있는데 데이터가 안 오는 상태는 flow 재구독으로 
 
 ## 저장
 
-`MarketDataPersistenceService` 가 `market_tickers`/`market_candles` 로 내린다([[persistence-schema]]). ticker 저장은 **종목별 카운터 기반 샘플링**(10 tick 마다 1건)이다. 예전에는 전역 카운터라 고활동 종목이 저장 슬롯을 독식했고, 저활동 종목은 시간창에 행이 없어 1시간 변화율이 `null` 이 됐다 — watchlist 를 이 테이블로 옮기면서(2026-08-05) 종목별로 분리했다.
+`MarketDataPersistenceService` 가 `market_tickers`/`market_candles` 로 내린다([[persistence-schema]]). ticker 저장은 **종목별 카운터 기반 샘플링**(10 tick 마다 1건)이다. 예전에는 전역 카운터라 고활동 종목이 저장 슬롯을 독식했다 — watchlist 를 이 테이블로 옮기면서(2026-08-05) 종목별로 분리했다.
+
+> [!caution]
+> **샘플링 때문에 이 테이블은 "그 종목이 존재하는가"의 근거가 될 수 없다.** 거래가 드문 종목은 1시간에 10 tick 이 안 차 행이 아예 없을 수 있다. 종목 목록·현재가는 `MarketDataStore` 의 메모리 스냅샷에서 읽고, DB 는 **과거 시점 기준값**에만 쓴다. watchlist 가 이 구조다 — DB 만 보고 목록을 만들면 조용한 종목이 UI 에서 사라진다.
 
 > [!important]
 > **`market` 컬럼은 정규화 형식(`BTC/KRW`)이지 Upbit 형식(`KRW-BTC`)이 아니다.** `UpbitMarketFeed` 가 `MarketPair.normalize` 를 거쳐 저장하기 때문이다. 반면 watchlist·엔진 설정은 Upbit 형식을 쓴다. 이 테이블을 조회하는 코드는 반드시 변환해야 하며, 빠뜨리면 **에러 없이 항상 빈 결과**가 나온다(무증상). watchlist 전환 때 실제로 이 함정에 걸렸고 테스트가 잡았다.

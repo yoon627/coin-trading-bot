@@ -1,10 +1,11 @@
 package com.trading.bot.api
 
 import com.trading.bot.config.WatchlistProperties
+import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.persistence.MarketTickerRepository
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
-import kotlinx.coroutines.reactor.awaitSingle
+import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -14,6 +15,7 @@ import java.time.ZoneId
 @RestController
 @RequestMapping("/api/watchlist")
 class WatchlistController(
+    private val marketDataStore: MarketDataStore,
     private val marketTickerRepository: MarketTickerRepository,
     private val watchlistProperties: WatchlistProperties,
 ) {
@@ -30,34 +32,35 @@ class WatchlistController(
                 // market_tickers 에는 정규화 형식("BTC/KRW")으로 저장된다 — UpbitMarketFeed 가
                 // MarketPair.normalize 를 거쳐 만든다. watchlist 설정은 Upbit 형식("KRW-BTC")이므로
                 // 조회 전에 변환해야 한다. 응답의 ticker 는 설정 형식 그대로 돌려준다.
-                val recent = marketTickerRepository
-                    .findByTimeRange(EXCHANGE, MarketPair.normalize(Exchange.UPBIT, ticker), oneHourAgo, now)
-                    .collectList()
-                    .awaitSingle()
+                val normalized = MarketPair.normalize(Exchange.UPBIT, ticker)
 
-                if (recent.isEmpty()) return@mapNotNull null
+                // 현재값은 **메모리 스냅샷**에서 읽는다. DB 는 10 tick 마다만 저장하므로 거래가
+                // 드문 종목은 1시간 안에 행이 없을 수 있는데, 그렇다고 목록에서 빠지면 안 된다
+                // (구 REST 수집은 5분마다 무조건 기록해 항상 노출됐다).
+                val latest = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)
+                    ?: return@mapNotNull null
 
-                val latest = recent.first()
-                val oldest = recent.last()
-                val hourChange = if (oldest.price > 0 && recent.size > 1) {
-                    ((latest.price - oldest.price) / oldest.price) * 100.0
-                } else null
+                // 1h 기준점만 DB 에서 1건 읽는다. 없으면 비교 대상이 없으니 변화율은 null —
+                // 구현 전환 전에도 창에 1건뿐이면 null 이었다.
+                val oldest = marketTickerRepository
+                    .findOldestInRange(EXCHANGE, normalized, oneHourAgo, now)
+                    .awaitSingleOrNull()
+                val hourChange = oldest
+                    ?.takeIf { it.price > 0 && it.price != latest.price }
+                    ?.let { ((latest.price - it.price) / it.price) * 100.0 }
 
                 mapOf(
                     "ticker" to ticker,
                     "currency" to ticker.substringAfter("-"),
                     "price" to latest.price,
-                    // price_snapshots 는 이 값들이 non-null 이었다. market_tickers 는 nullable 이므로
-                    // 여기서 메우지 않으면 응답에 null 이 새로 등장해 프론트 계약이 바뀐다.
-                    // change_1h 는 원래도 null 을 낼 수 있었으므로 그대로 둔다.
-                    "high_price" to (latest.highPrice24h ?: 0.0),
-                    "low_price" to (latest.lowPrice24h ?: 0.0),
-                    "change_24h" to (latest.changeRate24h ?: 0.0) * 100,
+                    "high_price" to latest.highPrice24h,
+                    "low_price" to latest.lowPrice24h,
+                    "change_24h" to latest.changeRate24h * 100,
                     "change_1h" to hourChange,
-                    "volume_24h" to (latest.quoteVolume24h ?: 0.0),
-                    // price_snapshots 는 KST LocalDateTime 을, market_tickers 는 Instant 를 저장한다.
+                    "volume_24h" to latest.quoteVolume24h,
+                    // price_snapshots 는 KST LocalDateTime 을, NormalizedTicker 는 Instant 를 쓴다.
                     // 응답 표현이 바뀌지 않도록 KST 로 변환해 같은 형식으로 넘긴다.
-                    "updated_at" to latest.recordedAt.atZone(kst).toLocalDateTime().toString(),
+                    "updated_at" to latest.timestamp.atZone(kst).toLocalDateTime().toString(),
                 )
             } catch (_: Exception) { null }
         }.sortedByDescending { (it["volume_24h"] as? Double) ?: 0.0 }
