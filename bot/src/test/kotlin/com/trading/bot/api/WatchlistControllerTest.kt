@@ -11,6 +11,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import org.junit.jupiter.api.Test
 import org.springframework.test.web.reactive.server.WebTestClient
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import java.time.Instant
 
@@ -90,16 +91,48 @@ class WatchlistControllerTest {
     }
 
     @Test
-    fun `메모리에 시세가 없는 종목만 빠진다`() {
-        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns snapshot("BTC/KRW", 100.0)
+    fun `메모리가 비면 DB 마지막 기록으로 폴백한다`() {
+        // 재시작 직후에는 WS 가 아직 emit 하지 않아 메모리가 비어 있다(isOnlyRealtime 이라
+        // 초기 스냅샷도 없다). 그 사이 종목이 사라지면 구 REST 수집 대비 회귀다.
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns null
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
-        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns Mono.empty()
+        every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns
+            Flux.just(row("BTC/KRW", 77.0).copy(quoteVolume24h = 5.0))
+        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
+        every { repo.findOldestInRange("UPBIT", any(), any(), any()) } returns Mono.empty()
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
             .expectBody()
             .jsonPath("$.coins.length()").isEqualTo(1)
             .jsonPath("$.coins[0].ticker").isEqualTo("KRW-BTC")
+            .jsonPath("$.coins[0].price").isEqualTo(77.0)
+    }
+
+    @Test
+    fun `메모리에도 DB 에도 없는 종목만 빠진다`() {
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns snapshot("BTC/KRW", 100.0)
+        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
+        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
+        every { repo.findOldestInRange("UPBIT", any(), any(), any()) } returns Mono.empty()
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.coins.length()").isEqualTo(1)
+            .jsonPath("$.coins[0].ticker").isEqualTo("KRW-BTC")
+    }
+
+    @Test
+    fun `1시간 전과 가격이 같으면 change_1h 는 0 이다`() {
+        // null 이 아니다 — 기존 구현은 창에 2건 이상이면 변화가 없어도 0.0 을 냈다.
+        arrangeBoth(btcPrice = 100.0)
+        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns
+            Mono.just(row("BTC/KRW", 100.0))
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody().jsonPath("$.coins[0].change_1h").isEqualTo(0.0)
     }
 
     @Test
