@@ -136,6 +136,25 @@ class WatchlistControllerTest {
     }
 
     @Test
+    fun `기준점이 현재값과 같은 관측이면 change_1h 는 null 이다`() {
+        // 메모리가 비어 DB 폴백을 타면 같은 행이 latest 이자 oldest 가 될 수 있다. 관측이
+        // 하나뿐인 것이므로 변화율을 만들면 안 된다(기존 `snapshots.size > 1` 조건과 동일).
+        val onlyRow = row("BTC/KRW", 100.0)
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns null
+        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
+        every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns Flux.just(onlyRow)
+        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
+        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns Mono.just(onlyRow)
+        every { repo.findOldestInRange("UPBIT", "ETH/KRW", any(), any()) } returns Mono.empty()
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.coins[0].price").isEqualTo(100.0)
+            .jsonPath("$.coins[0].change_1h").doesNotExist()
+    }
+
+    @Test
     fun `조회 키를 정규화 형식으로 변환해 넘긴다`() {
         // 변환을 빠뜨리면 에러 없이 항상 빈 결과가 나온다(무증상). 호출 인자를 직접 고정한다.
         arrangeBoth()

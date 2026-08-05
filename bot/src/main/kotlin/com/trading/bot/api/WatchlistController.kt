@@ -46,13 +46,15 @@ class WatchlistController(
                         .next().awaitSingleOrNull()?.toView()
                     ?: return@mapNotNull null
 
-                // 1h 기준점만 DB 에서 1건 읽는다. 없으면 비교 대상이 없으니 변화율은 null —
-                // 구현 전환 전에도 창에 1건뿐이면 null 이었다. 가격이 그대로면 0.0 이다.
+                // 1h 기준점만 DB 에서 1건 읽는다. 기존 구현은 창에 **2건 이상**일 때만 변화율을
+                // 냈으므로(`snapshots.size > 1`), 관측이 하나뿐이면 null 이어야 한다. 기준점이
+                // 현재값과 같은 관측이면(메모리가 비어 DB 폴백을 탄 경우 그럴 수 있다) 비교
+                // 대상이 없는 것이다 — 시각으로 구분한다. 가격만 같은 건 정상적인 0.0 이다.
                 val oldest = marketTickerRepository
                     .findOldestInRange(EXCHANGE, normalized, oneHourAgo, now)
                     .awaitSingleOrNull()
                 val hourChange = oldest
-                    ?.takeIf { it.price > 0 }
+                    ?.takeIf { it.price > 0 && it.recordedAt.isBefore(latest.at) }
                     ?.let { ((latest.price - it.price) / it.price) * 100.0 }
 
                 mapOf(

@@ -11,7 +11,9 @@ import java.time.Instant
 
 interface MarketTickerRepository : ReactiveCrudRepository<MarketTickerEntity, Long> {
 
-    @Query("SELECT * FROM market_tickers WHERE exchange = :exchange AND market = :market ORDER BY recorded_at DESC LIMIT :limit")
+    // recorded_at 은 WS 타임스탬프(ms)라 같은 시각의 행이 생길 수 있다 — id 로 tie-break 하지
+    // 않으면 "가장 최신" 이 호출마다 달라진다.
+    @Query("SELECT * FROM market_tickers WHERE exchange = :exchange AND market = :market ORDER BY recorded_at DESC, id DESC LIMIT :limit")
     fun findRecent(exchange: String, market: String, limit: Int): Flux<MarketTickerEntity>
 
     // 1h 변화율의 기준점 — 창 안에서 **가장 오래된 1건**만 필요하다. 창 전체를 읽으면 활발한

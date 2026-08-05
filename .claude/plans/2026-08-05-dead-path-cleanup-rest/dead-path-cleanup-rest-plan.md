@@ -17,6 +17,7 @@ updated: 2026-08-05
 - 2026-08-05: **함정 발견 — 테스트가 잡았다.** `market_tickers.market` 은 정규화 형식(`BTC/KRW`)인데(`UpbitMarketFeed.kt:182` 가 `MarketPair.normalize` 를 거쳐 저장) watchlist 설정은 Upbit 형식(`KRW-BTC`)이다. 조회 시 변환하지 않으면 **에러 없이 항상 빈 결과**가 된다. parity 테스트를 먼저 써둔 덕에 구현 직후 잡혔다.
 - 2026-08-05: 구현 완료 — `findByTimeRange` 신설, `WatchlistController` 전환(정규화 변환 포함), per-market 샘플링, `PriceCollector`·`PriceSnapshotRepository`·`PriceSnapshotEntity` 삭제. wiki `marketdata-pipeline` 에 정규화 함정·샘플링 변경 적립.
 - 2026-08-05: codex code-review(high) **P0 0** / P1 1 / P2 3 / P3 1 → 전량 처분.
+- 2026-08-06: **pre-push 3차 P2 2건** — 폴백 추가가 "관측 1건인데 변화율 계산" 경로를 새로 만들었다(같은 행이 latest 이자 oldest). 시각 비교로 구분하고 `findRecent` tie-breaker 추가. 602 tests green.
 - 2026-08-06: **pre-push 2차에서 또 P1** — 메모리만 보면 재시작 직후 종목이 빠지고(WS `isOnlyRealtime`), 가격 무변동 시 `change_1h` 가 `null` 이 되는 회귀도 있었다. DB 폴백 추가 + 조건 정정. 601 tests green.
 - 2026-08-05: **pre-push codex 가 P1 을 추가 검출 — 설계를 바꿨다.** 샘플링 때문에 조용한 종목이 1h 창에 행이 없어 watchlist 에서 사라진다(구 REST 는 5분마다 기록해 항상 노출). 현재값·목록은 `MarketDataStore` 메모리에서, DB 는 1h 기준값 1건만 읽도록 전환 — 같은 수정으로 P2(1h 전체 적재)도 해소. 599 tests green.
 
@@ -102,6 +103,13 @@ codex code-review (2026-08-05, effort=high) — P0 0 / P1 1 / P2 3 / P3 1, 미�
 | P1 | 메모리만 보면 **재시작 직후** 종목이 사라진다 — WS 는 `isOnlyRealtime` 이라 초기 스냅샷이 없어, 첫 tick 전까지 `MarketDataStore` 가 비어 있다 | **fix** — 메모리 → `findRecent(…, 1)` DB 폴백 → 둘 다 없을 때만 제외. `ChartController` 와 같은 메모리+DB 폴백 패턴이다 |
 | P2 | 1h 전과 가격이 같으면 `takeIf { it.price != latest.price }` 가 기준점을 버려 `change_1h` 가 `null` — 기존은 `0.0` 이었다 | **fix** — 그 조건은 내가 잘못 넣었다. `price > 0` 만 남겨 무변동 시 `0.0` 을 낸다. 테스트로 고정 |
 
+## pre-push codex review 3차 (2026-08-06, high) — P2 2건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P2-a | 관측이 1건뿐일 때도 변화율을 계산한다 — 특히 DB 폴백 시 같은 행이 latest 이자 oldest 가 되어 `0.0` 이 나오는데, 기존은 `snapshots.size > 1` 조건으로 `null` 이었다. **내 폴백 추가가 만든 새 경로** | **fix** — `oldest.recordedAt.isBefore(latest.at)` 로 서로 다른 관측일 때만 계산. 가격만 같은 경우(정상적인 `0.0`)와 구분된다 |
+| P2-b | `findRecent` 가 `recorded_at DESC` 만 정렬해 동일 시각 행에서 "최신" 이 비결정적 | **fix** — `id DESC` tie-breaker. 이 메서드의 소비자는 이번에 추가한 폴백뿐이라(grep 확인) 영향 범위가 닫혀 있다 |
+
 # Deferred` 에 명시 |
 
 ## pre-push codex review (2026-08-05, high) — P1 1 / P2 1, 미해결 0
@@ -117,6 +125,13 @@ codex code-review (2026-08-05, effort=high) — P0 0 / P1 1 / P2 3 / P3 1, 미�
 |---|---|---|
 | P1 | 메모리만 보면 **재시작 직후** 종목이 사라진다 — WS 는 `isOnlyRealtime` 이라 초기 스냅샷이 없어, 첫 tick 전까지 `MarketDataStore` 가 비어 있다 | **fix** — 메모리 → `findRecent(…, 1)` DB 폴백 → 둘 다 없을 때만 제외. `ChartController` 와 같은 메모리+DB 폴백 패턴이다 |
 | P2 | 1h 전과 가격이 같으면 `takeIf { it.price != latest.price }` 가 기준점을 버려 `change_1h` 가 `null` — 기존은 `0.0` 이었다 | **fix** — 그 조건은 내가 잘못 넣었다. `price > 0` 만 남겨 무변동 시 `0.0` 을 낸다. 테스트로 고정 |
+
+## pre-push codex review 3차 (2026-08-06, high) — P2 2건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P2-a | 관측이 1건뿐일 때도 변화율을 계산한다 — 특히 DB 폴백 시 같은 행이 latest 이자 oldest 가 되어 `0.0` 이 나오는데, 기존은 `snapshots.size > 1` 조건으로 `null` 이었다. **내 폴백 추가가 만든 새 경로** | **fix** — `oldest.recordedAt.isBefore(latest.at)` 로 서로 다른 관측일 때만 계산. 가격만 같은 경우(정상적인 `0.0`)와 구분된다 |
+| P2-b | `findRecent` 가 `recorded_at DESC` 만 정렬해 동일 시각 행에서 "최신" 이 비결정적 | **fix** — `id DESC` tie-breaker. 이 메서드의 소비자는 이번에 추가한 폴백뿐이라(grep 확인) 영향 범위가 닫혀 있다 |
 
 # Deferred
 
