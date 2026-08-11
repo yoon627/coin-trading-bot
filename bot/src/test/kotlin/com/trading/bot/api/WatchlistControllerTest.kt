@@ -43,8 +43,10 @@ class WatchlistControllerTest {
         timestamp = now,
     )
 
+    // 폴백에는 신선도 검사(실제 now 기준 1시간)가 걸리므로 고정 시각이 아니라 현재 기준으로 만든다.
     private fun row(market: String, price: Double, id: Long = 1L) = MarketTickerEntity(
-        id = id, exchange = "UPBIT", market = market, price = price, recordedAt = now.minusSeconds(3000),
+        id = id, exchange = "UPBIT", market = market, price = price,
+        recordedAt = Instant.now().minusSeconds(60),
     )
 
     private fun candle(market: String, close: Double) = MarketCandleEntity(
@@ -120,6 +122,23 @@ class WatchlistControllerTest {
             .jsonPath("$.coins.length()").isEqualTo(1)
             .jsonPath("$.coins[0].ticker").isEqualTo("KRW-BTC")
             .jsonPath("$.coins[0].price").isEqualTo(77.0)
+    }
+
+    @Test
+    fun `1시간보다 오래된 폴백 값은 쓰지 않는다`() {
+        // market_tickers 는 7일 보존이다. 제한이 없으면 며칠 전 가격이 현재가로 표시된다 —
+        // 구 구현도 1시간 창 밖은 조회하지 않았다.
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns null
+        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns snapshot("ETH/KRW", 200.0)
+        every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns
+            Flux.just(row("BTC/KRW", 77.0).copy(recordedAt = Instant.now().minusSeconds(86_400)))
+        noBaseline()
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.coins.length()").isEqualTo(1)
+            .jsonPath("$.coins[0].ticker").isEqualTo("KRW-ETH")
     }
 
     @Test
