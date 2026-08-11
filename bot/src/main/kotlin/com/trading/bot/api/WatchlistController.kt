@@ -63,9 +63,11 @@ class WatchlistController(
                 val baseline = marketCandleRepository
                     .findOldestInRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
                     .awaitSingleOrNull()
-                val hourChange = baseline?.closePrice
-                    ?.takeIf { it > 0 }
-                    ?.let { ((latest.price - it) / it) * 100.0 }
+                // 재시작·수집 공백 직후에는 창의 첫 봉이 사실상 현재 봉일 수 있다. 그걸로
+                // 계산하면 1시간 변화율이 아니다 — 충분히 과거의 봉일 때만 기준으로 삼는다.
+                val hourChange = baseline
+                    ?.takeIf { it.closePrice > 0 && it.openTime <= now.minusSeconds(MIN_BASELINE_AGE_SECONDS) }
+                    ?.let { ((latest.price - it.closePrice) / it.closePrice) * 100.0 }
 
                 mapOf(
                     "ticker" to ticker,
@@ -115,5 +117,9 @@ class WatchlistController(
 
         // 1분봉 — 1시간 창의 첫 봉을 기준가로 쓴다.
         const val BASELINE_INTERVAL_MINUTES = 1
+
+        // 기준봉이 이만큼은 과거여야 "1시간 변화율" 이라 부를 수 있다. 창(1시간)의 절반으로
+        // 잡아, 수집 공백으로 앞부분이 비었어도 남은 봉이 의미 있는 기준이 되게 한다.
+        const val MIN_BASELINE_AGE_SECONDS = 1_800L
     }
 }

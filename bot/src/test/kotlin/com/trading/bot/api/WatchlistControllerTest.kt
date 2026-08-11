@@ -52,7 +52,8 @@ class WatchlistControllerTest {
     private fun candle(market: String, close: Double) = MarketCandleEntity(
         exchange = "UPBIT", market = market, intervalMinutes = 1,
         openPrice = close, highPrice = close, lowPrice = close, closePrice = close,
-        volume = 1.0, openTime = now.minusSeconds(3600), closeTime = now.minusSeconds(3540),
+        volume = 1.0, openTime = Instant.now().minusSeconds(3_300),
+        closeTime = Instant.now().minusSeconds(3_240),
     )
 
     private fun noBaseline() {
@@ -198,6 +199,19 @@ class WatchlistControllerTest {
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
             .expectBody().jsonPath("$.coins[0].change_1h").isEqualTo(10.0)
+    }
+
+    @Test
+    fun `기준봉이 최근 것뿐이면 change_1h 를 만들지 않는다`() {
+        // 재시작·수집 공백 직후에는 창의 첫 봉이 사실상 현재 봉이다. 그걸로 계산하면
+        // 1시간 변화율이 아니라 몇 분 변화율이 된다 — 기존 구현의 단일 관측과 같이 null.
+        arrangeBoth(btcPrice = 110.0)
+        every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Mono.just(candle("BTC/KRW", 100.0).copy(openTime = Instant.now().minusSeconds(120)))
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody().jsonPath("$.coins[0].change_1h").doesNotExist()
     }
 
     @Test
