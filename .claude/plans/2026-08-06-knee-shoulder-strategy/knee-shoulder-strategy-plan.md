@@ -25,9 +25,12 @@ updated: 2026-08-11
   Major 2건 + Minor 7건을 fix loop 1회차로 반영. **mutation 검증 9/9 CAUGHT** 로 조건 고정 입증.
   전체 검증: `:bot:test` 623건 failures=0, wiki 3종 통과. Acceptance 11항목 전부 증거 충족.
 
+- 2026-08-12 — push 완료(pre-push codex high-reasoning 리뷰 blocking issue 없음). **PR #95 생성**.
+
 # Next
 
-커밋 → push → PR 생성 (사용자 승인 후). 이후 PR2(백테 검증)는 별도 브랜치.
+PR #95 리뷰·머지 대기. 머지 후 PR2(백테 검증)는 **별도 worktree**에서 — 착수 전 먼저
+"백테 50봉 vs 라이브 60봉 RSI 불일치"(아래 Deferred)를 어떻게 다룰지 판단해야 캘리브레이션이 유효하다.
 
 # Decisions
 
