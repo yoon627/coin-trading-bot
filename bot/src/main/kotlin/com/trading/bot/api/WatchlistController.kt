@@ -43,9 +43,12 @@ class WatchlistController(
                 // 메모리도 비어 있는 경우(재시작 직후 — WS 는 isOnlyRealtime 이라 초기 스냅샷이
                 // 없다) DB 의 마지막 기록으로 폴백한다. 구 REST 수집은 5분마다 무조건 기록해
                 // 항상 노출됐으므로, 둘 다 없을 때만 제외해야 회귀가 아니다.
-                // 폴백에는 **신선도 제한**이 필요하다. market_tickers 는 7일 보존이라 제한이
-                // 없으면 며칠 전 가격을 현재가로 표시한다. 구 구현도 1시간 창 밖은 보지 않았다.
-                val latest = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)?.toView()
+                // 두 경로 모두 **1시간 신선도**를 요구한다. 메모리 값은 마지막 WS 이벤트 이후
+                // 계속 남고 market_tickers 는 7일 보존이라, 제한이 없으면 오래된 가격을 현재가로
+                // 표시한다. 구 구현도 1시간 창 밖은 보지 않았다. 메모리가 낡았으면 DB 로 넘어간다.
+                val latest = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)
+                    ?.takeIf { it.timestamp.isAfter(oneHourAgo) }
+                    ?.toView()
                     ?: marketTickerRepository.findRecent(EXCHANGE, normalized, 1)
                         .next().awaitSingleOrNull()
                         ?.takeIf { it.recordedAt.isAfter(oneHourAgo) }

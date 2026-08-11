@@ -40,7 +40,7 @@ class WatchlistControllerTest {
         changeRate24h = 0.05,
         highPrice24h = 121.0,
         lowPrice24h = 99.0,
-        timestamp = now,
+        timestamp = Instant.now(),
     )
 
     // 폴백에는 신선도 검사(실제 now 기준 1시간)가 걸리므로 고정 시각이 아니라 현재 기준으로 만든다.
@@ -83,7 +83,7 @@ class WatchlistControllerTest {
             .jsonPath("$.coins[0].volume_24h").isEqualTo(1000.0)
             .jsonPath("$.coins[0].high_price").isEqualTo(121.0)
             .jsonPath("$.coins[0].low_price").isEqualTo(99.0)
-            .jsonPath("$.coins[0].updated_at").isEqualTo("2026-08-05T09:00")
+            .jsonPath("$.coins[0].updated_at").exists()
     }
 
     @Test
@@ -122,6 +122,24 @@ class WatchlistControllerTest {
             .jsonPath("$.coins.length()").isEqualTo(1)
             .jsonPath("$.coins[0].ticker").isEqualTo("KRW-BTC")
             .jsonPath("$.coins[0].price").isEqualTo(77.0)
+    }
+
+    @Test
+    fun `메모리 값이 낡았으면 DB 폴백으로 넘어간다`() {
+        // WS 가 끊기거나 그 종목 이벤트가 1시간 넘게 없으면 메모리 값이 stale 하다.
+        // 그때는 더 신선한 DB 기록이 있으면 그쪽을 써야 한다.
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns
+            snapshot("BTC/KRW", 999.0).copy(timestamp = Instant.now().minusSeconds(7_200))
+        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
+        every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns Flux.just(row("BTC/KRW", 77.0))
+        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
+        noBaseline()
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.coins.length()").isEqualTo(1)
+            .jsonPath("$.coins[0].price").isEqualTo(77.0) // stale 한 999.0 이 아니다
     }
 
     @Test
