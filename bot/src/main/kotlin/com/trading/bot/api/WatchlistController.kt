@@ -43,16 +43,15 @@ class WatchlistController(
                 // 메모리도 비어 있는 경우(재시작 직후 — WS 는 isOnlyRealtime 이라 초기 스냅샷이
                 // 없다) DB 의 마지막 기록으로 폴백한다. 구 REST 수집은 5분마다 무조건 기록해
                 // 항상 노출됐으므로, 둘 다 없을 때만 제외해야 회귀가 아니다.
-                // 두 경로 모두 **1시간 신선도**를 요구한다. 메모리 값은 마지막 WS 이벤트 이후
-                // 계속 남고 market_tickers 는 7일 보존이라, 제한이 없으면 오래된 가격을 현재가로
-                // 표시한다. 구 구현도 1시간 창 밖은 보지 않았다. 메모리가 낡았으면 DB 로 넘어간다.
-                val latest = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)
-                    ?.takeIf { it.timestamp.isAfter(oneHourAgo) }
-                    ?.toView()
-                    ?: marketTickerRepository.findRecent(EXCHANGE, normalized, 1)
-                        .next().awaitSingleOrNull()
-                        ?.takeIf { it.recordedAt.isAfter(oneHourAgo) }
-                        ?.toView()
+                // 값이 있으면 오래됐더라도 종목을 **표시한다**. 신선도로 걸러 목록에서 빼면
+                // WS 이벤트가 드문 종목이 UI 에서 사라지는데, 구 REST 수집(5분 주기)에서는
+                // 그런 일이 없었다. 대신 `updated_at` 이 그 값이 언제 것인지 드러내고,
+                // 낡은 값으로 1시간 변화율을 만들지 않는 것은 아래 기준봉 조건이 맡는다.
+                // 더 신선한 쪽을 고르기 위해 메모리·DB 중 나중 관측을 쓴다.
+                val fromMemory = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)?.toView()
+                val fromDb = marketTickerRepository.findRecent(EXCHANGE, normalized, 1)
+                    .next().awaitSingleOrNull()?.toView()
+                val latest = listOfNotNull(fromMemory, fromDb).maxByOrNull { it.at }
                     ?: return@mapNotNull null
 
                 // 1h 기준점은 **1분봉**에서 얻는다. market_tickers 는 종목별 10 tick 마다만

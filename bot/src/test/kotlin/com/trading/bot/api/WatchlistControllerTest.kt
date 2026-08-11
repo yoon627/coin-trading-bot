@@ -56,6 +56,11 @@ class WatchlistControllerTest {
         closeTime = Instant.now().minusSeconds(3_240),
     )
 
+    /** DB ticker 이력이 없는 기본 상태 — 개별 테스트가 필요하면 덮어쓴다. */
+    private fun noDbHistory() {
+        every { repo.findRecent("UPBIT", any(), any()) } returns Flux.empty()
+    }
+
     private fun noBaseline() {
         every { candles.findOldestInRange("UPBIT", any(), 1, any(), any()) } returns Mono.empty()
     }
@@ -64,6 +69,7 @@ class WatchlistControllerTest {
     private fun arrangeBoth(btcPrice: Double = 110.0, ethPrice: Double = 200.0) {
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns snapshot("BTC/KRW", btcPrice)
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns snapshot("ETH/KRW", ethPrice)
+        noDbHistory()
         noBaseline()
     }
 
@@ -95,6 +101,7 @@ class WatchlistControllerTest {
             snapshot("BTC/KRW", 110.0).copy(quoteVolume24h = 999.0) // 정렬 [0] 고정
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns
             snapshot("ETH/KRW", 200.0).copy(quoteVolume24h = 10.0)
+        noDbHistory()
         noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
@@ -126,9 +133,9 @@ class WatchlistControllerTest {
     }
 
     @Test
-    fun `메모리 값이 낡았으면 DB 폴백으로 넘어간다`() {
-        // WS 가 끊기거나 그 종목 이벤트가 1시간 넘게 없으면 메모리 값이 stale 하다.
-        // 그때는 더 신선한 DB 기록이 있으면 그쪽을 써야 한다.
+    fun `메모리 값이 낡았으면 더 신선한 DB 기록을 쓴다`() {
+        // WS 가 끊기거나 그 종목 이벤트가 오래 없으면 메모리 값이 stale 하다.
+        // 더 최근 관측이 DB 에 있으면 그쪽을 쓴다.
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns
             snapshot("BTC/KRW", 999.0).copy(timestamp = Instant.now().minusSeconds(7_200))
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
@@ -144,27 +151,30 @@ class WatchlistControllerTest {
     }
 
     @Test
-    fun `1시간보다 오래된 폴백 값은 쓰지 않는다`() {
-        // market_tickers 는 7일 보존이다. 제한이 없으면 며칠 전 가격이 현재가로 표시된다 —
-        // 구 구현도 1시간 창 밖은 조회하지 않았다.
+    fun `값이 오래됐어도 종목은 목록에 남고 updated_at 이 시각을 드러낸다`() {
+        // 신선도로 걸러 목록에서 빼면 조용한 종목이 UI 에서 사라진다 — 구 REST 수집에서는
+        // 없던 일이다. 낡은 값으로 1h 변화율을 만들지 않는 것은 기준봉 조건이 맡는다.
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns null
-        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns snapshot("ETH/KRW", 200.0)
+        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
         every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns
             Flux.just(row("BTC/KRW", 77.0).copy(recordedAt = Instant.now().minusSeconds(86_400)))
+        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
         noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
             .expectBody()
             .jsonPath("$.coins.length()").isEqualTo(1)
-            .jsonPath("$.coins[0].ticker").isEqualTo("KRW-ETH")
+            .jsonPath("$.coins[0].ticker").isEqualTo("KRW-BTC")
+            .jsonPath("$.coins[0].price").isEqualTo(77.0)
+            .jsonPath("$.coins[0].updated_at").exists()
     }
 
     @Test
     fun `메모리에도 DB 에도 없는 종목만 빠진다`() {
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns snapshot("BTC/KRW", 100.0)
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
-        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
+        noDbHistory()
         noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
@@ -233,6 +243,7 @@ class WatchlistControllerTest {
             snapshot("BTC/KRW", 100.0).copy(quoteVolume24h = 10.0)
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns
             snapshot("ETH/KRW", 200.0).copy(quoteVolume24h = 999.0)
+        noDbHistory()
         noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
