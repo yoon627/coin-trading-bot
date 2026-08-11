@@ -1,18 +1,27 @@
 package com.trading.bot.api
 
 import com.trading.bot.config.WatchlistProperties
-import com.trading.bot.persistence.PriceSnapshotRepository
-import kotlinx.coroutines.reactor.awaitSingle
+import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.persistence.MarketCandleRepository
+import com.trading.bot.persistence.MarketTickerRepository
+import com.trading.bot.persistence.entity.MarketTickerEntity
+import com.trading.common.domain.Exchange
+import com.trading.common.domain.MarketPair
+import com.trading.common.domain.NormalizedTicker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
-import java.time.LocalDateTime
+import java.time.Instant
 import java.time.ZoneId
 
 @RestController
 @RequestMapping("/api/watchlist")
 class WatchlistController(
-    private val priceSnapshotRepository: PriceSnapshotRepository,
+    private val marketDataStore: MarketDataStore,
+    private val marketTickerRepository: MarketTickerRepository,
+    private val marketCandleRepository: MarketCandleRepository,
     private val watchlistProperties: WatchlistProperties,
 ) {
     private val kst = ZoneId.of("Asia/Seoul")
@@ -20,38 +29,114 @@ class WatchlistController(
     @GetMapping
     suspend fun getWatchlist(): Map<String, Any> {
         val tickers = watchlistProperties.tickerList()
-        val now = LocalDateTime.now(kst)
-        val oneHourAgo = now.minusHours(1)
+        val now = Instant.now()
+        val oneHourAgo = now.minusSeconds(3600)
 
         val items = tickers.mapNotNull { ticker ->
             try {
-                val snapshots = priceSnapshotRepository
-                    .findByTickerAndCapturedAtBetweenOrderByCapturedAtDesc(ticker, oneHourAgo, now)
-                    .collectList()
-                    .awaitSingle()
+                // market_tickers 에는 정규화 형식("BTC/KRW")으로 저장된다 — UpbitMarketFeed 가
+                // MarketPair.normalize 를 거쳐 만든다. watchlist 설정은 Upbit 형식("KRW-BTC")이므로
+                // 조회 전에 변환해야 한다. 응답의 ticker 는 설정 형식 그대로 돌려준다.
+                val normalized = MarketPair.normalize(Exchange.UPBIT, ticker)
 
-                if (snapshots.isEmpty()) return@mapNotNull null
+                // 현재값은 메모리 스냅샷을 먼저 본다. DB 는 10 tick 마다만 저장하므로 거래가 드문
+                // 종목은 1시간 창에 행이 없을 수 있는데, 그렇다고 목록에서 빠지면 안 된다.
+                // 메모리도 비어 있는 경우(재시작 직후 — WS 는 isOnlyRealtime 이라 초기 스냅샷이
+                // 없다) DB 의 마지막 기록으로 폴백한다. 구 REST 수집은 5분마다 무조건 기록해
+                // 항상 노출됐으므로, 둘 다 없을 때만 제외해야 회귀가 아니다.
+                // 값이 있으면 오래됐더라도 종목을 **표시한다**. 신선도로 걸러 목록에서 빼면
+                // WS 이벤트가 드문 종목이 UI 에서 사라지는데, 구 REST 수집(5분 주기)에서는
+                // 그런 일이 없었다. 대신 `updated_at` 이 그 값이 언제 것인지 드러내고,
+                // 낡은 값으로 1시간 변화율을 만들지 않는 것은 아래 기준봉 조건이 맡는다.
+                // 더 신선한 쪽을 고르기 위해 메모리·DB 중 나중 관측을 쓴다.
+                val fromMemory = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)?.toView()
+                // DB 실패가 메모리 시세까지 날리면 안 된다 — WS 는 멀쩡한데 종목이 사라진다.
+                val fromDb = try {
+                    marketTickerRepository.findRecent(EXCHANGE, normalized, 1)
+                        .next().awaitSingleOrNull()?.toView()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                val latest = listOfNotNull(fromMemory, fromDb).maxByOrNull { it.at }
+                    ?: return@mapNotNull null
 
-                val latest = snapshots.first()
-                val oldest = snapshots.last()
-                val hourChange = if (oldest.price > 0 && snapshots.size > 1) {
-                    ((latest.price - oldest.price) / oldest.price) * 100.0
-                } else null
+                // 1h 기준점은 **1분봉**에서 얻는다. market_tickers 는 종목별 10 tick 마다만
+                // 저장돼 거래가 드문 종목은 1시간 창에 행이 0~1건뿐이라 변화율을 만들 수 없다 —
+                // 구 REST 수집(5분 주기)은 거래량과 무관하게 기록했으므로 그대로 두면 회귀다.
+                // 캔들은 60초 REST 폴링이라 거래량과 무관하게 채워진다([[marketdata-pipeline]]).
+                // 창의 첫 봉(가장 오래된 것)의 종가가 1시간 전 가격이다.
+                // 기준봉은 change_1h 에만 쓰인다 — 실패하면 그 필드만 비우고 나머지는 반환한다.
+                val baseline = try {
+                    marketCandleRepository
+                        .findOldestInRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
+                        .awaitSingleOrNull()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                // 재시작·수집 공백 직후에는 창의 첫 봉이 사실상 현재 봉일 수 있다. 그걸로
+                // 계산하면 1시간 변화율이 아니다 — 충분히 과거의 봉일 때만 기준으로 삼는다.
+                // 현재값 자체가 1시간보다 오래됐으면(WS 중단 등) 최근 기준봉과 비교해도 의미가
+                // 없다 — 목록에는 남기되 변화율은 만들지 않는다.
+                val hourChange = baseline
+                    ?.takeIf { latest.at.isAfter(oneHourAgo) }
+                    ?.takeIf { it.closePrice > 0 && it.openTime <= now.minusSeconds(MIN_BASELINE_AGE_SECONDS) }
+                    ?.let { ((latest.price - it.closePrice) / it.closePrice) * 100.0 }
 
                 mapOf(
                     "ticker" to ticker,
                     "currency" to ticker.substringAfter("-"),
                     "price" to latest.price,
-                    "high_price" to latest.highPrice,
-                    "low_price" to latest.lowPrice,
-                    "change_24h" to latest.signedChangeRate * 100,
+                    "high_price" to latest.high,
+                    "low_price" to latest.low,
+                    "change_24h" to latest.changeRate * 100,
                     "change_1h" to hourChange,
-                    "volume_24h" to latest.accTradePrice24h,
-                    "updated_at" to latest.capturedAt.toString(),
+                    "volume_24h" to latest.quoteVolume,
+                    // price_snapshots 는 KST LocalDateTime 을 저장했다. 표현이 바뀌지 않도록 KST 로 맞춘다.
+                    "updated_at" to latest.at.atZone(kst).toLocalDateTime().toString(),
                 )
             } catch (_: Exception) { null }
         }.sortedByDescending { (it["volume_24h"] as? Double) ?: 0.0 }
 
         return mapOf("coins" to items)
+    }
+
+    /** 메모리 스냅샷과 DB 행이 같은 모양이 아니라서, 응답 조립 전에 한 형태로 모은다. */
+    private data class TickerView(
+        val price: Double,
+        val high: Double,
+        val low: Double,
+        val changeRate: Double,
+        val quoteVolume: Double,
+        val at: Instant,
+    )
+
+    private fun NormalizedTicker.toView() =
+        TickerView(price, highPrice24h, lowPrice24h, changeRate24h, quoteVolume24h, timestamp)
+
+    // market_tickers 는 nullable 컬럼이다 — price_snapshots 는 non-null 이었으므로 0.0 으로 메워
+    // 응답에 null 이 새로 등장하지 않게 한다.
+    private fun MarketTickerEntity.toView() = TickerView(
+        price = price,
+        high = highPrice24h ?: 0.0,
+        low = lowPrice24h ?: 0.0,
+        changeRate = changeRate24h ?: 0.0,
+        quoteVolume = quoteVolume24h ?: 0.0,
+        at = recordedAt,
+    )
+
+    private companion object {
+        // watchlist 는 Upbit WS 경로 전용이다 — MarketDataIngestionService 가 같은 목록을 구독한다.
+        const val EXCHANGE = "UPBIT"
+
+        // 1분봉 — 1시간 창의 첫 봉을 기준가로 쓴다.
+        const val BASELINE_INTERVAL_MINUTES = 1
+
+        // 기준봉이 이만큼은 과거여야 "1시간 변화율" 이라 부를 수 있다. 창(1시간)의 절반으로
+        // 잡아, 수집 공백으로 앞부분이 비었어도 남은 봉이 의미 있는 기준이 되게 한다.
+        const val MIN_BASELINE_AGE_SECONDS = 1_800L
     }
 }
