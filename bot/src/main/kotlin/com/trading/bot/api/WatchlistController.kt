@@ -61,8 +61,8 @@ class WatchlistController(
                 // 캔들은 60초 REST 폴링이라 거래량과 무관하게 채워진다([[marketdata-pipeline]]).
                 // 창의 첫 봉(가장 오래된 것)의 종가가 1시간 전 가격이다.
                 val baseline = marketCandleRepository
-                    .findByTimeRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
-                    .next().awaitSingleOrNull()
+                    .findOldestInRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
+                    .awaitSingleOrNull()
                 val hourChange = baseline?.closePrice
                     ?.takeIf { it > 0 }
                     ?.let { ((latest.price - it) / it) * 100.0 }

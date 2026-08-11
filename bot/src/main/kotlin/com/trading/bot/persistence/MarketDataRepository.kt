@@ -38,6 +38,17 @@ interface MarketCandleRepository : ReactiveCrudRepository<MarketCandleEntity, Lo
     """)
     fun findByTimeRange(exchange: String, market: String, intervalMinutes: Int, from: Instant, to: Instant): Flux<MarketCandleEntity>
 
+    // 시간창의 첫 봉만 필요할 때. Flux 를 받아 next() 하면 SQL 에는 LIMIT 이 걸리지 않아
+    // 1시간치(60행)를 그대로 읽어온다.
+    @Query("""
+        SELECT * FROM market_candles
+        WHERE exchange = :exchange AND market = :market AND interval_minutes = :intervalMinutes
+        AND open_time BETWEEN :from AND :to
+        ORDER BY open_time ASC
+        LIMIT 1
+    """)
+    fun findOldestInRange(exchange: String, market: String, intervalMinutes: Int, from: Instant, to: Instant): Mono<MarketCandleEntity>
+
     // 멱등 저장: 같은 (exchange, market, interval, open_time) 재수집 시 INSERT 대신 갱신
     // → 폴링 drift 로 인한 UNIQUE 위반 침묵/미반영 제거.
     @Modifying

@@ -56,7 +56,7 @@ class WatchlistControllerTest {
     )
 
     private fun noBaseline() {
-        every { candles.findByTimeRange("UPBIT", any(), 1, any(), any()) } returns Flux.empty()
+        every { candles.findOldestInRange("UPBIT", any(), 1, any(), any()) } returns Mono.empty()
     }
 
     /** 두 종목 모두 메모리에 있고, ETH 는 1h 기준점이 없는 기본 상태. */
@@ -69,8 +69,8 @@ class WatchlistControllerTest {
     @Test
     fun `응답 키와 값이 기존 계약을 유지한다`() {
         arrangeBoth()
-        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
-            Flux.just(candle("BTC/KRW", 100.0))
+        every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Mono.just(candle("BTC/KRW", 100.0))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -177,8 +177,8 @@ class WatchlistControllerTest {
     fun `1시간 전과 가격이 같으면 change_1h 는 0 이다`() {
         // null 이 아니다 — 기존 구현은 창에 2건 이상이면 변화가 없어도 0.0 을 냈다.
         arrangeBoth(btcPrice = 100.0)
-        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
-            Flux.just(candle("BTC/KRW", 100.0))
+        every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Mono.just(candle("BTC/KRW", 100.0))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -192,8 +192,8 @@ class WatchlistControllerTest {
         // 기준가를 거기서 얻는다 — 구 REST 수집(5분 주기)이 제공하던 값을 잃지 않는다.
         arrangeBoth(btcPrice = 110.0)
         every { repo.findRecent("UPBIT", any(), any()) } returns Flux.empty() // ticker 이력 없음
-        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
-            Flux.just(candle("BTC/KRW", 100.0))
+        every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Mono.just(candle("BTC/KRW", 100.0))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -204,13 +204,13 @@ class WatchlistControllerTest {
     fun `조회 키를 정규화 형식으로 변환해 넘긴다`() {
         // 변환을 빠뜨리면 에러 없이 항상 빈 결과가 나온다(무증상). 호출 인자를 직접 고정한다.
         arrangeBoth()
-        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns Flux.empty()
+        every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns Mono.empty()
 
         client.get().uri("/api/watchlist").exchange().expectStatus().isOk
 
         verify { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") }
-        verify { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) }
-        verify(exactly = 0) { candles.findByTimeRange("UPBIT", "KRW-BTC", 1, any(), any()) }
+        verify { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) }
+        verify(exactly = 0) { candles.findOldestInRange("UPBIT", "KRW-BTC", 1, any(), any()) }
     }
 
     @Test
@@ -231,8 +231,8 @@ class WatchlistControllerTest {
     @Test
     fun `기준점 조회가 실패해도 나머지 종목을 반환한다`() {
         arrangeBoth()
-        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
-            Flux.error(RuntimeException("db down"))
+        every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Mono.error(RuntimeException("db down"))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
