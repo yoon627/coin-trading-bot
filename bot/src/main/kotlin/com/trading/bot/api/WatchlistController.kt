@@ -79,7 +79,10 @@ class WatchlistController(
                 }
                 // 재시작·수집 공백 직후에는 창의 첫 봉이 사실상 현재 봉일 수 있다. 그걸로
                 // 계산하면 1시간 변화율이 아니다 — 충분히 과거의 봉일 때만 기준으로 삼는다.
+                // 현재값 자체가 1시간보다 오래됐으면(WS 중단 등) 최근 기준봉과 비교해도 의미가
+                // 없다 — 목록에는 남기되 변화율은 만들지 않는다.
                 val hourChange = baseline
+                    ?.takeIf { latest.at.isAfter(oneHourAgo) }
                     ?.takeIf { it.closePrice > 0 && it.openTime <= now.minusSeconds(MIN_BASELINE_AGE_SECONDS) }
                     ?.let { ((latest.price - it.closePrice) / it.closePrice) * 100.0 }
 

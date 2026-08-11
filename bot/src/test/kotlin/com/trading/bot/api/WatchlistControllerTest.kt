@@ -212,6 +212,25 @@ class WatchlistControllerTest {
     }
 
     @Test
+    fun `현재값이 1시간보다 오래되면 change_1h 를 만들지 않는다`() {
+        // WS 중단으로 폴백값이 낡았는데 기준봉만 최근이면 엉뚱한 변화율이 나온다.
+        // 목록에는 남기되(사용자 결정) 변화율은 비운다.
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns null
+        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
+        every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns
+            Flux.just(row("BTC/KRW", 77.0).copy(recordedAt = Instant.now().minusSeconds(86_400)))
+        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
+        every { candles.findOldestInRange("UPBIT", any(), 1, any(), any()) } returns
+            Mono.just(candle("BTC/KRW", 100.0))
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody()
+            .jsonPath("$.coins[0].price").isEqualTo(77.0) // 목록엔 남는다
+            .jsonPath("$.coins[0].change_1h").doesNotExist()
+    }
+
+    @Test
     fun `기준봉이 최근 것뿐이면 change_1h 를 만들지 않는다`() {
         // 재시작·수집 공백 직후에는 창의 첫 봉이 사실상 현재 봉이다. 그걸로 계산하면
         // 1시간 변화율이 아니라 몇 분 변화율이 된다 — 기존 구현의 단일 관측과 같이 null.
