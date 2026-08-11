@@ -254,7 +254,8 @@ class WatchlistControllerTest {
     }
 
     @Test
-    fun `기준점 조회가 실패해도 나머지 종목을 반환한다`() {
+    fun `기준봉 조회가 실패해도 현재가 항목은 남는다`() {
+        // 기준봉은 change_1h 에만 쓰인다 — 실패로 종목 전체가 사라지면 안 된다.
         arrangeBoth()
         every { candles.findOldestInRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
             Mono.error(RuntimeException("db down"))
@@ -262,7 +263,17 @@ class WatchlistControllerTest {
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
             .expectBody()
-            .jsonPath("$.coins.length()").isEqualTo(1)
-            .jsonPath("$.coins[0].ticker").isEqualTo("KRW-ETH")
+            .jsonPath("$.coins.length()").isEqualTo(2)
+            .jsonPath("$.coins[?(@.ticker == 'KRW-BTC')].price").isEqualTo(110.0)
+    }
+
+    @Test
+    fun `DB 가 죽어도 메모리 시세로 응답한다`() {
+        arrangeBoth()
+        every { repo.findRecent("UPBIT", any(), any()) } returns Flux.error(RuntimeException("db down"))
+
+        client.get().uri("/api/watchlist").exchange()
+            .expectStatus().isOk
+            .expectBody().jsonPath("$.coins.length()").isEqualTo(2)
     }
 }

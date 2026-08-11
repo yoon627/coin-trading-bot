@@ -8,6 +8,7 @@ import com.trading.bot.persistence.entity.MarketTickerEntity
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
 import com.trading.common.domain.NormalizedTicker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
@@ -49,8 +50,15 @@ class WatchlistController(
                 // 낡은 값으로 1시간 변화율을 만들지 않는 것은 아래 기준봉 조건이 맡는다.
                 // 더 신선한 쪽을 고르기 위해 메모리·DB 중 나중 관측을 쓴다.
                 val fromMemory = marketDataStore.getLatestTicker(Exchange.UPBIT, normalized)?.toView()
-                val fromDb = marketTickerRepository.findRecent(EXCHANGE, normalized, 1)
-                    .next().awaitSingleOrNull()?.toView()
+                // DB 실패가 메모리 시세까지 날리면 안 된다 — WS 는 멀쩡한데 종목이 사라진다.
+                val fromDb = try {
+                    marketTickerRepository.findRecent(EXCHANGE, normalized, 1)
+                        .next().awaitSingleOrNull()?.toView()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
                 val latest = listOfNotNull(fromMemory, fromDb).maxByOrNull { it.at }
                     ?: return@mapNotNull null
 
@@ -59,9 +67,16 @@ class WatchlistController(
                 // 구 REST 수집(5분 주기)은 거래량과 무관하게 기록했으므로 그대로 두면 회귀다.
                 // 캔들은 60초 REST 폴링이라 거래량과 무관하게 채워진다([[marketdata-pipeline]]).
                 // 창의 첫 봉(가장 오래된 것)의 종가가 1시간 전 가격이다.
-                val baseline = marketCandleRepository
-                    .findOldestInRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
-                    .awaitSingleOrNull()
+                // 기준봉은 change_1h 에만 쓰인다 — 실패하면 그 필드만 비우고 나머지는 반환한다.
+                val baseline = try {
+                    marketCandleRepository
+                        .findOldestInRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
+                        .awaitSingleOrNull()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
                 // 재시작·수집 공백 직후에는 창의 첫 봉이 사실상 현재 봉일 수 있다. 그걸로
                 // 계산하면 1시간 변화율이 아니다 — 충분히 과거의 봉일 때만 기준으로 삼는다.
                 val hourChange = baseline
