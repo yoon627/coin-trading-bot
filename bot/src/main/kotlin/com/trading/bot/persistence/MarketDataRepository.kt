@@ -11,8 +11,11 @@ import java.time.Instant
 
 interface MarketTickerRepository : ReactiveCrudRepository<MarketTickerEntity, Long> {
 
-    @Query("SELECT * FROM market_tickers WHERE exchange = :exchange AND market = :market ORDER BY recorded_at DESC LIMIT :limit")
+    // recorded_at 은 WS 타임스탬프(ms)라 같은 시각의 행이 생길 수 있다 — id 로 tie-break 하지
+    // 않으면 "가장 최신" 이 호출마다 달라진다.
+    @Query("SELECT * FROM market_tickers WHERE exchange = :exchange AND market = :market ORDER BY recorded_at DESC, id DESC LIMIT :limit")
     fun findRecent(exchange: String, market: String, limit: Int): Flux<MarketTickerEntity>
+
 
     @Query("DELETE FROM market_tickers WHERE recorded_at < :before")
     fun deleteOlderThan(before: Instant): Mono<Long>
@@ -34,6 +37,17 @@ interface MarketCandleRepository : ReactiveCrudRepository<MarketCandleEntity, Lo
         ORDER BY open_time ASC
     """)
     fun findByTimeRange(exchange: String, market: String, intervalMinutes: Int, from: Instant, to: Instant): Flux<MarketCandleEntity>
+
+    // 시간창의 첫 봉만 필요할 때. Flux 를 받아 next() 하면 SQL 에는 LIMIT 이 걸리지 않아
+    // 1시간치(60행)를 그대로 읽어온다.
+    @Query("""
+        SELECT * FROM market_candles
+        WHERE exchange = :exchange AND market = :market AND interval_minutes = :intervalMinutes
+        AND open_time BETWEEN :from AND :to
+        ORDER BY open_time ASC
+        LIMIT 1
+    """)
+    fun findOldestInRange(exchange: String, market: String, intervalMinutes: Int, from: Instant, to: Instant): Mono<MarketCandleEntity>
 
     // 멱등 저장: 같은 (exchange, market, interval, open_time) 재수집 시 INSERT 대신 갱신
     // → 폴링 drift 로 인한 UNIQUE 위반 침묵/미반영 제거.
