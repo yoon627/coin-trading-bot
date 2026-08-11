@@ -52,7 +52,7 @@ coin-trading-bot/
 ├── common/                          # 공유 도메인 + 인디케이터 + 스윙 전략
 │   └── src/main/kotlin/com/trading/common/
 │       ├── domain/                  # NormalizedCandle, NormalizedTicker, Exchange, MarketPair
-│       └── strategy/                # Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + 스윙 전략 7개
+│       └── strategy/                # Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + 스윙 전략 9개
 │                                    #   (@Bean 등록은 :bot/config/StrategyConfig)
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
@@ -75,7 +75,7 @@ coin-trading-bot/
 └── perf/                            # k6 부하 테스트
 ```
 
-> 스윙 전략 7개(`VolatilityBreakout`, `RsiBounce`, `GoldenCross`, `MacdCross`, `BollingerBounce`, `MeanReversion`, `CombinedStrategy`)와 `TradingStrategy` 인터페이스는 `:common`에 거주하며 백테스트에도 그대로 재사용된다.
+> 스윙 전략 9개(`VolatilityBreakout`, `RsiBounce`, `GoldenCross`, `MacdCross`, `BollingerBounce`, `MeanReversion`, `CombinedStrategy`, `KneeReversal`, `KneePullback`)와 `TradingStrategy` 인터페이스는 `:common`에 거주하며 백테스트에도 그대로 재사용된다.
 
 ---
 
@@ -93,7 +93,7 @@ coin-trading-bot/
 
 시간봉/일봉 기준 기술적 지표로 매매. 보유 기간 수시간~수일. 사용자별 종목/전략은 `bot_configs`에 저장.
 
-**스윙 전략 (7개):**
+**스윙 전략 (9개):**
 | 전략 | 설명 |
 |------|------|
 | VolatilityBreakout | 래리 윌리엄스 변동성 돌파 (전일 범위 × K) |
@@ -103,6 +103,12 @@ coin-trading-bot/
 | BollingerBounce | 볼린저 밴드 하단 반등 |
 | MeanReversion | 평균 회귀 (MA20 대비 -3% + 낮은 변동성) |
 | CombinedStrategy | 변동성 돌파 + 추세 + RSI 복합 |
+| KneeReversal | 무릎 매수 — 40봉 고점 대비 15%+ 하락 후 20봉 저점 대비 3~12% 반등 |
+| KneePullback | 무릎 매수 — MA20 > MA40 추세에서 MA20 부근 눌림 후 반등 양봉 |
+
+`Knee*` 두 전략은 `ShoulderExit`(과열 RSI 꺾임 / 볼린저 상단 복귀)로 `shouldSell`을 override 한다 —
+기본 데드크로스 대신 "어깨"에서 조기 이탈하는 것이 목적이다. 단 차트 청산은 `chartExitEnabled` 가 켜져
+있을 때만 평가되고 `maxHoldDays=1`이면 보유가 1거래일로 잘리므로, 스윙 의도로 쓰려면 두 값을 함께 조정해야 한다.
 
 **리스크 관리:** 익절 +2% / 손절 -5% / 트레일링 스탑 고점 대비 -2% / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋. 50일 MA 아래 매수 차단은 **백테스트 전용**(`useMarketFilter` opt-in, 기본 off)이며 라이브 봇 매수 경로에는 적용되지 않는다.
 
@@ -229,9 +235,9 @@ bot_configs
 
 1. **단일 JVM in-process** — 시세 수집·매매·API를 한 앱에서 처리, 메시지 버스 불필요
 2. **멀티모듈 Gradle** — common(공유 도메인/전략) / bot(앱) 관심사 분리
-3. **전략 패턴** — `TradingStrategy` 인터페이스 + 스윙 전략 7개
+3. **전략 패턴** — `TradingStrategy` 인터페이스 + 스윙 전략 9개
 4. **리액티브 아키텍처** — WebFlux + Coroutines + R2DBC 논블로킹 I/O
 5. **멀티 타임프레임** — 캔들을 자동 집계하여 모든 타임프레임 지원
 6. **저장 시 암호화** — AES-GCM으로 DB 내 Upbit API 키 보호
 7. **멀티유저** — 사용자별 독립 엔진 + API 키 + 종목/전략 설정
-8. **리서치-라이브 공유** — 스윙 전략 7개를 `:common`에 두어 라이브/백테스트 양쪽에서 재사용
+8. **리서치-라이브 공유** — 스윙 전략 9개를 `:common`에 두어 라이브/백테스트 양쪽에서 재사용

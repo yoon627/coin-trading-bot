@@ -98,4 +98,50 @@ class IndicatorsTest {
         }
         assertFalse(Indicators.isMaUptrend(candles, 5, 20))
     }
+
+    @Test
+    fun `lowestLow returns the lowest low within the recent period`() {
+        val candles = listOf(
+            candle(0.0, 0.0, 95.0, 0.0),
+            candle(0.0, 0.0, 90.0, 0.0),
+            candle(0.0, 0.0, 85.0, 0.0),
+            candle(0.0, 0.0, 80.0, 0.0), // period 3 이면 제외되는 더 낮은 저가
+        )
+        assertEquals(85.0, Indicators.lowestLow(candles, 3), 0.001)
+        assertEquals(80.0, Indicators.lowestLow(candles, 4), 0.001)
+    }
+
+    @Test
+    fun `lowestLow returns 0 with insufficient data`() {
+        val candles = listOf(candle(0.0, 0.0, 95.0, 0.0))
+        assertEquals(0.0, Indicators.lowestLow(candles, 5))
+    }
+
+    @Test
+    fun `highestHigh returns the highest high within the recent period`() {
+        val candles = listOf(
+            candle(0.0, 105.0, 0.0, 0.0),
+            candle(0.0, 110.0, 0.0, 0.0),
+            candle(0.0, 115.0, 0.0, 0.0),
+            candle(0.0, 120.0, 0.0, 0.0), // period 3 이면 제외되는 더 높은 고가
+        )
+        assertEquals(115.0, Indicators.highestHigh(candles, 3), 0.001)
+        assertEquals(120.0, Indicators.highestHigh(candles, 4), 0.001)
+    }
+
+    @Test
+    fun `highestHigh returns 0 with insufficient data`() {
+        val candles = listOf(candle(0.0, 105.0, 0.0, 0.0))
+        assertEquals(0.0, Indicators.highestHigh(candles, 5))
+    }
+
+    @Test
+    fun `lowestLow and highestHigh reject non-positive period`() {
+        // 이 가드가 없으면 take(0).minOf {} 가 NoSuchElementException 을 던진다.
+        val candles = listOf(candle(100.0, 105.0, 95.0, 100.0))
+        assertEquals(0.0, Indicators.lowestLow(candles, 0))
+        assertEquals(0.0, Indicators.highestHigh(candles, 0))
+        assertEquals(0.0, Indicators.lowestLow(candles, -1))
+        assertEquals(0.0, Indicators.highestHigh(candles, -1))
+    }
 }

@@ -140,6 +140,12 @@ coin-trading-bot/
 | `bollinger_bounce` | 볼린저 하단 밴드 부근 반등과 RSI 조건 결합 |
 | `macd_cross` | MACD가 signal을 상향 돌파하고 histogram이 양수 |
 | `mean_reversion` | MA20 대비 하락, 변동성 및 RSI 회복 조건 결합 |
+| `knee_reversal` | 40봉 고점 대비 15% 이상 하락 후, 20봉 저점 대비 3~12% 반등 구간에서 진입 |
+| `knee_pullback` | MA20 > MA40 상승 추세에서 MA20 부근까지 눌린 뒤 반등 양봉 |
+
+> `knee_*` 전략은 청산도 함께 정의한다(과열 RSI 꺾임 또는 볼린저 상단 복귀 — "어깨"). 다만 차트 청산은
+> `TRADING_CHART_EXIT_ENABLED` 가 켜져 있을 때만 평가되고, `TRADING_MAX_HOLD_DAYS` 가 1이면 다음 거래일
+> 09:00에 강제 청산되므로 스윙 보유를 의도한다면 두 값을 함께 조정해야 한다.
 
 ### 기본 리스크 관리
 
