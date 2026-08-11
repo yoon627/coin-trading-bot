@@ -9,7 +9,7 @@
 - [[architecture-overview]] — 단일 Spring Boot 프로세스 안의 봇·API·시세수집, 모듈 2개
 - [[trading-engine-loop]] — `processTicker` 게이트 순서, 청산 우선순위, 기본 리스크 파라미터
 - [[exit-gates]] — 손절·트레일링·익절·차트청산·보유상한의 판정식과 비자명한 지점
-- [[swing-strategies]] — `TradingStrategy` 인터페이스와 전략 7종, 기본 `combined` 의 3조건
+- [[swing-strategies]] — `TradingStrategy` 인터페이스와 전략 9종(무릎 매수 2종 포함), 기본 `combined` 의 3조건
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집, `MarketDataStore`, half-open 워치독
 - [[kis-stock-trading-flow]] — KIS 국내주식 봇의 시작·시세·신호·포지션 사이클
 - [[kis-order-lifecycle]] — KIS 수동·자동 주문의 검증·WAL·API 송신·체결 reconcile
