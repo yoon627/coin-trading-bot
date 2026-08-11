@@ -1,6 +1,6 @@
 ---
 title: dead-path-cleanup-rest — watchlist 를 market_tickers 로 전환하고 price_snapshots 수집 제거
-status: in_progress
+status: done
 started: 2026-08-05
 updated: 2026-08-05
 ---
@@ -16,6 +16,7 @@ updated: 2026-08-05
 - 2026-08-05: Explore 완료. 아래 Decisions 의 사실을 코드로 확인.
 - 2026-08-05: **함정 발견 — 테스트가 잡았다.** `market_tickers.market` 은 정규화 형식(`BTC/KRW`)인데(`UpbitMarketFeed.kt:182` 가 `MarketPair.normalize` 를 거쳐 저장) watchlist 설정은 Upbit 형식(`KRW-BTC`)이다. 조회 시 변환하지 않으면 **에러 없이 항상 빈 결과**가 된다. parity 테스트를 먼저 써둔 덕에 구현 직후 잡혔다.
 - 2026-08-05: 구현 완료 — `findByTimeRange` 신설, `WatchlistController` 전환(정규화 변환 포함), per-market 샘플링, `PriceCollector`·`PriceSnapshotRepository`·`PriceSnapshotEntity` 삭제. wiki `marketdata-pipeline` 에 정규화 함정·샘플링 변경 적립.
+- 2026-08-12: PR #93 머지(main `dd0783d`). pre-push 13차까지 전량 처분(13차만 wontfix — 구 구현에도 있던 근사라 회귀 아님), 607 tests green.
 - 2026-08-05: codex code-review(high) **P0 0** / P1 1 / P2 3 / P3 1 → 전량 처분.
 - 2026-08-06: **pre-push 3차 P2 2건** — 폴백 추가가 "관측 1건인데 변화율 계산" 경로를 새로 만들었다(같은 행이 latest 이자 oldest). 시각 비교로 구분하고 `findRecent` tie-breaker 추가. 602 tests green.
 - 2026-08-06: **pre-push 2차에서 또 P1** — 메모리만 보면 재시작 직후 종목이 빠지고(WS `isOnlyRealtime`), 가격 무변동 시 `change_1h` 가 `null` 이 되는 회귀도 있었다. DB 폴백 추가 + 조건 정정. 601 tests green.
@@ -23,7 +24,9 @@ updated: 2026-08-05
 
 # Next
 
-PR 생성·머지. 그 뒤 2단계(`V19__drop_price_snapshots.sql`)를 별도 작업으로.
+없음 — PR [#93](https://github.com/yoon627/coin-trading-bot/pull/93) 머지(main `dd0783d`).
+
+**후속(별도 작업)**: 2단계 `V19__drop_price_snapshots.sql`. 이번 배포가 안정된 뒤 진행하며, 그때 `PriceCollector` 삭제로 사라진 7일 정리 스케줄분(기존 행)도 테이블째 정리된다.
 
 # Decisions
 
