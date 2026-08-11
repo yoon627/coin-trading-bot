@@ -73,6 +73,16 @@ object Indicators {
         return shortMa < longMa && prevShortMa >= prevLongMa
     }
 
+    fun lowestLow(candles: List<Ohlc>, period: Int): Double {
+        if (period <= 0 || candles.size < period) return 0.0
+        return candles.take(period).minOf { it.low }
+    }
+
+    fun highestHigh(candles: List<Ohlc>, period: Int): Double {
+        if (period <= 0 || candles.size < period) return 0.0
+        return candles.take(period).maxOf { it.high }
+    }
+
     fun isMaUptrend(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
         if (candles.size < longPeriod) return false
         val shortMa = calculateMa(candles, shortPeriod)
