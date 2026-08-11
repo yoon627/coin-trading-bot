@@ -2,6 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.persistence.MarketCandleRepository
 import com.trading.bot.persistence.MarketTickerRepository
 import com.trading.bot.persistence.entity.MarketTickerEntity
 import com.trading.common.domain.Exchange
@@ -19,6 +20,7 @@ import java.time.ZoneId
 class WatchlistController(
     private val marketDataStore: MarketDataStore,
     private val marketTickerRepository: MarketTickerRepository,
+    private val marketCandleRepository: MarketCandleRepository,
     private val watchlistProperties: WatchlistProperties,
 ) {
     private val kst = ZoneId.of("Asia/Seoul")
@@ -46,17 +48,17 @@ class WatchlistController(
                         .next().awaitSingleOrNull()?.toView()
                     ?: return@mapNotNull null
 
-                // 1h 기준점만 DB 에서 1건 읽는다. 기존 구현은 창에 **2건 이상**일 때만 변화율을
-                // 냈으므로(`snapshots.size > 1`), 관측이 하나뿐이면 null 이어야 한다. 기준점이
-                // 현재값과 **같은 행**이면(메모리가 비어 DB 폴백을 탄 경우) 비교 대상이 없다.
-                // recorded_at 은 ms 라 서로 다른 관측이 같은 시각을 가질 수 있어 행 id 로 판정한다.
-                // 메모리에서 온 현재값은 id 가 없으므로 항상 다른 관측으로 본다.
-                val oldest = marketTickerRepository
-                    .findOldestInRange(EXCHANGE, normalized, oneHourAgo, now)
-                    .awaitSingleOrNull()
-                val hourChange = oldest
-                    ?.takeIf { it.price > 0 && (latest.sourceRowId == null || it.id != latest.sourceRowId) }
-                    ?.let { ((latest.price - it.price) / it.price) * 100.0 }
+                // 1h 기준점은 **1분봉**에서 얻는다. market_tickers 는 종목별 10 tick 마다만
+                // 저장돼 거래가 드문 종목은 1시간 창에 행이 0~1건뿐이라 변화율을 만들 수 없다 —
+                // 구 REST 수집(5분 주기)은 거래량과 무관하게 기록했으므로 그대로 두면 회귀다.
+                // 캔들은 60초 REST 폴링이라 거래량과 무관하게 채워진다([[marketdata-pipeline]]).
+                // 창의 첫 봉(가장 오래된 것)의 종가가 1시간 전 가격이다.
+                val baseline = marketCandleRepository
+                    .findByTimeRange(EXCHANGE, normalized, BASELINE_INTERVAL_MINUTES, oneHourAgo, now)
+                    .next().awaitSingleOrNull()
+                val hourChange = baseline?.closePrice
+                    ?.takeIf { it > 0 }
+                    ?.let { ((latest.price - it) / it) * 100.0 }
 
                 mapOf(
                     "ticker" to ticker,
@@ -84,8 +86,6 @@ class WatchlistController(
         val changeRate: Double,
         val quoteVolume: Double,
         val at: Instant,
-        /** DB 행에서 왔을 때의 식별자. 메모리 스냅샷이면 null. */
-        val sourceRowId: Long? = null,
     )
 
     private fun NormalizedTicker.toView() =
@@ -100,11 +100,13 @@ class WatchlistController(
         changeRate = changeRate24h ?: 0.0,
         quoteVolume = quoteVolume24h ?: 0.0,
         at = recordedAt,
-        sourceRowId = id,
     )
 
     private companion object {
         // watchlist 는 Upbit WS 경로 전용이다 — MarketDataIngestionService 가 같은 목록을 구독한다.
         const val EXCHANGE = "UPBIT"
+
+        // 1분봉 — 1시간 창의 첫 봉을 기준가로 쓴다.
+        const val BASELINE_INTERVAL_MINUTES = 1
     }
 }

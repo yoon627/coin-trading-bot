@@ -2,7 +2,9 @@ package com.trading.bot.api
 
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.persistence.MarketCandleRepository
 import com.trading.bot.persistence.MarketTickerRepository
+import com.trading.bot.persistence.entity.MarketCandleEntity
 import com.trading.bot.persistence.entity.MarketTickerEntity
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedTicker
@@ -23,8 +25,9 @@ class WatchlistControllerTest {
 
     private val store = mockk<MarketDataStore>()
     private val repo = mockk<MarketTickerRepository>()
+    private val candles = mockk<MarketCandleRepository>()
     private val props = WatchlistProperties("KRW-BTC,KRW-ETH")
-    private val controller = WatchlistController(store, repo, props)
+    private val controller = WatchlistController(store, repo, candles, props)
     private val client = WebTestClient.bindToController(controller).build()
 
     private val now = Instant.parse("2026-08-05T00:00:00Z") // KST 09:00
@@ -44,18 +47,28 @@ class WatchlistControllerTest {
         id = id, exchange = "UPBIT", market = market, price = price, recordedAt = now.minusSeconds(3000),
     )
 
+    private fun candle(market: String, close: Double) = MarketCandleEntity(
+        exchange = "UPBIT", market = market, intervalMinutes = 1,
+        openPrice = close, highPrice = close, lowPrice = close, closePrice = close,
+        volume = 1.0, openTime = now.minusSeconds(3600), closeTime = now.minusSeconds(3540),
+    )
+
+    private fun noBaseline() {
+        every { candles.findByTimeRange("UPBIT", any(), 1, any(), any()) } returns Flux.empty()
+    }
+
     /** 두 종목 모두 메모리에 있고, ETH 는 1h 기준점이 없는 기본 상태. */
     private fun arrangeBoth(btcPrice: Double = 110.0, ethPrice: Double = 200.0) {
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns snapshot("BTC/KRW", btcPrice)
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns snapshot("ETH/KRW", ethPrice)
-        every { repo.findOldestInRange("UPBIT", "ETH/KRW", any(), any()) } returns Mono.empty()
+        noBaseline()
     }
 
     @Test
     fun `응답 키와 값이 기존 계약을 유지한다`() {
         arrangeBoth()
-        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns
-            Mono.just(row("BTC/KRW", 100.0))
+        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Flux.just(candle("BTC/KRW", 100.0))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -79,7 +92,7 @@ class WatchlistControllerTest {
             snapshot("BTC/KRW", 110.0).copy(quoteVolume24h = 999.0) // 정렬 [0] 고정
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns
             snapshot("ETH/KRW", 200.0).copy(quoteVolume24h = 10.0)
-        every { repo.findOldestInRange("UPBIT", any(), any(), any()) } returns Mono.empty()
+        noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -99,7 +112,7 @@ class WatchlistControllerTest {
         every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns
             Flux.just(row("BTC/KRW", 77.0).copy(quoteVolume24h = 5.0))
         every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
-        every { repo.findOldestInRange("UPBIT", any(), any(), any()) } returns Mono.empty()
+        noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -114,7 +127,7 @@ class WatchlistControllerTest {
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns snapshot("BTC/KRW", 100.0)
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
         every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
-        every { repo.findOldestInRange("UPBIT", any(), any(), any()) } returns Mono.empty()
+        noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -127,8 +140,8 @@ class WatchlistControllerTest {
     fun `1시간 전과 가격이 같으면 change_1h 는 0 이다`() {
         // null 이 아니다 — 기존 구현은 창에 2건 이상이면 변화가 없어도 0.0 을 냈다.
         arrangeBoth(btcPrice = 100.0)
-        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns
-            Mono.just(row("BTC/KRW", 100.0))
+        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Flux.just(candle("BTC/KRW", 100.0))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -136,35 +149,31 @@ class WatchlistControllerTest {
     }
 
     @Test
-    fun `기준점이 현재값과 같은 관측이면 change_1h 는 null 이다`() {
-        // 메모리가 비어 DB 폴백을 타면 같은 행이 latest 이자 oldest 가 될 수 있다. 관측이
-        // 하나뿐인 것이므로 변화율을 만들면 안 된다(기존 `snapshots.size > 1` 조건과 동일).
-        val onlyRow = row("BTC/KRW", 100.0)
-        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns null
-        every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns null
-        every { repo.findRecent("UPBIT", "BTC/KRW", 1) } returns Flux.just(onlyRow)
-        every { repo.findRecent("UPBIT", "ETH/KRW", 1) } returns Flux.empty()
-        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns Mono.just(onlyRow)
-        every { repo.findOldestInRange("UPBIT", "ETH/KRW", any(), any()) } returns Mono.empty()
+    fun `거래가 드문 종목도 1h 변화율을 얻는다`() {
+        // 이 작업의 핵심 회귀 방어. ticker 저장은 종목별 10 tick 샘플링이라 조용한 종목은
+        // 1시간 창에 행이 0~1건뿐이다. 캔들은 60초 REST 폴링이라 거래량과 무관하게 채워지므로
+        // 기준가를 거기서 얻는다 — 구 REST 수집(5분 주기)이 제공하던 값을 잃지 않는다.
+        arrangeBoth(btcPrice = 110.0)
+        every { repo.findRecent("UPBIT", any(), any()) } returns Flux.empty() // ticker 이력 없음
+        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Flux.just(candle("BTC/KRW", 100.0))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
-            .expectBody()
-            .jsonPath("$.coins[0].price").isEqualTo(100.0)
-            .jsonPath("$.coins[0].change_1h").doesNotExist()
+            .expectBody().jsonPath("$.coins[0].change_1h").isEqualTo(10.0)
     }
 
     @Test
     fun `조회 키를 정규화 형식으로 변환해 넘긴다`() {
         // 변환을 빠뜨리면 에러 없이 항상 빈 결과가 나온다(무증상). 호출 인자를 직접 고정한다.
         arrangeBoth()
-        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns Mono.empty()
+        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns Flux.empty()
 
         client.get().uri("/api/watchlist").exchange().expectStatus().isOk
 
         verify { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") }
-        verify { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) }
-        verify(exactly = 0) { repo.findOldestInRange("UPBIT", "KRW-BTC", any(), any()) }
+        verify { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) }
+        verify(exactly = 0) { candles.findByTimeRange("UPBIT", "KRW-BTC", 1, any(), any()) }
     }
 
     @Test
@@ -173,7 +182,7 @@ class WatchlistControllerTest {
             snapshot("BTC/KRW", 100.0).copy(quoteVolume24h = 10.0)
         every { store.getLatestTicker(Exchange.UPBIT, "ETH/KRW") } returns
             snapshot("ETH/KRW", 200.0).copy(quoteVolume24h = 999.0)
-        every { repo.findOldestInRange("UPBIT", any(), any(), any()) } returns Mono.empty()
+        noBaseline()
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
@@ -185,8 +194,8 @@ class WatchlistControllerTest {
     @Test
     fun `기준점 조회가 실패해도 나머지 종목을 반환한다`() {
         arrangeBoth()
-        every { repo.findOldestInRange("UPBIT", "BTC/KRW", any(), any()) } returns
-            Mono.error(RuntimeException("db down"))
+        every { candles.findByTimeRange("UPBIT", "BTC/KRW", 1, any(), any()) } returns
+            Flux.error(RuntimeException("db down"))
 
         client.get().uri("/api/watchlist").exchange()
             .expectStatus().isOk
