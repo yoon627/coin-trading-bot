@@ -1,10 +1,10 @@
 ---
-title: DB 스키마 — Flyway V1~V18 와 Upbit·KIS 핵심 테이블
+title: DB 스키마 — Flyway V1~V19 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-08-02
+updated: 2026-08-19
 claim_state: current
-verified: 2026-08-02 — bot/src/main/resources/db/migration/ V1~V18 및 KIS persistence 코드 실측
+verified: 2026-08-19 — V19 를 실제 Postgres 16 에 V1~V19 순차 적용해 확인(price_snapshots·인덱스 소멸, 나머지 테이블 보존)
 sources:
   - bot/src/main/resources/db/migration/
   - PROJECT_ANALYSIS.md
@@ -13,11 +13,11 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V18** 이다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V19** 이다.
 
 | 버전 | 내용 |
 |---|---|
-| V1~V9 | `trade_records`, `users`, `bot_state`, public profile, discord webhook, `price_snapshots`, admin role, 인덱스 |
+| V1~V9 | `trade_records`, `users`, `bot_state`, public profile, discord webhook, `price_snapshots`(V19 에서 제거), admin role, 인덱스 |
 | V10 | `market_tickers`, `market_candles` — 시계열 시세 ([[marketdata-pipeline]]) |
 | V11 | `trade_executions`, `positions`, `strategy_signals` |
 | V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정 |
@@ -27,6 +27,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V16 | 사용자별 KIS 키·계좌번호·모의투자 여부(`users.kis_*`) |
 | V17 | `bot_state` 거래소별 분리 + KIS WAL 활성 unique key에 `side` 추가 |
 | V18 | KIS 포지션 메타데이터(`stock_position_state`) durable snapshot |
+| V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다([[marketdata-pipeline]]) |
 
 다음 마이그레이션 번호를 정하는 규칙은 [[migration-numbering]] 에 있다 — 미머지 브랜치가 번호를 선점하는 문제가 실제로 있었다.
 

@@ -2,9 +2,9 @@
 title: 경량화(rightsizing) — 왜 collector·Kafka·ML 이 없는가
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-19
 claim_state: current
-verified: 2026-07-28 — settings.gradle.kts(모듈 2개), MarketDataIngestionService.kt:33-37 주석, CLAUDE.md
+verified: 2026-08-19 — price_snapshots 제거(V19) 반영
 sources:
   - CLAUDE.md
   - PROJECT_ANALYSIS.md
@@ -24,7 +24,7 @@ sources:
 ## 남은 흔적을 만나면
 
 - 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다.
-- `price_snapshots` 테이블처럼 소비자 없이 남은 저장 경로가 있다([[persistence-schema]]). 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
+- 소비자 없이 남은 저장 경로가 잔재로 남는다. `price_snapshots` 가 그랬고 V19 에서 제거됐다([[persistence-schema]]) — 경량화 직후가 아니라 한참 뒤에야 드러났다는 점이 교훈이다. 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
 - Redis 는 남아 있다 — `RateLimitFilter` 가 조건부로 쓴다.
 
 ## 되돌릴 때의 기준
