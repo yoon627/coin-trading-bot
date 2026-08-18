@@ -1,0 +1,14 @@
+-- dead code 정리 2단계: price_snapshots 는 소비자가 없다.
+--
+-- 1단계(PR #93)에서 watchlist API 를 MarketDataStore 메모리 스냅샷 + market_tickers/market_candles
+-- 로 옮기고 PriceCollector(5분 주기 REST 수집)를 삭제했다. 그 시점부터 이 테이블은 쓰기도 읽기도
+-- 없다. 롤백 안전을 위해 DROP 을 이 릴리스로 미뤘다 — 1단계 배포가 살아 있는 이미지로 롤백해도
+-- 없는 테이블을 조회하지 않도록.
+--
+-- 인덱스(idx_price_snapshots_captured_at_only, V9)는 테이블과 함께 삭제된다.
+--
+-- CASCADE 는 쓰지 않는다. 저장소의 V1~V18 에는 이 테이블을 참조하는 FK·view·trigger 가 없지만,
+-- 운영 DB 에서 수동 생성된 객체가 있다면 조용히 지우는 것보다 DROP 이 실패하는 편이 안전하다.
+-- DROP 은 AccessExclusiveLock 을 잡으므로, 장기 트랜잭션이 이 테이블을 물고 있으면 Flyway 가
+-- 대기해 기동 health check 가 늦어질 수 있다 — 이 테이블은 쓰는 쪽이 이미 없어 가능성은 낮다.
+DROP TABLE IF EXISTS price_snapshots;
