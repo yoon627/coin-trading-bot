@@ -43,7 +43,8 @@ class KneePullback : TradingStrategy {
         if (currentPrice <= candles[1].tradePrice) return false
         if (currentPrice <= candles[0].openingPrice) return false
 
-        return Indicators.calculateRsi(candles, RSI_PERIOD) in HEALTHY_RSI
+        // RSI 를 고정 길이로 자르는 이유는 KneeReversal 과 같다 — window 길이 의존성 제거.
+        return Indicators.calculateRsi(candles.take(TREND_LONG), RSI_PERIOD) in HEALTHY_RSI
     }
 
     // 어깨 청산 — candles 종가 기반(currentPrice 미사용). 판정식은 ShoulderExit 참조.

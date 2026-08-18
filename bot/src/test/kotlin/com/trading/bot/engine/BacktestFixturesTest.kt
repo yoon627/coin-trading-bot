@@ -1,0 +1,67 @@
+package com.trading.bot.engine
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+
+/**
+ * fixture 자체의 무결성을 고정한다.
+ *
+ * 특히 **정렬 방향**이 중요하다 — 재수집이 오름차순으로 이뤄지면 [BacktestFixtures.slice] 가 예외 없이
+ * 정반대 구간을 잘라내고, 백테는 조용히 잘못된 기간의 수치를 낸다.
+ */
+class BacktestFixturesTest {
+
+    @Test
+    fun `every market fixture has the expected shape`() {
+        for (market in BacktestFixtures.MARKETS) {
+            val candles = BacktestFixtures.load(market)
+
+            assertEquals(200, candles.size, "$market: 200봉이 아니다")
+            assertTrue(candles.all { it.market == market }, "$market: 다른 마켓 캔들이 섞였다")
+            assertTrue(
+                candles.all { it.openingPrice > 0 && it.highPrice > 0 && it.lowPrice > 0 && it.tradePrice > 0 },
+                "$market: 0 이하 가격이 있다",
+            )
+            assertTrue(
+                candles.all { it.highPrice >= maxOf(it.openingPrice, it.tradePrice) },
+                "$market: 고가가 시/종가보다 낮다",
+            )
+            assertTrue(
+                candles.all { it.lowPrice <= minOf(it.openingPrice, it.tradePrice) },
+                "$market: 저가가 시/종가보다 높다",
+            )
+        }
+    }
+
+    @Test
+    fun `fixtures are ordered newest first`() {
+        for (market in BacktestFixtures.MARKETS) {
+            val dates = BacktestFixtures.load(market).map { it.candleDateTimeKst }
+            assertEquals(
+                dates.sortedDescending(), dates,
+                "$market: 최신순이 아니다 — slice 가 반대 구간을 자르게 된다",
+            )
+        }
+    }
+
+    @Test
+    fun `slice keeps chronological order and picks the intended window`() {
+        val candles = BacktestFixtures.load("KRW-BTC")
+        val chronological = candles.reversed()
+
+        val head = BacktestFixtures.slice(candles, 0, 9)
+        assertEquals(10, head.size)
+        // 반환도 최신순이므로 마지막 원소가 시간순 첫 봉이어야 한다.
+        assertEquals(chronological[0].candleDateTimeKst, head.last().candleDateTimeKst)
+        assertEquals(chronological[9].candleDateTimeKst, head.first().candleDateTimeKst)
+
+        assertEquals(130, BacktestFixtures.inSample(candles).size)
+        assertEquals(120, BacktestFixtures.outOfSample(candles).size)
+        assertEquals(
+            chronological[80].candleDateTimeKst,
+            BacktestFixtures.outOfSample(candles).last().candleDateTimeKst,
+            "out-of-sample 이 원본 80번째 봉에서 시작하지 않는다",
+        )
+    }
+}
