@@ -15,6 +15,10 @@ class KneeReversal : TradingStrategy {
     private companion object {
         // 라이브 store 는 최대 60봉, 백테 window 는 정확히 50봉을 넘긴다 — 둘 다에서 유효한 상한.
         const val PEAK_WINDOW = 40
+
+        // 청산(ShoulderExit)이 직전 epoch 를 만들려고 한 봉을 더 쓰므로 진입도 같은 최소치를 요구한다.
+        // 40봉에서 진입만 되면 그 포지션의 차트 청산이 하루 동안 평가되지 못하는 비대칭이 생긴다.
+        const val MIN_CANDLES = PEAK_WINDOW + 1
         const val TROUGH_WINDOW = 20
         const val MIN_DECLINE = 0.15
         val KNEE_RANGE = 0.03..0.12
@@ -28,7 +32,7 @@ class KneeReversal : TradingStrategy {
         currentPrice: Double,
         config: TradingProperties,
     ): Boolean {
-        if (candles.size < PEAK_WINDOW) return false
+        if (candles.size < MIN_CANDLES) return false
 
         val peak = Indicators.highestHigh(candles, PEAK_WINDOW)
         val trough = Indicators.lowestLow(candles, TROUGH_WINDOW)
@@ -43,7 +47,9 @@ class KneeReversal : TradingStrategy {
         if ((currentPrice - trough) / trough !in KNEE_RANGE) return false
 
         if (currentPrice <= candles[1].tradePrice) return false
-        if (Indicators.calculateRsi(candles, RSI_PERIOD) !in REBOUND_RSI) return false
+        // RSI 는 리스트 전체로 Wilder smoothing 을 돌아 window 길이가 값에 들어간다. 다른 지표와 같은
+        // 40봉으로 잘라야 백테(50봉)와 라이브(21~60봉)가 같은 판정을 낸다.
+        if (Indicators.calculateRsi(candles.take(PEAK_WINDOW), RSI_PERIOD) !in REBOUND_RSI) return false
 
         val avgVolume = candles.take(VOLUME_WINDOW).map { it.candleAccTradeVolume }.average()
         return avgVolume <= 0 || candles[0].candleAccTradeVolume >= avgVolume
