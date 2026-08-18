@@ -30,7 +30,7 @@ class KneeReversalTest {
             "decline" to ((peak - trough) / peak >= 0.15),
             "knee" to ((current - trough) / trough in 0.03..0.12),
             "upbar" to (current > candles[1].tradePrice),
-            "rsi" to (Indicators.calculateRsi(candles, 14) in 35.0..55.0),
+            "rsi" to (Indicators.calculateRsi(candles.take(40), 14) in 35.0..55.0),
             "volume" to (candles[0].candleAccTradeVolume >= avgVolume),
         )
     }

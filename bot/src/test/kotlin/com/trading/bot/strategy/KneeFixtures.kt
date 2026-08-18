@@ -113,7 +113,7 @@ internal object KneeFixtures {
      * 단봉 급락으로는 Wilder smoothing 때문에 70 을 못 뚫어서, 조정을 여러 봉에 걸쳐 준다.
      */
     fun overheatFade(
-        bars: Int = 32,
+        bars: Int = 45,
         start: Double = 10_000.0,
         rise: Double = 0.012,
         fadeBars: Int = 3,
@@ -137,7 +137,7 @@ internal object KneeFixtures {
      * 횡보를 완전 평탄하게 두면 avgLoss=0 이라 RSI 가 100 이 되어 과열 조건까지 켜지므로 지그재그로 만든다.
      */
     fun bandReturn(
-        bars: Int = 30,
+        bars: Int = 45,
         base: Double = 10_000.0,
         zigzagPct: Double = 0.006,
         spikePct: Double = 0.08,
@@ -156,7 +156,7 @@ internal object KneeFixtures {
     }
 
     /** 스파이크 없는 지그재그 횡보 — 어깨 청산이 발동하지 않아야 하는 대조군. */
-    fun zigzagFlat(bars: Int = 30, base: Double = 10_000.0, zigzagPct: Double = 0.006) =
+    fun zigzagFlat(bars: Int = 45, base: Double = 10_000.0, zigzagPct: Double = 0.006) =
         bandReturn(bars = bars, base = base, zigzagPct = zigzagPct, spikePct = 0.0, backPct = 0.0)
 
     /**
