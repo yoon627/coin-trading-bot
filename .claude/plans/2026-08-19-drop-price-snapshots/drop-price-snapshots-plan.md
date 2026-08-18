@@ -1,6 +1,6 @@
 ---
 title: drop-price-snapshots — price_snapshots 테이블 제거 (dead-path-cleanup 2단계)
-status: in_progress
+status: done
 started: 2026-08-19
 updated: 2026-08-19
 ---
@@ -11,11 +11,14 @@ updated: 2026-08-19
 
 # Progress
 
+- 2026-08-19: PR #96 머지(main `3171145`). pre-push codex 는 한 번에 통과.
 - 2026-08-19: 1단계 배포(main `dd0783d`)가 3 job 전부 success 로 안정된 것을 확인하고 2단계 착수. 코드 참조 0건 확인(남은 언급은 주석 3곳뿐). V19 작성 후 **실제 Postgres 16 에 V1~V19 전체를 순서대로 적용해 검증** — 테이블·인덱스 소멸, 나머지 테이블 보존. 641 tests green.
 
 # Next
 
-PR 생성·머지 → 배포 관찰. 배포 후에는 `price_snapshots` 가 운영 DB 에서도 사라진다.
+없음 — PR [#96](https://github.com/yoon627/coin-trading-bot/pull/96) 머지(main `3171145`). 배포가 끝나면 운영 DB 에서도 테이블이 사라진다.
+
+이로써 이슈 #49 큐 C 가 완결됐다(C-1: PR #93 / C-2: PR #96).
 
 # Decisions
 
@@ -47,7 +50,7 @@ PR 생성·머지 → 배포 관찰. 배포 후에는 `price_snapshots` 가 운�
 - [x] **다른 테이블 보존**: `market_tickers`·`market_candles`·`trading_states`·`stock_position_state` 존재 확인
 - [x] **코드 참조 0**: `price_snapshots`/`PriceSnapshot` 참조가 주석 3곳과 이력 마이그레이션 2개뿐
 - [x] **빌드·테스트**: JDK 21 `./gradlew build` — 641 tests, 0 failures
-- [ ] **배포 반영**: 머지 후 CI/CD 관찰
+- [x] **머지**: PR #96 → main `3171145`. 배포 관찰은 별도(마이그레이션이 앱 기동 시 실행된다)
 
 # Review Disposition
 
