@@ -23,6 +23,8 @@ PR1(#95, main 머지 완료)의 `knee_reversal`·`knee_pullback` 에 대해 **�
   - 슬라이스는 **라이브 신호를 실제로 바꾼다**: |RSI(50봉 전체) − RSI(take40)| 평균 1.40 / p95 3.60 / **최대 9.08**
     (이 수치는 '변경 전후 차이'다. 변경이 없앤 '백테↔라이브 발산' 은 별개로 50봉↔60봉 최대 5.65)
 
+- 2026-08-19 (PR #98 생성) — code-reviewer(+codex) REQUEST CHANGES blocker 3건을 fix loop 1회차로 반영.
+  최종 검증 `:bot:test` 650건 failures=0, wiki 3종 clean, pre-push codex 통과.
 - 2026-08-19 (구현 완료) — RSI 슬라이스 적용 후 `KneeRsiWindowTest` 진입 불일치 3 → 0, 청산 2 → 0.
   `ShoulderExit.MIN_CANDLES` 41 상향에 따라 shouldSell fixture 봉수 30/32 → 45 로 조정.
   리뷰가 예고한 대로 `conditions()` 헬퍼를 슬라이스에 맞추자 `extended above ma20` 이 RED 가 됐고,
@@ -47,7 +49,10 @@ PR1(#95, main 머지 완료)의 `knee_reversal`·`knee_pullback` 에 대해 **�
 
 # Next
 
-code-reviewer 결과 반영 → 최종 검증 → 커밋·PR. 승격은 하지 않는다(위 판정).
+**PR #98 리뷰·머지 대기.** 승격은 하지 않는다(위 판정 — OOS 근거 없음).
+머지 후 후보: ① 배포 전 `knee_*` 사용자 유무 확인(라이브 신호가 바뀐다) ② Deferred 의 candle
+sufficiency 계약 통합(구조 이슈) ③ 상승장 표본 확보(일봉 API `to` 파라미터로 과거 구간 별도 수집).
+PR3(RiskProfile)은 이 결과상 우선순위가 낮아졌다 — 전략 자체에 승격 근거가 없다.
 
 # Decisions
 
