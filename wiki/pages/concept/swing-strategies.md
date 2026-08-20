@@ -2,9 +2,9 @@
 title: 스윙 전략 9종과 TradingStrategy 인터페이스
 category: concept
 created: 2026-07-28
-updated: 2026-08-11
+updated: 2026-08-19
 claim_state: current
-verified: 2026-08-11 — KneeReversal.kt·KneePullback.kt·ShoulderExit.kt 전문, BacktestEngine.kt:87-90(window 50봉), TradingEngine.kt:362-368(store 21~60봉), :bot:test 25건 통과
+verified: 2026-08-19 — RSI take(40) 슬라이스 적용 후 KneeRsiWindowTest 로 w50/w60/w41 판정 일치 확인(8마켓 fixture 1128 케이스), ShoulderExit.MIN_CANDLES 41 상향, :bot:test 통과
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/TradingStrategy.kt
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
@@ -45,6 +45,7 @@ interface TradingStrategy {
 | `knee_pullback` | 상승 추세 중 조정 | MA20 > MA40 + 현재가가 MA20 의 0.97~1.02배 + 직전봉 대비 상승 양봉 + RSI 40~60 |
 
 - **lookback 상한은 40봉**이다. 백테는 전략에 정확히 50봉을 넘기고([[backtest-engine]]), 라이브 store 경로는 21~60봉 가변이라 그보다 긴 lookback 은 백테·라이브에서 다르게 동작한다. 대신 라이브 warm-up 21~39봉 구간에서 두 전략은 **영구 false**다(예외 없음, 신호도 없음).
+- **RSI 도 `take(40)` 으로 잘라서 넘긴다.** `calculateRsi` 는 리스트 전체로 Wilder smoothing 을 돌아 **window 길이가 값에 들어간다** — 자르지 않으면 같은 시점인데 백테(50봉)와 라이브(21~60봉)의 판정이 갈린다 — 8마켓 1128 케이스 실측에서 진입 3건·청산 2건이 어긋났고, RSI 자체는 50봉↔60봉이 최대 5.65, 라이브 window 가 21~60봉으로 가변인 것까지 보면 최대 21.43 벌어진다. 자른 뒤에는 `max|ΔRSI| = 0.0000` 으로 완전히 일치한다. 같은 이유로 `ShoulderExit` 은 최소 **41봉**을 요구한다 — `drop(1)` 로 직전 epoch 를 만들기 때문에 40봉이면 그쪽이 39봉이 되어 어긋난다. 기존 7개 전략은 같은 성질을 갖지만 동작 변경을 피하려고 손대지 않았다.
 - **`ma5` 상향 전환을 반등 확인으로 쓰지 않는다.** `calculateMa` 가 단순평균이라 `ma5(t) > ma5(t−1)` 는 `close[0] > close[5]` 와 **정확히 동치**이고, 눌림목 국면과는 교집합이 거의 없다. 그래서 `close[0] > close[1]`(+양봉)로 판정한다.
 - 두 전략은 `ShoulderExit` 로 `shouldSell` 을 override 한다 — 과열 RSI 하향 돌파(70) 또는 볼린저 상단 이탈 후 복귀. 기본 데드크로스를 **OR 로 병합하지 않는** 이유는 조기 이탈이 목적이라 늦은 신호가 섞이면 의도가 사라지기 때문이다.
 - ⚠️ 어깨 청산은 `chartExitEnabled` 가 꺼져 있으면 호출되지 않고, `maxHoldDays=1` 이면 백테에서도 `atHoldLimit` 게이트에 막혀 CHART_EXIT 대신 TIME_EXIT 이 난다([[exit-gates]]). 즉 **기본 설정에서는 dead path** 다.
