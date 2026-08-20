@@ -19,15 +19,20 @@ object ShoulderExit {
     private const val BB_PERIOD = 20
     private const val BB_MULTIPLIER = 2.0
 
-    // 직전 epoch 지표까지 계산하므로 밴드 주기보다 한 봉 더 필요하다.
-    private const val MIN_CANDLES = BB_PERIOD + 1
+    // RSI 가 볼 봉 수. 리스트 전체를 쓰면 백테(50봉)와 라이브(21~60봉)의 값이 갈린다.
+    private const val RSI_WINDOW = 40
+
+    // 직전 epoch 도 RSI_WINDOW 만큼 확보해야 두 판정이 같은 길이를 본다 — 40봉이면 drop(1) 이 39봉이라
+    // 어긋난다. 이 상향으로 warm-up 21~40봉 구간에서는 차트 청산이 평가되지 않지만, 그 구간엔 무릎 진입
+    // 자체가 없다(진입이 40/41봉을 요구).
+    private const val MIN_CANDLES = RSI_WINDOW + 1
 
     fun isTriggered(candles: List<Ohlc>): Boolean {
         if (candles.size < MIN_CANDLES) return false
         val previous = candles.drop(1)
 
-        val rsiPrev = Indicators.calculateRsi(previous, RSI_PERIOD)
-        val rsiNow = Indicators.calculateRsi(candles, RSI_PERIOD)
+        val rsiPrev = Indicators.calculateRsi(previous.take(RSI_WINDOW), RSI_PERIOD)
+        val rsiNow = Indicators.calculateRsi(candles.take(RSI_WINDOW), RSI_PERIOD)
         if (rsiPrev >= OVERHEATED && rsiNow < OVERHEATED) return true
 
         // 밴드가 가격보다 빨리 확장되면 상승 중인 봉도 "상단 안으로 복귀"로 보인다. 하락 봉만 인정해야
