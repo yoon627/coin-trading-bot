@@ -26,7 +26,7 @@ class KneePullbackTest {
             "dip" to (current in shortMa * 0.97..shortMa * 1.02),
             "upbar" to (current > candles[1].tradePrice),
             "bull" to (current > candles[0].openingPrice),
-            "rsi" to (Indicators.calculateRsi(candles, 14) in 40.0..60.0),
+            "rsi" to (Indicators.calculateRsi(candles.take(40), 14) in 40.0..60.0),
         )
     }
 
@@ -52,10 +52,10 @@ class KneePullbackTest {
 
     @Test
     fun `does not buy when price is extended above ma20`() = runTest {
-        // 조정 없이 한 봉에 4% 올라 20일선 위로 이탈 — 눌린 적이 없으니 무릎이 아니다.
+        // 되밀림은 있지만 마지막 봉이 3.5% 튀어 20일선 위(1.079배)로 이탈한다 — 눌린 자리에서 산 게 아니다.
         assertRejectedOnlyBy(
             "dip",
-            KneeFixtures.pullback(rise = 0.002, dipBars = 1, dipPct = 0.0, reboundPct = 0.04, sawPct = 0.04, sawPeriod = 3),
+            KneeFixtures.pullback(rise = 0.0015, dipBars = 1, dipPct = 0.0, reboundPct = 0.035, sawPct = 0.07, sawPeriod = 2),
         )
     }
 
