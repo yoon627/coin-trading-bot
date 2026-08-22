@@ -22,11 +22,16 @@ updated: 2026-08-22
   P3 truncated 경계 — `# Review Disposition`). **P1 은 설계 가정 오류**라 그룹핑 기준을 수량 잔량으로 재구현했다.
   테스트 9종 → 12종, `./gradlew build` + esbuild 재검증 통과.
 
+- 2026-08-22: codex 3차 지적 중 P2(화면 건수) 수정, P1(요청수량 기록)은 기록 경로 기존 결함이라 **이슈 #105 로 분리**.
+  사용자 승인 하에 `CODEX_SKIP=1` 로 push, **PR #113** 생성. 커밋 5개.
+
 # Next
 
-화면 실제 렌더 확인(acceptance 9, 유일한 미충족 항목). 임시 하네스가 이미 있다:
-`python3 -m http.server 8899 --directory bot/src/main/resources/static` 후 `http://localhost:8899/_rt_harness.html`.
-확인이 끝나면 `bot/src/main/resources/static/_rt_harness.html` 를 **삭제**한다(커밋 대상 아님).
+1. **화면 실제 렌더 확인** (acceptance 9 — 유일한 미충족 항목). 하네스:
+   `python3 -m http.server 8899 --directory bot/src/main/resources/static` → `http://localhost:8899/_rt_harness.html`.
+   확인 후 `bot/src/main/resources/static/_rt_harness.html` 를 **삭제**한다(의도적으로 커밋에서 제외했다).
+2. 확인되면 PR #113 머지 → worktree·브랜치 정리(이 repo 는 머지 후 자동 정리 규약).
+3. 이어서 2차: SELL 행에 `entry_price`/`entry_at`/`pnl_amount` 기록해 수수료 차감된 정확한 손익 금액 제공(새 worktree).
 
 # Decisions
 
