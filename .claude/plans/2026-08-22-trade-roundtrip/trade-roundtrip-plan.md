@@ -143,7 +143,7 @@ babel-standalone 이 브라우저에서 트랜스파일하는 구조라 빌드 �
 
 # Deferred
 
-- **수동 매도가 체결량이 아니라 요청 수량을 기록한다** (codex P1 · 기록 경로 기존 결함 · `TradeExecutionService.kt:152-157`):
+- **수동 매도가 체결량이 아니라 요청 수량을 기록한다** — **이슈 #105 로 분리** (codex P1 · 기록 경로 기존 결함 · `TradeExecutionService.kt:152-157`):
   `executeSellVolume` 은 주문 후 체결을 확인하지 않고 요청한 `sellVolume` 을 그대로 `trade_records.volume` 에 넣는다
   (`recordOrder` 도 `orderUuid` 를 로깅·반환에만 쓴다). 엔진 경로(`PositionManager.completeBuy`)가 실제 잔고·체결량을
   쓰는 것과 다르다. 부분 체결·미체결이 나면 이 조회의 **잔량 계산이 조기에 0 에 도달해 아직 보유 중인 포지션이
