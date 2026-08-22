@@ -1,6 +1,7 @@
 package com.trading.bot.strategy
 
 import com.trading.bot.engine.BacktestFixtures
+import com.trading.bot.engine.BacktestFixtures.Regime
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.strategy.KneePullback
@@ -32,7 +33,7 @@ class KneeRsiWindowTest {
         var checked = 0
         val mismatches = mutableListOf<String>()
 
-        for ((market, candles) in BacktestFixtures.loadAll()) {
+        for (regime in Regime.entries) for ((market, candles) in BacktestFixtures.loadAll(regime)) {
             val chronological = candles.reversed()
             for (end in 59 until chronological.size) {
                 val w50 = window(chronological, end, 50)
@@ -62,7 +63,7 @@ class KneeRsiWindowTest {
     fun `shoulder exit does not depend on how many candles the caller passes`() {
         val mismatches = mutableListOf<String>()
 
-        for ((market, candles) in BacktestFixtures.loadAll()) {
+        for (regime in Regime.entries) for ((market, candles) in BacktestFixtures.loadAll(regime)) {
             val chronological = candles.reversed()
             for (end in 59 until chronological.size) {
                 // 41 은 ShoulderExit 이 두 epoch 를 모두 40봉으로 잡는 최소치.
