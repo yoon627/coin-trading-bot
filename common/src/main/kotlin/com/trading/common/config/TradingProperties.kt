@@ -32,6 +32,9 @@ data class TradingProperties(
     init {
         // 0 이하면 첫 실패에서 곧바로 halt 되어 모든 ticker 의 매수가 멈춘다 — 기동 시 걸러낸다.
         require(reconcileHaltThreshold >= 1) { "trading.reconcile-halt-threshold must be >= 1, got $reconcileHaltThreshold" }
+        // 0 이하면 tick 루프가 폭주하고, 막힌 매도 알림 임계(threshold × interval)도 0초가 되어
+        // 첫 reconcile 에서 즉시 발화한다(#55).
+        require(intervalSeconds >= 1) { "trading.interval-seconds must be >= 1, got $intervalSeconds" }
     }
 
     fun tickerList(): List<String> = tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
