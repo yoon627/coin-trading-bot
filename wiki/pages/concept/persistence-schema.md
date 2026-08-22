@@ -1,10 +1,10 @@
 ---
-title: DB 스키마 — Flyway V1~V19 와 Upbit·KIS 핵심 테이블
+title: DB 스키마 — Flyway V1~V20 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-08-19
+updated: 2026-08-22
 claim_state: current
-verified: 2026-08-19 — V19 를 실제 Postgres 16 에 V1~V19 순차 적용해 확인(price_snapshots·인덱스 소멸, 나머지 테이블 보존)
+verified: 2026-08-22 — V20 까지 실제 Postgres 16 에 순차 적용해 컬럼 타입·NOT NULL·default 확인
 sources:
   - bot/src/main/resources/db/migration/
   - PROJECT_ANALYSIS.md
@@ -13,7 +13,7 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V19** 이다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V20** 이다.
 
 | 버전 | 내용 |
 |---|---|
@@ -28,6 +28,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V17 | `bot_state` 거래소별 분리 + KIS WAL 활성 unique key에 `side` 추가 |
 | V18 | KIS 포지션 메타데이터(`stock_position_state`) durable snapshot |
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다([[marketdata-pipeline]]) |
+| V20 | `trading_states.pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림의 판정 기준을 카운터에서 경과시간으로 |
 
 다음 마이그레이션 번호를 정하는 규칙은 [[migration-numbering]] 에 있다 — 미머지 브랜치가 번호를 선점하는 문제가 실제로 있었다.
 
