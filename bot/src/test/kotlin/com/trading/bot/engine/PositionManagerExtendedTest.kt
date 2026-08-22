@@ -722,12 +722,15 @@ class PositionManagerExtendedTest {
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
         val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
         val state = TradingState("KRW-BTC", position = true, peakPrice = 52_000_000.0, peakPersistFailed = true)
+        state.markBought(50_000_000.0, 0.001, "macd_cross")
+        // 잔고를 주지 않으면 phantom(잔고 0) 경로로 빠져 실제 커밋을 타지 않는다.
+        coEvery { upbitClient.getAccounts() } returns
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "s1")
         coEvery { upbitClient.getOrder("s1") } returns
             Order(uuid = "s1", state = "done", executedVolume = "0.001")
-        state.markBought(50_000_000.0, 0.001, "macd_cross")
 
-        mgr.sell("KRW-BTC", state, 52_000_000.0, SellReason.TAKE_PROFIT)
+        assertNotNull(mgr.sell("KRW-BTC", state, 52_000_000.0, SellReason.TAKE_PROFIT))
 
         assertFalse(state.peakPersistFailed)
     }
