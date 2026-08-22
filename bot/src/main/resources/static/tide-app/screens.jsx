@@ -390,11 +390,16 @@ function OrdersPage({ user, setActive }) {
               </>}
             </span>
             <span>
-              {r.open ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>—</span> : <>
+              {r.open ? (
+                <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>
+                  {r.sell_count > 0 ? `부분 매도 ${r.sell_count}회 · 잔량 보유` : '—'}
+                </span>
+              ) : <>
                 <span className="num" style={{ display: 'block', fontSize: 11, color: 'var(--ink-500)' }}>
                   {(r.exit_at || '').toString().slice(0, 16).replace('T', ' ')}
                 </span>
                 <span className="num" style={{ fontWeight: 600 }}>{fmtKRW(r.exit_price)}</span>
+                {r.sell_count > 1 && <span style={{ fontSize: 10.5, color: 'var(--ink-500)' }}> · {r.sell_count}회 분할</span>}
               </>}
             </span>
             <span className="num" style={{ textAlign: 'right', fontWeight: 700, color: tone }}>

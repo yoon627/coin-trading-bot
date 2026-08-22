@@ -177,6 +177,82 @@ class TradeRoundTripTest {
     }
 
     /**
+     * 엔진 청산은 전량이지만 `ManualTradeController` 는 수량 지정 매도를 지원한다.
+     * SELL 하나를 곧 포지션 종료로 보면 첫 매도가 전체 매수액과 비교돼 손익이 틀리고 나머지는 고아가 된다.
+     */
+    @Test
+    fun `부분 매도 두 번으로 전량 청산되면 한 라운드트립이다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 10.0, reason = "MANUAL"),
+                rec("KRW-BTC", "SELL", 120.0, 6.0, "2026-08-01T15:00", pnlPercent = 20.0, reason = "TAKE_PROFIT"),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        val rt = rts[0]
+        assertFalse(rt.open)
+        assertFalse(rt.partial)
+        assertEquals(2, rt.sellCount)
+        // 손익은 매도 총액(440+720=1160) − 매수 총액(1000)
+        assertEquals(160.0, rt.pnlAmountGross)
+        // 매도 평균가 = 1160 / 10
+        assertEquals(116.0, rt.exitPrice)
+        // 수익률은 수량가중 평균 = (10×4 + 20×6) / 10
+        assertEquals(16.0, rt.pnlPercent)
+        // 마지막 매도 기준
+        assertEquals(LocalDateTime.parse("2026-08-01T15:00"), rt.exitAt)
+        assertEquals("TAKE_PROFIT", rt.reason)
+    }
+
+    @Test
+    fun `부분 매도 후 잔량이 남으면 아직 청산되지 않은 것이다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 10.0, "2026-08-01T10:00"),
+                rec("KRW-BTC", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 10.0, reason = "MANUAL"),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        val rt = rts[0]
+        assertTrue(rt.open)
+        assertEquals(1, rt.sellCount)
+        // 아직 확정 손익이 아니다
+        assertNull(rt.exitAt)
+        assertNull(rt.exitPrice)
+        assertNull(rt.pnlPercent)
+        assertNull(rt.pnlAmountGross)
+    }
+
+    /**
+     * 조회 상한으로 앞이 잘리면 남은 첫 BUY 가 분할 매수의 중간일 수 있다.
+     * 그때 평단·손익은 일부 매수만으로 계산된 값이라 정상처럼 보여선 안 된다.
+     */
+    @Test
+    fun `앞이 잘려 들어오면 가장 오래된 그룹은 partial 로 표시된다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 200.0, 1.0, "2026-08-01T11:00"),
+                rec("KRW-BTC", "SELL", 210.0, 1.0, "2026-08-01T12:00", pnlPercent = 5.0),
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-02T10:00"),
+                rec("KRW-BTC", "SELL", 130.0, 1.0, "2026-08-02T12:00", pnlPercent = 30.0),
+            ),
+            truncatedHead = true,
+        )
+
+        assertEquals(2, rts.size)
+        // 최신순이므로 마지막이 가장 오래된 그룹
+        val oldest = rts.last()
+        assertTrue(oldest.partial, "잘린 쪽 그룹은 매수가 누락됐을 수 있어 partial 이어야 한다")
+        assertNull(oldest.pnlAmountGross, "믿을 수 없는 매수액으로 손익을 계산하면 안 된다")
+        // 뒤따르는 그룹은 온전하다
+        assertFalse(rts.first().partial)
+        assertEquals(30.0, rts.first().pnlAmountGross)
+    }
+
+    /**
      * 프론트(`screens.jsx` OrdersPage)가 읽는 키와 실제 와이어 포맷이 어긋나면 화면이 조용히 빈다.
      * 앱은 Jackson SNAKE_CASE 전략(`application.yml`)을 쓰므로 그 변환 결과를 계약으로 고정한다.
      */
@@ -196,7 +272,7 @@ class TradeRoundTripTest {
 
         listOf(
             "ticker", "entry_at", "entry_price", "buy_count", "buy_amount", "buy_volume",
-            "exit_at", "exit_price", "sell_amount", "sell_volume",
+            "sell_count", "exit_at", "exit_price", "sell_amount", "sell_volume",
             "pnl_percent", "pnl_amount_gross", "holding_seconds", "reason", "strategy", "open", "partial",
         ).forEach { key ->
             assertTrue(json.contains("\"$key\""), "직렬화 JSON 에 키가 없다: $key — $json")

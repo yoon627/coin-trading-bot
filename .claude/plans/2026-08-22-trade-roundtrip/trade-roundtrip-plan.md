@@ -17,7 +17,10 @@ updated: 2026-08-22
 - 2026-08-22: TDD Red(미구현 심볼 참조로 컴파일 실패 확인) → 구현 → Green. 테스트 9종 통과, `./gradlew build` BUILD SUCCESSFUL.
   백엔드(`TradeRoundTrip.kt` 조립 + `findRecentAscending` + `GET /api/trades/roundtrips`), 프론트(OrdersPage 탭 구조) 완료.
   JSX 문법은 esbuild 파싱으로 검증, 필드명 계약은 직렬화 테스트로 고정. README API 표 갱신.
-  **화면 실제 렌더은 미검증** — 브라우저 접근 2회 실패(Blockers 참조).
+  **화면 실제 렌더은 미검증** — 브라우저 접근 실패(Blockers 참조).
+- 2026-08-22: codex pre-push 리뷰가 push 를 2회 차단, 지적 3건 전부 수정(P1 부분 매도 · P2 잘린 그룹 partial ·
+  P3 truncated 경계 — `# Review Disposition`). **P1 은 설계 가정 오류**라 그룹핑 기준을 수량 잔량으로 재구현했다.
+  테스트 9종 → 12종, `./gradlew build` + esbuild 재검증 통과.
 
 # Next
 
@@ -35,10 +38,17 @@ updated: 2026-08-22
 4. 화면(`screens.jsx` OrdersPage)은 시간/거래쌍/방향/가격/수량/총액/전략 7컬럼뿐 — DB에 있는 `pnl_percent`·`reason` 조차 안 보인다.
 5. 보유 기간은 1번 때문에 계산 불가.
 
-## 그룹핑이 성립하는 근거
+## 그룹핑 기준 — 수량 잔량 (2026-08-22 정정)
 
-매도는 **항상 전량 청산**(`TradingState.markSold` 가 `holdVolume=0`), 추가 매수는 평단에 합산.
-따라서 한 포지션 = `직전 SELL 이후의 BUY 여러 건` + `SELL 1건` 으로 결정적으로 묶인다. 부분 매도가 없어 모호성이 없다.
+~~매도는 항상 전량 청산이므로 `직전 SELL 이후의 BUY 들` + `SELL 1건` 으로 묶인다~~
+→ **틀렸다. 수량 잔량으로 판정하도록 변경** (이유: 이 전제는 **엔진 경로에만** 참이다.
+`ManualTradeController.kt:80-86` 의 수동 매도는 `sellVolume = volume` 으로 **수량 지정 매도**를 지원하고
+(`sell_all` 과 택일) 부분 매도마다 SELL 행이 남는다. SELL 하나를 곧 포지션 종료로 보면
+첫 매도가 전체 매수액과 비교돼 손익이 틀리고 나머지 매도는 고아 SELL 로 빠진다. codex pre-push P1).
+
+**현재 기준**: 한 포지션은 "매수를 누적하다가 매도 누적으로 **잔량이 0**(≤ `VOLUME_EPSILON`)이 될 때까지".
+부분 매도는 같은 포지션에 누적되고, 매도 평균가·수익률은 수량가중으로 합산한다.
+잔량이 남으면 `open=true` 이고 확정 손익(exit·pnl)을 채우지 않는다.
 
 ## SQL 아닌 Kotlin 순수 함수로 그룹핑 (이유: 테스트 가능성)
 
@@ -91,7 +101,11 @@ CTE+윈도우 함수 `@Query` 로 구현하면 검증할 방법이 없고 Postgr
 | 3 | 미청산 보유분이 `open=true` 로 표시 | 동 테스트 | ✅ 통과 |
 | 4 | 여러 티커가 교차 기록돼도 티커별로 정확히 분리 | 동 테스트 | ✅ 통과 |
 | 5 | 고아 SELL(선행 BUY 없음)이 크래시 없이 처리 | 동 테스트 (`partial=true`, 손익금액 null) | ✅ 통과 |
-| 6 | 전체 테스트 통과 | `./gradlew build` | ✅ BUILD SUCCESSFUL |
+| 5b | 수동 **부분 매도**가 한 포지션으로 누적 | 동 테스트 (4+6 분할 매도 → 1건, 가중평균 116/16.0%) | ✅ 통과 |
+| 5c | 부분 매도 후 잔량 보유는 미청산 | 동 테스트 (`open=true`, 확정손익 null) | ✅ 통과 |
+| 5d | 앞이 잘린 그룹은 partial 로 손익 비움 | 동 테스트 (`truncatedHead=true`) | ✅ 통과 |
+| 5e | truncated 경계 — 정확히 상한이면 잘린 것 아님 | `TradeHistoryControllerTest` 2건 | ✅ 통과 |
+| 6 | 전체 테스트 통과 | `./gradlew build` (테스트 12종) | ✅ BUILD SUCCESSFUL |
 | 7 | 타입체크 통과 | 위 build 에 포함 | ✅ BUILD SUCCESSFUL |
 | 8 | 프론트가 읽는 필드명과 와이어 포맷이 일치 | 직렬화 계약 테스트(17개 snake_case 키) | ✅ 통과 |
 | 9 | 화면에서 라운드트립 탭이 렌더 | 하네스 + 브라우저 육안 | ❌ **미검증** — 브라우저 접근 실패 |
@@ -113,6 +127,12 @@ babel-standalone 이 브라우저에서 트랜스파일하는 구조라 빌드 �
 
 # Review Disposition
 
+- **fix** — [codex pre-push P1] **부분 매도 미고려 (설계 가정 오류)**: 모든 SELL 을 포지션 종료로 처리해
+  수동 부분 매도 시 라운드트립·손익이 틀렸다. 수량 잔량 기반 판정으로 재구현(위 Decisions 정정).
+  테스트 2건 추가(분할 매도 전량청산 / 부분 매도 후 잔량 보유). DTO 에 `sellCount` 추가, 화면에도 표기.
+- **fix** — [codex pre-push P2] 앞이 잘린 그룹의 `partial` 누락: 조회 상한으로 분할 매수 중간이 잘리면
+  남은 첫 BUY 만으로 평단이 계산돼 정상처럼 보였다. `assembleRoundTrips(truncatedHead)` 로 각 티커의
+  가장 오래된 그룹을 `partial` 처리하고 손익 금액을 비운다. 테스트 1건 추가.
 - **fix** — [codex pre-push P3] `truncated` 경계 오류: `records.size >= MAX_SOURCE_RECORDS` 는 결과가
   *정확히* 상한일 때도 잘렸다고 표시했다. 상한+1 건을 받아 `> MAX` 로 판정하고 넘칠 때만 `takeLast(MAX)` 하도록 수정.
   회귀 방지 테스트 2건 추가(`TradeHistoryControllerTest`). 상수는 테스트 접근을 위해 `internal companion` 으로 노출.
