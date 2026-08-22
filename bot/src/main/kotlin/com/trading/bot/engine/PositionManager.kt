@@ -304,6 +304,9 @@ class PositionManager(
             record,
         )
         applyTransition(state)
+        // 이 커밋도 peakPrice 를 포함한 스냅샷을 저장한다 — 원본 dirty 를 남기면 매수 후에는
+        // 불필요한 재시도가, 매도 후에는 position=false 라 재시도 경로조차 못 타 영영 남는다(#54).
+        state.peakPersistFailed = false
         if (!recorded) return
         try {
             notifyTrade(record)
@@ -336,9 +339,19 @@ class PositionManager(
     }
 
     /** 메타(peakPrice/boughtToday/entryStrategy/halt 등) durable 반영. best-effort — 실패 시 다음 전이에서 재기록. */
+    /**
+     * 모든 durable 쓰기의 단일 통로. 저장되는 스냅샷에 `peakPrice` 가 포함되므로, 어느 경로로
+     * 저장했든 peak dirty 는 함께 해소된다 — 개별 호출자마다 해제하면 빠뜨린 경로에서 불필요한
+     * 재시도가 매 tick 돈다(#54).
+     */
+    private suspend fun upsertState(state: TradingState) {
+        tradingStateService.upsert(userId, state)
+        state.peakPersistFailed = false
+    }
+
     private suspend fun persist(state: TradingState) {
         try {
-            tradingStateService.upsert(userId, state)
+            upsertState(state)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -349,7 +362,7 @@ class PositionManager(
     /** pending durable 기록 — 실패 시 pendingPersistFailed 게이트로 신규 진입을 차단(#20 크래시 윈도우 방어). */
     private suspend fun persistPending(state: TradingState) {
         try {
-            tradingStateService.upsert(userId, state)
+            upsertState(state)
             state.pendingPersistFailed = false
         } catch (e: CancellationException) {
             throw e
@@ -362,8 +375,24 @@ class PositionManager(
     /** 메타 변경 후 durable 반영(best-effort) — 실패해도 다음 전이에서 재기록된다. */
     internal suspend fun persistState(state: TradingState) = persist(state)
 
+    /**
+     * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다음 tick 이 재시도하게 한다 —
+     * flush 가 갱신 tick 에만 걸리므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다(#54).
+     * 진입 게이트는 건드리지 않는다.
+     */
+    internal suspend fun persistPeak(state: TradingState) {
+        try {
+            upsertState(state)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            state.peakPersistFailed = true
+            log.warn("peak persist failed for {} — retry next tick: {}", state.ticker, e.message)
+        }
+    }
+
     /** 실패를 호출자에게 알려야 하는 durable 반영(halt 해제 등 사용자 응답이 걸린 경로). */
-    internal suspend fun persistStateOrThrow(state: TradingState) = tradingStateService.upsert(userId, state)
+    internal suspend fun persistStateOrThrow(state: TradingState) = upsertState(state)
 
     /** pending 기록 실패로 막힌 진입을 푸는 유일한 경로 — 성공해야 pendingPersistFailed 가 해제된다. */
     internal suspend fun retryPendingPersistIfNeeded(state: TradingState) {

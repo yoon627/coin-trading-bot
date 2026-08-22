@@ -660,6 +660,94 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `peak persist failure marks the state dirty so the next tick retries`() = runTest {
+        // 신고점 flush 는 갱신 tick 에만 걸린다. 그 1회가 실패한 뒤 하락장으로 돌아서면 다시
+        // 갱신될 일이 없어, 재시작 시 낮은 옛 peak 이 복원되고 트레일링이 안 걸린다(#54).
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>()
+        coEvery { stateService.upsert(any(), any()) } throws RuntimeException("db down")
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", position = true, peakPrice = 52_000_000.0)
+
+        mgr.persistPeak(state)
+
+        assertTrue(state.peakPersistFailed)
+    }
+
+    @Test
+    fun `peak persist retry clears the dirty flag once the write lands`() = runTest {
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", position = true, peakPrice = 52_000_000.0, peakPersistFailed = true)
+
+        mgr.persistPeak(state)
+
+        assertFalse(state.peakPersistFailed)
+        coVerify(exactly = 1) { stateService.upsert(1L, state) }
+    }
+
+    @Test
+    fun `peak persist failure does not block new entries`() = runTest {
+        // pendingPersistFailed 와 달리 peak 은 진입 차단 사유가 아니다 — 고점 유실은 청산 정확도
+        // 문제이지 주문 유실 위험이 아니다. 게이트가 잘못 추가되면 buy() 가 막히므로 실제로 사본다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", peakPersistFailed = true)
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "b1")
+        coEvery { upbitClient.getOrder("b1") } returns
+            Order(uuid = "b1", state = "done", executedVolume = "0.001", price = "50000000")
+
+        assertNotNull(mgr.buy("KRW-BTC", state, 50_000_000.0, "macd_cross"))
+    }
+
+    @Test
+    fun `every successful upsert path clears the peak dirty flag`() = runTest {
+        // 개별 호출자마다 해제하면 빠뜨린 경로에서 불필요한 재시도가 매 tick 돈다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+
+        val viaOrThrow = TradingState("KRW-BTC", position = true, peakPersistFailed = true)
+        mgr.persistStateOrThrow(viaOrThrow)
+        assertFalse(viaOrThrow.peakPersistFailed, "persistStateOrThrow 성공도 dirty 를 해소해야 한다")
+
+        val viaPending = TradingState("KRW-BTC", pendingBuyUuid = "p1", pendingPersistFailed = true, peakPersistFailed = true)
+        mgr.retryPendingPersistIfNeeded(viaPending)
+        assertFalse(viaPending.peakPersistFailed, "pending 재기록 성공도 dirty 를 해소해야 한다")
+    }
+
+    @Test
+    fun `a fill commit clears the peak dirty flag on the live state`() = runTest {
+        // 체결 커밋은 state.copy() 를 저장하므로 원본 flag 가 남는다. 매도 후에는 position=false 라
+        // 재시도 경로조차 못 타 dirty 가 영영 남는다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", position = true, peakPrice = 52_000_000.0, peakPersistFailed = true)
+        state.markBought(50_000_000.0, 0.001, "macd_cross")
+        // 잔고를 주지 않으면 phantom(잔고 0) 경로로 빠져 실제 커밋을 타지 않는다.
+        coEvery { upbitClient.getAccounts() } returns
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "s1")
+        coEvery { upbitClient.getOrder("s1") } returns
+            Order(uuid = "s1", state = "done", executedVolume = "0.001")
+
+        assertNotNull(mgr.sell("KRW-BTC", state, 52_000_000.0, SellReason.TAKE_PROFIT))
+
+        assertFalse(state.peakPersistFailed)
+    }
+
+    @Test
+    fun `a successful generic persist clears the peak dirty flag`() = runTest {
+        // 같은 스냅샷이 저장됐으면 peak 도 durable 이다 — dirty 를 남기면 매 tick 불필요한 재시도가 돈다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", position = true, peakPersistFailed = true)
+
+        mgr.persistState(state)
+
+        assertFalse(state.peakPersistFailed)
+    }
+
+    @Test
     fun `sell recovery uses the recorded volume instead of the already-synced zero balance`() = runTest {
         // 재시작 후 syncPosition 이 잔고 0 을 반영하면 holdVolume·avgBuyPrice 가 비어 있다.
         // 그 상태로 잔고 0 을 보고 청산을 확정하면 수량 0·손익 없음의 유령 SELL 이 남는다.
