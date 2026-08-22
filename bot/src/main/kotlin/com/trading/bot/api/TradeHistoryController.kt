@@ -25,4 +25,29 @@ class TradeHistoryController(
         val total = tradeRecordRepository.countByUserId(userId)
         return mapOf("total" to total, "limit" to sanitizedLimit, "offset" to sanitizedOffset, "records" to records)
     }
+
+    /**
+     * 매수→매도를 짝지어 돌려준다. flat 한 [getTrades] 만으로는 어느 매도가 어느 매수의 청산인지 알 수 없다.
+     */
+    @GetMapping("/roundtrips")
+    suspend fun getRoundTrips(
+        @RequestParam(defaultValue = "100") limit: Int,
+    ): Map<String, Any> {
+        val userId = currentUserId()
+        val sanitizedLimit = requestValidators.sanitizeTradeLimit(limit)
+        val records = tradeRecordRepository.findRecentAscending(userId, MAX_SOURCE_RECORDS)
+        val roundTrips = assembleRoundTrips(records)
+        return mapOf(
+            "total" to roundTrips.size,
+            "limit" to sanitizedLimit,
+            "truncated" to (records.size >= MAX_SOURCE_RECORDS),
+            // Map 키는 Jackson SNAKE_CASE 전략을 타지 않으므로(POJO 프로퍼티만 해당) 직접 맞춘다.
+            "round_trips" to roundTrips.take(sanitizedLimit),
+        )
+    }
+
+    private companion object {
+        /** 조립을 위해 메모리에 올리는 원본 레코드 상한. 넘으면 오래된 쪽이 잘린다(응답의 truncated). */
+        const val MAX_SOURCE_RECORDS = 5000
+    }
 }
