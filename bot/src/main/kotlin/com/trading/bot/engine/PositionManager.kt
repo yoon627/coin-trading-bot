@@ -336,11 +336,19 @@ class PositionManager(
     }
 
     /** 메타(peakPrice/boughtToday/entryStrategy/halt 등) durable 반영. best-effort — 실패 시 다음 전이에서 재기록. */
+    /**
+     * 모든 durable 쓰기의 단일 통로. 저장되는 스냅샷에 `peakPrice` 가 포함되므로, 어느 경로로
+     * 저장했든 peak dirty 는 함께 해소된다 — 개별 호출자마다 해제하면 빠뜨린 경로에서 불필요한
+     * 재시도가 매 tick 돈다(#54).
+     */
+    private suspend fun upsertState(state: TradingState) {
+        tradingStateService.upsert(userId, state)
+        state.peakPersistFailed = false
+    }
+
     private suspend fun persist(state: TradingState) {
         try {
-            tradingStateService.upsert(userId, state)
-            // 같은 스냅샷이 저장됐으므로 peak 도 durable 이다 — dirty 를 남기면 불필요한 재시도가 매 tick 돈다.
-            state.peakPersistFailed = false
+            upsertState(state)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -351,7 +359,7 @@ class PositionManager(
     /** pending durable 기록 — 실패 시 pendingPersistFailed 게이트로 신규 진입을 차단(#20 크래시 윈도우 방어). */
     private suspend fun persistPending(state: TradingState) {
         try {
-            tradingStateService.upsert(userId, state)
+            upsertState(state)
             state.pendingPersistFailed = false
         } catch (e: CancellationException) {
             throw e
@@ -371,8 +379,7 @@ class PositionManager(
      */
     internal suspend fun persistPeak(state: TradingState) {
         try {
-            tradingStateService.upsert(userId, state)
-            state.peakPersistFailed = false
+            upsertState(state)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -382,7 +389,7 @@ class PositionManager(
     }
 
     /** 실패를 호출자에게 알려야 하는 durable 반영(halt 해제 등 사용자 응답이 걸린 경로). */
-    internal suspend fun persistStateOrThrow(state: TradingState) = tradingStateService.upsert(userId, state)
+    internal suspend fun persistStateOrThrow(state: TradingState) = upsertState(state)
 
     /** pending 기록 실패로 막힌 진입을 푸는 유일한 경로 — 성공해야 pendingPersistFailed 가 해제된다. */
     internal suspend fun retryPendingPersistIfNeeded(state: TradingState) {

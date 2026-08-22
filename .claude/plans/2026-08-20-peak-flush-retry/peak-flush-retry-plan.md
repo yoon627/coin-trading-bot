@@ -79,9 +79,21 @@ codex code-review (2026-08-20, effort=high) — **P0/P1 0** / P2 2 / P3 1, 미�
 
 codex 가 함께 확인해 준 것: `peakPersistFailed` 는 DB 매핑에 없어 재시작 시 `false` 로 초기화됨 ✅ / `runLoop` 가 순차라 flag 동시 접근 없음 ✅ / KIS 는 `StockPosition.durableDirty` + `finally` 재시도로 같은 결함 없음 ✅.
 
+## pre-push codex review (2026-08-22) — P3 1건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P3 | `persist()` 에만 해제를 넣어 `persistPending`·`persistStateOrThrow` 성공 시 dirty 가 남는다 | **fix** — 개별 호출자마다 넣는 대신 **`upsertState()` 단일 통로**를 만들어 모든 성공 경로가 함께 해소하게 했다. 빠뜨린 경로가 생기지 않는 형태다. 체결 확정 트랜잭션(`PositionManager.kt:303`)은 원본이 아닌 `state.copy()` 를 저장하므로 대상이 아니다 |
+
 # Deferred
 
 - **durable 쓰기 실패의 backoff·로그 rate-limit**(codex P2-b 잔여): DB 장애가 길어지면 `persistPeak`·`persistPending` 등이 매 tick 재시도하며 warn 을 남긴다. 이번 변경만의 문제가 아니라 durable 쓰기 경로 공통 사안이라 별도로 다룬다.
+
+## pre-push codex review (2026-08-22) — P3 1건, 미해결 0
+
+| # | finding | 처분 |
+|---|---|---|
+| P3 | `persist()` 에만 해제를 넣어 `persistPending`·`persistStateOrThrow` 성공 시 dirty 가 남는다 | **fix** — 개별 호출자마다 넣는 대신 **`upsertState()` 단일 통로**를 만들어 모든 성공 경로가 함께 해소하게 했다. 빠뜨린 경로가 생기지 않는 형태다. 체결 확정 트랜잭션(`PositionManager.kt:303`)은 원본이 아닌 `state.copy()` 를 저장하므로 대상이 아니다 |
 
 # Deferred
 

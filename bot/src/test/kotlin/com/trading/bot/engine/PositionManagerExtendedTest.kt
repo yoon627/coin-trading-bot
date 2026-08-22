@@ -701,6 +701,21 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `every successful upsert path clears the peak dirty flag`() = runTest {
+        // 개별 호출자마다 해제하면 빠뜨린 경로에서 불필요한 재시도가 매 tick 돈다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+
+        val viaOrThrow = TradingState("KRW-BTC", position = true, peakPersistFailed = true)
+        mgr.persistStateOrThrow(viaOrThrow)
+        assertFalse(viaOrThrow.peakPersistFailed, "persistStateOrThrow 성공도 dirty 를 해소해야 한다")
+
+        val viaPending = TradingState("KRW-BTC", pendingBuyUuid = "p1", pendingPersistFailed = true, peakPersistFailed = true)
+        mgr.retryPendingPersistIfNeeded(viaPending)
+        assertFalse(viaPending.peakPersistFailed, "pending 재기록 성공도 dirty 를 해소해야 한다")
+    }
+
+    @Test
     fun `a successful generic persist clears the peak dirty flag`() = runTest {
         // 같은 스냅샷이 저장됐으면 peak 도 durable 이다 — dirty 를 남기면 매 tick 불필요한 재시도가 돈다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
