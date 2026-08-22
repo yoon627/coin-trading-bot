@@ -25,13 +25,15 @@ updated: 2026-08-22
 - 2026-08-22: codex 3차 지적 중 P2(화면 건수) 수정, P1(요청수량 기록)은 기록 경로 기존 결함이라 **이슈 #105 로 분리**.
   사용자 승인 하에 `CODEX_SKIP=1` 로 push, **PR #113** 생성. 커밋 5개.
 
+- 2026-08-22: headless Chrome 으로 화면 렌더 관찰해 **acceptance 9 충족**(전 항목 통과). 값 없는 손익 칸이
+  수익률 색을 쓰던 미관 문제 1건 수정. 임시 하네스 삭제. PR #113 머지 진행.
+
 # Next
 
-1. **화면 실제 렌더 확인** (acceptance 9 — 유일한 미충족 항목). 하네스:
-   `python3 -m http.server 8899 --directory bot/src/main/resources/static` → `http://localhost:8899/_rt_harness.html`.
-   확인 후 `bot/src/main/resources/static/_rt_harness.html` 를 **삭제**한다(의도적으로 커밋에서 제외했다).
-2. 확인되면 PR #113 머지 → worktree·브랜치 정리(이 repo 는 머지 후 자동 정리 규약).
-3. 이어서 2차: SELL 행에 `entry_price`/`entry_at`/`pnl_amount` 기록해 수수료 차감된 정확한 손익 금액 제공(새 worktree).
+2차 작업: SELL 행에 `entry_price`/`entry_at`/`pnl_amount` 를 기록해 **수수료가 차감된 정확한 손익 금액**을 제공한다
+(V20 마이그레이션 + `PositionManager.buildSellRecord` 가 이미 아는 `basisPrice` 를 버리지 않도록 수정).
+1차 그룹핑이 과거 데이터를 이미 커버하므로 급하지 않다. 새 worktree 에서 진행한다.
+관련: 이슈 #105(수동 매도 요청수량 기록)도 손익 정확도에 영향을 준다.
 
 # Decisions
 
@@ -113,7 +115,7 @@ CTE+윈도우 함수 `@Query` 로 구현하면 검증할 방법이 없고 Postgr
 | 6 | 전체 테스트 통과 | `./gradlew build` (테스트 12종) | ✅ BUILD SUCCESSFUL |
 | 7 | 타입체크 통과 | 위 build 에 포함 | ✅ BUILD SUCCESSFUL |
 | 8 | 프론트가 읽는 필드명과 와이어 포맷이 일치 | 직렬화 계약 테스트(17개 snake_case 키) | ✅ 통과 |
-| 9 | 화면에서 라운드트립 탭이 렌더 | 하네스 + 브라우저 육안 | ❌ **미검증** — 브라우저 접근 실패 |
+| 9 | 화면에서 라운드트립 탭이 렌더 | 하네스 + **headless Chrome(puppeteer-core)** 실행·관찰 | ✅ 통과 (아래 관찰 내용) |
 | 10 | 문서 동기화 | README API 표 · wiki sources 조회 | ✅ README 갱신, wiki 해당 페이지 없음 |
 
 추가 검증(표 밖): JSX 문법 — `npx esbuild screens.jsx` 파싱 성공(61.0kb, 오류 0).
@@ -121,10 +123,13 @@ babel-standalone 이 브라우저에서 트랜스파일하는 구조라 빌드 �
 
 # Blockers
 
-**acceptance 9(화면 렌더 관찰) 미충족** — Chrome 확장으로 `http://localhost:8899` / `http://127.0.0.1:8899` 접근이
-2회 모두 `Frame is showing error page` 로 실패했다. 같은 URL 을 `curl` 로 부르면 200 이므로 서버는 정상이고,
-확장의 사이트 권한(localhost 미허용)이 원인으로 보인다(⚠️추정).
-푸는 데 필요한 것: 확장에서 localhost 사이트 권한 허용, 또는 사용자가 직접 브라우저로 하네스 URL 열어 육안 확인.
+없음 — 전 항목 충족.
+
+~~acceptance 9 미충족~~ **해소**: Chrome 확장 경로는 localhost 접근이 막혀(요청이 서버에 도달조차 안 함) 실패했지만,
+**headless Chrome 을 puppeteer-core 로 직접 띄워** 우회했다(시스템 Chrome 재사용, 브라우저 다운로드 없음).
+관찰 결과 — 탭 2종, truncated 배너, 익절 +19.8%/₩40,000,000/4시간 30분, 분할매수 `3회 분할` 가중평단 ₩4,175,000,
+손절 -2.15% 파랑, `보유 중` 배지, `매수 기록 없음`(partial) 모두 의도대로. 콘솔 에러는 favicon 404 뿐(하네스 한정).
+검증 스크립트: `scratchpad/render-check/check.js`.
 
 세션 환경 이슈 2건이 **작업 외적으로** 존재 (이 plan 의 범위 아님):
 - 프로젝트 PreToolUse agent 훅의 `if` 가 fail-open 이라 무관한 Bash 명령을 차단한다. 수정본은 준비됨(`scratchpad/settings.fixed.json`), 적용은 사용자 몫.
