@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.engine.BacktestFixtures.Regime
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -14,8 +15,8 @@ class BacktestFixturesTest {
 
     @Test
     fun `every market fixture has the expected shape`() {
-        for (market in BacktestFixtures.MARKETS) {
-            val candles = BacktestFixtures.load(market)
+        for (regime in Regime.entries) for (market in BacktestFixtures.markets(regime)) {
+            val candles = BacktestFixtures.load(regime, market)
 
             assertEquals(200, candles.size, "$market: 200봉이 아니다")
             assertTrue(candles.all { it.market == market }, "$market: 다른 마켓 캔들이 섞였다")
@@ -36,8 +37,8 @@ class BacktestFixturesTest {
 
     @Test
     fun `fixtures are ordered newest first`() {
-        for (market in BacktestFixtures.MARKETS) {
-            val dates = BacktestFixtures.load(market).map { it.candleDateTimeKst }
+        for (regime in Regime.entries) for (market in BacktestFixtures.markets(regime)) {
+            val dates = BacktestFixtures.load(regime, market).map { it.candleDateTimeKst }
             assertEquals(
                 dates.sortedDescending(), dates,
                 "$market: 최신순이 아니다 — slice 가 반대 구간을 자르게 된다",
@@ -46,8 +47,20 @@ class BacktestFixturesTest {
     }
 
     @Test
+    fun `bull regime covers only the markets listed back then`() {
+        // 현재 거래대금 상위 8개 중 4개는 2023-11 에 미상장이었다 — 유니버스 선정의 생존편향 증거이자,
+        // paired 비교를 4마켓으로 제한해야 하는 이유다.
+        assertEquals(8, BacktestFixtures.markets(Regime.BEAR).size)
+        assertEquals(BacktestFixtures.PAIRED_MARKETS, BacktestFixtures.markets(Regime.BULL))
+        assertTrue(
+            BacktestFixtures.markets(Regime.BEAR).containsAll(BacktestFixtures.PAIRED_MARKETS),
+            "paired 마켓이 두 국면 모두에 있어야 한다",
+        )
+    }
+
+    @Test
     fun `slice keeps chronological order and picks the intended window`() {
-        val candles = BacktestFixtures.load("KRW-BTC")
+        val candles = BacktestFixtures.load(Regime.BEAR, "KRW-BTC")
         val chronological = candles.reversed()
 
         val head = BacktestFixtures.slice(candles, 0, 9)

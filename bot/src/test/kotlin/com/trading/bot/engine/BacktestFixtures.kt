@@ -10,24 +10,50 @@ import com.trading.common.domain.Candle
  * 데이터 출처·정규화 규칙은 `bot/src/test/resources/backtest/README.md` 참조.
  * JSON 은 API 응답과 같은 **최신순**(index 0 = 최신)이고, [BacktestEngine.run] 이 내부에서 뒤집으므로
  * 이 로더도 최신순 그대로 돌려준다. 구간을 자를 때만 시간순으로 뒤집었다가 되돌린다.
+ *
+ * 국면이 둘이다 — 하락장([Regime.BEAR]) 하나만 보면 "이 전략이 원래 나쁜지, 이 장에서만 나쁜지"를
+ * 가를 수 없어서 상승장([Regime.BULL])을 함께 둔다.
  */
 internal object BacktestFixtures {
 
-    val MARKETS = listOf(
-        "KRW-XRP", "KRW-BTC", "KRW-MMT", "KRW-ETH",
-        "KRW-WLD", "KRW-RVN", "KRW-ONDO", "KRW-DOGE",
+    enum class Regime(val dir: String, val label: String) {
+        /** 2026-01-31 ~ 2026-08-18. 8마켓 중 7개가 마이너스. */
+        BEAR("bear", "하락장 2026-01~08"),
+
+        /** 2023-11-23 ~ 2024-06-09. BTC +96%, ETH +89%, DOGE +102%, XRP -16%. */
+        BULL("bull", "상승장 2023-11~2024-06"),
+    }
+
+    /** 두 국면 모두에 존재하는 마켓 — 마켓 효과를 통제한 paired 비교에 쓴다. */
+    val PAIRED_MARKETS = listOf("KRW-XRP", "KRW-BTC", "KRW-ETH", "KRW-DOGE")
+
+    private val MARKETS_BY_REGIME = mapOf(
+        Regime.BEAR to listOf(
+            "KRW-XRP", "KRW-BTC", "KRW-MMT", "KRW-ETH",
+            "KRW-WLD", "KRW-RVN", "KRW-ONDO", "KRW-DOGE",
+        ),
+        // MMT·WLD·RVN·ONDO 는 이 시기 미상장이라 4마켓뿐이다. 현재 거래대금 상위의 절반이 2년 전엔
+        // 없었다는 뜻이고, 이것 자체가 유니버스 선정에 생존편향이 있다는 증거다.
+        Regime.BULL to PAIRED_MARKETS,
     )
 
     private val mapper = jacksonObjectMapper()
 
+    fun markets(regime: Regime): List<String> = MARKETS_BY_REGIME.getValue(regime)
+
     /** 최신순 200봉. */
-    fun load(market: String): List<Candle> {
-        val path = "/backtest/$market.json"
+    fun load(regime: Regime, market: String): List<Candle> {
+        val path = "/backtest/${regime.dir}/$market.json"
         val stream = requireNotNull(javaClass.getResourceAsStream(path)) { "fixture 없음: $path" }
         return stream.use { mapper.readValue(it) }
     }
 
-    fun loadAll(): Map<String, List<Candle>> = MARKETS.associateWith { load(it) }
+    fun loadAll(regime: Regime): Map<String, List<Candle>> =
+        markets(regime).associateWith { load(regime, it) }
+
+    /** 두 국면에 공통으로 있는 마켓만 — paired 비교용. */
+    fun loadPaired(regime: Regime): Map<String, List<Candle>> =
+        PAIRED_MARKETS.associateWith { load(regime, it) }
 
     /**
      * 시간순 [from]..[to] (양끝 포함) 구간을 잘라 최신순으로 돌려준다.
