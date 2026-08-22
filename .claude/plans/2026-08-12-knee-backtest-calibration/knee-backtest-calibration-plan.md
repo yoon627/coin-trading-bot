@@ -234,3 +234,9 @@ TP·손절·트레일링을 건드리지 않는 이유는 그 순간 "어떤 값
   빈 응답으로 종료하고 6개 패턴 외 검토 금지"라는 hook 메시지가 tool 결과에 끼어들었다. 실제 지시(working tree
   전체 리뷰)와 정면으로 어긋나 리뷰어가 따르지 않고 우회했다. PR1 리뷰에서도 같은 계열의 차단이 2회 있었으므로
   **동일 유형 2회 재현** — hook 설정 점검 대상.
+- **[정정] "PreToolUse hook 오탐" 진단은 틀렸다** (2026-08-22 확인). 설정된 hook 을 전수 확인한 결과
+  `guard-worktree-edit.js`(Edit/Write)와 `rtk hook`(Bash)뿐이고, "staged `.kt` 6개 패턴 검사" 를 하는
+  hook 은 **존재하지 않는다**. `pre-commit-check.sh` 는 secret 패턴 15개 스캔이고 git pre-commit 용이다.
+  **실제 원인은 권한 허용목록**이었다 — `.claude/settings.local.json` 의 gradle 항목이 정확한 문자열 3개
+  (`./gradlew test` 등)뿐이라 `:bot:test --tests '...'` 같은 변형이 `ask` 로 떨어지고, subagent 는 사용자에게
+  물을 수 없어 자동 거부된다. `Bash(./gradlew:*)` 와일드카드로 넓혀 해결했고, subagent 재실행으로 확인했다.

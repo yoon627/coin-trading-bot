@@ -119,3 +119,9 @@ PR2(#98) 판정의 최대 한계였던 **"하락장 한 국면"** 을 푼다. �
   plan 을 소급 작성해 보강했고 code-reviewer 는 정상 수행한다. 같은 이탈이 반복되면 게이트 강화 검토.
 - **PreToolUse hook 오탐 (누적 3회)**: PR1·PR2 리뷰에서 "staged `.kt` 가 없으니 종료" 메시지가 working-tree
   리뷰를 차단했다. PR2 plan 에도 기록했으며 **동일 유형 3회 재현** — hook 설정 점검이 필요하다.
+- **[정정] "PreToolUse hook 오탐" 진단은 틀렸다** (2026-08-22 확인). 설정된 hook 을 전수 확인한 결과
+  `guard-worktree-edit.js`(Edit/Write)와 `rtk hook`(Bash)뿐이고, "staged `.kt` 6개 패턴 검사" 를 하는
+  hook 은 **존재하지 않는다**. `pre-commit-check.sh` 는 secret 패턴 15개 스캔이고 git pre-commit 용이다.
+  **실제 원인은 권한 허용목록**이었다 — `.claude/settings.local.json` 의 gradle 항목이 정확한 문자열 3개
+  (`./gradlew test` 등)뿐이라 `:bot:test --tests '...'` 같은 변형이 `ask` 로 떨어지고, subagent 는 사용자에게
+  물을 수 없어 자동 거부된다. `Bash(./gradlew:*)` 와일드카드로 넓혀 해결했고, subagent 재실행으로 확인했다.
