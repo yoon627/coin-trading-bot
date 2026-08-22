@@ -1,6 +1,6 @@
 ---
 title: stuck-sell-alert — 막힌 매도 알림을 재시작에 무관하게 (#55)
-status: in_progress
+status: done
 started: 2026-08-22
 updated: 2026-08-22
 ---
@@ -11,11 +11,12 @@ updated: 2026-08-22
 
 # Progress
 
+- 2026-08-22: PR #102 머지(main `b0fed21`). pre-push codex 한 번에 통과, 668 tests green.
 - 2026-08-22: 이슈가 제시한 두 안 중 **경과시간 판정**을 택했다(재시작 무관). V20 으로 `pending_sell_since`·`pending_sell_alerted` 를 durable 화하고 카운터를 제거. 실제 Postgres 16 에 V1~V20 적용해 컬럼 타입·제약 확인. 664 tests green.
 
 # Next
 
-codex 리뷰 반영 → PR.
+없음 — PR [#102](https://github.com/yoon627/coin-trading-bot/pull/102) 머지(main `b0fed21`), 이슈 #55 종결.
 
 # Decisions
 
