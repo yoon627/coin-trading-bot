@@ -179,9 +179,19 @@ class UserTradingManager(
             val engine = engines.computeIfAbsent(state.userId) {
                 createEngine(userSecretsService.decryptUserSecrets(user))
             }
-            engine.setStrategy(state.strategy)
+            if (!engine.setStrategy(state.strategy)) {
+                // 전략을 제거·rename 한 배포나 revert 후에 발생한다. 폴백 자체는 안전하지만, 이 사실을
+                // 알리지 않으면 로그·캐시가 죽은 이름을 계속 보고해 운영자가 실제와 다른 전략이 매매 중인
+                // 것을 모른다.
+                log.warn(
+                    "restore: user {} 의 전략 '{}' 을 찾지 못해 '{}' 로 폴백했다 — 설정을 확인해야 한다",
+                    state.userId, state.strategy, engine.getActiveStrategyName(),
+                )
+            }
             engine.start(tickers, initialStates)
-            log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, state.strategy, tickers)
+            val activeStrategy = engine.getActiveStrategyName()
+            userStrategies[state.userId] = activeStrategy
+            log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, activeStrategy, tickers)
             true
         } catch (e: Exception) {
             log.warn("restore: user {} 복원 실패 — 재시도 대상: {}", state.userId, e.message)
