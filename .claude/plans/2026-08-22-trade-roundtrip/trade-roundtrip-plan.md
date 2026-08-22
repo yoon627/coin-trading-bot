@@ -127,6 +127,10 @@ babel-standalone 이 브라우저에서 트랜스파일하는 구조라 빌드 �
 
 # Review Disposition
 
+- **defer** — [codex 3차 P1] 수동 매도가 요청 수량을 기록해 잔량 계산이 조기에 0 이 될 수 있다.
+  기록 경로의 **기존 결함**이고 고치려면 실거래 주문 경로에 체결 폴링을 넣어야 해 조회 기능 범위 밖 → `# Deferred`.
+- **fix** — [codex 3차 P2] 화면 건수: `rtList.length`(limit 으로 잘린 길이)를 써서 100건을 넘으면 항상 '총 100건' 으로
+  보였다. API 의 `total` 을 쓰도록 수정.
 - **fix** — [codex pre-push P1] **부분 매도 미고려 (설계 가정 오류)**: 모든 SELL 을 포지션 종료로 처리해
   수동 부분 매도 시 라운드트립·손익이 틀렸다. 수량 잔량 기반 판정으로 재구현(위 Decisions 정정).
   테스트 2건 추가(분할 매도 전량청산 / 부분 매도 후 잔량 보유). DTO 에 `sellCount` 추가, 화면에도 표기.
@@ -138,6 +142,14 @@ babel-standalone 이 브라우저에서 트랜스파일하는 구조라 빌드 �
   회귀 방지 테스트 2건 추가(`TradeHistoryControllerTest`). 상수는 테스트 접근을 위해 `internal companion` 으로 노출.
 
 # Deferred
+
+- **수동 매도가 체결량이 아니라 요청 수량을 기록한다** (codex P1 · 기록 경로 기존 결함 · `TradeExecutionService.kt:152-157`):
+  `executeSellVolume` 은 주문 후 체결을 확인하지 않고 요청한 `sellVolume` 을 그대로 `trade_records.volume` 에 넣는다
+  (`recordOrder` 도 `orderUuid` 를 로깅·반환에만 쓴다). 엔진 경로(`PositionManager.completeBuy`)가 실제 잔고·체결량을
+  쓰는 것과 다르다. 부분 체결·미체결이 나면 이 조회의 **잔량 계산이 조기에 0 에 도달해 아직 보유 중인 포지션이
+  청산된 것처럼** 보인다. 고치려면 수동 매도에 체결 폴링(엔진의 `FILL_POLL_ATTEMPTS` 류)을 넣어야 하는데
+  **실거래 주문 경로 변경**이라 조회 기능 범위 밖이고, 과거 데이터는 어차피 소급되지 않는다.
+  시장가 매도는 통상 즉시 전량 체결이라 실제 빈도는 낮을 것으로 보이나(⚠️추정) 확인된 바 없다.
 
 - **`trade_records` 중복 행 가능성** (경미 · 기존 데이터 품질 · `TradeExecutionService.saveAudit`):
   멱등 dedup 이 `exchangeOrderId` 기준인데 이 값이 **null 인 과거·수동 기록은 dedup 대상이 아니다**(`TradeRecord.kt:13` 주석에 명시).
