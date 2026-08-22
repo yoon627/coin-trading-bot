@@ -240,6 +240,16 @@ class TradingEngine(
             // 재기록 경로까지 막아버려서, 여기서 풀어주지 않으면 그 ticker 는 영영 매수 불가로 남는다.
             positionManager.retryPendingPersistIfNeeded(state)
 
+            // 신고점은 트레일링 스톱의 기준선 — 영속 안 하면 재시작 후 peak 이 0 에서 다시 쌓여
+            // 이미 발동했어야 할 청산이 안 걸린다. 갱신된 tick 에만 flush 하되(매 tick upsert 는
+            // write 증폭), 직전 flush 가 실패했으면 갱신이 없어도 재시도한다 — 하락 전환 후에는
+            // 갱신될 일이 없어 그 1회 실패가 그대로 고점 유실이 된다(#54).
+            // 아래 pending reconcile 분기보다 앞에 둔다: 미해소가 길어지는 동안에도 재시도가 돌아야 한다.
+            if (state.position) {
+                val newHigh = state.updatePeakPrice(currentPrice)
+                if (newHigh || state.peakPersistFailed) positionManager.persistPeak(state)
+            }
+
             // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
             if (state.pendingBuyUuid != null) {
@@ -259,9 +269,6 @@ class TradingEngine(
             }
 
             if (state.position) {
-                // 신고점은 트레일링 스톱의 기준선 — 영속 안 하면 재시작 후 peak 이 0 에서 다시 쌓여
-                // 이미 발동했어야 할 청산이 안 걸린다. 갱신된 tick 에만 flush(상승 시에만 true).
-                if (state.updatePeakPrice(currentPrice)) positionManager.persistState(state)
                 val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
                 if (reason != null && positionManager.sell(ticker, state, currentPrice, reason) != null) return
             }
