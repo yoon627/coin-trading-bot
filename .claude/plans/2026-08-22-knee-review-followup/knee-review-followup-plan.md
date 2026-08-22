@@ -117,3 +117,9 @@ PR #99 는 `code-reviewer` 가 세션 한도로 두 번 중단돼 **정적 리�
 - **리뷰 지적을 그대로 받으면 안 된다는 사례**: M1 에서 리뷰어의 진단과 제안이 모두 부정확했고,
   코드를 직접 읽고 mutation 을 돌려야 실제 동작(`holdDays=0` 체결 봉)이 드러났다. 리뷰 결과도
   증거로 확인한 뒤 반영한다.
+- **[정정] "PreToolUse hook 오탐" 진단은 틀렸다** (2026-08-22 확인). 설정된 hook 을 전수 확인한 결과
+  `guard-worktree-edit.js`(Edit/Write)와 `rtk hook`(Bash)뿐이고, "staged `.kt` 6개 패턴 검사" 를 하는
+  hook 은 **존재하지 않는다**. `pre-commit-check.sh` 는 secret 패턴 15개 스캔이고 git pre-commit 용이다.
+  **실제 원인은 권한 허용목록**이었다 — `.claude/settings.local.json` 의 gradle 항목이 정확한 문자열 3개
+  (`./gradlew test` 등)뿐이라 `:bot:test --tests '...'` 같은 변형이 `ask` 로 떨어지고, subagent 는 사용자에게
+  물을 수 없어 자동 거부된다. `Bash(./gradlew:*)` 와일드카드로 넓혀 해결했고, subagent 재실행으로 확인했다.
