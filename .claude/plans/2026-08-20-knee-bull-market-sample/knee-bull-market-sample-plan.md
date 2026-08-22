@@ -1,8 +1,8 @@
 ---
 title: knee-bull-market-sample — 상승장 표본 추가로 무릎 전략 국면 의존성 판정 (PR3)
-status: in_progress
+status: done
 started: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
 # Goal
@@ -47,7 +47,7 @@ PR2(#98) 판정의 최대 한계였던 **"하락장 한 국면"** 을 푼다. �
 
 # Next
 
-code-reviewer → 최종 검증 → 커밋·PR. 승격하지 않는다.
+완료 — PR #99 머지(`fa69354`). 사후 정적 리뷰 지적은 `knee-review-followup` 브랜치에서 반영했다.
 
 # Decisions
 
