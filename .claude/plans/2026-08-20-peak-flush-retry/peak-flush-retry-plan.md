@@ -83,7 +83,8 @@ codex 가 함께 확인해 준 것: `peakPersistFailed` 는 DB 매핑에 없어 
 
 | # | finding | 처분 |
 |---|---|---|
-| P3 | `persist()` 에만 해제를 넣어 `persistPending`·`persistStateOrThrow` 성공 시 dirty 가 남는다 | **fix** — 개별 호출자마다 넣는 대신 **`upsertState()` 단일 통로**를 만들어 모든 성공 경로가 함께 해소하게 했다. 빠뜨린 경로가 생기지 않는 형태다. 체결 확정 트랜잭션(`PositionManager.kt:303`)은 원본이 아닌 `state.copy()` 를 저장하므로 대상이 아니다 |
+| P3(1차) | `persist()` 에만 해제를 넣어 `persistPending`·`persistStateOrThrow` 성공 시 dirty 가 남는다 | **fix** — 개별 호출자마다 넣는 대신 **`upsertState()` 단일 통로**를 만들어 모든 성공 경로가 함께 해소하게 했다 |
+| P3(2차) | 체결 커밋(`commitFillAndApply`)은 `state.copy()` 를 저장해 원본 dirty 가 남는다. **매도 후에는 `position=false` 라 재시도 경로조차 못 타 영영 남는다** | **fix** — 커밋 성공 후 원본 flag 해제. 1차 수정에서 "복사본이라 대상 아님" 이라 판단했던 것이 틀렸다 — 저장되는 스냅샷에 peak 이 들어가므로 durable 은 최신이다 |
 
 # Deferred
 
@@ -93,7 +94,8 @@ codex 가 함께 확인해 준 것: `peakPersistFailed` 는 DB 매핑에 없어 
 
 | # | finding | 처분 |
 |---|---|---|
-| P3 | `persist()` 에만 해제를 넣어 `persistPending`·`persistStateOrThrow` 성공 시 dirty 가 남는다 | **fix** — 개별 호출자마다 넣는 대신 **`upsertState()` 단일 통로**를 만들어 모든 성공 경로가 함께 해소하게 했다. 빠뜨린 경로가 생기지 않는 형태다. 체결 확정 트랜잭션(`PositionManager.kt:303`)은 원본이 아닌 `state.copy()` 를 저장하므로 대상이 아니다 |
+| P3(1차) | `persist()` 에만 해제를 넣어 `persistPending`·`persistStateOrThrow` 성공 시 dirty 가 남는다 | **fix** — 개별 호출자마다 넣는 대신 **`upsertState()` 단일 통로**를 만들어 모든 성공 경로가 함께 해소하게 했다 |
+| P3(2차) | 체결 커밋(`commitFillAndApply`)은 `state.copy()` 를 저장해 원본 dirty 가 남는다. **매도 후에는 `position=false` 라 재시도 경로조차 못 타 영영 남는다** | **fix** — 커밋 성공 후 원본 flag 해제. 1차 수정에서 "복사본이라 대상 아님" 이라 판단했던 것이 틀렸다 — 저장되는 스냅샷에 peak 이 들어가므로 durable 은 최신이다 |
 
 # Deferred
 

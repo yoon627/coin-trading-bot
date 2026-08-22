@@ -716,6 +716,23 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `a fill commit clears the peak dirty flag on the live state`() = runTest {
+        // 체결 커밋은 state.copy() 를 저장하므로 원본 flag 가 남는다. 매도 후에는 position=false 라
+        // 재시도 경로조차 못 타 dirty 가 영영 남는다.
+        val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
+        val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
+        val state = TradingState("KRW-BTC", position = true, peakPrice = 52_000_000.0, peakPersistFailed = true)
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "s1")
+        coEvery { upbitClient.getOrder("s1") } returns
+            Order(uuid = "s1", state = "done", executedVolume = "0.001")
+        state.markBought(50_000_000.0, 0.001, "macd_cross")
+
+        mgr.sell("KRW-BTC", state, 52_000_000.0, SellReason.TAKE_PROFIT)
+
+        assertFalse(state.peakPersistFailed)
+    }
+
+    @Test
     fun `a successful generic persist clears the peak dirty flag`() = runTest {
         // 같은 스냅샷이 저장됐으면 peak 도 durable 이다 — dirty 를 남기면 매 tick 불필요한 재시도가 돈다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)

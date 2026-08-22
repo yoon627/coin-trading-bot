@@ -304,6 +304,9 @@ class PositionManager(
             record,
         )
         applyTransition(state)
+        // 이 커밋도 peakPrice 를 포함한 스냅샷을 저장한다 — 원본 dirty 를 남기면 매수 후에는
+        // 불필요한 재시도가, 매도 후에는 position=false 라 재시도 경로조차 못 타 영영 남는다(#54).
+        state.peakPersistFailed = false
         if (!recorded) return
         try {
             notifyTrade(record)
