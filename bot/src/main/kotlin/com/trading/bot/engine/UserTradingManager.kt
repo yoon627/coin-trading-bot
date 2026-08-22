@@ -244,6 +244,8 @@ class UserTradingManager(
                     "hold_volume" to state.holdVolume,
                     "bought_today" to state.boughtToday,
                     "halted" to state.halted,
+                    // 보유 여부 미확정으로 매수가 막힌 상태 — 로그를 안 보고도 원인을 알 수 있게 노출한다.
+                    "unsynced" to state.unsynced,
                 )
             } ?: emptyList<Map<String, Any>>()),
             "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
