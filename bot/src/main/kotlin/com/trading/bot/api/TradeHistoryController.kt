@@ -40,7 +40,7 @@ class TradeHistoryController(
         val truncated = fetched.size > MAX_SOURCE_RECORDS
         // 오름차순이라 뒤쪽이 최신 — 넘칠 때 버리는 쪽은 가장 오래된 한 건이다.
         val records = if (truncated) fetched.takeLast(MAX_SOURCE_RECORDS) else fetched
-        val roundTrips = assembleRoundTrips(records)
+        val roundTrips = assembleRoundTrips(records, truncatedHead = truncated)
         return mapOf(
             "total" to roundTrips.size,
             "limit" to sanitizedLimit,
