@@ -183,37 +183,29 @@ class KneeStrategyComparisonTest {
 
     @Test
     fun `aggregation totals match the underlying backtest results`() = runTest {
-        // 집계 코드가 조용히 틀려도 리포트 숫자만 바뀔 뿐이라, 원본 결과와의 항등식으로 고정한다.
+        // 집계 코드가 조용히 틀려도 리포트 숫자만 바뀔 뿐이다. 합계만 맞추면 전략끼리 값이 뒤바뀌어도
+        // 통과하므로, 보고서에 실리는 네 값(거래수·END·평균수익률·승률)을 **전략별로** 원본과 대조한다.
         val markets = BacktestFixtures.loadAll(Regime.BEAR)
         val rows = aggregate(markets, BacktestFixtures::inSample, liveDefault).associateBy { it.strategy }
 
-        var totalTrades = 0
-        var totalEnd = 0
-        for ((market, candles) in markets) {
-            for (result in engine.compareAll(BacktestFixtures.inSample(candles), market, liveDefault)) {
-                totalTrades += result.trades.size
-                totalEnd += result.trades.count { it.reason == "END" }
-            }
-        }
-
-        assertEquals(totalTrades, rows.values.sumOf { it.trades }, "pooled 거래수가 원본 합과 다르다")
-        assertEquals(totalEnd, rows.values.sumOf { it.endTrades }, "END 집계가 원본과 다르다")
-
-        // 보고서가 인용하는 숫자는 avgNetPnl·winRate 다. 여기가 틀리면 판정 근거가 통째로 흔들리므로
-        // 거래수뿐 아니라 이 둘도 원본에서 다시 계산해 대조한다.
         val pnlByStrategy = mutableMapOf<String, MutableList<Double>>()
+        val endByStrategy = mutableMapOf<String, Int>()
         for ((market, candles) in markets) {
             for (result in engine.compareAll(BacktestFixtures.inSample(candles), market, liveDefault)) {
                 pnlByStrategy.getOrPut(result.strategyName) { mutableListOf() } += result.trades.map { it.pnlPercent }
+                endByStrategy.merge(result.strategyName, result.trades.count { it.reason == "END" }, Int::plus)
             }
         }
-        for ((name, pnls) in pnlByStrategy) {
-            val row = rows.getValue(name)
-            if (pnls.isEmpty()) continue
-            assertEquals(pnls.average(), row.avgNetPnl, 1e-9, "$name: 평균 수익률이 원본과 다르다")
+
+        rows.values.forEach { row ->
+            val pnls = pnlByStrategy[row.strategy].orEmpty()
+            assertEquals(pnls.size, row.trades, "${row.strategy}: 거래수가 원본과 다르다")
+            assertEquals(endByStrategy[row.strategy] ?: 0, row.endTrades, "${row.strategy}: END 집계가 원본과 다르다")
+            if (pnls.isEmpty()) return@forEach
+            assertEquals(pnls.average(), row.avgNetPnl, 1e-9, "${row.strategy}: 평균 수익률이 원본과 다르다")
             assertEquals(
                 100.0 * pnls.count { it > 0 } / pnls.size, row.winRate, 1e-9,
-                "$name: 승률이 원본과 다르다",
+                "${row.strategy}: 승률이 원본과 다르다",
             )
         }
     }

@@ -68,8 +68,9 @@ PR #99 는 `code-reviewer` 가 세션 한도로 두 번 중단돼 **정적 리�
 | # | 충족 기준 | 검증 방법 | 통과 조건 |
 |---|---|---|---|
 | 1 | `!atHoldLimit` 게이트가 테스트로 고정된다 | 게이트 제거 mutation | **CAUGHT** |
+| 1b | 집계가 전략별로 원본과 일치 | END 오배분 mutation | **CAUGHT** |
 | 2 | 남은 tautology 없음 | 해당 단언 제거 후 테스트 통과 | green |
-| 3 | `avgNetPnl`·`winRate` 가 원본과 일치 | 집계 항등식 테스트 | green |
+| 3 | 거래수·END·`avgNetPnl`·`winRate` 가 **전략별로** 원본과 일치 | 집계 항등식 테스트 | green |
 | 4 | in/out 양쪽 모두 거래가 있었음을 확인 | 카운터 분리 단언 | green |
 | 5 | `PAIRED_MARKETS` 가 실제 교집합 | 계산식 단언 | green |
 | 6 | wiki provenance 동기화 + 검증 3종 | `check_links.py`·`verify.sh`·`smoke.sh` | 통과 |
@@ -103,6 +104,7 @@ PR #99 는 `code-reviewer` 가 세션 한도로 두 번 중단돼 **정적 리�
 | 테스트명 `bull regime covers…` 가 BEAR·PAIRED 도 포함 | **fix** — `regime market rosters are pinned` |
 | wiki "상위권" 근거 표 불명(Open Q1) | **fix** — 기준과 실제 순위 명시 |
 | `aggregate` 중복·JSON 재파싱·문구 6곳 중복 | **defer** — 실행 0.6초라 실익 낮음. Deferred 기록 |
+| (pre-push codex) `endTrades <= trades` 제거로 전략 간 오배분을 놓친다 | **fix (해법 강화)** — 지적 방향은 맞지만 제안한 단언은 약하다. A(trades=10,end=3)의 END 를 B(trades=20,end=0)로 옮겨도 `3 <= 20` 이라 통과한다. 대신 **거래수·END·평균수익률·승률 네 값을 전략별로 원본과 대조**하도록 강화했고, END 오배분 mutation 으로 **CAUGHT** 확인 |
 | `String.format` locale | **defer** — pre-existing, 별도 |
 | `outOfSample` 의 199 하드코딩 | **wontfix** — fixture 가 200봉으로 고정돼 있고 그 자체를 테스트가 검증한다 |
 | plan `status: in_progress`(Open Q4) | **fix** — PR3 plan 을 done 으로 갱신 |
