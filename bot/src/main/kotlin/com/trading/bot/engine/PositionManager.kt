@@ -339,6 +339,8 @@ class PositionManager(
     private suspend fun persist(state: TradingState) {
         try {
             tradingStateService.upsert(userId, state)
+            // 같은 스냅샷이 저장됐으므로 peak 도 durable 이다 — dirty 를 남기면 불필요한 재시도가 매 tick 돈다.
+            state.peakPersistFailed = false
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -361,6 +363,23 @@ class PositionManager(
 
     /** 메타 변경 후 durable 반영(best-effort) — 실패해도 다음 전이에서 재기록된다. */
     internal suspend fun persistState(state: TradingState) = persist(state)
+
+    /**
+     * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다음 tick 이 재시도하게 한다 —
+     * flush 가 갱신 tick 에만 걸리므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다(#54).
+     * 진입 게이트는 건드리지 않는다.
+     */
+    internal suspend fun persistPeak(state: TradingState) {
+        try {
+            tradingStateService.upsert(userId, state)
+            state.peakPersistFailed = false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            state.peakPersistFailed = true
+            log.warn("peak persist failed for {} — retry next tick: {}", state.ticker, e.message)
+        }
+    }
 
     /** 실패를 호출자에게 알려야 하는 durable 반영(halt 해제 등 사용자 응답이 걸린 경로). */
     internal suspend fun persistStateOrThrow(state: TradingState) = tradingStateService.upsert(userId, state)

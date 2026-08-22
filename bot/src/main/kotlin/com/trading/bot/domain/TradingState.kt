@@ -42,6 +42,10 @@ data class TradingState(
     var exitParams: ExitParamsSnapshot? = null,
     // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
     var pendingPersistFailed: Boolean = false,
+    // 신고점 flush 가 실패하면 true — 갱신 tick 에만 flush 하므로 그대로 두면 재시도 기회가
+    // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서 재기록한다(비영속).
+    // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
+    var peakPersistFailed: Boolean = false,
 ) {
     fun pnlPercent(currentPrice: Double): Double {
         if (avgBuyPrice <= 0) return 0.0
