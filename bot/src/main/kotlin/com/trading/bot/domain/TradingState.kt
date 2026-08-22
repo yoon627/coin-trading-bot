@@ -9,6 +9,11 @@ data class TradingState(
     val ticker: String,
     var position: Boolean = false,
     var avgBuyPrice: Double = 0.0,
+    /**
+     * 봇이 자기 포지션으로 통제하는 수량. 거래소 free 잔고에 **우리 매도 주문이 잠그고 있을 수 있는 만큼**만
+     * 더한다 — Upbit 의 locked 는 출금 대기·수동 주문까지 섞인 값이라 그대로 쓰면 팔 수 없는 수량을 보유로
+     * 세게 된다. 거래소 잔고에서 채우는 경로는 모두 `PositionManager.heldVolume` 하나를 쓴다.
+     */
     var holdVolume: Double = 0.0,
     var peakPrice: Double = 0.0,
     var buyDate: LocalDate? = null,
@@ -29,8 +34,10 @@ data class TradingState(
     // 이미 비어 있으므로, 이 값 없이 잔고만 보고 청산을 확정하면 수량 0·손익 없음의 유령 SELL 이 기록된다.
     var pendingSellVolume: Double? = null,
     var pendingSellAvgPrice: Double? = null,
-    // syncPosition 이 거래소 잔고 동기화에 실패하면 true — position 상태가 불확실하므로 매수를 막아
-    // 재시작 직후(429 빈발) 이중 포지션을 방지. processTicker 가 다음 tick 재시도해 성공 시 해소.
+    // 보유 여부가 불확실해 신규 매수를 막아야 하면 true. 두 경우다 — (1) syncPosition 의 잔고 조회 실패
+    // (재시작 직후 429 빈발), (2) 조회는 됐지만 우리 주문으로 설명되지 않는 locked 잔고가 있어 그 코인이
+    // 우리 포지션인지 알 수 없는 경우. 어느 쪽이든 그 위에 진입하면 이중 포지션이다.
+    // processTicker 가 다음 tick 재시도하고, 해소되면 매수가 풀린다.
     var unsynced: Boolean = false,
     // #19: reconcilePendingBuy 의 getOrder·잔고조회가 연속 실패해 pending 이 무한 재시도되면 halt.
     // 신규 매수만 막는다(buy() 가드) — 매도·reconcile·잔고 동기화까지 막으면 포지션이 청산 못 하고 갇힌다.
@@ -46,6 +53,9 @@ data class TradingState(
     var exitParams: ExitParamsSnapshot? = null,
     // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
     var pendingPersistFailed: Boolean = false,
+    // 귀속 불명 locked 로 이미 경고했는지. unsynced 는 조회 실패로도 켜지므로 그걸 dedup 키로 쓰면
+    // "조회 실패 → 다음 tick 성공했으나 귀속 불명" 순서에서 원인이 로그에 한 번도 안 남는다(비영속).
+    var unattributableLockWarned: Boolean = false,
     // 신고점 flush 가 실패하면 true — 갱신 tick 에만 flush 하므로 그대로 두면 재시도 기회가
     // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서 재기록한다(비영속).
     // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
@@ -85,6 +95,8 @@ data class TradingState(
         val resuming = position
         if (position && !replace) {
             // 추가 매수: 평균 단가 계산. entryStrategy 는 최초 진입 전략 유지(덮어쓰지 않음).
+            // 여기서 더하는 volume 은 거래소 관측값이 아니라 주문 의도 수량이라 holdVolume 의 정의(거래소
+            // 잔고 기반) 밖이다. 프로덕션 경로는 completeBuy 가 항상 replace=true 라 도달하지 않는다.
             val totalCost = avgBuyPrice * holdVolume + price * volume
             val totalVolume = holdVolume + volume
             avgBuyPrice = totalCost / totalVolume
