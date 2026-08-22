@@ -26,10 +26,14 @@ updated: 2026-08-22
   CONFIRMED Major 1 + Minor 8 + PLAUSIBLE 1. 처분은 아래 표. 수정 후 재검증 통과.
 - 2026-08-22 simplify 체크(메인 직접) — `unattributableLockWarned` 중복 대입 1건 제거,
   syncPosition 주석 7줄 → 4줄 축약. 동작 불변, 재검증 통과.
+- 2026-08-22 최종 검증 통과(`:bot:test`+`:common:test --rerun-tasks`, `compileKotlin`, wiki 3종) →
+  커밋 `61d26c8`(코드+wiki, 8파일 +320/-25) · `1f8d115`(plan) → push(pre-push codex high:
+  no blocking issues) → **PR #116** 생성. Acceptance 11개 항목 전부 증거 대조 완료.
 
 # Next
 
-최종 검증 → 커밋 → PR (`Closes #56`).
+**PR #116 머지 대기.** 리뷰 코멘트가 달리면 이 worktree 에서 `/c` 로 이어받아 대응한다.
+머지되면 `# Deferred` 3건(wait 구간 상한 / 가드 기동 한정 / `sell()` M4 일관성)의 이슈화 여부를 판단.
 
 # Decisions
 
