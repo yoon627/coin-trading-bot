@@ -8,7 +8,7 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V19) |
+| **마이그레이션** | Flyway (V1~V20) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
@@ -116,7 +116,7 @@ coin-trading-bot/
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V19)
+### Flyway 마이그레이션 (V1~V20)
 
 | 버전 | 내용 |
 |------|------|
@@ -131,6 +131,7 @@ coin-trading-bot/
 | V17 | `bot_state` 에 `exchange` 컬럼((user_id, exchange) 별 1행 — Upbit/KIS 동시 운영). WAL 활성 불변식에 `side` 추가 |
 | V18 | `stock_position_state` — 주식 포지션의 durable 스냅샷(트레일링 고점·매수 거래일·진입 전략). 보유수량·평단은 거래소 잔고가 진실이라 저장하지 않는다 |
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다 |
+| V20 | `trading_states` 에 `pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림을 재시작 횟수와 무관한 경과시간으로 판정 |
 
 ### 핵심 테이블
 
