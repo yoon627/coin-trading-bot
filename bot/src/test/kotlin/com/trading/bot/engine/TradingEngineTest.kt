@@ -264,7 +264,24 @@ class TradingEngineTest {
         engine.processTicker("KRW-BTC", state, strategy)
 
         assertEquals(52_000_000.0, state.peakPrice)
-        coVerify(exactly = 1) { positionManager.persistState(state) }
+        coVerify(exactly = 1) { positionManager.persistPeak(state) }
+    }
+
+    @Test
+    fun `a dirty tick that also sets a new high persists only once`() = runTest {
+        // 재시도와 갱신 flush 를 따로 두면 같은 tick 에 upsert 가 두 번 난다.
+        val engine = createEngine()
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001,
+            peakPrice = 51_000_000.0, peakPersistFailed = true,
+        )
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        assertEquals(52_000_000.0, state.peakPrice)
+        coVerify(exactly = 1) { positionManager.persistPeak(state) }
     }
 
     @Test
@@ -277,7 +294,42 @@ class TradingEngineTest {
 
         engine.processTicker("KRW-BTC", state, strategy)
 
-        coVerify(exactly = 0) { positionManager.persistState(any()) }
+        coVerify(exactly = 0) { positionManager.persistPeak(any()) }
+    }
+
+    @Test
+    fun `processTicker retries a failed peak flush even without a new high`() = runTest {
+        // 갱신 tick 에만 flush 하므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다.
+        // 그대로 두면 재시작 시 낮은 옛 peak 이 복원돼 트레일링이 안 걸린다(#54).
+        val engine = createEngine()
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001,
+            peakPrice = 53_000_000.0, peakPersistFailed = true,
+        )
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 1) { positionManager.persistPeak(state) } // 신고점이 아닌데도 재시도
+    }
+
+    @Test
+    fun `peak retry runs even while a pending sell blocks the rest of the tick`() = runTest {
+        // 미해소 매도가 있으면 tick 이 조기 return 해 flush 지점에 도달하지 못한다. 재시도를
+        // 그 뒤에 두면 미해소가 길어지는 동안 dirty 가 계속 남는다(#54).
+        val engine = createEngine()
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001,
+            peakPrice = 53_000_000.0, peakPersistFailed = true, pendingSellUuid = "s1",
+        )
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { positionManager.reconcilePendingSell(any(), any(), any()) } returns null
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 1) { positionManager.persistPeak(state) }
     }
 
     @Test
