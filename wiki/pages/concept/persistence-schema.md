@@ -1,10 +1,10 @@
 ---
-title: DB 스키마 — Flyway V1~V19 와 Upbit·KIS 핵심 테이블
+title: DB 스키마 — Flyway V1~V20 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-08-19
+updated: 2026-08-22
 claim_state: current
-verified: 2026-08-19 — V19 를 실제 Postgres 16 에 V1~V19 순차 적용해 확인(price_snapshots·인덱스 소멸, 나머지 테이블 보존)
+verified: 2026-08-22 — V20 을 실제 Postgres 17 에 V1~V20 순차 적용해 확인(pnl_amount 컬럼·백업테이블 2개 생성). 운영 데이터를 재현한 시드로 backfill 귀속 4/4 일치, 재실행 0행(idempotent) 확인
 sources:
   - bot/src/main/resources/db/migration/
   - PROJECT_ANALYSIS.md
@@ -13,7 +13,7 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V19** 이다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V20** 이다.
 
 | 버전 | 내용 |
 |---|---|
@@ -28,6 +28,25 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V17 | `bot_state` 거래소별 분리 + KIS WAL 활성 unique key에 `side` 추가 |
 | V18 | KIS 포지션 메타데이터(`stock_position_state`) durable snapshot |
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다([[marketdata-pipeline]]) |
+| V20 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구(아래) |
+
+## 매도 기록의 전략 귀속 (V20)
+
+`buildSellRecord` 가 `TradeRecord` 를 만들 때 `strategy` 인자를 넘기지 않아, V20 이전의 **매도 기록은 전부 `strategy=NULL`** 이었다. `pnl_percent` 를 가진 side 가 SELL 뿐이라 `/api/strategies/performance` 는 손익 전량을 `unknown` 그룹에 넣어 왔다 — 이 API 는 만들어진 이래 전략별 손익을 보여준 적이 없다.
+
+소급 귀속 규칙은 **포지션 구간(직전 SELL 이후) 내 첫 번째 non-manual BUY** 다. 두 가지가 비자명하다.
+
+**왜 첫 번째인가** — `markBought` 의 실제 분기는 `entryStrategy = if (resuming) entryStrategy ?: strategy else strategy` 이고 `resuming` 은 진입 시점의 `position` 이다. `completeBuy` 가 `replace=true` 로 부르므로 "추가매수 시 유지" 가지(`position && !replace`)는 타지 않지만, **else 안에서 `resuming` 이 참이면 기존 값이 그대로 살아남는다**. 재시작 후 `syncPosition` 이 `position=true` 로 만든 뒤 `reconcilePendingBuy`·`BalanceRecovery` 가 `completeBuy` 를 부르는 경로가 그렇다. 즉 한 포지션에 엔진 BUY 가 여럿이면 **먼저 찍힌 전략**이 남는다.
+
+**왜 `manual` 을 빼는가** — 수동 매수(`TradeExecutionService.executeBuy`)는 `TradingState` 를 아예 건드리지 않고 `syncPosition` 도 `entryStrategy` 를 세우지 않는다. 그래서 수동 매수 위에 엔진이 매수하면 `resuming=false` 로 엔진 전략이 들어간다 — `manual` 은 애초에 `entryStrategy` 후보가 아니다.
+
+⚠️ **원금은 반대로 마지막 BUY 를 본다.** 전략은 최초 진입값이 유지되는 반면 `avgBuyPrice` 는 `markBought` 가 매번 덮어쓰기 때문이다. 두 기준이 다른 것은 런타임을 미러한 결과다.
+
+이 페어링은 코드가 보장하는 불변식이 아니라 적용 시점 데이터의 성질이다 — 부분매도와 수동 `executeSellVolume` 은 이미 오늘도 1:1 을 깰 수 있다. 그래서 V20 은 대상을 `id` 상한으로 고정하고 원본을 `*_v20_backup` 테이블에 남긴다. 상한을 시각이 아니라 `id` 로 잡은 것도 의도다 — `trade_records.created_at` 은 `TIMESTAMP`, `trade_executions` 는 `TIMESTAMPTZ` 라 같은 리터럴이 세션 TimeZone 에 따라 다르게 해석된다.
+
+⚠️ **수동 매도는 여전히 귀속을 틀린다** — `executeSellAll`/`executeSellVolume` 이 `strategy="manual"` 을 하드코딩해서, 엔진이 잡은 포지션을 사람이 청산하면 진입 전략이 크레딧을 못 받는다. KIS 경로(`StockOrderReconciler.buildExecution`)도 같은 결함이 남아 있다.
+
+⚠️ **`trade_executions.fee` 는 V20 부터만 채워진다.** 그 이전 행은 `0`(미기록)이다 — `saveAudit` 이 값을 넘기지 않았다. 소급하지 않은 이유는 수수료율이 `TRADING_ROUND_TRIP_FEE_RATE` 로 환경마다 다를 수 있어 SQL 에 상수로 박으면 기본값이 아닌 환경에서 과거와 현재가 다른 기준이 되기 때문이다. 총 수수료를 집계할 일이 생기면 V20 이전 행을 제외해야 한다. 채워지는 값도 **체결 응답의 실제 수수료가 아니라 설정값 기반 추정**이다(`Order` 가 Upbit `paid_fee` 를 파싱하지 않는다).
 
 다음 마이그레이션 번호를 정하는 규칙은 [[migration-numbering]] 에 있다 — 미머지 브랜치가 번호를 선점하는 문제가 실제로 있었다.
 

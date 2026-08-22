@@ -273,7 +273,8 @@ class TradeExecutionServiceTest {
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "dup-1") } returns Mono.just(true)
         val record = TradeRecord(
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
-            totalAmount = 50000.0, exchangeOrderId = "dup-1", userId = 1L,
+            totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+            exchangeOrderId = "dup-1", userId = 1L,
         )
 
         service.saveAndNotify(record, client, null, null)
@@ -288,7 +289,8 @@ class TradeExecutionServiceTest {
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "new-1") } returns Mono.just(false)
         val record = TradeRecord(
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
-            totalAmount = 50000.0, exchangeOrderId = "new-1", userId = 1L,
+            totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+            exchangeOrderId = "new-1", userId = 1L,
         )
 
         service.saveAndNotify(record, client, null, null)
@@ -304,7 +306,8 @@ class TradeExecutionServiceTest {
         val statePersisted = AtomicBoolean(false)
         val record = TradeRecord(
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
-            totalAmount = 50000.0, exchangeOrderId = "fill-1", userId = 1L,
+            totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+            exchangeOrderId = "fill-1", userId = 1L,
         )
 
         val recorded = service.commitFill(
@@ -345,5 +348,47 @@ class TradeExecutionServiceTest {
         assertEquals("notify-fail", result.orderUuid)
         assertFalse(result.recorded, "주문은 접수됐지만 알림 실패는 수동 후처리 실패로 노출돼야 한다")
         coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
+    }
+
+    // --- 감사 기록의 파생값 ---
+    // fee 는 도메인이 아니라 saveAudit 이 유도한다. 그래야 TradeRecord 생성 경로 다섯 곳이 전부
+    // 한 지점으로 수렴해 공식이 흩어지지 않고, 손익이 없는 매수 행에도 수수료가 남는다.
+
+    @Test
+    fun `saveAudit derives the fee for buy rows too`() = runTest {
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fee-buy") } returns Mono.just(false)
+        val entity = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(entity)) } returns
+            Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
+
+        service.saveAudit(
+            TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.002,
+                totalAmount = 100000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+                exchangeOrderId = "fee-buy", userId = 1L,
+            )
+        )
+
+        // 편도 = 왕복(0.001)의 절반 → 100,000 × 0.0005 = 50원
+        assertEquals(50.0, entity.captured.fee, 1e-9)
+    }
+
+    @Test
+    fun `saveAudit carries the strategy and realized amount onto the execution row`() = runTest {
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "audit-sell") } returns Mono.just(false)
+        val entity = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(entity)) } returns
+            Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
+
+        service.saveAudit(
+            TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.SELL, price = 52000000.0, volume = 0.002,
+                totalAmount = 104000.0, pnlPercent = 3.9, pnlAmount = 3900.0, strategy = "knee_reversal",
+                exchangeOrderId = "audit-sell", userId = 1L,
+            )
+        )
+
+        assertEquals("knee_reversal", entity.captured.strategy)
+        assertEquals(3900.0, entity.captured.pnlAmount!!, 1e-9)
     }
 }

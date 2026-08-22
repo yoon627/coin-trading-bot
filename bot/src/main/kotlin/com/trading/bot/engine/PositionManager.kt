@@ -6,6 +6,7 @@ import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.TradePnl
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingDay
@@ -272,6 +273,8 @@ class PositionManager(
             price = fillPrice,
             volume = volume,
             totalAmount = totalAmount,
+            pnlPercent = null, // 진입 — 실현 손익 없음
+            pnlAmount = null,
             strategy = strategy,
             exchangeOrderId = orderUuid,
         )
@@ -634,7 +637,8 @@ class PositionManager(
     /**
      * 매도 TradeRecord 생성 — 기록용 pnl 은 왕복수수료 차감(net, 백테스트 feeRate×2 와 통일). 청산 게이트는 gross 유지.
      * 평단 미상(외부 입금분 syncPosition 복원 등)이면 pnl null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
-     * markSold 이전에 호출해야 avgBuyPrice 가 살아있어 pnl 복원 가능. reason 미지정 시 state.pendingSellReason 사용.
+     * markSold 이전에 호출해야 avgBuyPrice·entryStrategy 가 살아있어 손익과 전략 귀속이 복원된다.
+     * reason 미지정 시 state.pendingSellReason 사용.
      */
     private fun buildSellRecord(
         ticker: String,
@@ -645,11 +649,7 @@ class PositionManager(
     ): TradeRecord {
         // 재시작 복원 경로에서는 avgBuyPrice 가 이미 0 으로 동기화돼 있으므로 주문 시점 평단을 쓴다.
         val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
-        val pnl = if (basisPrice > 0) {
-            ((currentPrice - basisPrice) / basisPrice) * 100.0 - tradingProperties.roundTripFeeRate * 100
-        } else {
-            null
-        }
+        val pnl = TradePnl.netPercent(currentPrice, basisPrice, tradingProperties.roundTripFeeRate)
         return TradeRecord(
             userId = userId,
             ticker = ticker,
@@ -658,6 +658,10 @@ class PositionManager(
             volume = volume,
             totalAmount = currentPrice * volume,
             pnlPercent = pnl,
+            pnlAmount = TradePnl.amount(pnl, basisPrice, volume),
+            // 청산은 진입 전략의 성과로 귀속한다. 매도 시점의 활성 전략을 쓰면 설정을 바꾼 뒤의 청산이
+            // 엉뚱한 전략 몫으로 잡힌다. markSold 가 clearEntryMeta 로 지우기 전이라 값이 살아 있다.
+            strategy = state.entryStrategy,
             reason = reason?.name,
             // markSold 이전 호출이라 pendingSellUuid 가 살아있음 — 재시작 reconcile 중복 기록을 막는 dedup 키.
             exchangeOrderId = state.pendingSellUuid,

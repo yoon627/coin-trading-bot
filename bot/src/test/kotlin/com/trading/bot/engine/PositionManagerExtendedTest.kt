@@ -982,6 +982,8 @@ class PositionManagerExtendedTest {
         val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT)
 
         assertEquals(3.9, result!!.pnlPercent!!, 1e-9)
+        // 원금 = 평단 50M × 0.001 = 50,000원, net 3.9% → 1,950원. 매도대금(52,000)이 아니라 원금에 곱한다.
+        assertEquals(1950.0, result.pnlAmount!!, 1e-6)
     }
 
     @Test
@@ -1244,6 +1246,7 @@ class PositionManagerExtendedTest {
 
         assertNotNull(result)
         assertNull(result!!.pnlPercent)
+        assertNull(result.pnlAmount) // 0 이면 손익 0원인 거래로 집계돼 평균을 끌어내린다
     }
 
     // --- 취소 안전성: placeOrder 성공 후 후처리는 NonCancellable 로 원자 완주 ---
@@ -1317,5 +1320,83 @@ class PositionManagerExtendedTest {
         val state = TradingState("KRW-BTC")
 
         assertThrows<CancellationException> { manager.syncPosition("KRW-BTC", state) }
+    }
+
+    // --- 매도 기록의 진입 전략 귀속 ---
+    // 매도 4경로 전부 markSold(=entryStrategy 소거) 이전에 buildSellRecord 를 부르므로 값이 살아 있다.
+    // entryStrategy 를 명시적으로 세워야 한다 — null 로 두면 단언이 null == null 로 통과해 버그를 못 잡는다.
+
+    @Test
+    fun `sell records the entry strategy on immediate fill`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-strat")
+        coEvery { upbitClient.getOrder("sell-strat") } returns Order(uuid = "sell-strat", state = "done")
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, "knee_reversal")
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT)
+
+        assertEquals("knee_reversal", result!!.strategy)
+    }
+
+    @Test
+    fun `reconcilePendingSell records the entry strategy when done`() = runTest {
+        coEvery { upbitClient.getOrder("s-strat") } returns
+            Order(uuid = "s-strat", state = "done", executedVolume = "0.001")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-strat", pendingSellReason = SellReason.TAKE_PROFIT,
+            entryStrategy = "combined",
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals("combined", result!!.strategy)
+    }
+
+    @Test
+    fun `sell recovery records the entry strategy when the order api is down`() = runTest {
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            pendingSellUuid = "s-recover-strat",
+            pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellVolume = 0.002,
+            pendingSellAvgPrice = 50_000_000.0,
+            entryStrategy = "knee_pullback",
+        )
+
+        val record = mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertEquals("knee_pullback", record!!.strategy)
+    }
+
+    @Test
+    fun `partial fill records the entry strategy and keeps it for the remaining position`() = runTest {
+        coEvery { upbitClient.getOrder("s-partial-strat") } returns
+            Order(uuid = "s-partial-strat", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0004", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-partial-strat", pendingSellReason = SellReason.STOP_LOSS,
+            entryStrategy = "combined",
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals("combined", result!!.strategy)
+        // 잔여 포지션은 markSold 를 타지 않으므로 다음 매도도 같은 전략으로 귀속돼야 한다.
+        assertEquals("combined", state.entryStrategy)
     }
 }

@@ -14,6 +14,7 @@ data class TradeRecordEntity(
     val volume: Double,
     val totalAmount: Double,
     val pnlPercent: Double? = null,
+    val pnlAmount: Double? = null,
     val reason: String? = null,
     val strategy: String? = null,
     val userId: Long? = null,
