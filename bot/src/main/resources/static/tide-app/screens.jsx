@@ -353,7 +353,8 @@ function OrdersPage({ user, setActive }) {
 
   const isRT = tab === 'roundtrips';
   const src = isRT ? rt : trades;
-  const count = isRT ? rtList.length : list.length;
+  // API 의 total 은 전체 라운드트립 수, rtList 는 limit 으로 잘린 목록 — 둘을 섞으면 항상 '총 100건' 으로 보인다.
+  const count = isRT ? (rt.data?.total ?? rtList.length) : list.length;
 
   const tabBtn = (key, label) => (
     <button onClick={() => setTab(key)}
