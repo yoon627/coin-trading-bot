@@ -111,6 +111,12 @@ babel-standalone 이 브라우저에서 트랜스파일하는 구조라 빌드 �
 - 프로젝트 PreToolUse agent 훅의 `if` 가 fail-open 이라 무관한 Bash 명령을 차단한다. 수정본은 준비됨(`scratchpad/settings.fixed.json`), 적용은 사용자 몫.
 - `.claude/settings.json` 첫 훅이 `shell: "powershell"` 인데 이 macOS에 powershell 이 없어 **시크릿 스캔 게이트가 죽어 있다.**
 
+# Review Disposition
+
+- **fix** — [codex pre-push P3] `truncated` 경계 오류: `records.size >= MAX_SOURCE_RECORDS` 는 결과가
+  *정확히* 상한일 때도 잘렸다고 표시했다. 상한+1 건을 받아 `> MAX` 로 판정하고 넘칠 때만 `takeLast(MAX)` 하도록 수정.
+  회귀 방지 테스트 2건 추가(`TradeHistoryControllerTest`). 상수는 테스트 접근을 위해 `internal companion` 으로 노출.
+
 # Deferred
 
 - **`trade_records` 중복 행 가능성** (경미 · 기존 데이터 품질 · `TradeExecutionService.saveAudit`):
