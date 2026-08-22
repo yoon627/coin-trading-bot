@@ -406,7 +406,7 @@ function OrdersPage({ user, setActive }) {
             <span className="num" style={{ textAlign: 'right', fontWeight: 700, color: tone }}>
               {r.pnl_percent == null ? '—' : `${r.pnl_percent > 0 ? '+' : ''}${fmtNum(r.pnl_percent, 2)}%`}
             </span>
-            <span className="num" style={{ textAlign: 'right', color: tone }}>
+            <span className="num" style={{ textAlign: 'right', color: r.pnl_amount_gross == null ? 'var(--ink-500)' : tone }}>
               {r.pnl_amount_gross == null ? '—' : fmtKRW(Math.round(r.pnl_amount_gross))}
             </span>
             <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>{fmtHolding(r.holding_seconds)}</span>
