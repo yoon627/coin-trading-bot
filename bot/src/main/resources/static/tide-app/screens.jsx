@@ -326,18 +326,113 @@ function TradePage({ user, setActive }) {
 }
 
 // ── ORDERS / TRADES HISTORY ───────────────────────────────
+// 보유기간(초) → 사람이 읽는 문자열. null 은 미청산이거나 매수 기록이 없어 계산 불가한 경우.
+function fmtHolding(sec) {
+  if (sec == null) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}일 ${h}시간`;
+  if (h > 0) return `${h}시간 ${m}분`;
+  return `${m}분`;
+}
+
+const SELL_REASON_LABEL = {
+  TAKE_PROFIT: '익절', TRAILING_STOP: '트레일링', STOP_LOSS: '손절',
+  CHART_EXIT: '차트청산', DAILY_RESET: '일일리셋', MANUAL: '수동',
+};
+
+const RT_GRID = '110px 1.4fr 1.4fr 96px 120px 100px 92px';
+
 function OrdersPage({ user, setActive }) {
+  const [tab, setTab] = React.useState('roundtrips');
   const trades = useAPI(() => TideAPI.trades().catch(() => null), [], 10000);
+  const rt = useAPI(() => TideAPI.roundTrips().catch(() => null), [], 10000);
   // /api/trades returns { total, limit, offset, records } — pull the array out
   // of the envelope, otherwise list.length is undefined and trades render as empty.
   const list = trades.data?.records || [];
+  const rtList = rt.data?.round_trips || [];
+
+  const isRT = tab === 'roundtrips';
+  const src = isRT ? rt : trades;
+  const count = isRT ? rtList.length : list.length;
+
+  const tabBtn = (key, label) => (
+    <button onClick={() => setTab(key)}
+            style={{ padding: '7px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', borderRadius: 8,
+                     border: `1px solid ${tab === key ? 'transparent' : 'var(--ink-100)'}`,
+                     background: tab === key ? 'var(--ink-700)' : 'transparent',
+                     color: tab === key ? '#fff' : 'var(--ink-500)' }}>{label}</button>
+  );
+
+  const roundTripRows = (
+    <>
+      <div style={{ display: 'grid', gridTemplateColumns: RT_GRID,
+                    padding: '14px 24px', fontSize: 11, color: 'var(--ink-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
+        <span>거래쌍</span><span>매수</span><span>매도</span>
+        <span style={{ textAlign: 'right' }}>수익률</span>
+        <span style={{ textAlign: 'right' }}>손익(원)</span>
+        <span>보유기간</span><span>사유</span>
+      </div>
+      {rtList.map((r, i) => {
+        const tone = r.pnl_percent == null ? 'var(--ink-500)' : (r.pnl_percent > 0 ? 'var(--up)' : 'var(--down)');
+        return (
+          <div key={i} style={{ display: 'grid', gridTemplateColumns: RT_GRID, padding: '14px 24px', fontSize: 13, alignItems: 'center', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
+            <span style={{ fontWeight: 600 }}>
+              {r.ticker}
+              {r.open && <span style={{ display: 'block', fontSize: 10.5, color: 'var(--up)', fontWeight: 600 }}>보유 중</span>}
+            </span>
+            <span>
+              {r.partial ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>매수 기록 없음</span> : <>
+                <span className="num" style={{ display: 'block', fontSize: 11, color: 'var(--ink-500)' }}>
+                  {(r.entry_at || '').toString().slice(0, 16).replace('T', ' ')}
+                </span>
+                <span className="num" style={{ fontWeight: 600 }}>{fmtKRW(r.entry_price)}</span>
+                {r.buy_count > 1 && <span style={{ fontSize: 10.5, color: 'var(--ink-500)' }}> · {r.buy_count}회 분할</span>}
+              </>}
+            </span>
+            <span>
+              {r.open ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>—</span> : <>
+                <span className="num" style={{ display: 'block', fontSize: 11, color: 'var(--ink-500)' }}>
+                  {(r.exit_at || '').toString().slice(0, 16).replace('T', ' ')}
+                </span>
+                <span className="num" style={{ fontWeight: 600 }}>{fmtKRW(r.exit_price)}</span>
+              </>}
+            </span>
+            <span className="num" style={{ textAlign: 'right', fontWeight: 700, color: tone }}>
+              {r.pnl_percent == null ? '—' : `${r.pnl_percent > 0 ? '+' : ''}${fmtNum(r.pnl_percent, 2)}%`}
+            </span>
+            <span className="num" style={{ textAlign: 'right', color: tone }}>
+              {r.pnl_amount_gross == null ? '—' : fmtKRW(Math.round(r.pnl_amount_gross))}
+            </span>
+            <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>{fmtHolding(r.holding_seconds)}</span>
+            <span>{r.reason ? <Badge tone="primary">{SELL_REASON_LABEL[r.reason] || r.reason}</Badge> : '—'}</span>
+          </div>
+        );
+      })}
+      <div style={{ padding: '12px 24px', fontSize: 11, color: 'var(--ink-500)', borderTop: '1px solid var(--ink-100)', lineHeight: 1.6 }}>
+        손익(원)은 매도총액 − 매수총액이라 <b>수수료가 빠지지 않은</b> 값입니다. 수익률(%)은 왕복 수수료를 차감한 값이라 둘의 부호가 다를 수 있습니다.
+      </div>
+    </>
+  );
 
   return (
     <Shell active="orders" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
-           title="주문·내역" subtitle={`총 ${list.length}건의 거래`}
-           actions={<Button size="sm" icon="refresh" variant="outline" onClick={trades.reload}>새로고침</Button>}>
+           title="주문·내역" subtitle={isRT ? `총 ${count}건의 매매 (매수→매도)` : `총 ${count}건의 체결`}
+           actions={<Button size="sm" icon="refresh" variant="outline" onClick={src.reload}>새로고침</Button>}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        {tabBtn('roundtrips', '매매 단위')}
+        {tabBtn('raw', '전체 체결 내역')}
+      </div>
+
+      {isRT && rt.data?.truncated &&
+        <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 8, background: 'var(--ink-50)', fontSize: 12, color: 'var(--ink-500)' }}>
+          기록이 많아 오래된 일부가 잘렸습니다 — 가장 오래된 항목은 매수 기록이 비어 있을 수 있습니다.
+        </div>}
+
       <Card padding={0}>
-        {trades.loading ? <div style={{ padding: 40, textAlign: 'center' }}><span className="tide-spinner"/></div> :
+        {src.loading ? <div style={{ padding: 40, textAlign: 'center' }}><span className="tide-spinner"/></div> :
+         isRT ? (
+          !rtList.length ? <Empty icon="orders" title="매매 내역이 없습니다" message="봇을 실행하거나 수동 매매를 시작해보세요"/> : roundTripRows
+         ) :
          !list.length ? <Empty icon="orders" title="거래 내역이 없습니다" message="봇을 실행하거나 수동 매매를 시작해보세요"/> :
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '160px 110px 70px 1fr 1fr 1fr 110px',

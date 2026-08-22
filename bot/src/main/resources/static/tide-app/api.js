@@ -53,6 +53,8 @@ const TideAPI = {
   portfolio: () => TideAPI._fetch('/api/portfolio'),
   account: () => TideAPI._fetch('/api/account'),
   trades: () => TideAPI._fetch('/api/trades'),
+  // 매수→매도 짝. 응답은 { total, limit, truncated, round_trips } 이고 각 항목 필드는 SNAKE_CASE.
+  roundTrips: () => TideAPI._fetch('/api/trades/roundtrips'),
   pricesLatest: () => TideAPI._fetch('/api/prices/latest'),
 
   // Strategy + backtest
