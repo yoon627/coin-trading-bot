@@ -140,9 +140,15 @@ class KneeStrategyComparisonTest {
         }
         println(report)
 
+        // aggregate 는 거래가 0건이어도 strategies.map 으로 늘 9행을 만든다. 행 수만 세면 fixture 로드가
+        // 실패해 전부 N/A 가 돼도 통과하므로, 두 국면 모두에서 무릎 전략이 실제로 거래했는지까지 본다.
         for (regime in Regime.entries) {
             val rows = aggregate(BacktestFixtures.loadPaired(regime), BacktestFixtures::outOfSample, liveDefault)
             assertEquals(strategies.size, rows.size, "$regime: 전략 수가 맞지 않는다")
+            listOf("knee_reversal", "knee_pullback").forEach { name ->
+                val row = rows.single { it.strategy == name }
+                assertTrue(row.trades > 0, "$regime/$name: paired 비교에 거래가 없다 — fixture 로드 실패 가능")
+            }
         }
     }
 
