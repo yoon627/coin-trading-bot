@@ -13,6 +13,9 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import java.time.LocalDateTime
 import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
@@ -36,6 +39,8 @@ class PositionManager(
     private val commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean =
         { persistState, _ -> persistState(); true },
     private val notifyTrade: suspend (record: TradeRecord) -> Unit = {},
+    /** 막힌 매도 경과시간 판정용. 테스트가 임계 경계를 정확히 검증할 수 있도록 주입한다(#55). */
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -418,19 +423,40 @@ class PositionManager(
         // 손절도 못 한 채 방치되므로, 매수판 halt 와 같은 상한에서 한 번 ERROR 로 올려 사람이 개입하게 한다.
         // (halt 는 신규 매수만 막는 플래그라 여기선 쓰지 않는다 — 필요한 건 차단이 아니라 알림.)
         if (state.pendingSellUuid != null) {
-            state.sellReconcileFailureCount++
-            if (state.sellReconcileFailureCount == tradingProperties.reconcileHaltThreshold) {
-                log.error(
-                    "매도 reconcile 미해소 {}회 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요.",
-                    state.sellReconcileFailureCount, ticker, uuid,
-                )
-            }
-        } else {
-            state.sellReconcileFailureCount = 0
+            warnIfSellStuckTooLong(ticker, state, uuid)
         }
         // 매도 pending 전이(clearPendingSell/markSold/부분갱신) durable 반영. wait(무전이)도 upsert 무해.
         persist(state)
         return result
+    }
+
+    /**
+     * 막힌 매도를 사람에게 한 번 알린다. 카운터가 아니라 **경과시간**으로 판정하는 이유는 pending 이
+     * durable 이기 때문이다 — 메모리 카운터는 배포·크래시마다 0 으로 돌아가 임계에 영영 못 닿았고,
+     * 그 사이 processTicker 는 매도·매수 평가를 통째로 막아 보유 포지션이 손절 없이 방치됐다(#55).
+     *
+     * 임계는 기존 의미(`reconcileHaltThreshold` tick)를 시간으로 환산해 유지한다.
+     * (halt 는 신규 매수만 막는 플래그라 여기선 쓰지 않는다 — 필요한 건 차단이 아니라 알림.)
+     */
+    private fun warnIfSellStuckTooLong(ticker: String, state: TradingState, uuid: String) {
+        if (state.pendingSellAlerted) return
+        val since = state.pendingSellSince ?: run {
+            // 이 마이그레이션 이전에 시작된 pending 은 시각이 없다 — 지금부터 센다.
+            state.pendingSellSince = clock.instant()
+            return
+        }
+        val threshold = Duration.ofSeconds(
+            tradingProperties.reconcileHaltThreshold.toLong() * tradingProperties.intervalSeconds,
+        )
+        val stuckFor = Duration.between(since, clock.instant())
+        if (stuckFor < threshold) return
+        // 알린 **뒤에** 표시한다. 먼저 표시하면 그 사이 크래시·전송 실패 시 재알림이 막혀 알림이
+        // 영구 유실된다 — 중복 알림이 유실보다 낫다. (전송 성공까지 보장하려면 outbox 가 필요하다.)
+        log.error(
+            "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요.",
+            stuckFor.seconds, ticker, uuid,
+        )
+        state.pendingSellAlerted = true
     }
 
     suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? {
@@ -488,6 +514,9 @@ class PositionManager(
         // 다음 tick reconcilePendingSell 이 이어받아 청산 확정·기록 → 이중매도·감사유실 방지.
         state.pendingSellUuid = order.uuid
         state.pendingSellReason = reason
+        // 미해소가 얼마나 끌었는지는 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55).
+        state.pendingSellSince = clock.instant()
+        state.pendingSellAlerted = false
         // 재시작 후에는 잔고·평단이 이미 비어 있으므로, 청산 기록의 근거를 주문 시점 값으로 함께 남긴다.
         state.pendingSellVolume = sellable
         state.pendingSellAvgPrice = state.avgBuyPrice
