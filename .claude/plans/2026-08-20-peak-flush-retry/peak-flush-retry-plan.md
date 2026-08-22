@@ -1,6 +1,6 @@
 ---
 title: peak-flush-retry — peakPrice flush 1회 실패가 재시도되지 않는 문제 (#54)
-status: in_progress
+status: done
 started: 2026-08-20
 updated: 2026-08-20
 ---
@@ -14,11 +14,12 @@ main 은 peak 영속 자체가 없었으므로 회귀가 아니라 **PR #50 개�
 # Progress
 
 - 2026-08-20: Explore — `TradingEngine.kt:264` 가 `updatePeakPrice()` true 일 때만 `persistState`, 그 `persist` 는 warn 만 남기고 삼킨다. 선례로 `pendingPersistFailed`(비영속 dirty + `retryPendingPersistIfNeeded`)가 이미 있어 같은 형태를 택했다.
+- 2026-08-22: PR #100 머지(main `032e49a`). pre-push codex 가 P3 2건·P2 1건을 추가 검출해 전량 반영, 659 tests green.
 - 2026-08-20: TDD Red(3 테스트) → 구현 → Green. 기존 테스트 2건이 `persistState` 호출을 검증하고 있어 `persistPeak` 으로 갱신했고, 재시도 경로 테스트를 추가했다. 654 tests green.
 
 # Next
 
-codex 리뷰 결과 반영 → PR.
+없음 — PR [#100](https://github.com/yoon627/coin-trading-bot/pull/100) 머지(main `032e49a`), 이슈 #54 종결.
 
 # Decisions
 
