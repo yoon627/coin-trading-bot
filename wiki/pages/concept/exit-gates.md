@@ -47,7 +47,7 @@ sources:
 - **`maxHoldDays` 는 0·음수를 1로 보정**한다(`effectiveMaxHoldDays`). env 오설정으로 0 이 들어오면 "매수 당일 즉시 청산" 루프가 돌기 때문이다.
 - **NaN 안전**: 평단 0 등으로 `pnlPct` 가 NaN 이면 IEEE 비교 의미상 모든 조건이 false → 발동하지 않는다.
 - **게이트는 gross, 기록은 net**: 청산 판정은 수수료를 빼지 않은 수익률로 하고, `TradeRecord.pnlPercent` 에만 왕복 수수료(`roundTripFeeRate`, 기본 0.1%)를 차감해 남긴다.
-- **진입 전략으로 청산한다**: `resolveExitStrategy` 가 `entryStrategy` 를 복원해 그 전략의 `shouldSell` 을 쓴다. 전략이 목록에서 사라졌으면 활성 전략으로 폴백하며 WARN — 이때는 청산 기준이 진입과 달라진다([[swing-strategies]]).
+- **진입 전략으로 청산한다**: `resolveExitStrategy` 가 `entryStrategy` 를 복원해 그 전략의 `shouldSell` 을 쓴다. 전략이 목록에서 사라졌으면 활성 전략으로 폴백하며 WARN — 이때는 청산 기준이 진입과 달라진다([[swing-strategies]]). 같은 `entryStrategy` 가 **매도 기록의 전략 귀속**에도 쓰인다(`buildSellRecord` 가 `markSold` 이전에 읽는다 — [[persistence-schema]]).
 - **차트 청산은 기본 off** (`chartExitEnabled=false`). 켜기 전 백테스트 검증이 전제다.
 
 ## ⚠️ 진입 시점 스냅샷은 아직 소비되지 않는다

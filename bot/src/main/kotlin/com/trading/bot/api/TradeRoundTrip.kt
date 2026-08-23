@@ -39,6 +39,37 @@ data class TradeRoundTrip(
 /** 코인 수량은 소수라 잔량 0 을 정확히 비교할 수 없다. 이 이하면 청산된 것으로 본다. */
 private const val VOLUME_EPSILON = 1e-8
 
+/** 수동 주문의 `strategy` 값 — `ManualTradeController` 가 넣는다. */
+private const val MANUAL_STRATEGY = "manual"
+
+/**
+ * 한 포지션의 매수 수량·금액. 매수 기록의 의미가 경로마다 달라서 그냥 합산할 수 없다.
+ *
+ * `PositionManager.completeBuy` 는 거래소 **전체 잔고와 평단**을 그대로 적는다(#20 — 재시작 시
+ * `syncPosition` 이 복원한 분과 이중계상되지 않게 하려는 의도다). 그래서 엔진 매수 기록은 증분 체결이
+ * 아니라 **그 시점 포지션 전체의 스냅샷**이고, 여러 건을 더하면 앞선 매수가 중복으로 들어간다.
+ * 반면 수동 매수(`TradeExecutionService.executeBuy`)는 그 주문의 금액·수량만 적으므로 합산이 맞다.
+ *
+ * 그래서 엔진 기록이 하나라도 있으면 **가장 마지막 것**이 포지션 전체를 대표하고, 수동뿐이면 합산한다.
+ *
+ * `strategy` 가 비어 있는 기록은 출처를 알 수 없으므로 합산하는 쪽(기존 동작)을 유지한다. 정상 흐름에서는
+ * 엔진도 수동도 값을 채우므로 실데이터에는 없다.
+ */
+private data class BuySide(val volume: Double, val amount: Double, val count: Int) {
+    companion object {
+        fun of(buys: List<TradeRecordEntity>): BuySide {
+            val engineSnapshot = buys.lastOrNull {
+                it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true)
+            }
+            return if (engineSnapshot != null) {
+                BuySide(engineSnapshot.volume, engineSnapshot.totalAmount, buys.size)
+            } else {
+                BuySide(buys.sumOf { it.volume }, buys.sumOf { it.totalAmount }, buys.size)
+            }
+        }
+    }
+}
+
 /**
  * 한 포지션은 "매수 누적 → 매도 누적으로 잔량이 0 이 될 때까지" 이다.
  *
@@ -68,13 +99,17 @@ fun assembleRoundTrips(
             sells = mutableListOf()
         }
 
+        fun remaining() = BuySide.of(buys).volume - sells.sumOf { it.volume }
+
         for (row in rows) {
             if (row.side.equals("BUY", ignoreCase = true)) {
+                // 매도가 시작된 뒤에 들어온 매수는 새 포지션이다. 잔량이 남아 있어도 여기서 끊지 않으면
+                // BUY→부분SELL→BUY→SELL 이 한 행으로 뭉쳐 보유기간과 손익이 뒤섞인다.
+                if (sells.isNotEmpty()) flush(closed = remaining() <= VOLUME_EPSILON)
                 buys.add(row)
             } else {
                 sells.add(row)
-                val remaining = buys.sumOf { it.volume } - sells.sumOf { it.volume }
-                if (remaining <= VOLUME_EPSILON) flush(closed = true)
+                if (remaining() <= VOLUME_EPSILON) flush(closed = true)
             }
         }
         if (buys.isNotEmpty() || sells.isNotEmpty()) flush(closed = false)
@@ -90,8 +125,9 @@ private fun roundTrip(
     closed: Boolean,
     headCut: Boolean,
 ): TradeRoundTrip {
-    val buyAmount = buys.sumOf { it.totalAmount }
-    val buyVolume = buys.sumOf { it.volume }
+    val buySide = BuySide.of(buys)
+    val buyAmount = buySide.amount
+    val buyVolume = buySide.volume
     val sellAmount = sells.sumOf { it.totalAmount }
     val sellVolume = sells.sumOf { it.volume }
     val entryAt = buys.firstOrNull()?.createdAt
@@ -120,7 +156,12 @@ private fun roundTrip(
             null
         },
         reason = sells.lastOrNull()?.reason,
-        strategy = buys.firstOrNull()?.strategy,
+        // 수동 매수 위에 엔진이 매수하면 런타임 entryStrategy 는 엔진 전략이 된다(수동 매수는 TradingState 를
+        // 건드리지 않는다). 첫 BUY 를 그대로 쓰면 'manual' 이 나와서, 같은 포지션의 SELL 기록·V21 백필과
+        // 전략 귀속이 갈린다. 엔진 기록이 있으면 그 중 **첫 번째**를 쓴다 — 여럿이면 먼저 찍힌 쪽이 남는다.
+        strategy = buys.firstOrNull { it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
+            ?.strategy
+            ?: buys.firstOrNull()?.strategy,
         open = !closed,
         partial = untrustedBuys,
     )

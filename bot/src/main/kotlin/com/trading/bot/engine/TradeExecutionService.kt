@@ -3,6 +3,7 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.TradePnl
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.notification.DiscordNotifier
@@ -28,13 +29,8 @@ class TradeExecutionService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    /** 기록용 net pnl(%) — 왕복수수료 차감, PositionManager.sell 과 동일 기준. 평단·현재가 미상이면 null(가짜 −100.1% 방지). */
     private fun netPnlPercent(currentPrice: Double, avgBuyPrice: Double): Double? =
-        if (avgBuyPrice > 0 && currentPrice > 0) {
-            ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100.0 - tradingProperties.roundTripFeeRate * 100
-        } else {
-            null
-        }
+        TradePnl.netPercent(currentPrice, avgBuyPrice, tradingProperties.roundTripFeeRate)
 
     /**
      * 매수 주문 실행 + 기록 저장 + Discord 알림
@@ -69,6 +65,8 @@ class TradeExecutionService(
                 price = currentPrice,
                 volume = volume,
                 totalAmount = amount,
+                pnlPercent = null, // 진입 — 실현 손익 없음
+                pnlAmount = null,
                 strategy = strategy,
                 userId = userId,
             )
@@ -106,13 +104,16 @@ class TradeExecutionService(
         return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
             val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
             val vol = account.balanceDouble()
+            val avgBuyPrice = account.avgBuyPriceDouble()
+            val pnl = netPnlPercent(currentPrice, avgBuyPrice)
             TradeRecord(
                 ticker = market,
                 side = TradeSide.SELL,
                 price = currentPrice,
                 volume = vol,
                 totalAmount = currentPrice * vol,
-                pnlPercent = netPnlPercent(currentPrice, account.avgBuyPriceDouble()),
+                pnlPercent = pnl,
+                pnlAmount = TradePnl.amount(pnl, avgBuyPrice, vol),
                 reason = SellReason.MANUAL.name,
                 strategy = strategy,
                 userId = userId,
@@ -150,13 +151,15 @@ class TradeExecutionService(
         return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
             val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
             val vol = sellVolume.toDoubleOrNull() ?: 0.0
+            val pnl = netPnlPercent(currentPrice, avgBuyPrice)
             TradeRecord(
                 ticker = market,
                 side = TradeSide.SELL,
                 price = currentPrice,
                 volume = vol,
                 totalAmount = currentPrice * vol,
-                pnlPercent = netPnlPercent(currentPrice, avgBuyPrice),
+                pnlPercent = pnl,
+                pnlAmount = TradePnl.amount(pnl, avgBuyPrice, vol),
                 reason = SellReason.MANUAL.name,
                 strategy = strategy,
                 userId = userId,
@@ -192,7 +195,11 @@ class TradeExecutionService(
                 price = record.price,
                 volume = record.volume,
                 totalAmount = record.totalAmount,
+                // 체결 응답의 실제 수수료가 아니라 설정값 기반 추정 — Order 가 paid_fee 를 파싱하지 않는다.
+                // 매수·매도 양쪽에서 편도로 잡히므로 두 행을 합치면 왕복분이 된다.
+                fee = TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate),
                 pnlPercent = record.pnlPercent,
+                pnlAmount = record.pnlAmount,
                 reason = record.reason,
                 strategy = record.strategy,
                 exchangeOrderId = record.exchangeOrderId,
