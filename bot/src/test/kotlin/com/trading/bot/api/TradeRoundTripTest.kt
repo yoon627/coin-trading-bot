@@ -221,8 +221,8 @@ class TradeRoundTripTest {
         )
 
         val rt = rts.single()
-        // 매도가 있었으므로 '매도 없음'(open) 은 아니다 — 잔량이 남은 일부 청산이다
-        assertFalse(rt.open)
+        // 잔량이 남았으므로 여전히 보유 중(open)이고, 그와 별개로 일부는 실현됐다
+        assertTrue(rt.open)
         assertTrue(rt.partiallyClosed)
         assertEquals(1, rt.sellCount)
         // 실현된 매도 정보는 그대로 보인다
