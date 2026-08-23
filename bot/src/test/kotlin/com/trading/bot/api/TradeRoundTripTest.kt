@@ -7,6 +7,7 @@ import com.trading.bot.persistence.entity.TradeRecordEntity
 import java.time.LocalDateTime
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -233,13 +234,16 @@ class TradeRoundTripTest {
         assertEquals(80.0, rt.pnlAmountGross)
     }
 
-    /** 작은 초과도 그만큼의 원가를 모르는 건 같다 — 비율 여유를 두면 그 초과가 손익에 섞인다. */
+    /**
+     * 엔진 매수 수량은 거래소 실잔고라 매도 수량과 직접 비교할 수 있다.
+     * 작은 초과도 그만큼의 원가를 모르는 건 같으므로 비율 여유를 두면 그 초과가 손익에 섞인다.
+     */
     @Test
-    fun `초과 매도가 아주 적어도 손익을 계산하지 않는다`() {
+    fun `실측 매수라면 초과 매도가 아주 적어도 손익을 계산하지 않는다`() {
         val rts = assembleRoundTrips(
             listOf(
-                rec("KRW-BTC", "BUY", 100.0, 100.0, "2026-08-01T10:00", strategy = "manual"),
-                // 0.5% 초과 — 비율 톨러런스(1%)를 뒀다면 정상 매도로 새어나간다
+                rec("KRW-BTC", "BUY", 100.0, 100.0, "2026-08-01T10:00", strategy = "combined"),
+                // 0.5% 초과 — 비율 톨러런스를 뒀다면 정상 매도로 새어나간다
                 rec("KRW-BTC", "SELL", 120.0, 100.5, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
             )
         )
@@ -247,6 +251,26 @@ class TradeRoundTripTest {
         val rt = rts.single()
         assertTrue(rt.partial)
         assertNull(rt.pnlAmountGross)
+    }
+
+    /**
+     * 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) 매도는 실제 잔고를 판다.
+     * 그래서 이전 포지션이 없는 정상 매매에서도 매도가 조금 더 많게 기록될 수 있다 — 이를 초과 매도로
+     * 단정하면 멀쩡한 거래의 손익이 화면에서 사라진다.
+     */
+    @Test
+    fun `추정 매수의 작은 기록 오차는 초과 매도로 보지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 100.0, "2026-08-01T10:00", strategy = "manual"),
+                // 0.3% 차이 — 추정 수량과 실제 체결의 오차 범위
+                rec("KRW-BTC", "SELL", 120.0, 100.3, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
+            )
+        )
+
+        val rt = rts.single()
+        assertFalse(rt.partial, "기록 오차를 초과 매도로 오인하면 정상 거래의 손익이 사라진다")
+        assertNotNull(rt.pnlAmountGross)
     }
 
     /**
