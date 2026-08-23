@@ -2,9 +2,9 @@
 title: 스윙 전략 9종과 TradingStrategy 인터페이스
 category: concept
 created: 2026-07-28
-updated: 2026-08-22
+updated: 2026-08-23
 claim_state: current
-verified: 2026-08-22 — KneeRsiWindowTest 로 w50/w60/w41 판정 일치 확인(2국면 12마켓 fixture 1692 케이스), KneeStrategyComparisonTest 로 두 국면 백테 관찰 기록 산출(PR #98·#99), :bot:test 통과
+verified: 2026-08-23 — TradingStrategy.minCandles 계약 도입(기본 21, macd 36, knee 41), StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/TradingStrategy.kt
   - bot/src/test/kotlin/com/trading/bot/engine/KneeStrategyComparisonTest.kt
@@ -66,7 +66,7 @@ interface TradingStrategy {
 2. MA 상승추세 — `isMaUptrend(candles, 5, 20)`
 3. RSI 건전 구간 — `calculateRsi(candles, 14) in 30.0..70.0`
 
-캔들이 21개 미만이면 즉시 false. 그래서 엔진의 D1 최소 게이트도 21(`MIN_DAILY_CANDLES`)로 맞춰져 있다.
+캔들이 21개 미만이면 즉시 false. 필요한 최소 봉수는 이제 **전략이 `minCandles` 로 선언**하고 엔진이 `max(MIN_DAILY_CANDLES, minCandles)` 로 쓴다(기본 21 = 기본 `shouldSell` 인 5/20 데드크로스 요구). `macd_cross` 36, `knee_*` 41 이며 `StrategyMinCandlesTest` 가 선언과 실제를 대조한다. 엔진 하한 21 은 맞춰져 있다.
 
 ## 청산과의 관계
 

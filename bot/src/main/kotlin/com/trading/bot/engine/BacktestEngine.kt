@@ -55,7 +55,8 @@ class BacktestEngine(
     private val tradingProperties: TradingProperties,
 ) {
     companion object {
-        private const val MIN_CANDLES = 50
+        // internal: 전략의 minCandles 상한을 테스트가 이 값으로 고정한다(리터럴 중복 방지).
+        internal const val MIN_CANDLES = 50
         private const val INITIAL_BALANCE = 1_000_000.0
         private const val MAX_PROFIT_FACTOR = 999.0
     }
