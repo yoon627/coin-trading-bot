@@ -386,12 +386,14 @@ function OrdersPage({ user, setActive }) {
                   : null}
             </span>
             <span>
-              {r.partial ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>매수 기록 없음</span> : <>
+              {r.buy_count === 0 ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>매수 기록 없음</span> : <>
                 <span className="num" style={{ display: 'block', fontSize: 11, color: 'var(--ink-500)' }}>
                   {(r.entry_at || '').toString().slice(0, 16).replace('T', ' ')}
                 </span>
                 <span className="num" style={{ fontWeight: 600 }}>{fmtKRW(r.entry_price)}</span>
                 {r.buy_count > 1 && <span style={{ fontSize: 10.5, color: 'var(--ink-500)' }}> · {r.buy_count}회 분할</span>}
+                {/* 매수 기록이 불완전해 평단·손익을 그대로 믿을 수 없는 경우 */}
+                {r.partial && <span style={{ fontSize: 10.5, color: 'var(--down)' }}> · 기록 불완전</span>}
               </>}
             </span>
             <span>

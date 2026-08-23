@@ -277,6 +277,28 @@ class TradeRoundTripTest {
     }
 
     /**
+     * 수동 `sellAll` 은 거래소 잔고 전체를 팔기 때문에 이전 포지션에서 넘어온 잔여분까지 매도 수량에 들어간다.
+     * 그 잔여분의 원가는 이 그룹에 없으므로 신규 평단을 적용하면 손익이 부풀려진다.
+     */
+    @Test
+    fun `매수보다 많이 팔렸으면 손익을 계산하지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00"),
+                // 이전 포지션 잔여분 1개가 섞여 3개가 팔렸다
+                rec("KRW-BTC", "SELL", 120.0, 3.0, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
+            )
+        )
+
+        val rt = rts.single()
+        assertTrue(rt.partial, "잔여분 원가를 모르므로 매수 기반 값을 신뢰할 수 없다")
+        assertNull(rt.pnlAmountGross, "신규 평단을 잔여분에 적용하면 손익이 부풀려진다")
+        // 매도 자체의 값은 그대로 노출한다
+        assertEquals(120.0, rt.exitPrice)
+        assertEquals(19.9, rt.pnlPercent)
+    }
+
+    /**
      * 프론트(`screens.jsx` OrdersPage)가 읽는 키와 실제 와이어 포맷이 어긋나면 화면이 조용히 빈다.
      * 앱은 Jackson SNAKE_CASE 전략(`application.yml`)을 쓰므로 그 변환 결과를 계약으로 고정한다.
      */

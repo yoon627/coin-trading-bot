@@ -105,8 +105,11 @@ private fun roundTrip(
     val entryAt = buys.firstOrNull()?.createdAt
     val exitAt = sells.lastOrNull()?.createdAt
     val entryPrice = if (buyVolume > 0) buyAmount / buyVolume else null
-    // 매수 기록이 없거나(고아 SELL) 앞이 잘려 일부만 남았으면 매수 기반 값을 믿을 수 없다.
-    val untrustedBuys = buys.isEmpty() || headCut
+    // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다
+    // (수동 sellAll 은 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
+    val oversold = buys.isNotEmpty() && sellVolume > buyVolume * (1 + DUST_RATIO)
+    // 매수 기록이 없거나(고아 SELL) 앞이 잘렸거나 초과 매도면 매수 기반 값을 믿을 수 없다.
+    val untrustedBuys = buys.isEmpty() || headCut || oversold
 
     return TradeRoundTrip(
         ticker = ticker,
