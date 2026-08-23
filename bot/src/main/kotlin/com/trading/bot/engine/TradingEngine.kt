@@ -230,8 +230,9 @@ class TradingEngine(
                 ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
                 ?: return
 
-            // 시작 시 syncPosition(runLoop) 이 실패했으면(unsynced) 매수 평가 전에 재시도. 성공 시 해소,
-            // 실패 지속 시 buy() 초입 가드가 신규 진입을 막아 이중 포지션을 방지한다.
+            // syncPosition(runLoop) 이 보유 여부를 확정하지 못했으면(unsynced — 조회 실패이거나 우리 주문으로
+            // 설명 안 되는 locked) 매수 평가 전에 재시도. 해소되면 풀리고, 지속되면 buy() 초입 가드가
+            // 신규 진입을 막아 이중 포지션을 방지한다.
             if (state.unsynced) {
                 positionManager.syncPosition(ticker, state)
             }
