@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import kotlin.math.max
 
 class TradingEngine(
     private val upbitClient: UpbitClient,
@@ -56,6 +57,9 @@ class TradingEngine(
     private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
+    // 캔들 부족 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 키에 전략·경로를 넣는 이유:
+    // 런타임 setStrategy 로 전략이 바뀌면 새로 알려야 하고, 매수/청산이 중복 발화하면 안 된다.
+    private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
     // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
     @Volatile
     private var activeStrategy: TradingStrategy? = null
@@ -279,11 +283,16 @@ class TradingEngine(
             // 매수도 청산과 동일: store 에 충분한 D1 이 있으면 store, 부족하면(부팅 직후/신규 마켓) REST 폴백.
             // 구 `size>=2` 게이트는 오염(중복 누적)에 가려 늘 store 를 탔고, 오염 제거 후엔 warm-up 동안 적은 캔들로
             // 전략을 죽였다(MeanReversion 등 size<21 false) → loadStoreDailyCandles 게이트로 매수/청산 통일.
-            val storeCandles = loadStoreDailyCandles(ticker)
+            val minCandles = effectiveMinCandles(strategy)
+            val storeCandles = loadStoreDailyCandles(ticker, minCandles)
             val shouldBuy = if (storeCandles != null) {
                 strategy.shouldBuyNormalized(storeCandles, currentPrice, tradingProperties)
             } else {
                 val candles = upbitClient.getDayCandles(ticker, MAX_DAILY_CANDLE_LOOKBACK)
+                // 부족해도 막지 않는다 — 전략이 자기 가드로 false 를 내므로 결과는 같고, 여기서 끊으면
+                // volatility_breakout(진입 2봉)처럼 짧은 이력으로도 매매하던 전략의 계약이 바뀐다.
+                // 목적은 차단이 아니라 "왜 신호가 없는지"를 드러내는 것이다.
+                if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, "buy", candles.size)
                 strategy.shouldBuy(candles, currentPrice, tradingProperties)
             }
             if (shouldBuy) {
@@ -350,28 +359,50 @@ class TradingEngine(
         currentPrice: Double,
         strategy: TradingStrategy,
     ): Boolean {
-        val storeCandles = loadStoreDailyCandles(ticker)
+        // 여기 strategy 는 resolveExitStrategy 가 복원한 **진입 전략**이다. 활성 전략 값을 쓰면
+        // knee(41)로 산 포지션을 활성 volatility_breakout(21) 기준으로 판단해, 21~40봉 store 가
+        // "충분"으로 통과하고 ShoulderExit 이 영영 false 가 된다 — 차트청산이 죽은 포지션이 생긴다.
+        val minCandles = effectiveMinCandles(strategy)
+        val storeCandles = loadStoreDailyCandles(ticker, minCandles)
         if (storeCandles != null) {
             return strategy.shouldSellNormalized(storeCandles, currentPrice, tradingProperties)
         }
         val candles = upbitClient.getDayCandles(ticker, MAX_DAILY_CANDLE_LOOKBACK)
-        if (candles.size < MIN_DAILY_CANDLES) {
-            log.debug("chartExit skipped for {}: insufficient D1 candles ({})", ticker, candles.size)
+        if (candles.size < minCandles) {
+            warnInsufficientCandles(ticker, strategy, "chartExit", candles.size)
             return false
         }
         return strategy.shouldSell(candles, currentPrice, tradingProperties)
+    }
+
+    /** 전략 요구와 엔진 하한 중 큰 쪽. 하한을 두는 이유는 21 미만 선언 전략이 더 짧은 store 를
+     * 고르게 되어(REST 60봉 대신) 지표 값 자체가 달라지기 때문이다 — 특히 RSI 는 window 길이에 민감하다. */
+    private fun effectiveMinCandles(strategy: TradingStrategy): Int =
+        max(MIN_DAILY_CANDLES, strategy.minCandles)
+
+    /** 캔들이 모자라 신호를 못 내는 상황을 알린다. 조용히 false 를 반환하면 원인을 코드로만 알 수 있다. */
+    private fun warnInsufficientCandles(ticker: String, strategy: TradingStrategy, path: String, actual: Int) {
+        val key = "$ticker:${strategy.name}:$path"
+        val now = System.currentTimeMillis()
+        val last = candleWarnAtMs[key]
+        if (last != null && now - last < STALE_WARN_INTERVAL_MS) return
+        candleWarnAtMs[key] = now
+        log.warn(
+            "{} skipped for {} (user {}): D1 캔들 {}개 < {} 전략이 요구하는 {}개",
+            path, ticker, userId, actual, strategy.name, effectiveMinCandles(strategy),
+        )
     }
 
     /**
      * 매수·청산 공통 D1 캔들 로딩. store 에 충분한(>=MIN_DAILY_CANDLES) D1 이 있으면 반환, 없으면 null(호출측 REST 폴백).
      * MarketDataStore 가 openTime upsert 로 dedup 하므로 distinctBy 는 방어망(store 회귀 대비, 평상시 no-op).
      */
-    internal fun loadStoreDailyCandles(ticker: String): List<NormalizedCandle>? {
+    internal fun loadStoreDailyCandles(ticker: String, minCandles: Int = MIN_DAILY_CANDLES): List<NormalizedCandle>? {
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
         val storeCandles = marketDataStore
             ?.getCandles(exchange, normalizedMarket, CandleInterval.D1, MAX_DAILY_CANDLE_LOOKBACK)
             ?.distinctBy { it.openTime }
-        return if (storeCandles != null && storeCandles.size >= MIN_DAILY_CANDLES) storeCandles else null
+        return if (storeCandles != null && storeCandles.size >= minCandles) storeCandles else null
     }
 
 }
