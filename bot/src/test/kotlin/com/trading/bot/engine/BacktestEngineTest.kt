@@ -456,4 +456,22 @@ class BacktestEngineTest {
         assertTrue(result.maxDrawdownPct > 0.0, "손실로 끝났는데 maxDrawdownPct 가 0 이다")
     }
 
+
+    @Test
+    fun `returns null at exactly the minimum candle count instead of throwing`() = runTest {
+        // 가드는 size < 50 만 막는데, 정확히 50봉이면 시뮬레이션 루프가 한 번도 돌지 않은 채
+        // buildResult 가 chronological[50] 을 읽어 IndexOutOfBounds 가 난다. 실질 최소 입력은 51봉이다.
+        val candles = buildTrendCandles(50)
+
+        val result = engine.run("volatility_breakout", candles, "KRW-BTC")
+
+        assertNull(result, "신호를 낼 수 없는 입력은 예외가 아니라 null 이어야 한다")
+    }
+
+    @Test
+    fun `runs with one candle above the minimum`() = runTest {
+        val result = engine.run("volatility_breakout", buildTrendCandles(51), "KRW-BTC")
+        assertNotNull(result, "51봉은 시뮬레이션이 가능해야 한다")
+    }
+
 }
