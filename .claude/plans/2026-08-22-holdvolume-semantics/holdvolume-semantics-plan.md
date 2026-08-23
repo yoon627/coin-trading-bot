@@ -1,8 +1,8 @@
 ---
 title: holdvolume-semantics — holdVolume 의 의미를 하나로 못박고 유령 포지션 제거 (#56)
-status: in_progress
+status: done
 started: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # Goal
@@ -29,11 +29,16 @@ updated: 2026-08-22
 - 2026-08-22 최종 검증 통과(`:bot:test`+`:common:test --rerun-tasks`, `compileKotlin`, wiki 3종) →
   커밋 `61d26c8`(코드+wiki, 8파일 +320/-25) · `1f8d115`(plan) → push(pre-push codex high:
   no blocking issues) → **PR #116** 생성. Acceptance 11개 항목 전부 증거 대조 완료.
+- 2026-08-23 `origin/main` 이 4개 PR 만큼 앞서 있어 `wiki/pages/concept/trading-engine-loop.md`
+  frontmatter 가 PR #118 과 충돌 → `origin/main` 을 브랜치로 머지해 해소(`3171627`, force push 없음).
+  양쪽 `verified` 사실 보존. main 은 PositionManager/TradingState/TradingEngine 미변경이라 핵심 무충돌.
+  재검증 전부 통과 → CI(`test`) SUCCESS → **PR #116 머지**(`67819cf`), #56 자동 종료.
+  worktree·로컬·원격 브랜치 정리 완료(브랜치 tip `3171627`).
+  `# Deferred` 3건을 이슈 #120·#121·#122 로 분리.
 
 # Next
 
-**PR #116 머지 대기.** 리뷰 코멘트가 달리면 이 worktree 에서 `/c` 로 이어받아 대응한다.
-머지되면 `# Deferred` 3건(wait 구간 상한 / 가드 기동 한정 / `sell()` M4 일관성)의 이슈화 여부를 판단.
+없음 — 완료. 후속은 `# Deferred` 에서 분리된 이슈 #120·#121·#122 가 소유한다.
 
 # Decisions
 
@@ -225,6 +230,9 @@ code-review(2026-08-22, Claude subagent + codex high) 처분:
 | Nit: `recoverSellFromBalance` KDoc 혼동 | **fix** | "이 경로만 상한 규칙 밖" 한 줄 추가 |
 
 # Deferred
+
+아래 3건은 **이슈로 분리됐다**(2026-08-23) — 이후 상태는 이슈가 소유한다:
+**#120**(wait 구간 상한 느슨함) · **#121**(가드 기동 시점 전용) · **#122**(`sell()` M4 일관성).
 
 - `recoverSellFromBalance` 의 `pendingSellVolume ?: holdVolume` fallback 은 이 경로가 `totalBalance()` 를
   유지하는 한 완전히는 정렬되지 않는다(심각도 낮음 — `pendingSellVolume` 이 null 인 레거시 row 에서만
