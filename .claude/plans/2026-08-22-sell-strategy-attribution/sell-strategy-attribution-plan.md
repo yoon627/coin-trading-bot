@@ -1,6 +1,6 @@
 ---
 title: sell-strategy-attribution — 매도 기록의 전략 귀속 복구 + 금액 손익 저장
-status: in_progress
+status: done
 started: 2026-08-22
 updated: 2026-08-23
 ---
@@ -35,13 +35,18 @@ updated: 2026-08-23
 - 2026-08-23: **main 병합 중 V20 번호 선점 발견** — plan-review 시점엔 비어 있었으나 `stuck-sell-alert`(#102) 머지로 V20 이 찼다. 내 backfill 을 **V21** 로 옮기고 백업 테이블·WARNING 문구도 맞췄다. 문서 충돌 2건은 양쪽 항목을 모두 살렸고, 상한 제거 후 남아 있던 wiki 의 "id 상한으로 고정" stale 서술도 교정. main V20 위에서 V1~V21 순차 적용 후 귀속 5/5 재확인.
 - 2026-08-23: **병합해온 main 코드에서 P1 2건 발견·수정**(pre-push codex). `TradeRoundTrip` 이 `buys.sumOf` 로 매수를 합산하는데, 엔진 BUY 행은 증분이 아니라 **누적 스냅샷**이라(이번 작업에서 실측 확정한 바로 그 성질) 추가매수 포지션의 수량·평단이 부풀고 전량 매도해도 잔량이 남아 라운드트립이 닫히지 않는다 — 운영 BTC 6월 거래에서 실제로 재현되는 값이다. `BuySide` 로 "엔진 기록이 있으면 마지막 것이 포지션 전체, 수동뿐이면 합산" 규칙을 세우고, 매도 시작 후의 새 매수는 별개 라운드트립으로 끊도록 고쳤다. TDD Red 3건 → Green.
 
+- 2026-08-23: **PR #117 머지 완료**(`1cb4f70`). CI test pass. 원격 브랜치 정리됨. pre-push 는 총 5라운드 6건 지적 중 5건 유효·1건 오탐(V20 재번호화 — 운영 DB 실측으로 반박: 적용된 V20 은 stuck_alert 이고 `trade_records.pnl_amount` 미존재. `--base` 가 병합 전 커밋이라 브랜치 내부 정리를 배포된 변경으로 오인). 사용자 승인 후 CODEX_SKIP=1 로 우회.
+
+- 2026-08-23: **배포·검증 완료.** V21 이 08-23 03:40:44 에 적용됐다(Flyway `Successfully applied 1 migration ... now at version v21`, 실행 104ms). 검증 결과가 사전 실측치와 정확히 일치: **combined 29건 +11,999원 / rsi_bounce 1건 +844원**, 미귀속 잔존 `trade_records` 0 · `trade_executions` 0, 두 테이블 combined 카운트 29/29 동일, 백업 테이블 30행/30행. 점검 블록 WARNING 은 **발화하지 않았다** — 미귀속이 0 이라 정상이다.
+  - ⚠️ **배포 순서에 대한 내 오해가 있었다**: 이 repo 는 `deploy-vultr` job 이 `github.event_name == 'push'` 라 **main 머지가 곧 자동 배포**다. "배포 전 백업" 을 계획해뒀지만 머지 순간 파이프라인이 시작됐다. `build-and-push` 단계에서 알아채 V21 적용 전에 백업을 확보했다(`backup.sh` 는 `BACKUP_S3_BUCKET` 미설정으로 사용 불가 → 변경 대상 두 테이블만 pg_dump, 6.3K).
+  - #117 의 배포 스텝은 **skipped** 됐다 — `Check deployment commit is current main` 가드가 작동했다(배포 시작 시점에 #118·#116 이 연달아 머지돼 main HEAD 가 앞서갔다). V21 은 이미 main 에 있었으므로 뒤이은 #116 배포에 함께 실려 적용됐다. 오늘처럼 머지가 몰리면 이 가드로 배포가 밀릴 수 있다.
+- 2026-08-23: 백업 테이블(`trade_records_v21_backup`·`trade_executions_v21_backup`, 각 30행)은 **보존하기로 결정**(사용자). 30행이라 공간 부담이 없고, 전략별 수치를 실제로 써보며 이상이 없는지 확인한 뒤 지우는 편이 안전하다.
+
 # Next
 
-**배포 시 확인 필요**(마이그레이션이 운영 데이터를 바꾼다):
-1. 배포 전 `deploy/vultr/backup.sh` 1회 실행(pg_dump→S3).
-2. 배포 후 기동 로그에서 `V20 backfill: 미귀속 매도 잔존` WARNING 을 확인 — 수동 매수만으로 만든 포지션 수와 일치해야 정상이고, 그보다 크면 페어링 전제가 깨진 것이다.
-3. SQL 로 전략별 집계 확인(API 아님 — `findByUserId` 는 legacy NULL user_id 행을 못 본다): `SELECT strategy, count(*) FROM trade_records WHERE side='SELL' GROUP BY 1`. 기대 **combined 29 / rsi_bounce 1**.
-4. 확인 후 `trade_records_v20_backup`·`trade_executions_v20_backup` DROP.
+없음 — 배포·검증까지 완료. 후속 정리 두 가지만 남았다:
+1. `trade_records_v21_backup`·`trade_executions_v21_backup` DROP (며칠 관찰 후).
+2. `# Deferred` 항목들 중 이슈로 올릴 것 선별.
 
 # Decisions
 
