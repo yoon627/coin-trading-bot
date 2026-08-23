@@ -426,4 +426,52 @@ class BacktestEngineTest {
         assertEquals("STOP_LOSS", first!!.reason, "같은 봉 신고점으로는 트레일링을 arm 하지 않아 SL 이 발동해야 한다")
         assertTrue(first.sellPrice < 10000.0, "SL 손실 체결이어야 한다(팬텀 트레일링 이익 아님)")
     }
+
+    @Test
+    fun `END trade updates drawdown like a normal exit`() = runTest {
+        // 시뮬레이션 종료 시 미청산 포지션은 "END" 로 강제청산된다. 그 거래가 손실이면 낙폭도 커져야 하는데,
+        // closeOpenPosition 이 peak/maxDrawdown 을 갱신하지 않으면 MDD 가 과소평가된다(processExit 는 갱신한다).
+        val alwaysBuy = object : TradingStrategy {
+            override val name = "always_buy"
+            override suspend fun shouldBuy(candles: List<Candle>, currentPrice: Double, config: TradingProperties) = true
+            override suspend fun shouldSell(candles: List<Candle>, currentPrice: Double, config: TradingProperties) = false
+        }
+        // 손절·익절·트레일링·보유상한을 모두 비활성에 가깝게 두어 END 로만 끝나게 한다.
+        val noExit = BacktestConfig(
+            takeProfitPct = 1_000.0, maxLossPct = 1_000.0,
+            trailingStopPct = 1_000.0, trailingArmPct = 1_000.0,
+            maxHoldDays = 10_000,
+        )
+        val engine = BacktestEngine(listOf(alwaysBuy), TradingProperties())
+
+        // 마지막 구간이 크게 하락 → END 청산이 손실로 끝난다.
+        val candles = buildCrashCandles(120)
+        val result = engine.run("always_buy", candles, "KRW-BTC", noExit)
+
+        assertNotNull(result)
+        result!!
+        val endTrades = result.trades.filter { it.reason == "END" }
+        assertTrue(endTrades.isNotEmpty(), "END 거래가 없어 검증이 성립하지 않는다")
+        assertTrue(endTrades.any { it.pnlPercent < 0 }, "END 가 손실이 아니어서 낙폭 검증이 무의미하다: ${endTrades.map { it.pnlPercent }}")
+        assertTrue(result.maxDrawdownPct > 0.0, "손실로 끝났는데 maxDrawdownPct 가 0 이다")
+    }
+
+
+    @Test
+    fun `returns null at exactly the minimum candle count instead of throwing`() = runTest {
+        // 가드는 size < 50 만 막는데, 정확히 50봉이면 시뮬레이션 루프가 한 번도 돌지 않은 채
+        // buildResult 가 chronological[50] 을 읽어 IndexOutOfBounds 가 난다. 실질 최소 입력은 51봉이다.
+        val candles = buildTrendCandles(50)
+
+        val result = engine.run("volatility_breakout", candles, "KRW-BTC")
+
+        assertNull(result, "신호를 낼 수 없는 입력은 예외가 아니라 null 이어야 한다")
+    }
+
+    @Test
+    fun `runs with one candle above the minimum`() = runTest {
+        val result = engine.run("volatility_breakout", buildTrendCandles(51), "KRW-BTC")
+        assertNotNull(result, "51봉은 시뮬레이션이 가능해야 한다")
+    }
+
 }
