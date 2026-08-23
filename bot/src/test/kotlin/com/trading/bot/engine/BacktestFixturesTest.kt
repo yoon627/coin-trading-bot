@@ -47,7 +47,7 @@ class BacktestFixturesTest {
     }
 
     @Test
-    fun `bull regime covers only the markets listed back then`() {
+    fun `regime market rosters are pinned`() {
         // 현재 거래대금 상위 8개 중 4개는 2023-11 에 미상장이었다 — 유니버스 선정의 생존편향 증거이자,
         // paired 비교를 4마켓으로 제한해야 하는 이유다.
         // 기대값을 구현 상수(PAIRED_MARKETS)로 쓰면 그 상수가 바뀔 때 테스트도 같이 바뀌어 통과한다.
@@ -61,9 +61,10 @@ class BacktestFixturesTest {
             BacktestFixtures.markets(Regime.BULL),
             "BULL 은 2023-11 당시 상장돼 있던 4개여야 한다",
         )
+        // 하드코딩끼리 비교하면 "교집합" 이라는 관계 자체는 검증되지 않는다. 관계를 직접 계산해 고정한다.
         assertEquals(
-            listOf("KRW-XRP", "KRW-BTC", "KRW-ETH", "KRW-DOGE"),
-            BacktestFixtures.PAIRED_MARKETS,
+            BacktestFixtures.markets(Regime.BEAR).intersect(BacktestFixtures.markets(Regime.BULL).toSet()),
+            BacktestFixtures.PAIRED_MARKETS.toSet(),
             "paired 마켓은 두 국면 교집합이어야 한다",
         )
     }

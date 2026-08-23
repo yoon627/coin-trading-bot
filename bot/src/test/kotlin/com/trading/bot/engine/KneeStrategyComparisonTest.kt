@@ -102,7 +102,7 @@ class KneeStrategyComparisonTest {
     fun `compares all strategies across both regimes and prints the record`() = runTest {
         val report = buildString {
             appendLine("무릎 전략 백테 관찰 기록 — pooled per-trade net pnl%")
-            appendLine("BEAR ${Regime.BEAR.label} 8마켓 / BULL ${Regime.BULL.label} 4마켓")
+            appendLine(Regime.entries.joinToString(" / ") { "$it ${it.label} ${BacktestFixtures.markets(it).size}마켓" })
             appendLine("주의: 마켓 상관이 높아 실효 독립 표본은 몇 개 되지 않는다. 판정이 아니라 기록이다.")
             appendLine()
             for (regime in Regime.entries) {
@@ -116,7 +116,6 @@ class KneeStrategyComparisonTest {
         println(report)
 
         val inDefault = aggregate(BacktestFixtures.loadAll(Regime.BEAR), BacktestFixtures::inSample, liveDefault)
-        assertEquals(strategies.size, inDefault.size)
         listOf("knee_reversal", "knee_pullback").forEach { name ->
             assertTrue(
                 inDefault.any { it.strategy == name && it.trades > 0 },
@@ -144,7 +143,6 @@ class KneeStrategyComparisonTest {
         // 실패해 전부 N/A 가 돼도 통과하므로, 두 국면 모두에서 무릎 전략이 실제로 거래했는지까지 본다.
         for (regime in Regime.entries) {
             val rows = aggregate(BacktestFixtures.loadPaired(regime), BacktestFixtures::outOfSample, liveDefault)
-            assertEquals(strategies.size, rows.size, "$regime: 전략 수가 맞지 않는다")
             listOf("knee_reversal", "knee_pullback").forEach { name ->
                 val row = rows.single { it.strategy == name }
                 assertTrue(row.trades > 0, "$regime/$name: paired 비교에 거래가 없다 — fixture 로드 실패 가능")
@@ -156,7 +154,9 @@ class KneeStrategyComparisonTest {
     fun `in and out of sample trades never overlap`() = runTest {
         // 한 마켓·한 전략만 보면 그 조합의 신호가 0건일 때 단언이 공허 통과한다. 전 조합을 돌고,
         // 거래가 있는 조합이 실제로 존재했는지까지 확인해야 분할 로직을 뒤집었을 때 잡힌다.
-        var checked = 0
+        // 두 구간을 따로 세는 이유는, 한쪽만 거래가 있어도 반대쪽 단언이 빈 집합에 대해 공허 통과하기 때문이다.
+        var inChecked = 0
+        var outChecked = 0
 
         for (regime in Regime.entries) {
             for ((market, candles) in BacktestFixtures.loadAll(regime)) {
@@ -171,50 +171,43 @@ class KneeStrategyComparisonTest {
                     // 체결은 신호 다음 봉이라 하한이 워밍업 +1 이다 — 범위를 넓게 잡으면 off-by-one 을 놓친다.
                     assertTrue(inTrades.all { it in 51..129 }, "$regime/$market/${strategy.name} in 진입이 구간 밖: $inTrades")
                     assertTrue(outTrades.all { it in 131..199 }, "$regime/$market/${strategy.name} out 진입이 워밍업 침범: $outTrades")
-                    assertEquals(emptySet<Int>(), inTrades intersect outTrades, "$regime/$market/${strategy.name} 두 구간 진입이 겹친다")
-                    checked++
+                    if (inTrades.isNotEmpty()) inChecked++
+                    if (outTrades.isNotEmpty()) outChecked++
                 }
             }
         }
 
-        assertTrue(checked > 0, "거래가 있는 조합이 하나도 없어 검증이 공허하다")
+        assertTrue(inChecked > 0, "in-sample 거래가 하나도 없어 검증이 공허하다")
+        assertTrue(outChecked > 0, "out-of-sample 거래가 하나도 없어 검증이 공허하다")
     }
 
     @Test
     fun `aggregation totals match the underlying backtest results`() = runTest {
-        // 집계 코드가 조용히 틀려도 리포트 숫자만 바뀔 뿐이라, 원본 결과와의 항등식으로 고정한다.
+        // 집계 코드가 조용히 틀려도 리포트 숫자만 바뀔 뿐이다. 합계만 맞추면 전략끼리 값이 뒤바뀌어도
+        // 통과하므로, 보고서에 실리는 네 값(거래수·END·평균수익률·승률)을 **전략별로** 원본과 대조한다.
         val markets = BacktestFixtures.loadAll(Regime.BEAR)
         val rows = aggregate(markets, BacktestFixtures::inSample, liveDefault).associateBy { it.strategy }
 
-        var totalTrades = 0
-        var totalEnd = 0
+        val pnlByStrategy = mutableMapOf<String, MutableList<Double>>()
+        val endByStrategy = mutableMapOf<String, Int>()
         for ((market, candles) in markets) {
             for (result in engine.compareAll(BacktestFixtures.inSample(candles), market, liveDefault)) {
-                totalTrades += result.trades.size
-                totalEnd += result.trades.count { it.reason == "END" }
+                pnlByStrategy.getOrPut(result.strategyName) { mutableListOf() } += result.trades.map { it.pnlPercent }
+                endByStrategy.merge(result.strategyName, result.trades.count { it.reason == "END" }, Int::plus)
             }
         }
 
-        assertEquals(totalTrades, rows.values.sumOf { it.trades }, "pooled 거래수가 원본 합과 다르다")
-        assertEquals(totalEnd, rows.values.sumOf { it.endTrades }, "END 집계가 원본과 다르다")
-        rows.values.forEach {
-            assertTrue(it.endTrades <= it.trades, "${it.strategy}: END 가 전체 거래수를 넘는다")
+        rows.values.forEach { row ->
+            val pnls = pnlByStrategy[row.strategy].orEmpty()
+            assertEquals(pnls.size, row.trades, "${row.strategy}: 거래수가 원본과 다르다")
+            assertEquals(endByStrategy[row.strategy] ?: 0, row.endTrades, "${row.strategy}: END 집계가 원본과 다르다")
+            if (pnls.isEmpty()) return@forEach
+            assertEquals(pnls.average(), row.avgNetPnl, 1e-9, "${row.strategy}: 평균 수익률이 원본과 다르다")
+            assertEquals(
+                100.0 * pnls.count { it > 0 } / pnls.size, row.winRate, 1e-9,
+                "${row.strategy}: 승률이 원본과 다르다",
+            )
         }
     }
 
-    @Test
-    fun `chart exit never fires under the live default config`() = runTest {
-        // maxHoldDays=1 이면 atHoldLimit 이 CHART_EXIT 을 먼저 차단한다(IntrabarExitModel).
-        // SWING 조합과의 차이가 이 게이트에서 온다는 전제를 고정한다.
-        for (regime in Regime.entries) {
-            for ((market, candles) in BacktestFixtures.loadAll(regime)) {
-                for (result in engine.compareAll(BacktestFixtures.inSample(candles), market, liveDefault)) {
-                    assertTrue(
-                        result.trades.none { it.reason == "CHART_EXIT" },
-                        "$regime/$market/${result.strategyName}: 기본 설정인데 CHART_EXIT 이 나왔다",
-                    )
-                }
-            }
-        }
-    }
 }

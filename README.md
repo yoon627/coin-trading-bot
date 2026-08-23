@@ -116,7 +116,7 @@ coin-trading-bot/
 │       │   ├── security/         # 사용자 API 키 암호화
 │       │   └── stream/           # candle 집계, 영속화, 보존 정책
 │       └── resources/
-│           ├── db/migration/     # Flyway V1~V19
+│           ├── db/migration/     # Flyway V1~V20
 │           └── static/           # login.html, app.html, tide-app/
 ├── deploy/aws/                   # AWS 생성·배포 스크립트와 prod Compose
 ├── deploy/oci/                   # Oracle Cloud(Always Free) 생성·배포 스크립트와 prod Compose
@@ -188,7 +188,7 @@ coin-trading-bot/
 | 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
 | 주문 | POST | `/api/trade/buy`, `/api/trade/sell` | 필요 |
-| 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades` | 필요 |
+| 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
 | 차트 | GET | `/api/chart/candles`, `/indicators`, `/tickers`, `/compare` | 필요 |
 | 전략 | GET/POST | `/api/strategies`, `/performance`, `/backtest` | 필요 |
 | 관심 목록 | GET | `/api/watchlist` | 필요 |
