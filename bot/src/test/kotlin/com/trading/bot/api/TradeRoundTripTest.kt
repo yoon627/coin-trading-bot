@@ -60,25 +60,32 @@ class TradeRoundTripTest {
         assertEquals(16200L, rt.holdingSeconds)
     }
 
+    /**
+     * 엔진 매수는 거래소 실잔고·평단을 남기는 **스냅샷**이라 합산하면 같은 보유분을 두 번 센다.
+     * 아래는 "1개 보유(평단 100) → 추가 매수로 3개 보유(평단 200)" 를 뜻한다.
+     */
     @Test
-    fun `분할 매수는 금액가중 평단으로 합산된다`() {
-        // 100원×1 + 200원×3 = 700원 / 4개 = 175원
+    fun `분할 매수는 합산하지 않고 마지막 스냅샷을 쓴다`() {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-ETH", "BUY", 100.0, 1.0, "2026-08-01T10:00"),
                 rec("KRW-ETH", "BUY", 200.0, 3.0, "2026-08-01T11:00"),
-                rec("KRW-ETH", "SELL", 300.0, 4.0, "2026-08-01T12:00"),
+                rec("KRW-ETH", "SELL", 300.0, 3.0, "2026-08-01T12:00"),
             )
         )
 
-        assertEquals(1, rts.size)
-        val rt = rts[0]
-        assertEquals(175.0, rt.entryPrice)
+        val rt = rts.single()
+        // 합산했다면 평단 175 · 수량 4 · 매수액 700 이 되어 실제보다 부풀려진다
+        assertEquals(200.0, rt.entryPrice)
+        assertEquals(3.0, rt.buyVolume)
+        assertEquals(600.0, rt.buyAmount)
+        // 매수 횟수는 그대로 2회
         assertEquals(2, rt.buyCount)
-        assertEquals(700.0, rt.buyAmount)
-        assertEquals(4.0, rt.buyVolume)
         // 진입 시각은 최초 매수 시각
         assertEquals(LocalDateTime.parse("2026-08-01T10:00"), rt.entryAt)
+        // 전량 청산으로 잡힌다
+        assertFalse(rt.partiallyClosed)
+        assertEquals(300.0, rt.pnlAmountGross)
     }
 
     @Test
@@ -226,11 +233,11 @@ class TradeRoundTripTest {
     }
 
     /**
-     * 운영 데이터(user 4, KRW-BTC)에서 확인된 패턴 — 첫 매수분이 한 번도 매도되지 않아 누적 잔량이
-     * 0 에 도달하지 못한다. 잔량으로 경계를 잡으면 이후 모든 매매가 한 줄로 뭉친다.
+     * 운영 데이터(user 4, KRW-BTC)의 실제 패턴 — 매수 스냅샷과 전량 매도가 번갈아 이어진다.
+     * 매수를 증분으로 오해해 합산하면 잔량이 0 에 닿지 않아 이 매매들이 전부 한 줄로 뭉쳤다.
      */
     @Test
-    fun `잔여 보유분이 남아도 이후 매매가 뭉치지 않는다`() {
+    fun `매도 후 재매수가 반복돼도 각각 분리된다`() {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 90000000.0, 0.0000983168, "2026-06-02T11:59"),

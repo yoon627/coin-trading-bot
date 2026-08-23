@@ -10,10 +10,13 @@ import java.time.LocalDateTime
 data class TradeRoundTrip(
     val ticker: String,
     val entryAt: LocalDateTime?,
-    /** 매수 금액가중 평단. */
+    /** 진입 평단 — 마지막 매수 기록의 가격. 엔진 매수는 거래소가 계산한 평단을 그대로 남긴다. */
     val entryPrice: Double?,
+    /** 매수 체결 횟수. 수량은 누적이 아니라 스냅샷이라 [buyVolume] 과 비례하지 않는다. */
     val buyCount: Int,
+    /** 마지막 매수 시점의 보유 금액(평단 × 보유수량). 매수 건별 금액의 합이 아니다. */
     val buyAmount: Double,
+    /** 마지막 매수 시점의 보유 수량. */
     val buyVolume: Double,
     /** 분할 매도 횟수. */
     val sellCount: Int,
@@ -50,10 +53,10 @@ private const val DUST_RATIO = 0.01
 /**
  * **매도 뒤에 매수가 오면 새 포지션이다.** 연속된 매도는 같은 포지션의 분할 매도로 본다.
  *
- * 수량 잔량으로 경계를 잡던 이전 규칙은 실제 데이터에서 실패했다 — 팔리지 않고 남은 소액 보유분이 있으면
- * 잔량이 0 에 도달하지 못해 그 티커의 매매가 전부 한 줄로 뭉쳤다(운영 데이터에서 8개 티커 중 3개가 그 상태).
- * 그 앞의 "매도 하나 = 포지션 종료" 규칙은 반대로 수동 분할 매도를 쪼개 손익을 틀리게 냈다.
- * 매매 **순서**로 경계를 정하면 두 경우 모두 옳게 갈린다.
+ * 수량 잔량으로 경계를 잡던 이전 규칙은 매수 기록을 증분으로 오해해(실제로는 스냅샷) 잔량이 0 에
+ * 도달하지 못했고, 그 티커의 매매가 전부 한 줄로 뭉쳤다. 그 앞의 "매도 하나 = 포지션 종료" 규칙은
+ * 반대로 수동 분할 매도를 쪼개 손익을 틀리게 냈다. 매매 **순서**로 경계를 정하면 수량 해석에
+ * 의존하지 않으므로 두 경우 모두 옳게 갈린다.
  *
  * 한계: 같은 포지션 중간에 추가 매수가 끼면(`BUY → 일부 SELL → BUY → SELL`) 둘로 갈린다. 수량만으로는
  * 추가 매수인지 새 진입인지 구분할 수 없어, 잘못 합치기보다 잘게 나누는 쪽을 택했다 — 나뉜 각 행의
@@ -98,13 +101,19 @@ private fun roundTrip(
     sells: List<TradeRecordEntity>,
     headCut: Boolean,
 ): TradeRoundTrip {
-    val buyAmount = buys.sumOf { it.totalAmount }
-    val buyVolume = buys.sumOf { it.volume }
+    // 엔진 매수(`PositionManager.completeBuy`)는 거래소 **실잔고와 평단**을 기록한다 — 증분이 아니라
+    // 그 시점 포지션 스냅샷이다. 합산하면 같은 보유분을 여러 번 세어 매수총액·평단이 부풀려진다.
+    // 그래서 마지막 매수 행을 대표로 쓴다(운영 데이터의 SELL 30건이 모두 직전 BUY 수량과 정확히 일치한다).
+    // 한계: 수동 매수(`TradeExecutionService.executeBuy`)는 이번 주문 수량만 남기는 증분이고 두 종류를
+    // 구분할 키가 없다. 수동 매수가 그룹의 마지막이면 총량보다 작게 잡힐 수 있다.
+    val lastBuy = buys.lastOrNull()
+    val buyAmount = lastBuy?.totalAmount ?: 0.0
+    val buyVolume = lastBuy?.volume ?: 0.0
+    val entryPrice = lastBuy?.price
     val sellAmount = sells.sumOf { it.totalAmount }
     val sellVolume = sells.sumOf { it.volume }
     val entryAt = buys.firstOrNull()?.createdAt
     val exitAt = sells.lastOrNull()?.createdAt
-    val entryPrice = if (buyVolume > 0) buyAmount / buyVolume else null
     // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다
     // (수동 sellAll 은 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
     val oversold = buys.isNotEmpty() && sellVolume > buyVolume * (1 + DUST_RATIO)
