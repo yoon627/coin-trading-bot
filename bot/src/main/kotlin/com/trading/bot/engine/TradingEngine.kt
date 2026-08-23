@@ -292,7 +292,7 @@ class TradingEngine(
                 // 부족해도 막지 않는다 — 전략이 자기 가드로 false 를 내므로 결과는 같고, 여기서 끊으면
                 // volatility_breakout(진입 2봉)처럼 짧은 이력으로도 매매하던 전략의 계약이 바뀐다.
                 // 목적은 차단이 아니라 "왜 신호가 없는지"를 드러내는 것이다.
-                if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, "buy", candles.size)
+                if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, "buy", candles.size, blocked = false)
                 strategy.shouldBuy(candles, currentPrice, tradingProperties)
             }
             if (shouldBuy) {
@@ -369,7 +369,7 @@ class TradingEngine(
         }
         val candles = upbitClient.getDayCandles(ticker, MAX_DAILY_CANDLE_LOOKBACK)
         if (candles.size < minCandles) {
-            warnInsufficientCandles(ticker, strategy, "chartExit", candles.size)
+            warnInsufficientCandles(ticker, strategy, "chartExit", candles.size, blocked = true)
             return false
         }
         return strategy.shouldSell(candles, currentPrice, tradingProperties)
@@ -380,16 +380,28 @@ class TradingEngine(
     private fun effectiveMinCandles(strategy: TradingStrategy): Int =
         max(MIN_DAILY_CANDLES, strategy.minCandles)
 
-    /** 캔들이 모자라 신호를 못 내는 상황을 알린다. 조용히 false 를 반환하면 원인을 코드로만 알 수 있다. */
-    private fun warnInsufficientCandles(ticker: String, strategy: TradingStrategy, path: String, actual: Int) {
+    /**
+     * 캔들이 모자라 신호를 못 내는 상황을 알린다. 조용히 false 를 반환하면 원인을 코드로만 알 수 있다.
+     *
+     * [blocked] 를 문구에 반영하는 이유: 매수 경로는 부족해도 전략을 그대로 호출하므로(짧은 이력으로도
+     * 매매하는 전략이 있다) "건너뛴다"고 적으면 실제로 체결된 진입을 운영자가 차단된 것으로 오해한다.
+     */
+    private fun warnInsufficientCandles(
+        ticker: String,
+        strategy: TradingStrategy,
+        path: String,
+        actual: Int,
+        blocked: Boolean,
+    ) {
         val key = "$ticker:${strategy.name}:$path"
         val now = System.currentTimeMillis()
         val last = candleWarnAtMs[key]
         if (last != null && now - last < STALE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now
         log.warn(
-            "{} skipped for {} (user {}): D1 캔들 {}개 < {} 전략이 요구하는 {}개",
+            "{} for {} (user {}): D1 캔들 {}개 < {} 전략 요구 {}개 — {}",
             path, ticker, userId, actual, strategy.name, effectiveMinCandles(strategy),
+            if (blocked) "신호 평가를 건너뛴다" else "신호 평가는 계속하나 대부분 false 다",
         )
     }
 

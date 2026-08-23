@@ -190,7 +190,7 @@ class KisStockTradingEngine(
         if (last != null && now - last < CANDLE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now
         log.warn(
-            "{} skipped for {}: 일봉 {}개 < {} 전략이 요구하는 {}개",
+            "{} for {}: 일봉 {}개 < {} 전략 요구 {}개 — 신호 평가를 건너뛴다",
             path, symbol, actual, activeStrategy.name, effectiveMinCandles(),
         )
     }
