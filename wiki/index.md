@@ -40,7 +40,7 @@
 
 ## entity — 외부 사실·버전
 
-- [[upbit-api]] — 주문 파라미터, 상태 판정, 캔들 경계(KST 09:00)
+- [[upbit-api]] — 잔고 필드(`locked` 의 의미와 상한 규칙), 주문 파라미터, 상태 판정, 캔들 경계(KST 09:00)
 - [[jdk-gradle-toolchain]] — JDK 21 고정, Gradle 8.12, JDK 25 비호환 우회
 - [[deployment-stack]] — EC2 t4g.medium + Caddy TLS + GHCR
 
