@@ -278,4 +278,73 @@ class TradeRoundTripTest {
             assertTrue(json.contains("\"$key\""), "직렬화 JSON 에 키가 없다: $key — $json")
         }
     }
+
+    // --- 엔진 매수 기록은 증분이 아니라 누적 스냅샷이다 ---
+    // PositionManager.completeBuy 는 거래소 전체 잔고·평단을 그대로 적는다(#20 — syncPosition 복원분과
+    // 이중계상되지 않게). 그래서 한 포지션의 엔진 BUY 행을 합산하면 수량이 부풀고 잔량이 0 이 되지 않는다.
+    // 반면 수동 매수(executeBuy)는 그 주문의 증분을 적으므로 합산이 맞다.
+
+    @Test
+    fun `수동 매수 위에 엔진이 매수하면 엔진 기록이 포지션 전체를 담는다`() {
+        // 운영 실측(KRW-BTC 2026-06): manual 0.00009832 → engine 0.00022853 → 전량 매도 0.00022853.
+        // 합산하면 0.00032685 가 되어 전량 매도인데도 잔량이 남은 것처럼 보인다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 101712000.0, 0.00009832, "2026-06-02T11:59", strategy = "manual"),
+                rec("KRW-BTC", "BUY", 94677000.0, 0.00022853, "2026-06-11T08:14", strategy = "rsi_bounce"),
+                rec("KRW-BTC", "SELL", 98466000.0, 0.00022853, "2026-06-14T21:40", pnlPercent = 3.902),
+            )
+        )
+
+        val rt = rts.single()
+        assertFalse(rt.open, "전량 매도했으므로 청산된 라운드트립이어야 한다")
+        assertEquals(0.00022853, rt.buyVolume, 1e-12)
+        assertEquals(94677000.0 * 0.00022853, rt.buyAmount, 1e-6)
+    }
+
+    @Test
+    fun `엔진이 두 번 기록해도 마지막 것이 포지션 전체다`() {
+        // 재시작 reconcile 등으로 한 포지션에 엔진 BUY 가 두 번 남는 경우.
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-SOL", "BUY", 2500.0, 4.0, "2026-08-12T01:00", strategy = "knee_reversal"),
+                rec("KRW-SOL", "BUY", 3000.0, 5.0, "2026-08-12T02:00", strategy = "knee_reversal"),
+                rec("KRW-SOL", "SELL", 3300.0, 5.0, "2026-08-13T00:00", pnlPercent = 9.9),
+            )
+        ).single()
+
+        assertFalse(rt.open)
+        assertEquals(5.0, rt.buyVolume, 1e-9)
+        assertEquals(3000.0, rt.entryPrice!!, 1e-9) // 마지막 스냅샷의 평단
+    }
+
+    @Test
+    fun `수동 매수만 여러 건이면 증분이므로 합산한다`() {
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-XRP", "BUY", 2000.0, 5.0, "2026-08-10T01:00", strategy = "manual"),
+                rec("KRW-XRP", "BUY", 2200.0, 5.0, "2026-08-10T02:00", strategy = "manual"),
+                rec("KRW-XRP", "SELL", 2400.0, 10.0, "2026-08-11T00:00", pnlPercent = 14.3),
+            )
+        ).single()
+
+        assertFalse(rt.open)
+        assertEquals(10.0, rt.buyVolume, 1e-9)
+        assertEquals(21000.0, rt.buyAmount, 1e-6) // 10000 + 11000
+    }
+
+    @Test
+    fun `부분 매도 뒤의 새 매수는 별개 라운드트립이다`() {
+        // 잔량이 남은 채 새 매수가 들어오면 현재 구현은 전부 한 그룹으로 합쳐 보유기간·손익을 왜곡한다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-ETH", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "manual"),
+                rec("KRW-ETH", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 9.9),
+                rec("KRW-ETH", "BUY", 120.0, 3.0, "2026-08-02T10:00", strategy = "manual"),
+                rec("KRW-ETH", "SELL", 130.0, 9.0, "2026-08-02T15:00", pnlPercent = 8.0),
+            )
+        )
+
+        assertEquals(2, rts.size, "매도가 시작된 뒤의 매수는 새 포지션으로 끊어야 한다")
+    }
 }

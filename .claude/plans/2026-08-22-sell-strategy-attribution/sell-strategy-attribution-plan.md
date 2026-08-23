@@ -32,6 +32,9 @@ updated: 2026-08-23
 
 - 2026-08-23: **pre-push codex 3라운드 통과 후 push·PR #117 생성**(`30f3c19`). 라운드별 지적은 `# Review Disposition` 참조 — P1(fee 하드코딩)·P2(백업 불일치)·P2(부분체결)·P1(귀속 순서) 처리 후 "no blocking issues".
 
+- 2026-08-23: **main 병합 중 V20 번호 선점 발견** — plan-review 시점엔 비어 있었으나 `stuck-sell-alert`(#102) 머지로 V20 이 찼다. 내 backfill 을 **V21** 로 옮기고 백업 테이블·WARNING 문구도 맞췄다. 문서 충돌 2건은 양쪽 항목을 모두 살렸고, 상한 제거 후 남아 있던 wiki 의 "id 상한으로 고정" stale 서술도 교정. main V20 위에서 V1~V21 순차 적용 후 귀속 5/5 재확인.
+- 2026-08-23: **병합해온 main 코드에서 P1 2건 발견·수정**(pre-push codex). `TradeRoundTrip` 이 `buys.sumOf` 로 매수를 합산하는데, 엔진 BUY 행은 증분이 아니라 **누적 스냅샷**이라(이번 작업에서 실측 확정한 바로 그 성질) 추가매수 포지션의 수량·평단이 부풀고 전량 매도해도 잔량이 남아 라운드트립이 닫히지 않는다 — 운영 BTC 6월 거래에서 실제로 재현되는 값이다. `BuySide` 로 "엔진 기록이 있으면 마지막 것이 포지션 전체, 수동뿐이면 합산" 규칙을 세우고, 매도 시작 후의 새 매수는 별개 라운드트립으로 끊도록 고쳤다. TDD Red 3건 → Green.
+
 # Next
 
 **배포 시 확인 필요**(마이그레이션이 운영 데이터를 바꾼다):
@@ -147,6 +150,8 @@ updated: 2026-08-23
 
 # Deferred
 
+- **라운드트립 조회의 truncation 표시가 과하게 보수적**(pre-push codex P2, 2026-08-23) — `TradeHistoryController` 가 원본 5000건 상한을 넘으면 `truncatedHead=true` 를 **모든 티커**에 적용해, 잘린 적 없는 티커의 가장 오래된 라운드트립도 `partial=true`(손익 금액 null)가 된다. 티커별 판정을 하려면 어느 티커가 잘렸는지 알아야 하는데 `MAX+1` 만 가져오는 구조상 알 수 없다. **지금 동작이 안전한 쪽**(틀린 평단을 정상처럼 보이느니 믿을 수 없음으로 표시)이라 그대로 뒀다. 운영은 62건이라 도달까지 멀다.
+- **`total` 이 잘린 데이터 기준**(같은 리뷰 P2) — 5000건 초과 시 `total` 이 메모리에서 조립한 라운드트립 수라 실제보다 작다. 정확히 주려면 전량 조립이 필요해 상한의 의미가 없어진다. `truncated` 플래그가 함께 나가므로 소비 측에서 구분은 가능하다 — API 계약에 명시하는 편이 낫다.
 - **수동 매도 경로의 `volume`·`price` 가 체결 응답이 아니라 요청값** (code-review m8) — `executeSellVolume:153` 의 `vol` 은 요청 수량, `currentPrice` 는 `getTicker()` 값이다. 0.3 요청/0.2 체결이면 `pnl_amount` 가 50% 과대. 이번 변경 이전부터 `volume`·`price`·`pnlPercent` 가 같은 추정치였으므로 신규 결함은 아니나, 금액으로 승격돼 사용자가 현금처럼 읽게 됐다.
 - **통합 테스트 인프라 부재** (code-review M2 의 근본 원인) — `Testcontainers`/`@DataR2dbcTest`/`@SpringBootTest` 가 repo 에 0건이라 Flyway·R2DBC 매핑·GROUP BY SQL 이 CI 에서 한 번도 안 돈다. 이번엔 임시 컨테이너 수동 검증으로 메웠다. 이슈 #53 이 같은 주제.
 - **`*_v20_backup` 테이블 정리** — 백필 결과 확인 후 DROP. 방치하면 영구 잔존한다.
