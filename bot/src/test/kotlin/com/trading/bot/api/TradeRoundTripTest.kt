@@ -284,6 +284,51 @@ class TradeRoundTripTest {
     }
 
     /**
+     * 수동 매수(`ManualTradeController` → strategy="manual")는 이번 주문분만 남기는 **증분**이다.
+     * 스냅샷으로 오인해 마지막 행만 쓰면 앞선 매수분이 통째로 누락된다.
+     */
+    @Test
+    fun `수동 매수는 증분이라 합산한다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00", strategy = "manual"),
+                rec("KRW-BTC", "BUY", 100.0, 3.0, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 5.0, "2026-08-01T12:00", pnlPercent = 19.9),
+            )
+        )
+
+        val rt = rts.single()
+        assertEquals(5.0, rt.buyVolume, "수동 매수 2건을 더해야 실제 보유량이 된다")
+        assertEquals(500.0, rt.buyAmount)
+        assertEquals(100.0, rt.entryPrice)
+        // 전량 매도이므로 초과 매도로 오인하지 않는다
+        assertFalse(rt.partial)
+        assertFalse(rt.partiallyClosed)
+        assertEquals(100.0, rt.pnlAmountGross)
+    }
+
+    /** 엔진 스냅샷 뒤에 수동 매수가 붙으면 스냅샷(총량) + 이후 증분이 그 시점 보유량이다. */
+    @Test
+    fun `엔진 스냅샷 이후의 수동 매수만 더한다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T09:00", strategy = "manual"),
+                // 엔진 매수 — 이 시점 총 보유량 4개, 평단 100 (위 수동 매수분을 이미 포함한다)
+                rec("KRW-BTC", "BUY", 100.0, 4.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 6.0, "2026-08-01T12:00", pnlPercent = 19.9),
+            )
+        )
+
+        val rt = rts.single()
+        // 스냅샷 4 + 이후 수동 2 = 6. 전부 더하면 7 이라 첫 수동 매수분을 두 번 세게 된다.
+        assertEquals(6.0, rt.buyVolume)
+        assertEquals(600.0, rt.buyAmount)
+        assertFalse(rt.partial)
+        assertEquals(120.0, rt.pnlAmountGross)
+    }
+
+    /**
      * 수동 `sellAll` 은 거래소 잔고 전체를 팔기 때문에 이전 포지션에서 넘어온 잔여분까지 매도 수량에 들어간다.
      * 그 잔여분의 원가는 이 그룹에 없으므로 신규 평단을 적용하면 손익이 부풀려진다.
      */

@@ -53,8 +53,12 @@ PR 생성·머지 후 worktree 정리.
 **데이터로 확증**: `user_id=4` 의 **SELL 30건이 모두 직전 BUY 와 수량이 정확히 일치**한다(불일치 0건).
 연속 BUY 2건도 모두 수량이 증가해 스냅샷 해석과 정합한다. 즉 잔여 dust 는 애초에 존재하지 않았다.
 
-⚠️ 수동 매수(`TradeExecutionService.executeBuy`)는 `amount / currentPrice` 로 **증분**을 남긴다. 같은 컬럼에
-두 의미가 섞여 있고 구분할 키가 없다 — 조회 측에서 완벽히 복원할 수 없는 데이터 모델 결함이다.
+수동 매수(`TradeExecutionService.executeBuy`)는 `amount / currentPrice` 로 **증분**을 남긴다. 같은 컬럼에
+두 의미가 섞여 있다. ~~구분할 키가 없다~~ → **`strategy` 로 구분된다** (2026-08-23 정정, codex P1):
+`ManualTradeController.kt:41` 이 `strategy = "manual"` 을 하드코딩한다.
+
+**최종 규칙**: `마지막 엔진 스냅샷 + 그 이후의 수동 증분들` = 그 시점 총 보유량.
+전부 합산하면 스냅샷에 이미 포함된 보유분을 두 번 세고, 마지막 행만 쓰면 뒤따르는 수동 매수분이 누락된다.
 
 ## 두 규칙 모두 실패했다
 
@@ -113,6 +117,10 @@ BTC 첫 그룹 손익은 `−9,276` → **`+382`** (팔지 않은 매수분을 �
 
 # Review Disposition
 
+- **fix** — [codex pre-push P1 · 2차] 수동 증분 매수를 스냅샷으로 오인: 마지막 행만 쓰면 수동 매수 2회 후
+  전량 매도 시 `buyVolume` 이 절반이 되어 초과 매도로 오인되고 손익이 비었다. `strategy = "manual"` 로
+  두 종류를 구분해 `마지막 엔진 스냅샷 + 이후 수동 증분` 을 보유량으로 삼는다. 테스트 2건 추가.
+  (직전 커밋에서 "구분 키가 없다"고 한 것도 틀렸다 — `ManualTradeController.kt:41` 에 하드코딩돼 있다.)
 - **fix** — [codex pre-push P1] **엔진 매수를 증분으로 오해했다 (진단 자체가 틀림)**: `completeBuy` 는 실잔고·평단을
   남기는 스냅샷이라 합산하면 같은 보유분을 여러 번 센다. 매수 대표값을 **마지막 행**으로 바꿨다
   (`buyVolume`·`buyAmount`·`entryPrice`). 운영 데이터 30/30 건이 이 해석과 정합함을 확인했고,

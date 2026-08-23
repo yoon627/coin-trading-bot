@@ -50,6 +50,9 @@ data class TradeRoundTrip(
  */
 private const val DUST_RATIO = 0.01
 
+/** 수동 주문이 남기는 전략명(`ManualTradeController`). 이 값이면 매수 수량은 스냅샷이 아니라 증분이다. */
+private const val MANUAL_STRATEGY = "manual"
+
 /**
  * **매도 뒤에 매수가 오면 새 포지션이다.** 연속된 매도는 같은 포지션의 분할 매도로 본다.
  *
@@ -101,15 +104,16 @@ private fun roundTrip(
     sells: List<TradeRecordEntity>,
     headCut: Boolean,
 ): TradeRoundTrip {
-    // 엔진 매수(`PositionManager.completeBuy`)는 거래소 **실잔고와 평단**을 기록한다 — 증분이 아니라
-    // 그 시점 포지션 스냅샷이다. 합산하면 같은 보유분을 여러 번 세어 매수총액·평단이 부풀려진다.
-    // 그래서 마지막 매수 행을 대표로 쓴다(운영 데이터의 SELL 30건이 모두 직전 BUY 수량과 정확히 일치한다).
-    // 한계: 수동 매수(`TradeExecutionService.executeBuy`)는 이번 주문 수량만 남기는 증분이고 두 종류를
-    // 구분할 키가 없다. 수동 매수가 그룹의 마지막이면 총량보다 작게 잡힐 수 있다.
-    val lastBuy = buys.lastOrNull()
-    val buyAmount = lastBuy?.totalAmount ?: 0.0
-    val buyVolume = lastBuy?.volume ?: 0.0
-    val entryPrice = lastBuy?.price
+    // 매수 기록에는 두 종류가 섞여 있다:
+    //  - 엔진 매수(`PositionManager.completeBuy`)는 거래소 **실잔고와 평단**을 남기는 그 시점 **스냅샷**
+    //  - 수동 매수(`TradeExecutionService.executeBuy`)는 이번 주문분만 남기는 **증분** (strategy="manual")
+    // 따라서 마지막 스냅샷 이후의 증분을 더해야 그 시점 총 보유량이 된다. 전부 합산하면 같은 보유분을
+    // 여러 번 세고, 마지막 행만 쓰면 뒤따르는 수동 매수분이 누락된다.
+    val lastSnapshot = buys.indexOfLast { !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
+    val heldBuys = if (lastSnapshot >= 0) buys.subList(lastSnapshot, buys.size) else buys
+    val buyAmount = heldBuys.sumOf { it.totalAmount }
+    val buyVolume = heldBuys.sumOf { it.volume }
+    val entryPrice = if (buyVolume > 0) buyAmount / buyVolume else null
     val sellAmount = sells.sumOf { it.totalAmount }
     val sellVolume = sells.sumOf { it.volume }
     val entryAt = buys.firstOrNull()?.createdAt
