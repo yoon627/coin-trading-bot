@@ -93,6 +93,13 @@ class IntrabarExitModelTest {
 
         val off = on.copy(chartExitEnabled = false)
         assertNull(IntrabarExitModel.evaluate(flat, 10000.0, 10000.0, false, off, chartExitSignal = true), "disabled → no chart exit")
+
+        // 한도봉은 09:00 리셋 시점이라 종가가 아직 없다 — 종가 신호인 CHART_EXIT 대신 TIME_EXIT(시가)이어야 한다.
+        assertEquals(
+            "TIME_EXIT",
+            IntrabarExitModel.evaluate(flat, 10000.0, 10000.0, true, on, chartExitSignal = true)?.reason,
+            "at hold limit → chart exit must yield to TIME_EXIT",
+        )
     }
 
     @Test
