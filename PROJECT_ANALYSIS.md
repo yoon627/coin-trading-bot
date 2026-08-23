@@ -8,7 +8,7 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V20) |
+| **마이그레이션** | Flyway (V1~V21) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
@@ -116,7 +116,7 @@ coin-trading-bot/
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V20)
+### Flyway 마이그레이션 (V1~V21)
 
 | 버전 | 내용 |
 |------|------|
@@ -132,6 +132,7 @@ coin-trading-bot/
 | V18 | `stock_position_state` — 주식 포지션의 durable 스냅샷(트레일링 고점·매수 거래일·진입 전략). 보유수량·평단은 거래소 잔고가 진실이라 저장하지 않는다 |
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다 |
 | V20 | `trading_states` 에 `pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림을 재시작 횟수와 무관한 경과시간으로 판정 |
+| V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구. `buildSellRecord` 가 `strategy` 를 안 넘겨 그때까지의 매도가 전부 `strategy=NULL` 이었다(전략별 손익이 통째로 `unknown` 으로 집계). 귀속은 포지션 구간 내 첫 번째 non-manual BUY 기준 — 수동 매수는 `TradingState` 를 세우지 않아 런타임 `entryStrategy` 후보가 아니다 |
 
 ### 핵심 테이블
 
