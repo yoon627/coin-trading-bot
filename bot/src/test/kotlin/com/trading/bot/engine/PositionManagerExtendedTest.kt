@@ -893,19 +893,137 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `syncPosition counts coins locked in an open order as held`() = runTest {
+    fun `syncPosition counts coins locked in our own open sell order as held`() = runTest {
         // 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 는 0 이다. 이걸 "보유 없음" 으로
         // 동기화하면 손절·익절이 한 번도 평가되지 않고, boughtToday 가 풀리면 그 위에 추가 매수까지 들어간다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
         )
-        val state = TradingState("KRW-BTC")
+        // 그 재시작 시나리오는 durable 에 매도 pending 이 남아 있는 상태다 — locked 를 우리 몫으로 볼 근거.
+        val state = TradingState("KRW-BTC", pendingSellUuid = "s-open", pendingSellVolume = 0.001)
 
         manager.syncPosition("KRW-BTC", state)
 
         assertTrue(state.position)
         assertEquals(0.001, state.holdVolume, 1e-9)
         assertEquals(50000000.0, state.avgBuyPrice, 0.01)
+    }
+
+    @Test
+    fun `syncPosition caps locked at our own sell order volume`() = runTest {
+        // 우리 주문은 0.001 만 잠글 수 있다 — 나머지 0.002 는 출금 대기 등 다른 사유다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.003", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", pendingSellUuid = "s-open", pendingSellVolume = 0.001)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertEquals(0.001, state.holdVolume, 1e-9)
+    }
+
+    @Test
+    fun `syncPosition treats unattributable lock as no holding and blocks buying`() = runTest {
+        // 매도 pending 이 없는데 잠긴 잔고가 있다 — 출금 대기·수동 주문이라 우리 포지션이 아니다.
+        // sell() 은 free 만 주문하므로 보유로 세면 팔 수 없는 유령 포지션이 된다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", position = false)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertFalse(state.position)
+        assertEquals(0.0, state.holdVolume, 1e-9)
+        assertTrue(state.unsynced) // 귀속 불명 — 신규 매수 차단
+    }
+
+    @Test
+    fun `syncPosition does not clear an existing position on unattributable lock`() = runTest {
+        // 여기서 position 을 내리면 markSold 를 우회한 청산이 되어 감사 기록 없이 포지션이 사라진다.
+        // 포지션 정리는 sell() 의 phantom 경로가 담당한다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertTrue(state.position)
+        assertEquals(0.001, state.holdVolume, 1e-9)
+        assertTrue(state.unsynced)
+    }
+
+    @Test
+    fun `syncPosition falls back to free plus locked when our order volume is unknown`() = runTest {
+        // 레거시 durable row — uuid 는 있는데 수량 기록이 없다. 상한을 걸 근거가 없으므로 종전대로
+        // free+locked 를 쓴다(보유를 잃는 쪽보다 안전).
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.003", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", pendingSellUuid = "s-legacy", pendingSellVolume = null)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertTrue(state.position)
+        assertEquals(0.003, state.holdVolume, 1e-9)
+    }
+
+    @Test
+    fun `syncPosition caps locked at the whole order volume while the order is still open`() = runTest {
+        // pendingSellVolume 은 주문 시점 수량이라 부분체결로 줄지 않는다. 주문이 wait 로 남아 일부만 체결된
+        // 구간에서는 상한이 체결분만큼 느슨하다(#56 Deferred) — 여기 우리 몫은 0.4, 타 사유가 0.2 인데
+        // 0.6 이 잡힌다. 주문이 terminal 이 되면 applySellFillOutcome 이 체결분을 빼 정확해진다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.6", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", pendingSellUuid = "s-wait", pendingSellVolume = 1.0)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertEquals(0.6, state.holdVolume, 1e-9)
+    }
+
+    @Test
+    fun `syncPosition reports the unattributable lock even when already unsynced from a fetch failure`() = runTest {
+        // 직전 tick 이 조회 실패로 unsynced 를 켠 상태. unsynced 를 dedup 키로 쓰면 이 원인이 로그에
+        // 한 번도 안 남는다 — 별도 플래그로 구분한다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", unsynced = true)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertTrue(state.unattributableLockWarned)
+        assertTrue(state.unsynced)
+    }
+
+    @Test
+    fun `syncPosition rearms the unattributable lock warning once the lock clears`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", locked = "0", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", unsynced = true, unattributableLockWarned = true)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertFalse(state.unattributableLockWarned) // 다시 생기면 또 알린다
+        assertFalse(state.unsynced)
+    }
+
+    @Test
+    fun `syncPosition excludes unattributable lock but keeps the free holding`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0004", locked = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", unsynced = true)
+
+        manager.syncPosition("KRW-BTC", state)
+
+        assertTrue(state.position)
+        assertEquals(0.0004, state.holdVolume, 1e-9)
+        assertFalse(state.unsynced) // 팔 수 있는 보유가 있으니 정상 동기화
     }
 
     @Test
@@ -1068,6 +1186,8 @@ class PositionManagerExtendedTest {
         val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT)
 
         assertEquals(3.9, result!!.pnlPercent!!, 1e-9)
+        // 원금 = 평단 50M × 0.001 = 50,000원, net 3.9% → 1,950원. 매도대금(52,000)이 아니라 원금에 곱한다.
+        assertEquals(1950.0, result.pnlAmount!!, 1e-6)
     }
 
     @Test
@@ -1183,6 +1303,101 @@ class PositionManagerExtendedTest {
         assertTrue(state.position) // 잔여 유지
         assertEquals(0.0004, state.holdVolume) // 잔여 실잔고로 갱신
         assertNull(state.pendingSellUuid) // pending 해소(잔여분은 다음 tick 재매도)
+    }
+
+    @Test
+    fun `reconcilePendingSell excludes unattributable lock from the remaining position`() = runTest {
+        // 잔여는 우리 주문의 미체결분까지다. 타 사유로 잠긴 0.002 를 잔여로 세면 free=0.0004 만 팔 수 있는
+        // 포지션에 0.0024 가 기록돼, 다음 매도가 계속 잔량을 남긴다.
+        coEvery { upbitClient.getOrder("s-partial") } returns
+            Order(uuid = "s-partial", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0004", locked = "0.002", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-partial", pendingSellReason = SellReason.STOP_LOSS,
+            pendingSellVolume = 0.001,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNotNull(result)
+        assertEquals(0.0006, result!!.volume)
+        assertTrue(state.position)
+        assertEquals(0.0004, state.holdVolume, 1e-9)
+        assertNull(state.pendingSellUuid)
+    }
+
+    @Test
+    fun `reconcilePendingSell keeps the remainder still locked by our own cancelled order`() = runTest {
+        // 취소된 미체결분이 아직 free 로 안 돌아온 순간. free 만 보면 잔여 포지션을 잃고 markSold 로 오판한다
+        // — 그러면 손절·익절 평가가 꺼진 채 코인만 거래소에 남는다.
+        coEvery { upbitClient.getOrder("s-partial") } returns
+            Order(uuid = "s-partial", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.0004", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-partial", pendingSellReason = SellReason.STOP_LOSS,
+            pendingSellVolume = 0.001,
+        )
+
+        manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertTrue(state.position)
+        assertEquals(0.0004, state.holdVolume, 1e-9)
+    }
+
+    @Test
+    fun `reconcilePendingSell clears the position when only unattributable lock remains`() = runTest {
+        // 전량 체결됐는데 타 사유로 잠긴 잔고가 남은 경우. 잔여 포지션으로 세면 free=0 이라 sell() 이
+        // 영영 주문하지 못하고 매 tick "Sell deferred" 만 반복하는 유령 포지션이 된다.
+        coEvery { upbitClient.getOrder("s-done") } returns
+            Order(uuid = "s-done", state = "done", executedVolume = "0.001")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.002", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-done", pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellVolume = 0.001,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertNotNull(result)
+        assertEquals(0.001, result!!.volume)
+        assertFalse(state.position)
+        assertEquals(0.0, state.holdVolume, 1e-9)
+        assertNull(state.pendingSellUuid)
+    }
+
+    @Test
+    fun `reconcilePendingSell restoring position after cancel ignores unattributable lock`() = runTest {
+        // cancel+0 → 우리 주문 몫은 free 로 돌아왔다. 이 시점 pendingSellUuid 는 아직 살아 있지만 죽은
+        // 주문의 것이므로, 그걸 근거로 타 사유 locked 까지 보유로 세면 안 된다.
+        coEvery { upbitClient.getOrder("s-cancel") } returns
+            Order(uuid = "s-cancel", state = "cancel", executedVolume = "0")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", locked = "0.002", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = false,
+            pendingSellUuid = "s-cancel", pendingSellReason = SellReason.STOP_LOSS,
+            pendingSellVolume = 0.001,
+        )
+
+        manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertTrue(state.position)
+        assertEquals(0.001, state.holdVolume, 1e-9)
+        assertNull(state.pendingSellUuid)
     }
 
     @Test
@@ -1330,6 +1545,7 @@ class PositionManagerExtendedTest {
 
         assertNotNull(result)
         assertNull(result!!.pnlPercent)
+        assertNull(result.pnlAmount) // 0 이면 손익 0원인 거래로 집계돼 평균을 끌어내린다
     }
 
     // --- 취소 안전성: placeOrder 성공 후 후처리는 NonCancellable 로 원자 완주 ---
@@ -1403,5 +1619,83 @@ class PositionManagerExtendedTest {
         val state = TradingState("KRW-BTC")
 
         assertThrows<CancellationException> { manager.syncPosition("KRW-BTC", state) }
+    }
+
+    // --- 매도 기록의 진입 전략 귀속 ---
+    // 매도 4경로 전부 markSold(=entryStrategy 소거) 이전에 buildSellRecord 를 부르므로 값이 살아 있다.
+    // entryStrategy 를 명시적으로 세워야 한다 — null 로 두면 단언이 null == null 로 통과해 버그를 못 잡는다.
+
+    @Test
+    fun `sell records the entry strategy on immediate fill`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-strat")
+        coEvery { upbitClient.getOrder("sell-strat") } returns Order(uuid = "sell-strat", state = "done")
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, "knee_reversal")
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.TAKE_PROFIT)
+
+        assertEquals("knee_reversal", result!!.strategy)
+    }
+
+    @Test
+    fun `reconcilePendingSell records the entry strategy when done`() = runTest {
+        coEvery { upbitClient.getOrder("s-strat") } returns
+            Order(uuid = "s-strat", state = "done", executedVolume = "0.001")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-strat", pendingSellReason = SellReason.TAKE_PROFIT,
+            entryStrategy = "combined",
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals("combined", result!!.strategy)
+    }
+
+    @Test
+    fun `sell recovery records the entry strategy when the order api is down`() = runTest {
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
+        val state = TradingState(
+            "KRW-BTC",
+            position = true,
+            pendingSellUuid = "s-recover-strat",
+            pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellVolume = 0.002,
+            pendingSellAvgPrice = 50_000_000.0,
+            entryStrategy = "knee_pullback",
+        )
+
+        val record = mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertEquals("knee_pullback", record!!.strategy)
+    }
+
+    @Test
+    fun `partial fill records the entry strategy and keeps it for the remaining position`() = runTest {
+        coEvery { upbitClient.getOrder("s-partial-strat") } returns
+            Order(uuid = "s-partial-strat", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0004", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-partial-strat", pendingSellReason = SellReason.STOP_LOSS,
+            entryStrategy = "combined",
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals("combined", result!!.strategy)
+        // 잔여 포지션은 markSold 를 타지 않으므로 다음 매도도 같은 전략으로 귀속돼야 한다.
+        assertEquals("combined", state.entryStrategy)
     }
 }
