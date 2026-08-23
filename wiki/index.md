@@ -13,7 +13,7 @@
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집, `MarketDataStore`, half-open 워치독
 - [[kis-stock-trading-flow]] — KIS 국내주식 봇의 시작·시세·신호·포지션 사이클
 - [[kis-order-lifecycle]] — KIS 수동·자동 주문의 검증·WAL·API 송신·체결 reconcile
-- [[persistence-schema]] — Flyway V1~V18, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가
+- [[persistence-schema]] — Flyway V1~V20, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속
 - [[backtest-engine]] — 단일티커·all-in 구조와 라이브 정합의 한계
 
 ## decision — 이 repo 가 내린 결정
@@ -40,7 +40,7 @@
 
 ## entity — 외부 사실·버전
 
-- [[upbit-api]] — 주문 파라미터, 상태 판정, 캔들 경계(KST 09:00)
+- [[upbit-api]] — 잔고 필드(`locked` 의 의미와 상한 규칙), 주문 파라미터, 상태 판정, 캔들 경계(KST 09:00)
 - [[jdk-gradle-toolchain]] — JDK 21 고정, Gradle 8.12, JDK 25 비호환 우회
 - [[deployment-stack]] — EC2 t4g.medium + Caddy TLS + GHCR
 

@@ -252,7 +252,10 @@ class TradingEngineTest {
     // 실제로 FAIL 함을 수동 mutation 으로 1회 확인함(Progress 기록).
 
     private fun tradeRec(side: TradeSide) =
-        TradeRecord(ticker = "KRW-BTC", side = side, price = 100.0, volume = 1.0, totalAmount = 100.0)
+        TradeRecord(
+            ticker = "KRW-BTC", side = side, price = 100.0, volume = 1.0, totalAmount = 100.0,
+            pnlPercent = null, pnlAmount = null, strategy = "combined",
+        )
 
     @Test
     fun `processTicker persists a new peak so trailing stop survives restart`() = runTest {
