@@ -233,6 +233,22 @@ class TradeRoundTripTest {
         assertEquals(80.0, rt.pnlAmountGross)
     }
 
+    /** 작은 초과도 그만큼의 원가를 모르는 건 같다 — 비율 여유를 두면 그 초과가 손익에 섞인다. */
+    @Test
+    fun `초과 매도가 아주 적어도 손익을 계산하지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 100.0, "2026-08-01T10:00", strategy = "manual"),
+                // 0.5% 초과 — 비율 톨러런스(1%)를 뒀다면 정상 매도로 새어나간다
+                rec("KRW-BTC", "SELL", 120.0, 100.5, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
+            )
+        )
+
+        val rt = rts.single()
+        assertTrue(rt.partial)
+        assertNull(rt.pnlAmountGross)
+    }
+
     /**
      * 수동 `sellAll` 은 거래소 잔고 전체를 팔기 때문에 이전 포지션의 잔여분까지 매도 수량에 들어간다.
      * 그 잔여분의 원가는 이 그룹에 없으므로 신규 평단을 적용하면 손익이 부풀려진다.
