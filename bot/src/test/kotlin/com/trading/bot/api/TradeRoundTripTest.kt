@@ -207,23 +207,47 @@ class TradeRoundTripTest {
     }
 
     @Test
-    fun `부분 매도 후 잔량이 남으면 아직 청산되지 않은 것이다`() {
+    fun `부분 매도 후 잔량이 남으면 일부 청산으로 표시된다`() {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 10.0, "2026-08-01T10:00"),
-                rec("KRW-BTC", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 10.0, reason = "MANUAL"),
+                rec("KRW-BTC", "SELL", 120.0, 4.0, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
             )
         )
 
-        assertEquals(1, rts.size)
-        val rt = rts[0]
-        assertTrue(rt.open)
+        val rt = rts.single()
+        // 매도가 있었으므로 open 은 아니다 — 다만 잔량이 남아 일부 청산이다.
+        assertFalse(rt.open)
+        assertTrue(rt.partiallyClosed)
         assertEquals(1, rt.sellCount)
-        // 아직 확정 손익이 아니다
-        assertNull(rt.exitAt)
-        assertNull(rt.exitPrice)
-        assertNull(rt.pnlPercent)
-        assertNull(rt.pnlAmountGross)
+        // 판 만큼의 원가만 차감한다: 480 − (평단 100 × 매도수량 4) = 80.
+        // 전체 매수액을 빼면 480 − 1000 = −520 이라 팔지도 않은 매수분이 손실로 잡힌다.
+        assertEquals(80.0, rt.pnlAmountGross)
+    }
+
+    /**
+     * 운영 데이터(user 4, KRW-BTC)에서 확인된 패턴 — 첫 매수분이 한 번도 매도되지 않아 누적 잔량이
+     * 0 에 도달하지 못한다. 잔량으로 경계를 잡으면 이후 모든 매매가 한 줄로 뭉친다.
+     */
+    @Test
+    fun `잔여 보유분이 남아도 이후 매매가 뭉치지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 90000000.0, 0.0000983168, "2026-06-02T11:59"),
+                rec("KRW-BTC", "BUY", 95000000.0, 0.00022853, "2026-06-11T08:14"),
+                rec("KRW-BTC", "SELL", 99000000.0, 0.00022853, "2026-06-14T21:40", pnlPercent = 4.1, reason = "TAKE_PROFIT"),
+                rec("KRW-BTC", "BUY", 96000000.0, 0.00020766, "2026-07-14T14:36"),
+                rec("KRW-BTC", "SELL", 97000000.0, 0.00020766, "2026-07-16T07:36", pnlPercent = 0.9, reason = "TRAILING_STOP"),
+                rec("KRW-BTC", "BUY", 98000000.0, 0.00023017, "2026-07-17T17:47"),
+                rec("KRW-BTC", "SELL", 99500000.0, 0.00023017, "2026-07-21T00:00", pnlPercent = 1.4, reason = "DAILY_RESET"),
+            )
+        )
+
+        // 잔량은 끝까지 0 이 되지 않지만 매도→매수 전환에서 갈린다
+        assertEquals(3, rts.size)
+        assertEquals(listOf("DAILY_RESET", "TRAILING_STOP", "TAKE_PROFIT"), rts.map { it.reason })
+        // 첫 그룹만 매수 2건(팔리지 않은 최초 매수분 포함)
+        assertEquals(listOf(1, 1, 2), rts.map { it.buyCount })
     }
 
     /**
@@ -273,7 +297,8 @@ class TradeRoundTripTest {
         listOf(
             "ticker", "entry_at", "entry_price", "buy_count", "buy_amount", "buy_volume",
             "sell_count", "exit_at", "exit_price", "sell_amount", "sell_volume",
-            "pnl_percent", "pnl_amount_gross", "holding_seconds", "reason", "strategy", "open", "partial",
+            "pnl_percent", "pnl_amount_gross", "holding_seconds", "reason", "strategy",
+            "open", "partially_closed", "partial",
         ).forEach { key ->
             assertTrue(json.contains("\"$key\""), "직렬화 JSON 에 키가 없다: $key — $json")
         }
