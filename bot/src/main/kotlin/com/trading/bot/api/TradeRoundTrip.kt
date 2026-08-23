@@ -156,7 +156,12 @@ private fun roundTrip(
             null
         },
         reason = sells.lastOrNull()?.reason,
-        strategy = buys.firstOrNull()?.strategy,
+        // 수동 매수 위에 엔진이 매수하면 런타임 entryStrategy 는 엔진 전략이 된다(수동 매수는 TradingState 를
+        // 건드리지 않는다). 첫 BUY 를 그대로 쓰면 'manual' 이 나와서, 같은 포지션의 SELL 기록·V21 백필과
+        // 전략 귀속이 갈린다. 엔진 기록이 있으면 그 중 **첫 번째**를 쓴다 — 여럿이면 먼저 찍힌 쪽이 남는다.
+        strategy = buys.firstOrNull { it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
+            ?.strategy
+            ?: buys.firstOrNull()?.strategy,
         open = !closed,
         partial = untrustedBuys,
     )
