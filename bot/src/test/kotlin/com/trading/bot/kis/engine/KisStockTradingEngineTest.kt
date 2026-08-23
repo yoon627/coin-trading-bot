@@ -23,6 +23,7 @@ class KisStockTradingEngineTest {
         pm = mockk()
         val strategy = mockk<TradingStrategy>()
         every { strategy.name } returns "rsi"
+        every { strategy.minCandles } returns 21
         engine = KisStockTradingEngine(
             userId = 1L, positionManager = pm, client = mockk<KisClient>(),
             strategies = listOf(strategy), tradingProperties = TradingProperties(),

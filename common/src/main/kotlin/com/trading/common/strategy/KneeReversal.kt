@@ -12,6 +12,8 @@ import com.trading.common.domain.Candle
 class KneeReversal : TradingStrategy {
     override val name = "knee_reversal"
 
+    override val minCandles = MIN_CANDLES
+
     private companion object {
         // 라이브 store 는 최대 60봉, 백테 window 는 정확히 50봉을 넘긴다 — 둘 다에서 유효한 상한.
         const val PEAK_WINDOW = 40

@@ -52,6 +52,7 @@ class TradingEngineTest {
         // (가격 경로는 store→REST 2단).
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
+        every { strategy.minCandles } returns 21
         every { dailyResetManager.checkAndReset(any()) } returns false
         every { dailyResetManager.shouldSellForDailyReset(any()) } returns false
     }
