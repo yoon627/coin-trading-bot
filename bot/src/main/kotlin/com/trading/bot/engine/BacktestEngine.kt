@@ -68,7 +68,9 @@ class BacktestEngine(
     ): BacktestResult? {
         val strategy = strategies.find { it.name == strategyName } ?: return null
         val chronological = candles.reversed()
-        if (chronological.size < MIN_CANDLES) return null
+        // 루프가 MIN_CANDLES 부터 시작하므로 정확히 MIN_CANDLES 개면 시뮬레이션이 한 번도 돌지 않고,
+        // buildResult 가 chronological[MIN_CANDLES] 를 읽어 터진다. 신호를 낼 수 있는 최소는 +1 이다.
+        if (chronological.size <= MIN_CANDLES) return null
 
         val simulation = simulateTrades(strategy, chronological, config)
         return buildResult(strategyName, ticker, chronological, simulation, config)
@@ -168,6 +170,9 @@ class BacktestEngine(
         state.balance *= (1 + pnl / 100.0)
         state.trades.add(BacktestTrade(state.buyIndex, chronological.size - 1, state.buyPrice, lastPrice, pnl, chronological.size - 1 - state.buyIndex, "END"))
         state.returns.add(pnl)
+        // processExit 와 같은 갱신 — 빠뜨리면 END 로 끝난 손실이 낙폭에 반영되지 않아 MDD 가 과소평가된다.
+        state.peakBalance = max(state.peakBalance, state.balance)
+        state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
     }
 
     private fun buildResult(
