@@ -254,23 +254,23 @@ class TradeRoundTripTest {
     }
 
     /**
-     * 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) 매도는 실제 잔고를 판다.
-     * 그래서 이전 포지션이 없는 정상 매매에서도 매도가 조금 더 많게 기록될 수 있다 — 이를 초과 매도로
-     * 단정하면 멀쩡한 거래의 손익이 화면에서 사라진다.
+     * 수동 매수도 마찬가지다. 그 수량은 추정치라(#105) 정상 매매인데 초과로 잡힐 수 있지만,
+     * 초과분의 원가를 모르는 것은 같으므로 손익을 비운다 — 틀린 손익을 보여주는 것보다 낫다.
      */
     @Test
-    fun `추정 매수의 작은 기록 오차는 초과 매도로 보지 않는다`() {
+    fun `추정 매수라도 기록보다 많이 팔렸으면 손익을 비운다`() {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 100.0, "2026-08-01T10:00", strategy = "manual"),
-                // 0.3% 차이 — 추정 수량과 실제 체결의 오차 범위
                 rec("KRW-BTC", "SELL", 120.0, 100.3, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
             )
         )
 
         val rt = rts.single()
-        assertFalse(rt.partial, "기록 오차를 초과 매도로 오인하면 정상 거래의 손익이 사라진다")
-        assertNotNull(rt.pnlAmountGross)
+        assertTrue(rt.partial)
+        assertNull(rt.pnlAmountGross)
+        // 매도 자체의 값은 그대로 노출한다
+        assertNotNull(rt.exitPrice)
     }
 
     /**
