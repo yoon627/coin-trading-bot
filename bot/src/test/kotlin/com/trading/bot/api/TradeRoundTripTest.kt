@@ -300,6 +300,21 @@ class TradeRoundTripTest {
         assertFalse(rt.open, "전량 매도했으므로 청산된 라운드트립이어야 한다")
         assertEquals(0.00022853, rt.buyVolume, 1e-12)
         assertEquals(94677000.0 * 0.00022853, rt.buyAmount, 1e-6)
+        // 런타임 entryStrategy 와 같은 값이어야 한다 — 수동 매수는 TradingState 를 세우지 않으므로
+        // 이 포지션의 진입 전략은 엔진이 적은 rsi_bounce 다. 'manual' 로 잡으면 SELL 기록과 갈린다.
+        assertEquals("rsi_bounce", rt.strategy)
+    }
+
+    @Test
+    fun `수동 매수만 있으면 그대로 manual 로 귀속된다`() {
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-XRP", "BUY", 2000.0, 10.0, "2026-08-10T01:00", strategy = "manual"),
+                rec("KRW-XRP", "SELL", 2100.0, 10.0, "2026-08-11T00:00", pnlPercent = 4.9),
+            )
+        ).single()
+
+        assertEquals("manual", rt.strategy)
     }
 
     @Test
