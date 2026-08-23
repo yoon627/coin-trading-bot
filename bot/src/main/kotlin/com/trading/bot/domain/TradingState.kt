@@ -1,5 +1,6 @@
 package com.trading.bot.domain
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import kotlin.math.max
@@ -36,8 +37,11 @@ data class TradingState(
     var halted: Boolean = false,
     var haltReason: String? = null,
     var reconcileFailureCount: Int = 0,
-    // 매도 pending 미해소 연속 횟수 — 차단이 아니라 1회 ERROR 알림용(비영속, 재시작 시 다시 센다).
-    var sellReconcileFailureCount: Int = 0,
+    // 매도 pending 이 시작된 시각. 미해소가 얼마나 오래 끌었는지는 재시작 횟수와 무관해야 하므로
+    // 카운터가 아니라 시각을 durable 로 남긴다(#55). pending 이 없으면 null.
+    var pendingSellSince: Instant? = null,
+    // 위 임계를 넘겨 이미 알린 pending 인지. durable 이라 재시작해도 중복 발화하지 않는다.
+    var pendingSellAlerted: Boolean = false,
     // 진입 시점 청산 파라미터 스냅샷. 저장·복원 전용 — 소비(진입 시점 값으로 청산)는 strategy-evolution Phase 2.
     var exitParams: ExitParamsSnapshot? = null,
     // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
@@ -134,6 +138,8 @@ data class TradingState(
         pendingSellReason = null
         pendingSellVolume = null
         pendingSellAvgPrice = null
+        pendingSellSince = null
+        pendingSellAlerted = false
     }
 
     /** #19: 수동 해제 — halt 플래그·사유·실패 카운터를 초기화해 다음 tick 부터 reconcile/매매를 재개한다. */

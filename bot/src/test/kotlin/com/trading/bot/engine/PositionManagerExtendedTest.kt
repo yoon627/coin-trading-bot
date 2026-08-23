@@ -802,8 +802,94 @@ class PositionManagerExtendedTest {
 
         repeat(5) { mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0) }
 
-        assertEquals(5, state.sellReconcileFailureCount)
         assertEquals("stuck", state.pendingSellUuid) // 확정하지 않고 유지
+        assertNotNull(state.pendingSellSince) // 경과시간 판정의 기준점이 생긴다
+        assertFalse(state.pendingSellAlerted) // 임계 전에는 알리지 않는다
+    }
+
+    /** 막힌 매도 시나리오 공통 배치. [elapsed] 초 전에 pending 이 시작된 것으로 둔다. */
+    private fun stuckSellFixture(elapsedSeconds: Long, alerted: Boolean = false): Pair<PositionManager, TradingState> {
+        val now = java.time.Instant.parse("2026-08-22T00:00:00Z")
+        val props = TradingProperties(reconcileHaltThreshold = 20, intervalSeconds = 10) // 임계 200초
+        val mgr = PositionManager(
+            upbitClient, props, mockk(relaxed = true), 1L,
+            clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC),
+        )
+        coEvery { upbitClient.getOrder("stuck") } returns Order(uuid = "stuck", state = "wait")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState(
+            "KRW-BTC", position = true, holdVolume = 0.001, avgBuyPrice = 50_000_000.0,
+            pendingSellUuid = "stuck", pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellVolume = 0.001,
+            pendingSellSince = now.minusSeconds(elapsedSeconds),
+            pendingSellAlerted = alerted,
+        )
+        return mgr to state
+    }
+
+    private suspend fun errorsWhileReconciling(mgr: PositionManager, state: TradingState): List<String> {
+        val logger = org.slf4j.LoggerFactory.getLogger(PositionManager::class.java) as ch.qos.logback.classic.Logger
+        val appender = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        return try {
+            mgr.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+            appender.list.filter { it.level == ch.qos.logback.classic.Level.ERROR }.map { it.formattedMessage }
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun `a stuck sell does not alert one second before the threshold`() = runTest {
+        val (mgr, state) = stuckSellFixture(elapsedSeconds = 199)
+
+        assertTrue(errorsWhileReconciling(mgr, state).isEmpty())
+        assertFalse(state.pendingSellAlerted)
+    }
+
+    @Test
+    fun `a stuck sell alerts exactly at the threshold`() = runTest {
+        // 카운터가 아니라 경과시간으로 판정해야 재시작 횟수와 무관해진다(#55).
+        val (mgr, state) = stuckSellFixture(elapsedSeconds = 200)
+
+        val errors = errorsWhileReconciling(mgr, state)
+
+        assertEquals(1, errors.size)
+        assertTrue(errors.single().contains("청산이 막혀"))
+        assertTrue(state.pendingSellAlerted)
+    }
+
+    @Test
+    fun `a stuck sell alerts only once`() = runTest {
+        val (mgr, state) = stuckSellFixture(elapsedSeconds = 300, alerted = true)
+
+        assertTrue(errorsWhileReconciling(mgr, state).isEmpty())
+    }
+
+    @Test
+    fun `the alert is emitted before the state is marked so a crash re-alerts`() = runTest {
+        // 표시를 먼저 하면 그 사이 크래시·전송 실패 시 재알림이 막혀 알림이 영구 유실된다.
+        val (mgr, state) = stuckSellFixture(elapsedSeconds = 300)
+
+        val errors = errorsWhileReconciling(mgr, state)
+
+        assertEquals(1, errors.size)
+        assertTrue(state.pendingSellAlerted) // 알린 뒤에 표시된다
+    }
+
+    @Test
+    fun `clearing a pending sell resets the stuck-alert state`() = runTest {
+        val state = TradingState(
+            "KRW-BTC", pendingSellUuid = "s1",
+            pendingSellSince = java.time.Instant.now(), pendingSellAlerted = true,
+        )
+
+        state.clearPendingSell()
+
+        assertNull(state.pendingSellSince)
+        assertFalse(state.pendingSellAlerted)
     }
 
     @Test

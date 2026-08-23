@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.bot.domain.SellReason
 import com.trading.bot.persistence.entity.TradingStateEntity
 import io.mockk.every
+import io.mockk.slot
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -73,5 +74,47 @@ class TradingStateServiceTest {
 
         assertEquals(setOf("KRW-BTC", "KRW-ETH"), states.keys)
         assertEquals("pending-2", states["KRW-ETH"]!!.pendingBuyUuid)
+    }
+
+    @Test
+    fun `stuck-sell alert fields survive a round trip`() = runTest {
+        // 이 repo 는 매핑 누락으로 컬럼이 통째로 유실된 전례가 있다(market_tickers.volume_24h).
+        // 새 필드는 재시작 후 알림 판정의 근거이므로 왕복을 고정한다(#55).
+        val since = java.time.Instant.parse("2026-08-22T00:00:00Z")
+        val domain = com.trading.bot.domain.TradingState(
+            ticker = "KRW-BTC",
+            pendingSellUuid = "s1",
+            pendingSellReason = SellReason.TAKE_PROFIT,
+            pendingSellSince = since,
+            pendingSellAlerted = true,
+        )
+
+        // 저장 방향: upsert 가 만드는 엔티티에 두 필드가 실려야 한다.
+        val saved = slot<TradingStateEntity>()
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns reactor.core.publisher.Mono.empty()
+        every { repository.save(capture(saved)) } answers {
+            reactor.core.publisher.Mono.just(saved.captured)
+        }
+        service.upsert(1L, domain)
+        assertEquals(since, saved.captured.pendingSellSince)
+        assertEquals(true, saved.captured.pendingSellAlerted)
+
+        // 복원 방향: 그 엔티티가 도메인으로 되돌아와야 한다.
+        rows(saved.captured)
+        val restored = service.loadStates(1L)["KRW-BTC"]!!
+
+        assertEquals(since, restored.pendingSellSince)
+        assertEquals(true, restored.pendingSellAlerted)
+    }
+
+    @Test
+    fun `a pending sell without a recorded start time restores as null`() = runTest {
+        // V20 이전에 시작된 pending — 판정은 "지금부터" 세도록 PositionManager 가 처리한다.
+        rows(TradingStateEntity(userId = 1L, ticker = "KRW-BTC", pendingSellUuid = "old"))
+
+        val restored = service.loadStates(1L)["KRW-BTC"]!!
+
+        assertNull(restored.pendingSellSince)
+        assertEquals(false, restored.pendingSellAlerted)
     }
 }
