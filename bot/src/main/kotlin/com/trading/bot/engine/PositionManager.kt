@@ -55,20 +55,65 @@ class PositionManager(
     private suspend fun findAccount(currency: String): Account? =
         upbitClient.getAccounts().find { it.currency == currency }
 
+    /**
+     * 보유 수량 = `free + min(locked, 우리 매도 주문이 아직 잠그고 있을 수 있는 최대 수량)`.
+     *
+     * Upbit 의 `locked` 는 "출금이나 주문 등에 잠겨 있는 잔액"이라 우리 주문 외 사유가 섞인다. 그대로 더하면
+     * `sell()` 이 주문할 수 없는(free 만 판다) 수량을 보유로 세어 유령 포지션이 남고, 반대로 통째로 버리면
+     * 우리 주문이 방금 풀렸지만 아직 free 로 안 돌아온 잔량을 잃는다. 상한을 두면 양쪽을 다 피하고,
+     * 거래소가 locked→free 를 언제 반영하든 같은 답이 나온다.
+     *
+     * @param ourLockCeiling 우리 매도 주문이 잠그고 있을 수 있는 **최대** 수량. 이미 free 로 돌아온 몫은
+     *   상한에서 빠진다 — 그래서 주문이 이미 풀렸으면 상한이 0 이 되어 타 사유 locked 가 새지 않는다.
+     */
+    private fun heldVolume(account: Account, ourLockCeiling: Double): Double {
+        val free = account.balanceDouble()
+        return free + minOf(account.lockedDouble(), (ourLockCeiling - free).coerceAtLeast(0.0))
+    }
+
+    /**
+     * 우리 매도 주문이 잠그고 있을 수 있는 최대 수량 = 주문 수량. 미해소 주문이 없으면 0, 주문은 있는데
+     * 수량 기록이 없으면(레거시 durable row) 상한을 걸지 않는다 — 그 경우 [heldVolume] 은 종전대로
+     * free+locked 가 된다.
+     *
+     * **느슨한 상한이다.** `pendingSellVolume` 은 주문 시점 수량이고 부분체결로 줄지 않으므로, 주문이 `wait`
+     * 로 남아 일부만 체결된 구간에서는 체결분만큼 여유가 생긴다. 체결분을 아는 호출부는 그만큼 빼서 넘긴다.
+     */
+    private fun ourSellLockCeiling(state: TradingState): Double =
+        if (state.pendingSellUuid == null) 0.0 else state.pendingSellVolume ?: Double.POSITIVE_INFINITY
+
     suspend fun syncPosition(ticker: String, state: TradingState) {
         try {
             val account = findAccount(ticker.substringAfter("-"))
-            // free 가 아니라 free+locked — 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 가 0 이다.
-            // 그걸 "보유 없음" 으로 동기화하면 손절·익절이 한 번도 평가되지 않는 무방비 보유가 되고,
-            // boughtToday 가 풀리는 순간 그 위에 추가 매수까지 들어간다.
-            account?.takeIf { it.totalBalance() > 0 }?.let {
-                state.position = true
-                state.avgBuyPrice = it.avgBuyPriceDouble()
-                state.holdVolume = it.totalBalance()
-                log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
+            if (account != null) {
+                // free 만 보면 안 된다 — 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 가 0 이다.
+                // 그걸 "보유 없음" 으로 동기화하면 손절·익절이 한 번도 평가되지 않는 무방비 보유가 되고,
+                // boughtToday 가 풀리는 순간 그 위에 추가 매수까지 들어간다.
+                val held = heldVolume(account, ourSellLockCeiling(state))
+                if (held > 0.0) {
+                    state.position = true
+                    state.avgBuyPrice = account.avgBuyPriceDouble()
+                    state.holdVolume = held
+                    log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
+                } else if (account.lockedDouble() > 0.0) {
+                    // 우리 주문으로 설명되지 않는 lock — 출금 대기이거나 사용자가 직접 낸 주문이다. 팔 수 없으니
+                    // 보유로 세지 않고 매수만 막는다. position 은 건드리지 않는다 — 여기서 내리면 markSold 를
+                    // 우회한 청산이 되어 감사 기록 없이 포지션이 사라진다(정리는 sell() 의 phantom 경로 몫).
+                    // 판정은 syncPosition 이 도는 시점(기동·unsynced 재시도·매도 무산 복원)에만 이뤄진다.
+                    if (!state.unattributableLockWarned) {
+                        log.warn(
+                            "Unattributable locked balance for {}: locked={} — blocking new entries until it clears",
+                            ticker, account.lockedDouble(),
+                        )
+                        state.unattributableLockWarned = true
+                    }
+                    state.unsynced = true
+                    return
+                }
             }
             // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
             state.unsynced = false
+            state.unattributableLockWarned = false
         } catch (e: CancellationException) {
             throw e // 취소는 전파(unsynced 로 삼키지 않는다).
         } catch (e: Exception) {
@@ -89,7 +134,8 @@ class PositionManager(
             return null
         }
         if (state.unsynced) {
-            // 거래소 동기화 실패로 보유 여부가 불확실 — 신규 매수 시 이미 보유분과 이중 포지션 위험. skip(processTicker 가 재시도).
+            // 보유 여부가 불확실 — 잔고 조회 실패이거나, 우리 주문으로 설명 안 되는 locked 가 있는 경우다.
+            // 어느 쪽이든 신규 매수는 이미 보유분과 이중 포지션 위험. skip(processTicker 가 재시도).
             log.debug("Skip buy for {}: position not synced with exchange — avoiding double entry", ticker)
             return null
         }
@@ -268,7 +314,8 @@ class PositionManager(
         // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
         val strategy = state.pendingBuyStrategy
         val orderUuid = state.pendingBuyUuid // markBought 가 clear 하기 전에 캡처 — 멱등 dedup 키.
-        val volume = account?.balanceDouble()?.takeIf { it > 0.0 } ?: executedVolume
+        // 매수 직후라 우리 매도 주문은 없다 → 상한 0 = free 만 센다(holdVolume 정의를 매수 경로도 공유).
+        val volume = account?.let { heldVolume(it, 0.0) }?.takeIf { it > 0.0 } ?: executedVolume
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
         val totalAmount = fillPrice * volume
         val record = TradeRecord(
@@ -564,11 +611,14 @@ class PositionManager(
         val executed = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
         return when {
             executed > 0.0 -> {
-                // terminal(done 전량 또는 cancel 부분) + 체결분. 미체결 잔량은 취소돼 locked 가 free 로 돌아왔으므로 실잔고가 정확.
+                // terminal(done 전량 또는 cancel 부분) + 체결분. 잔여는 우리 주문이 못 판 몫까지만 센다 —
+                // 취소된 미체결 잔량은 free 로 돌아오지만 반영이 늦을 수 있고, 반대로 남은 locked 가 우리
+                // 주문 것이 아닐 수도 있다(출금 대기 등). 둘 다 [heldVolume] 의 상한이 처리한다.
                 // buildSellRecord 는 평단이 필요하므로 전이 전에 만든다. 잔고 조회도 트랜잭션 밖에서 끝낸다(#52).
                 val record = buildSellRecord(ticker, state, currentPrice, executed)
                 val account = findAccount(ticker.substringAfter("-"))
-                val remaining = account?.totalBalance() ?: 0.0
+                val unfilled = (ourSellLockCeiling(state) - executed).coerceAtLeast(0.0)
+                val remaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
                 val recoveredAvg = account?.avgBuyPriceDouble() ?: 0.0
                 val now = LocalDateTime.now(TradingDay.KST)
                 val applyTransition: (TradingState) -> Unit = if (remaining > 0.0) {
@@ -607,6 +657,9 @@ class PositionManager(
      * getOrder 장애 시 실잔고로 매도 체결 여부 추정 복원. free+locked 합(totalBalance)이 0 = 청산됨(markSold 이전
      * holdVolume 으로 기록), 남음 = 미체결/진행중(pending 유지, 다음 tick). free 만 보면 미체결 잔량이 locked 로 묶인
      * 진행중 주문을 청산으로 오판한다(codex P2). 전제: 1 ticker = 1 position, pending 생존 중 잔고 변화는 이 매도 결과.
+     *
+     * 여기만 [heldVolume] 의 상한 규칙 밖이다 — "다 나갔나"만 판정하므로 locked 를 넉넉히 세는 쪽이 보수적
+     * (잔고가 남아 보이면 pending 을 유지해 사람이 확인하게 둔다). 상세는 #56 Deferred.
      */
     private suspend fun recoverSellFromBalance(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
         return try {
