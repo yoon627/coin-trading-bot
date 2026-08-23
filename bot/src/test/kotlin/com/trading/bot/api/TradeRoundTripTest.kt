@@ -206,24 +206,52 @@ class TradeRoundTripTest {
         assertEquals("TAKE_PROFIT", rt.reason)
     }
 
+    /**
+     * 잔량이 남았다고 매도 정보까지 비우면 **이미 실현된 매도가 화면에서 통째로 사라진다** —
+     * "10개 사서 4개 팔고 6개 보유 중"이 "10개 사서 보유 중"으로만 보인다.
+     */
     @Test
-    fun `부분 매도 후 잔량이 남으면 아직 청산되지 않은 것이다`() {
+    fun `부분 매도 후 잔량이 남아도 실현된 매도는 노출한다`() {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 10.0, "2026-08-01T10:00"),
-                rec("KRW-BTC", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 10.0, reason = "MANUAL"),
+                rec("KRW-BTC", "SELL", 120.0, 4.0, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
             )
         )
 
-        assertEquals(1, rts.size)
-        val rt = rts[0]
-        assertTrue(rt.open)
+        val rt = rts.single()
+        // 매도가 있었으므로 '매도 없음'(open) 은 아니다 — 잔량이 남은 일부 청산이다
+        assertFalse(rt.open)
+        assertTrue(rt.partiallyClosed)
         assertEquals(1, rt.sellCount)
-        // 아직 확정 손익이 아니다
-        assertNull(rt.exitAt)
-        assertNull(rt.exitPrice)
-        assertNull(rt.pnlPercent)
+        // 실현된 매도 정보는 그대로 보인다
+        assertEquals(LocalDateTime.parse("2026-08-01T12:00"), rt.exitAt)
+        assertEquals(120.0, rt.exitPrice)
+        assertEquals(19.9, rt.pnlPercent)
+        // 판 만큼의 원가만 차감: 480 − 평단 100 × 매도 4 = 80.
+        // 전체 매수액을 빼면 480 − 1000 = −520 이라 팔지도 않은 6개가 손실로 잡힌다.
+        assertEquals(80.0, rt.pnlAmountGross)
+    }
+
+    /**
+     * 수동 `sellAll` 은 거래소 잔고 전체를 팔기 때문에 이전 포지션의 잔여분까지 매도 수량에 들어간다.
+     * 그 잔여분의 원가는 이 그룹에 없으므로 신규 평단을 적용하면 손익이 부풀려진다.
+     */
+    @Test
+    fun `매수보다 많이 팔렸으면 손익을 계산하지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 3.0, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
+            )
+        )
+
+        val rt = rts.single()
+        assertTrue(rt.partial, "잔여분 원가를 모르므로 매수 기반 값을 신뢰할 수 없다")
         assertNull(rt.pnlAmountGross)
+        // 매도 자체의 값은 그대로 노출한다
+        assertEquals(120.0, rt.exitPrice)
+        assertEquals(19.9, rt.pnlPercent)
     }
 
     /**
@@ -273,7 +301,8 @@ class TradeRoundTripTest {
         listOf(
             "ticker", "entry_at", "entry_price", "buy_count", "buy_amount", "buy_volume",
             "sell_count", "exit_at", "exit_price", "sell_amount", "sell_volume",
-            "pnl_percent", "pnl_amount_gross", "holding_seconds", "reason", "strategy", "open", "partial",
+            "pnl_percent", "pnl_amount_gross", "holding_seconds", "reason", "strategy",
+            "open", "partially_closed", "partial",
         ).forEach { key ->
             assertTrue(json.contains("\"$key\""), "직렬화 JSON 에 키가 없다: $key — $json")
         }
