@@ -46,6 +46,8 @@ class DiscordNotifierTest {
             price = 50000000.0,
             volume = 0.002,
             totalAmount = 100000.0,
+            pnlPercent = null,
+            pnlAmount = null,
             strategy = "volatility_breakout",
             userId = 1L,
         )
@@ -69,6 +71,7 @@ class DiscordNotifierTest {
             volume = 0.002,
             totalAmount = 104000.0,
             pnlPercent = 4.0,
+            pnlAmount = 4000.0,
             reason = "TAKE_PROFIT",
             strategy = "rsi_bounce",
             userId = 1L,
@@ -87,6 +90,9 @@ class DiscordNotifierTest {
             price = 50000000.0,
             volume = 0.002,
             totalAmount = 100000.0,
+            pnlPercent = null,
+            pnlAmount = null,
+            strategy = null, // 전략 미상 분기(수동 매수 포지션)도 embed 를 만들 수 있어야 한다
             userId = 1L,
         )
 
@@ -107,6 +113,9 @@ class DiscordNotifierTest {
             price = 50000000.0,
             volume = 0.002,
             totalAmount = 100000.0,
+            pnlPercent = null,
+            pnlAmount = null,
+            strategy = "combined",
             userId = 1L,
         )
 
@@ -123,6 +132,9 @@ class DiscordNotifierTest {
             price = 50000000.0,
             volume = 0.002,
             totalAmount = 100000.0,
+            pnlPercent = null,
+            pnlAmount = null,
+            strategy = "combined",
             userId = 1L,
         )
 

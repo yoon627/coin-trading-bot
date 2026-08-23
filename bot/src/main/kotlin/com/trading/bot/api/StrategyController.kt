@@ -40,24 +40,18 @@ class StrategyController(
     @GetMapping("/performance")
     suspend fun getPerformance(): Map<String, Any> {
         val userId = currentUserId()
-        val records = tradeRecordRepository.findByUserId(userId, 1000)
-
-        val byStrategy = records.groupBy { it.strategy ?: "unknown" }
-        val results = byStrategy.map { (strategy, trades) ->
-            val sells = trades.filter { it.side == "SELL" && it.pnlPercent != null }
-            val wins = sells.count { (it.pnlPercent ?: 0.0) > 0 }
-            val totalPnl = sells.sumOf { it.pnlPercent ?: 0.0 }
-            val totalAmount = trades.sumOf { it.totalAmount }
-
+        // 전략 미상(null)은 unknown 으로 묶는다 — 수동 매수로 만든 포지션을 엔진이 청산하면 진입 전략이 없다.
+        val results = tradeRecordRepository.aggregateByStrategy(userId).map { row ->
             mapOf(
-                "strategy" to strategy,
-                "total_trades" to trades.size,
-                "sell_trades" to sells.size,
-                "win_trades" to wins,
-                "win_rate" to if (sells.isNotEmpty()) (wins.toDouble() / sells.size * 100) else 0.0,
-                "total_pnl_pct" to totalPnl,
-                "avg_pnl_pct" to if (sells.isNotEmpty()) totalPnl / sells.size else 0.0,
-                "total_amount" to totalAmount,
+                "strategy" to (row.strategy ?: "unknown"),
+                "total_trades" to row.totalTrades,
+                "sell_trades" to row.sellTrades,
+                "win_trades" to row.winTrades,
+                "win_rate" to if (row.sellTrades > 0) row.winTrades.toDouble() / row.sellTrades * 100 else 0.0,
+                "total_pnl_pct" to row.totalPnlPct,
+                "avg_pnl_pct" to if (row.sellTrades > 0) row.totalPnlPct / row.sellTrades else 0.0,
+                "total_pnl_amount" to row.totalPnlAmount,
+                "total_amount" to row.totalAmount,
             )
         }
 
