@@ -182,7 +182,8 @@ private fun roundTrip(
         strategy = buys.firstOrNull { it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
             ?.strategy
             ?: buys.firstOrNull()?.strategy,
-        open = !hasSells,
+        // open 은 "아직 전량 청산되지 않았다" 는 뜻을 그대로 유지한다 — 일부만 팔았어도 잔량은 보유 중이다.
+        open = !closed,
         partiallyClosed = hasSells && !closed,
         partial = untrustedBuys,
     )

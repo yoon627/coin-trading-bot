@@ -379,11 +379,9 @@ function OrdersPage({ user, setActive }) {
           <div key={i} style={{ display: 'grid', gridTemplateColumns: RT_GRID, padding: '14px 24px', fontSize: 13, alignItems: 'center', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
             <span style={{ fontWeight: 600 }}>
               {r.ticker}
-              {r.open
-                ? <span style={{ display: 'block', fontSize: 10.5, color: 'var(--up)', fontWeight: 600 }}>보유 중</span>
-                : r.partially_closed
-                  ? <span style={{ display: 'block', fontSize: 10.5, color: 'var(--ink-500)', fontWeight: 600 }}>일부 매도</span>
-                  : null}
+              {r.open && <span style={{ display: 'block', fontSize: 10.5, color: 'var(--up)', fontWeight: 600 }}>
+                {r.partially_closed ? '일부 매도 · 보유 중' : '보유 중'}
+              </span>}
             </span>
             <span>
               {r.buy_count === 0 ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>매수 기록 없음</span> : <>
@@ -397,7 +395,8 @@ function OrdersPage({ user, setActive }) {
               </>}
             </span>
             <span>
-              {r.open ? (
+              {/* 잔량이 남아 open 이어도 이미 실현된 매도가 있으면 보여준다 */}
+              {r.sell_count === 0 ? (
                 <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>—</span>
               ) : <>
                 <span className="num" style={{ display: 'block', fontSize: 11, color: 'var(--ink-500)' }}>
