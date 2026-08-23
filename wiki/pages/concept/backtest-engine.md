@@ -2,9 +2,9 @@
 title: 백테스트 엔진 — 구조와 라이브 정합의 한계
 category: concept
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-23
 claim_state: current
-verified: 2026-07-28 — BacktestEngine.kt:53-171 정독 (단일 position 필드·balance 복리·fill 규칙 실측)
+verified: 2026-08-23 — BacktestEngine.run 가드를 size <= MIN_CANDLES 로 수정, 50봉 null·51봉 실행 회귀 테스트 추가
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/IntrabarExitModel.kt
@@ -20,7 +20,7 @@ sources:
 - **단일 티커, 단일 포지션.** 상태는 `position: Boolean` + `buyPrice` 하나다. 종목 분산·부분 익절·동시 보유가 없다.
 - **전액 복리(all-in).** `balance *= (1 + netPnl/100)` — 포지션 사이징 개념이 없다. 초기 잔고 1,000,000.
 - **워밍업 50봉**(`MIN_CANDLES`). 시뮬레이션 루프는 `for (i in 50 until size)` 라 51번째 봉부터 신호를 낸다.
-  > [!conflict] `run()` 은 `size < 50` 일 때만 null 을 반환하므로 **정확히 50봉을 넘기면 통과**하는데, 루프가 한 번도 돌지 않은 채 `buildResult` 가 `chronological[50]` 을 읽어 `IndexOutOfBoundsException` 이 난다(`BacktestEngine.kt:71,87,180`). 실질 최소 입력은 **51봉**이다.
+  > 정확히 50봉이면 루프가 한 번도 돌지 않아 `buildResult` 가 `chronological[50]` 을 읽고 터졌었다. 가드를 `size <= MIN_CANDLES` 로 고쳐(2026-08-23) 이제 **51봉 미만은 null** 을 반환한다 — 실질 최소 입력이 51봉이라는 사실은 그대로다.
 - **look-ahead 방지**: 신호는 봉 `i` 종가까지의 window 로 판단하고, **체결은 다음 봉 `i+1` 시가**로 잡는다.
 - **비용**: `feeRate × 2 × 100` 을 왕복으로 차감(`config.feeRate` 기본 0.0005). 슬리피지는 별도 모델이 없다.
 - **종료 시 미청산 포지션**은 마지막 종가로 `"END"` 청산해 결과에 포함한다.
