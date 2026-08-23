@@ -45,12 +45,6 @@ private const val VOLUME_EPSILON = 1e-8
 private const val MANUAL_STRATEGY = "manual"
 
 /**
- * 수동 매수 수량은 주문금액을 조회 시점 가격으로 나눈 **추정치**라 실제 체결과 어긋난다(#105).
- * 그 그룹의 초과 매도를 판정할 때 이 비율만큼은 기록 오차로 보고 넘긴다.
- */
-private const val MANUAL_VOLUME_SLACK = 0.01
-
-/**
  * 한 포지션의 매수 수량·금액. 매수 기록의 의미가 경로마다 달라서 그냥 합산할 수 없다.
  *
  * `PositionManager.completeBuy` 는 거래소 **전체 잔고와 평단**을 그대로 적는다(#20 — 재시작 시
@@ -145,16 +139,14 @@ private fun roundTrip(
     val exitAt = if (hasSells) sells.lastOrNull()?.createdAt else null
     // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다(수동 sellAll 은
     // 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
-    // 판정 기준은 매수 수량이 실측인지 추정인지에 달렸다.
-    //  - 엔진 매수는 거래소 실잔고라 매도 수량과 직접 비교할 수 있다 → 부동소수 반올림만 흡수한다.
-    //  - 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량이라(#105) 실제 체결과 어긋난다.
-    //    반면 `sellAll` 은 실제 잔고를 판다. 그래서 정상 매매인데도 매도가 조금 더 많게 기록될 수 있어,
-    //    그 기록 오차를 초과 매도로 오인하지 않게 여유를 둔다. 대신 그만큼 실제 초과를 놓칠 수 있는데,
-    //    수량 자체가 추정치인 이상 이보다 정밀하게는 가를 수 없다.
-    // 엔진 기록이 하나라도 있으면 그것이 보유량을 대표하므로(BuySide) 실측으로 본다.
-    val estimatedBuys = buys.isNotEmpty() && buys.all { it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
-    val oversellSlack = if (estimatedBuys) buyVolume * MANUAL_VOLUME_SLACK else VOLUME_EPSILON
-    val oversold = buys.isNotEmpty() && sellVolume > buyVolume + oversellSlack
+    // 기록된 매수보다 많이 팔렸으면 그 초과분의 원가를 알 수 없다 — 이전 포지션 잔여분일 수도, 외부
+    // 입금분일 수도 있다. 비율 여유를 두면 그만큼의 정체 모를 수량이 손익에 섞이므로, 흡수하는 것은
+    // 부동소수 반올림뿐이다.
+    //
+    // 부작용: 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) `sellAll` 은
+    // 실제 잔고를 판다. 그래서 이전 포지션이 없는 정상 매매도 초과로 잡혀 손익이 비는 경우가 생긴다.
+    // 틀린 손익을 보여주느니 비우는 편을 택했다 — 근본 해결은 #105 에서 실제 체결 수량을 기록하는 것이다.
+    val oversold = buys.isNotEmpty() && sellVolume > buyVolume + VOLUME_EPSILON
     // 매수 기록이 없거나(고아 SELL) 앞이 잘렸거나 초과 매도면 매수 기반 값을 믿을 수 없다.
     val untrustedBuys = buys.isEmpty() || headCut || oversold
 
