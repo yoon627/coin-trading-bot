@@ -44,9 +44,6 @@ private const val VOLUME_EPSILON = 1e-8
 /** 수동 주문의 `strategy` 값 — `ManualTradeController` 가 넣는다. */
 private const val MANUAL_STRATEGY = "manual"
 
-/** 코인 수량은 수수료 때문에 딱 떨어지지 않는다. 매수량의 이 비율을 넘게 팔렸을 때만 초과 매도로 본다. */
-private const val OVERSELL_TOLERANCE = 0.01
-
 /**
  * 한 포지션의 매수 수량·금액. 매수 기록의 의미가 경로마다 달라서 그냥 합산할 수 없다.
  *
@@ -142,7 +139,9 @@ private fun roundTrip(
     val exitAt = if (hasSells) sells.lastOrNull()?.createdAt else null
     // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다(수동 sellAll 은
     // 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
-    val oversold = buys.isNotEmpty() && sellVolume > buyVolume * (1 + OVERSELL_TOLERANCE)
+    // 비율이 아니라 절대 오차로 판정한다 — 매도가 매수보다 많다는 것 자체가 이상 신호라,
+    // 흡수해야 할 것은 부동소수 반올림뿐이다. 비율 여유를 두면 그만큼의 실제 초과가 손익에 섞인다.
+    val oversold = buys.isNotEmpty() && sellVolume > buyVolume + VOLUME_EPSILON
     // 매수 기록이 없거나(고아 SELL) 앞이 잘렸거나 초과 매도면 매수 기반 값을 믿을 수 없다.
     val untrustedBuys = buys.isEmpty() || headCut || oversold
 
