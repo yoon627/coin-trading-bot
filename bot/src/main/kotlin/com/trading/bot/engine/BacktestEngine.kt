@@ -168,6 +168,9 @@ class BacktestEngine(
         state.balance *= (1 + pnl / 100.0)
         state.trades.add(BacktestTrade(state.buyIndex, chronological.size - 1, state.buyPrice, lastPrice, pnl, chronological.size - 1 - state.buyIndex, "END"))
         state.returns.add(pnl)
+        // processExit 와 같은 갱신 — 빠뜨리면 END 로 끝난 손실이 낙폭에 반영되지 않아 MDD 가 과소평가된다.
+        state.peakBalance = max(state.peakBalance, state.balance)
+        state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
     }
 
     private fun buildResult(

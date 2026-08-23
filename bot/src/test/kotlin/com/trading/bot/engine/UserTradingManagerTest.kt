@@ -401,4 +401,27 @@ class UserTradingManagerTest {
         coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
         verify(exactly = 1) { tradeExecutionRepository.save(any()) }
     }
+
+    @Test
+    fun `restore reports the strategy the engine actually uses, not the one in the database`() = runTest {
+        // DB 에 있는 전략명이 현재 bean 목록에 없으면(전략 제거·rename·revert 후) setStrategy 는 false 를
+        // 반환하고 엔진은 폴백 전략으로 돈다. 그 사실을 알리지 않으면 로그·상태 응답은 DB 값을 그대로
+        // 보고해, 운영자가 실제와 다른 전략이 매매 중인 것을 모른다.
+        val stale = BotStateEntity(userId = 7L, running = true, strategy = "removed_strategy", tickers = "KRW-BTC")
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(stale)
+        coEvery { userRepository.findById(7L) } returns Mono.just(user(7L))
+        every { mockEngine.setStrategy("removed_strategy") } returns false
+        every { mockEngine.getActiveStrategyName() } returns "volatility_breakout"
+
+        manager.restoreAllRunningBots()
+
+        // getStatus 는 engine 을 우선 읽어 이미 정확하다. 문제는 내부 캐시다 — 엔진이 사라진 뒤
+        // (재시작·reload) startBot 이 이 값을 다시 setStrategy 에 넘기므로, DB 의 죽은 이름이 남으면
+        // 매번 폴백을 반복하면서 로그에는 그 이름이 계속 찍힌다.
+        val f = UserTradingManager::class.java.getDeclaredField("userStrategies").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val cache = f.get(manager) as ConcurrentHashMap<Long, String>
+        assertEquals("volatility_breakout", cache[7L], "캐시에 DB 의 죽은 전략명이 그대로 남았다")
+    }
+
 }

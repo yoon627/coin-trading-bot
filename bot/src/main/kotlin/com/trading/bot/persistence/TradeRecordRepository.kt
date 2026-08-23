@@ -100,6 +100,22 @@ class TradeRecordRepository(
             .awaitSingle()
     }
 
+    /**
+     * 라운드트립 조립용 — 최근 [max] 건을 **시간 오름차순**으로 돌려준다.
+     * 그룹 경계가 BUY/SELL 순서에 의존하므로 createdAt 동률을 대비해 id 를 2차 정렬키로 쓴다.
+     * 상한을 넘으면 오래된 쪽이 잘려 가장 오래된 라운드트립의 매수 기록이 빌 수 있다(partial).
+     */
+    suspend fun findRecentAscending(userId: Long, max: Int): List<TradeRecordEntity> {
+        return r2dbcRepository.findByUserId(
+            userId,
+            Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")),
+        )
+            .take(max.toLong())
+            .collectList()
+            .awaitSingle()
+            .reversed()
+    }
+
     suspend fun countByUserId(userId: Long): Long {
         return r2dbcRepository.countByUserId(userId).awaitSingle()
     }

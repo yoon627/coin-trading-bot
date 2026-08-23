@@ -2,7 +2,7 @@
 title: sell-strategy-attribution — 매도 기록의 전략 귀속 복구 + 금액 손익 저장
 status: in_progress
 started: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # Goal
@@ -29,6 +29,8 @@ updated: 2026-08-22
 - 2026-08-22: **code-reviewer(+codex high) REQUEST CHANGES → Major 2 + Minor 7 + Nit 5 반영** (처분은 `# Review Disposition`). 핵심은 M1 — 내가 arch 지적에 과잉 방어로 넣은 `id<=62` 상한이 오히려 "측정~배포 사이 체결분 영구 미보정" 을 만든다는 지적. 상한을 제거하고 점검 블록(WARNING)으로 대체했다. M2 는 `aggregateByStrategy` 를 임시 컨테이너에서 실제 실행해 해소.
 - 2026-08-22: **simplify 체크(메인 직접)** — `netPnlPercent` 래퍼는 반복 인자를 줄이므로 유지, V20 의 테이블별 UPDATE 는 컬럼·조건이 달라 통합하면 오히려 복잡해져 유지. 제거한 것: 불필요한 `!!`(비-null `fee`), `TradeRecord` KDoc 의 원칙 서술 교정(`pnlAmount` 가 예외임을 정직하게 명시 — 평단은 청산과 함께 사라져 sink 가 되짚을 수 없다).
 - 2026-08-22: **최종 검증 4/4 통과**(격리 runner) — `:bot:test :common:test` BUILD SUCCESSFUL / `build -x test` SUCCESSFUL / `wiki/verify.sh` clean 28p / `wiki/smoke.sh` 10 pass. 손익 공식 단일화도 확인(`rg "roundTripFeeRate \* 100"` → `TradePnl.kt` 1곳).
+
+- 2026-08-23: **pre-push codex 3라운드 통과 후 push·PR #117 생성**(`30f3c19`). 라운드별 지적은 `# Review Disposition` 참조 — P1(fee 하드코딩)·P2(백업 불일치)·P2(부분체결)·P1(귀속 순서) 처리 후 "no blocking issues".
 
 # Next
 

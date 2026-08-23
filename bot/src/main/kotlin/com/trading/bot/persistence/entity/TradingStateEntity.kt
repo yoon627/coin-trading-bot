@@ -29,5 +29,7 @@ data class TradingStateEntity(
     val halted: Boolean = false,
     val haltReason: String? = null,
     val reconcileFailureCount: Int = 0,
+    val pendingSellSince: java.time.Instant? = null,
+    val pendingSellAlerted: Boolean = false,
     val updatedAt: Instant = Instant.now(),
 )

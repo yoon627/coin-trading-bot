@@ -58,12 +58,12 @@ ALTER TABLE trade_records ADD COLUMN pnl_amount DOUBLE PRECISION;
 --
 -- 조건은 아래 네 UPDATE 가 건드리는 행의 **합집합**이어야 한다. strategy 백필 대상(strategy IS NULL)만
 -- 담으면, 이미 strategy 가 있는 수동 매도('manual')가 pnl_amount 백필만 받았을 때 원본이 남지 않는다.
-CREATE TABLE trade_records_v20_backup AS
+CREATE TABLE trade_records_v21_backup AS
 SELECT id, strategy, pnl_amount FROM trade_records
 WHERE side = 'SELL'
   AND (strategy IS NULL OR (pnl_amount IS NULL AND pnl_percent IS NOT NULL));
 
-CREATE TABLE trade_executions_v20_backup AS
+CREATE TABLE trade_executions_v21_backup AS
 SELECT id, strategy, pnl_amount FROM trade_executions
 WHERE side = 'SELL' AND exchange = 'UPBIT'
   AND (strategy IS NULL OR (pnl_amount IS NULL AND pnl_percent IS NOT NULL));
@@ -147,7 +147,7 @@ WHERE s.side = 'SELL' AND s.pnl_amount IS NULL AND s.pnl_percent IS NOT NULL
 -- 실제로 배포 compose 가 그 변수를 전달한다. SQL 에 비율을 상수로 박으면 기본값이 아닌 환경에서
 -- 과거 행이 새 행과 다른 기준으로 기록되고, 원본이 0 이라 되돌릴 근거도 남지 않는다.
 -- 0 은 "기록 안 됨" 으로 읽히지만 틀린 추정치는 맞는 값과 구분되지 않는다 — 후자가 더 나쁘다.
--- 현재 이 컬럼을 읽는 코드는 없다. 총 수수료를 집계할 일이 생기면 V20 이전 행을 제외해야 한다.
+-- 현재 이 컬럼을 읽는 코드는 없다. 총 수수료를 집계할 일이 생기면 V21 이전 행을 제외해야 한다.
 
 -- 백필은 전제가 어긋나면 조용히 넘어간다(상관 서브쿼리가 NULL). 그러면 배포 로그에도 /performance 에도
 -- 신호가 없어 "고쳐졌다"고 오인하게 된다. 남은 미귀속 수를 세어 알린다.
@@ -161,7 +161,7 @@ BEGIN
     SELECT count(*) INTO tr_left FROM trade_records    WHERE side = 'SELL' AND strategy IS NULL;
     SELECT count(*) INTO te_left FROM trade_executions WHERE side = 'SELL' AND strategy IS NULL AND exchange = 'UPBIT';
     IF tr_left > 0 OR te_left > 0 THEN
-        RAISE WARNING 'V20 backfill: 미귀속 매도 잔존 — trade_records %건, trade_executions %건. '
+        RAISE WARNING 'V21 backfill: 미귀속 매도 잔존 — trade_records %건, trade_executions %건. '
                       '수동 매수만으로 만든 포지션이면 정상이고, 그 외면 페어링 전제가 깨진 것이다.',
                       tr_left, te_left;
     END IF;
