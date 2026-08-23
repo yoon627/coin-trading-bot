@@ -2,9 +2,9 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-08-22
+updated: 2026-08-23
 claim_state: current
-verified: 2026-08-22 — #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 이전 2026-08-01 — c37591a 후속 작업의 TradingEngine.kt:118-294, PositionManager.kt:74-315·420-610, TradeExecutionService.kt:166-287 및 JDK 21 관련 테스트 실행
+verified: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
@@ -43,16 +43,17 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 
 | 항목 | 기본값 |
 |---|---|
-| `takeProfitPct` | 2.0 (+2% 익절) |
+| `takeProfitPct` | 5.0 (+5% 익절) |
 | `maxLossPct` | 5.0 (−5% 손절) |
-| `trailingStopPct` / `trailingArmPct` | 2.0 / 0.0 |
+| `trailingStopPct` / `trailingArmPct` | 2.0 / 3.0 |
 | `maxHoldDays` | 1 (KST 09:00 경계) |
 | `chartExitEnabled` | **false** (기본 off) |
 | `intervalSeconds` | 10 |
 | `investRatio` / `maxInvestAmount` | 0.1 / 100,000 KRW |
 | `reconcileHaltThreshold` | 20 |
 
-> [!conflict] 과거 `PROJECT_ANALYSIS.md` 가 이 수치를 정반대로(손절 −3%/익절 +5%) 기재한 적이 있고 `docs-sync` 작업에서 교정됐다. **문서가 아니라 `TradingProperties.kt` 가 근거다.**
+> [!conflict] 이 표는 두 번 어긋난 적이 있다 — 과거 `PROJECT_ANALYSIS.md` 가 정반대로(손절 −3%/익절 +5%) 적었고, #75(리스크 기본값 단일화) 이후에는 이 페이지가 `takeProfitPct` 2.0 · `trailingArmPct` 0.0 인 옛 값을 들고 있었다(2026-08-23 교정).
+> **문서가 아니라 `TradingProperties.kt` 가 근거다.** 기본값이 바뀌면 이 표를 같은 커밋에서 고친다.
 
 ## 주문 유실 방지 구조
 
