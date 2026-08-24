@@ -31,6 +31,9 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V20 | `trading_states.pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림의 판정 기준을 카운터에서 경과시간으로 |
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구(아래) |
 
+> ⚠️ `trade_records.volume` 은 기록 경로에 따라 **총 보유량 스냅샷**(엔진)과 **증분**(수동)이 섞인다.
+> 합산하면 조회·집계가 조용히 틀린다 — [[trade-record-volume-semantics]] 참조.
+
 ## 매도 기록의 전략 귀속 (V21)
 
 `buildSellRecord` 가 `TradeRecord` 를 만들 때 `strategy` 인자를 넘기지 않아, V21 이전의 **매도 기록은 전부 `strategy=NULL`** 이었다. `pnl_percent` 를 가진 side 가 SELL 뿐이라 `/api/strategies/performance` 는 손익 전량을 `unknown` 그룹에 넣어 왔다 — 이 API 는 만들어진 이래 전략별 손익을 보여준 적이 없다.
