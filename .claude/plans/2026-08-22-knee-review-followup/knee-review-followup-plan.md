@@ -1,8 +1,8 @@
 ---
 title: knee-review-followup — PR3 사후 정적 리뷰 지적 반영
-status: in_progress
+status: done
 started: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # Goal
@@ -11,6 +11,8 @@ PR #99 는 `code-reviewer` 가 세션 한도로 두 번 중단돼 **정적 리�
 사후 리뷰에서 나온 Major 2건·Minor 다수를 반영한다. production 로직 변경은 없고 테스트·문서 품질 작업이다.
 
 # Progress
+
+- 2026-08-24 — PR #103 머지 확인, `status: done` 처리(머지 시점에 못 닫아 뒤늦게 정리).
 
 - 2026-08-22 — 사후 정적 리뷰(code-reviewer) 수행 → REQUEST CHANGES. Major 2 + Minor 12 + Nit 6 + refuted 7.
   반영 완료. 특히 M1 은 **리뷰어의 지적 자체도 부정확**했음을 mutation 으로 확인하고 더 정확한 해법으로 갔다.
@@ -35,7 +37,8 @@ PR #99 는 `code-reviewer` 가 세션 한도로 두 번 중단돼 **정적 리�
 
 # Next
 
-최종 검증 → 커밋·PR.
+완료 — 사후 정적 리뷰 지적 반영(게이트 검증 이관·집계 전략별 대조).
+
 
 # Decisions
 

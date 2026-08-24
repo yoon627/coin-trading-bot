@@ -1,8 +1,8 @@
 ---
 title: knee-shoulder-strategy — 무릎 매수/어깨 매도 스윙 전략 2종 추가 (PR1)
-status: in_progress
+status: done
 started: 2026-08-06
-updated: 2026-08-11
+updated: 2026-08-24
 ---
 
 # Goal
@@ -18,6 +18,8 @@ updated: 2026-08-11
 
 # Progress
 
+- 2026-08-24 — PR #95 머지(`b611782`·`042f728`) 확인, `status: done` 처리(머지 시점에 못 닫아 뒤늦게 정리).
+
 - 2026-08-06 — Explore 완료(백테/라이브 캔들 window 제약 실측), plan 작성 → plan-reviewer(+codex 0.146.0) 검토 →
   blocker 6건 반영해 plan 개정(조건식 2곳 변경, bean 등록 위치 제약 추가, Acceptance 재작성, rollback 절차 추가).
 - 2026-08-11 — plan 개정본 저장. TDD Red 착수.
@@ -29,8 +31,8 @@ updated: 2026-08-11
 
 # Next
 
-PR #95 리뷰·머지 대기. 머지 후 PR2(백테 검증)는 **별도 worktree**에서 — 착수 전 먼저
-"백테 50봉 vs 라이브 60봉 RSI 불일치"(아래 Deferred)를 어떻게 다룰지 판단해야 캘리브레이션이 유효하다.
+완료 — 무릎 매수 2종 + 어깨 청산 구현. 후속은 PR #98(백테 검증)로 이어졌다.
+
 
 # Decisions
 
