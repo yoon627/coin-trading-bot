@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-08-23
 claim_state: current
-verified: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행
+verified: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
@@ -29,7 +29,7 @@ sources:
 5. **미해소 매도 reconcile** — 같은 구조의 매도판.
 6. **보유 중이면 청산 평가** — `updatePeakPrice`(오를 때만 durable flush) → `decideSell` → `sell`.
 7. **당일 1회 가드** — `position || boughtToday` 면 매수 평가 자체를 생략.
-8. **매수 평가** — D1 캔들이 store 에 21개 이상이면 store, 아니면 REST 60개로 폴백해 [[swing-strategies]] 의 `shouldBuy` 판정.
+8. **매수 평가** — D1 캔들이 store 에 전략이 요구하는 만큼(`max(MIN_DAILY_CANDLES, strategy.minCandles)`) store 에 있으면 store, 아니면 REST 60개로 폴백해 [[swing-strategies]] 의 `shouldBuy` 판정.
 
 ## 청산 사유 우선순위 (decideSell, :322-334)
 
