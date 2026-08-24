@@ -1,8 +1,8 @@
 ---
 title: knee-backtest-calibration — 무릎 전략 2종 백테 관찰 기록 (PR2)
-status: in_progress
+status: done
 started: 2026-08-12
-updated: 2026-08-19
+updated: 2026-08-24
 ---
 
 # Goal
@@ -14,6 +14,8 @@ PR1(#95, main 머지 완료)의 `knee_reversal`·`knee_pullback` 에 대해 **�
 산출물은 수치와 그 수치의 한계이며, 승격 여부는 사람이 정한다.
 
 # Progress
+
+- 2026-08-24 — PR #98 머지 확인, `status: done` 처리(머지 시점에 못 닫아 뒤늦게 정리).
 
 - 2026-08-12 — worktree 생성(base `origin/main@6bfae21`). 8마켓 선정 기준 확정.
 - 2026-08-19 — fixture 재수집(2026-01-31~08-18, 8마켓×200봉, 284KB). **기간이 하락장임을 실측**(8개 중 7개 마이너스).
@@ -49,10 +51,8 @@ PR1(#95, main 머지 완료)의 `knee_reversal`·`knee_pullback` 에 대해 **�
 
 # Next
 
-**PR #98 리뷰·머지 대기.** 승격은 하지 않는다(위 판정 — OOS 근거 없음).
-머지 후 후보: ① 배포 전 `knee_*` 사용자 유무 확인(라이브 신호가 바뀐다) ② Deferred 의 candle
-sufficiency 계약 통합(구조 이슈) ③ 상승장 표본 확보(일봉 API `to` 파라미터로 과거 구간 별도 수집).
-PR3(RiskProfile)은 이 결과상 우선순위가 낮아졌다 — 전략 자체에 승격 근거가 없다.
+완료 — RSI window 의존성 제거 + 백테 관찰 기록. 판정은 **승격 근거 없음**. 국면 한계는 PR #99 에서 상승장 표본으로 후속 검증했다.
+
 
 # Decisions
 

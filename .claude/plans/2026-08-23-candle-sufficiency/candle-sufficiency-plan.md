@@ -1,8 +1,8 @@
 ---
 title: candle-sufficiency — 최소 캔들 계약을 전략이 선언하게 한다 (#109)
-status: in_progress
+status: done
 started: 2026-08-23
-updated: 2026-08-23
+updated: 2026-08-24
 ---
 
 # Goal
@@ -15,6 +15,8 @@ updated: 2026-08-23
 REST 자체가 부족한 신규 마켓은 이 변경으로 고쳐지지 않는다.
 
 # Progress
+
+- 2026-08-24 — PR #124 머지(`d7fc820`) 확인, `status: done` 처리(머지 시점에 못 닫아 뒤늦게 정리).
 
 - 2026-08-23 — 전 전략 요구 수집, plan 작성 → plan-reviewer(+codex 0.147.0) **CONDITIONAL**.
   문제 정의 오류 포함 blocker 7건을 반영해 개정.
@@ -35,7 +37,8 @@ REST 자체가 부족한 신규 마켓은 이 변경으로 고쳐지지 않는�
 
 # Next
 
-TDD(계약 테스트 먼저) → 구현 → code-reviewer.
+완료 — `TradingStrategy.minCandles` 계약 도입. 남은 것은 이슈로: seed 무재시도·KIS 청산 비대칭은 Deferred 에 기록돼 있다.
+
 
 # Decisions
 
