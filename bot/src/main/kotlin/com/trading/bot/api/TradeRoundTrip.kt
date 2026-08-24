@@ -32,6 +32,8 @@ data class TradeRoundTrip(
     val strategy: String?,
     /** 아직 전량 청산되지 않았다(미매수 잔량 보유). */
     val open: Boolean,
+    /** 매도는 있었지만 매수 수량의 일부가 아직 남아 있다. */
+    val partiallyClosed: Boolean,
     /** 매수 기록이 없거나 일부만 남아 매수 기반 값(평단·손익금액)을 믿을 수 없다. */
     val partial: Boolean,
 )
@@ -131,25 +133,43 @@ private fun roundTrip(
     val sellAmount = sells.sumOf { it.totalAmount }
     val sellVolume = sells.sumOf { it.volume }
     val entryAt = buys.firstOrNull()?.createdAt
-    val exitAt = if (closed) sells.lastOrNull()?.createdAt else null
-    // 매수 기록이 없거나(고아 SELL) 앞이 잘려 일부만 남았으면 매수 기반 값을 믿을 수 없다.
-    val untrustedBuys = buys.isEmpty() || headCut
+    val entryPrice = if (buyVolume > 0) buyAmount / buyVolume else null
+    // 잔량이 남았다고 매도 정보까지 비우면 이미 실현된 매도가 화면에서 사라진다.
+    val hasSells = sells.isNotEmpty()
+    val exitAt = if (hasSells) sells.lastOrNull()?.createdAt else null
+    // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다(수동 sellAll 은
+    // 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
+    // 기록된 매수보다 많이 팔렸으면 그 초과분의 원가를 알 수 없다 — 이전 포지션 잔여분일 수도, 외부
+    // 입금분일 수도 있다. 비율 여유를 두면 그만큼의 정체 모를 수량이 손익에 섞이므로, 흡수하는 것은
+    // 부동소수 반올림뿐이다.
+    //
+    // 부작용: 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) `sellAll` 은
+    // 실제 잔고를 판다. 그래서 이전 포지션이 없는 정상 매매도 초과로 잡혀 손익이 비는 경우가 생긴다.
+    // 틀린 손익을 보여주느니 비우는 편을 택했다 — 근본 해결은 #105 에서 실제 체결 수량을 기록하는 것이다.
+    val oversold = buys.isNotEmpty() && sellVolume > buyVolume + VOLUME_EPSILON
+    // 매수 기록이 없거나(고아 SELL) 앞이 잘렸거나 초과 매도면 매수 기반 값을 믿을 수 없다.
+    val untrustedBuys = buys.isEmpty() || headCut || oversold
 
     return TradeRoundTrip(
         ticker = ticker,
         entryAt = entryAt,
-        entryPrice = if (buyVolume > 0) buyAmount / buyVolume else null,
+        entryPrice = entryPrice,
         buyCount = buys.size,
         buyAmount = buyAmount,
         buyVolume = buyVolume,
         sellCount = sells.size,
         exitAt = exitAt,
-        exitPrice = if (closed && sellVolume > 0) sellAmount / sellVolume else null,
-        sellAmount = if (closed) sellAmount else null,
-        sellVolume = if (closed) sellVolume else null,
-        pnlPercent = if (closed) weightedPnlPercent(sells) else null,
-        // 매수액을 모르면 0 으로 채우지 않는다 — 매도액 전체가 이익인 것처럼 보이는 가짜 손익이 된다.
-        pnlAmountGross = if (closed && !untrustedBuys) sellAmount - buyAmount else null,
+        exitPrice = if (hasSells && sellVolume > 0) sellAmount / sellVolume else null,
+        sellAmount = if (hasSells) sellAmount else null,
+        sellVolume = if (hasSells) sellVolume else null,
+        pnlPercent = if (hasSells) weightedPnlPercent(sells) else null,
+        // 판 만큼의 원가만 차감한다 — 전체 매수액을 빼면 아직 팔지 않은 매수분이 손실로 잡힌다.
+        // 매수액을 모르면 0 으로 채우지 않는다: 매도액 전체가 이익인 것처럼 보이는 가짜 손익이 된다.
+        pnlAmountGross = if (hasSells && !untrustedBuys && entryPrice != null) {
+            sellAmount - entryPrice * sellVolume
+        } else {
+            null
+        },
         holdingSeconds = if (exitAt != null && entryAt != null) {
             Duration.between(entryAt, exitAt).seconds
         } else {
@@ -162,7 +182,9 @@ private fun roundTrip(
         strategy = buys.firstOrNull { it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
             ?.strategy
             ?: buys.firstOrNull()?.strategy,
+        // open 은 "아직 전량 청산되지 않았다" 는 뜻을 그대로 유지한다 — 일부만 팔았어도 잔량은 보유 중이다.
         open = !closed,
+        partiallyClosed = hasSells && !closed,
         partial = untrustedBuys,
     )
 }
