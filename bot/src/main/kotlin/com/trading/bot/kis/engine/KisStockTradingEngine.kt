@@ -18,6 +18,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.max
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,8 @@ class KisStockTradingEngine(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val positions = ConcurrentHashMap<String, StockPosition>()
+    // 캔들 부족 경고 억제(심볼:전략:경로 + 60초) — tick 마다 반복되면 로그가 묻힌다.
+    private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // REST 폴백 전용 로컬 캐시(M-D). store 는 @Scheduled 폴러가 단독 writer 로 유지한다.
@@ -176,15 +179,37 @@ class KisStockTradingEngine(
         else -> null
     }
 
+    /** 전략 요구와 엔진 하한 중 큰 쪽 — Upbit 엔진과 같은 계약을 쓴다(두 거래소가 전략 목록을 공유). */
+    private fun effectiveMinCandles(): Int = max(MIN_CANDLES, activeStrategy.minCandles)
+
+    /** 캔들이 모자라 신호를 못 내는 상황을 알린다 — 기존엔 무로그라 원인을 코드로만 알 수 있었다. */
+    private fun warnInsufficientCandles(symbol: String, path: String, actual: Int) {
+        val key = "$symbol:${activeStrategy.name}:$path"
+        val now = System.currentTimeMillis()
+        val last = candleWarnAtMs[key]
+        if (last != null && now - last < CANDLE_WARN_INTERVAL_MS) return
+        candleWarnAtMs[key] = now
+        log.warn(
+            "{} for {}: 일봉 {}개 < {} 전략 요구 {}개 — 신호 평가를 건너뛴다",
+            path, symbol, actual, activeStrategy.name, effectiveMinCandles(),
+        )
+    }
+
     private suspend fun chartExitTriggered(symbol: String, price: Long): Boolean {
         val candles = candles(symbol)
-        if (candles.size < MIN_CANDLES) return false
+        if (candles.size < effectiveMinCandles()) {
+            warnInsufficientCandles(symbol, "chartExit", candles.size)
+            return false
+        }
         return activeStrategy.shouldSellNormalized(candles, price.toDouble(), tradingProperties)
     }
 
     private suspend fun shouldBuy(symbol: String, price: Long): Boolean {
         val candles = candles(symbol)
-        if (candles.size < MIN_CANDLES) return false
+        if (candles.size < effectiveMinCandles()) {
+            warnInsufficientCandles(symbol, "buy", candles.size)
+            return false
+        }
         return activeStrategy.shouldBuyNormalized(candles, price.toDouble(), tradingProperties)
     }
 
@@ -195,7 +220,7 @@ class KisStockTradingEngine(
      */
     private suspend fun candles(symbol: String): List<NormalizedCandle> {
         val cached = marketDataStore.getCandles(Exchange.KIS, symbol, CandleInterval.D1, CANDLE_LOOKBACK)
-        if (cached.size >= MIN_CANDLES) return cached
+        if (cached.size >= effectiveMinCandles()) return cached
 
         candleCache.get(symbol)?.let { return it }
         if (!candleCache.shouldAttempt(symbol)) return cached
@@ -248,7 +273,9 @@ class KisStockTradingEngine(
     }
 
     private companion object {
+        // 전략이 더 긴 lookback 을 요구하면 그쪽이 이긴다(effectiveMinCandles). 이 값은 하한이다.
         const val MIN_CANDLES = 20
+        private const val CANDLE_WARN_INTERVAL_MS = 60_000L
         const val CANDLE_LOOKBACK = 60
         const val CANDLE_BACKFILL_DAYS = 100L
 

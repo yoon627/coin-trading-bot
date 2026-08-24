@@ -34,6 +34,9 @@ class KisStockTradingEngineDurableTest {
         stateService = mockk(relaxed = true)
         val strategy = mockk<TradingStrategy>()
         every { strategy.name } returns "rsi"
+        // 지금은 이 테스트가 매수·청산 경로를 타지 않아 읽히지 않지만, 엔진이 minCandles 를 보게 된 이상
+        // 경로가 늘면 strict mock 이 터진다. relaxed 로 바꾸면 0 이 반환돼 게이트가 무력화되므로 stub 으로 둔다.
+        every { strategy.minCandles } returns 21
 
         engine = KisStockTradingEngine(
             userId = 1L, positionManager = pm, client = client,
