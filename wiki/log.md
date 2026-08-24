@@ -70,3 +70,16 @@
 | 과거 백테스트 무효 | 모델 학습 오염은 `BacktestEngine.kt:98`(다음 봉 시가 체결)이 막는 층위가 아님 |
 | 텍스트 수집 경로 부재 | `common`·`bot/src/main` grep 0건, 스키마에 텍스트 테이블 없음 |
 | 구독 토큰으로 서버 자동화 불가 | Anthropic Consumer Terms — API 키 외 자동·비인간 접근 금지 |
+
+## [2026-08-24] ingest | 배포 자동화 실측 + 검증 지점 일반화 교훈(코드 분기)
+
+`sell-strategy-attribution` 작업(PR #117, V21)에서 나온 재사용 지식 2건. 새 페이지 없이 기존 2페이지를 갱신했다 — 귀속 규칙 자체는 이미 [[persistence-schema]] 에 있고, 여기 적립한 건 그 규칙을 **어떻게 잘못 도출했는가**와 **배포가 언제 도는가**다.
+
+| 페이지 | 무엇을 추가했나 | 근거 |
+|---|---|---|
+| [[deployment-stack]] | `main` 머지 = 즉시 배포 시작(사전 백업 창 없음), stale 가드로 그 PR 배포가 skipped 될 수 있음 | `.github/workflows/deploy.yml:61,75-87`, 2026-08-23 #117 실측 |
+| [[lesson-single-point-verification]] | "검증 지점"에 **코드 분기**를 포함 — `resuming=false` 만 보고 일반화한 사례 | `TradingState.kt:95,109`, pre-push codex P1 |
+
+`verified` 갱신: deployment-stack 은 live Actions 배포를 **처음으로 실제 관찰**(2026-08-23 03:40:44, Flyway v21)해 "merge 후 과제" 단서를 해소했다.
+
+부수 수정: `index.md` 의 stale 2줄(`persistence-schema` V1~V20 → V1~V21, `deployment-stack` EC2 t4g.medium → Vultr vc2-1c-2gb).
