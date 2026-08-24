@@ -7,6 +7,16 @@ import com.trading.common.domain.NormalizedCandle
 interface TradingStrategy {
     val name: String
 
+    /**
+     * 이 전략이 신호를 내려면 필요한 최소 캔들 수 — 진입·청산 중 **큰 쪽**이다.
+     *
+     * 기본값 21 은 기본 [shouldSell](5/20 데드크로스)이 요구하는 값이라, 이 값을 override 하지 않은
+     * 전략은 지금까지와 같은 봉 수를 본다. 더 긴 lookback 을 쓰는 전략은 반드시 올려야 한다 —
+     * 선언과 실제가 어긋나면 엔진이 짧은 캔들을 넘겨 전략이 조용히 false 를 반환한다
+     * (StrategyMinCandlesTest 가 전 전략을 순회해 이 계약을 강제한다).
+     */
+    val minCandles: Int get() = 21
+
     suspend fun shouldBuy(
         candles: List<Candle>,
         currentPrice: Double,

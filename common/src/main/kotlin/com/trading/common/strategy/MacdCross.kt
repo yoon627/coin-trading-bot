@@ -6,6 +6,9 @@ import com.trading.common.domain.Candle
 class MacdCross : TradingStrategy {
     override val name = "macd_cross"
 
+    // MACD(26+9) + drop(1) 로 직전 값까지 본다.
+    override val minCandles = 36
+
     override suspend fun shouldBuy(
         candles: List<Candle>,
         currentPrice: Double,

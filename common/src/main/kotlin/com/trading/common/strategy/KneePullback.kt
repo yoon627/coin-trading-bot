@@ -11,6 +11,8 @@ import com.trading.common.domain.Candle
 class KneePullback : TradingStrategy {
     override val name = "knee_pullback"
 
+    override val minCandles = MIN_CANDLES
+
     private companion object {
         const val TREND_SHORT = 20
         const val TREND_LONG = 40

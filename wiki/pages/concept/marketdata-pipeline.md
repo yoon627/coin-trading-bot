@@ -2,9 +2,9 @@
 title: 시세 수집 파이프라인 — WS ticker + REST 캔들, 무수신 워치독
 category: concept
 created: 2026-07-28
-updated: 2026-08-05
+updated: 2026-08-23
 claim_state: current
-verified: 2026-08-05 — MarketDataIngestionService.kt·MarketDataStore.kt 전문(2026-08-03) + MarketDataPersistenceService.kt·UpbitMarketFeed.kt:182 의 정규화 저장·종목별 샘플링을 테스트 실행으로 확인
+verified: 2026-08-23 — seedDailyCandles 200봉·실패 시 무재시도 확인, 전략별 minCandles 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt
@@ -37,7 +37,7 @@ UpbitMarketFeed ──ticker(WS)──┐
 ## 수집 코루틴
 
 - **ticker**: WS flow 를 collect 한다. flow 가 에러로든 정상으로든 끝나면 backoff 후 **재구독**한다. 예전 구현은 catch 후 종료라 한 번 끊기면 수집이 영영 멈췄다.
-- **candle**: 60초마다 M1 을 폴링. 캔들 한 번 요청의 상한과 D1 봉 경계(KST 09:00)는 [[upbit-api]] 참조. 부팅 시 `seedDailyCandles` 가 D1 200개를 store 에 한 번 채운다 — 안 하면 D1 버퍼가 하루 1개씩만 쌓여 최대 ~21일 동안 매 tick REST 폴백을 탄다([[trading-engine-loop]] 의 `MIN_DAILY_CANDLES`).
+- **candle**: 60초마다 M1 을 폴링. 캔들 한 번 요청의 상한과 D1 봉 경계(KST 09:00)는 [[upbit-api]] 참조. 부팅 시 `seedDailyCandles` 가 D1 200개를 store 에 한 번 채운다 — 안 하면 D1 버퍼가 하루 1개씩만 쌓여 전략이 요구하는 봉수를 채울 때까지 매 tick REST 폴백을 탄다 — 기본 21일, `macd_cross` 36일, `knee_*` 41일([[trading-engine-loop]] 의 `MIN_DAILY_CANDLES` 와 [[swing-strategies]] 의 `minCandles`). **seed 가 실패하면 재시도가 없어** 그 상태가 오래 간다.
 - **fan-out 격리**: store 와 persistence 를 각각 독립 try/catch 로 감싼다. 한 sink 실패가 다른 sink 나 수집 코루틴을 죽이지 않게 — 구 Kafka 2-consumer-group 격리와 등가.
 
 ## half-open 워치독
