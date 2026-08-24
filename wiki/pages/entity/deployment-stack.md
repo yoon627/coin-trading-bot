@@ -2,9 +2,9 @@
 title: 배포 스택 — Vultr 서울 + Caddy TLS + GHCR
 category: entity
 created: 2026-07-28
-updated: 2026-08-04
+updated: 2026-08-24
 claim_state: current
-verified: 2026-08-04 — 배포 계층 기본값 제거(#75)를 `docker compose config` 실측(미설정 키가 `null` 로 렌더 = 컨테이너 미주입)과 `append_trading_overrides` 격리 실행으로 확인. 인프라 구성은 2026-08-02 확인분 유지; live Actions 배포 관찰은 여전히 merge 후 과제
+verified: 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지
 sources:
   - PROJECT_ANALYSIS.md
   - deploy/vultr/
@@ -39,7 +39,18 @@ sources:
 - **앱 코드 변경은 이미지 재빌드가 있어야 반영된다.** `deploy.sh deploy`(pull)만으로는 안 바뀐다([[lesson-cors-origin-rebuild]]).
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.
-  최초 실행은 healthy 컨테이너에서만 rollback 기준을 bootstrap하며, queued stale SHA는 배포하지 않는다.
+  최초 실행은 healthy 컨테이너에서만 rollback 기준을 bootstrap한다(stale SHA 취급은 아래 두 항목).
+- **`main` 머지가 곧 배포 시작이다.** `deploy-vultr` job 은 `if: github.event_name == 'push'`(`deploy.yml:61`)라
+  PR 을 머지하는 순간 파이프라인이 돈다. 따라서 **"배포 직전에 무엇을 하겠다"는 절차에는 창이 없다** — 백업·스냅샷은
+  머지 전에 끝내야 한다. 머지 후에 확보하려면 `test`·`build-and-push` 가 도는 몇 분이 사실상 마지막 기회다
+  (2026-08-23 V21 배포에서 실제로 그 창에서 백업을 확보했다. `deploy/vultr/backup.sh` 는 `BACKUP_S3_BUCKET`
+  미설정이면 쓸 수 없어 대상 테이블만 `pg_dump` 했다).
+- **머지가 몰리면 그 PR 의 배포 스텝은 skipped 된다.** `Check deployment commit is current main`(`deploy.yml:75-87`)이
+  `origin/main` 과 `GITHUB_SHA` 를 대조해 다르면 이후 스텝을 전부 건너뛴다. `concurrency: vultr-production` 이
+  `cancel-in-progress: false` 라 앞 배포를 기다리는 동안 main 이 앞서가면 이 조건에 걸린다. 2026-08-23 PR #117 이
+  그랬고, 그 커밋은 이미 main 에 있었으므로 뒤이어 머지된 #116 의 배포에 함께 실려 적용됐다 — **변경이 누락된 게
+  아니라 배포 시점이 뒤 PR 로 밀린 것**이다. 내 PR 의 Actions 가 skipped 라고 배포 실패로 읽지 말고, 후속 배포
+  로그에서 반영을 확인한다.
 - GitHub-hosted runner의 동적 출발 IP 때문에 Vultr cloud firewall의 `ctb-ssh-github-actions` 22/tcp
   `0.0.0.0/0` 규칙이 필요하며, 운영 SSH는 password 금지·root key-only로 hardening되어 있다.
 - 수동 SSH는 `SSH_ALLOW_CIDR`로 제한하고, `setup_firewall`은 전용 규칙이 잘못되거나 중복되면

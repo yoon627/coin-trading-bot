@@ -13,7 +13,7 @@
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집, `MarketDataStore`, half-open 워치독
 - [[kis-stock-trading-flow]] — KIS 국내주식 봇의 시작·시세·신호·포지션 사이클
 - [[kis-order-lifecycle]] — KIS 수동·자동 주문의 검증·WAL·API 송신·체결 reconcile
-- [[persistence-schema]] — Flyway V1~V20, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속
+- [[persistence-schema]] — Flyway V1~V21, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속
 - [[trade-record-volume-semantics]] — `trade_records.volume` 이 엔진은 총보유량 스냅샷, 수동은 증분인 이유와 보유량 산출 규칙
 - [[backtest-engine]] — 단일티커·all-in 구조와 라이브 정합의 한계
 
@@ -32,7 +32,7 @@
 
 - [[lesson-secure-cookie-http]] — prod + HTTP 는 브라우저 로그인 불가 (curl 로는 안 잡힌다)
 - [[lesson-cors-origin-rebuild]] — 브라우저만 403(CORS Origin) + 앱 변경엔 이미지 재빌드 필요
-- [[lesson-single-point-verification]] — 한 곳에서 통과한 검증을 일반화하지 말 것
+- [[lesson-single-point-verification]] — 한 곳에서 통과한 검증을 일반화하지 말 것 (네트워크 지점 · 코드 분기)
 - [[lesson-ec2-sizing-oom]] — 소형 EC2 에서 OOM 으로 부팅 실패 (historical)
 - [[lesson-deploy-script-pitfalls]] — `set -e` 단락 종료, MSYS 경로 변환
 - [[lesson-branch-checkout-drift]] — checkout 이 미커밋 변경을 끌고 간다
@@ -43,7 +43,7 @@
 
 - [[upbit-api]] — 잔고 필드(`locked` 의 의미와 상한 규칙), 주문 파라미터, 상태 판정, 캔들 경계(KST 09:00)
 - [[jdk-gradle-toolchain]] — JDK 21 고정, Gradle 8.12, JDK 25 비호환 우회
-- [[deployment-stack]] — EC2 t4g.medium + Caddy TLS + GHCR
+- [[deployment-stack]] — Vultr 서울 vc2-1c-2gb + Caddy TLS + GHCR, `main` 머지 = 자동 배포
 
 ## source / query
 

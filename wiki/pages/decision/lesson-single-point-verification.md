@@ -1,13 +1,14 @@
 ---
-title: lesson — 한 곳에서 통과한 검증을 일반화하지 말 것 (SG 단일 IP)
+title: lesson — 한 곳에서 통과한 검증을 일반화하지 말 것 (SG 단일 IP · 코드 분기)
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-24
 claim_state: current
-verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-05-30) 이관, 원본 커밋 331426f
+verified: 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 331426f) 이관분 유지
 sources:
   - docs/lessons.md
   - deploy/aws/deploy.sh
+  - bot/src/main/kotlin/com/trading/bot/domain/TradingState.kt
 ---
 
 # lesson: 한 곳에서 통과한 검증을 일반화하지 말 것
@@ -39,3 +40,25 @@ sources:
 3. 그래도 **본인 환경에서 직접 확인**하게 한다 — 이게 이 교훈의 핵심이고 스택이 바뀌어도 남는다([[deployment-stack]]).
 
 이 교훈의 핵심은 SG 규칙이 아니라 **"검증 지점이 하나면 결론도 그 지점에 한정된다"** 는 것이다. 같은 뿌리에서 [[lesson-secure-cookie-http]](curl 은 통과, 브라우저는 실패)가 나왔다.
+
+## 같은 실수, 이번엔 코드 분기에서
+
+**언제**: 2026-08-23
+
+검증 지점은 머신이나 네트워크만이 아니다. **조건식의 분기 하나만 확인하고 규칙을 일반화한 것도 같은 실수다.**
+
+매도 기록의 전략 귀속을 소급 복구하면서([[persistence-schema]]) "한 포지션에 엔진 매수가 여러 번이면 어느 전략이 남는가"를 정해야 했다. 근거는 `TradingState.markBought`(`:95`, `:109`)의 한 줄이다.
+
+```kotlin
+val resuming = position
+// ...
+entryStrategy = if (resuming) entryStrategy ?: strategy else strategy
+```
+
+나는 `resuming = false` 경로만 짚어보고 "항상 나중 전략으로 덮인다"고 결론지어 backfill 을 **마지막 BUY** 기준으로 짰다. 그 전에 이미 "코드로 검증했다"고 보고한 뒤였다.
+
+그러나 `resuming = true` 경로가 실재한다 — 재시작 후 `syncPosition` 이 `position = true` 로 만든 뒤 `reconcilePendingBuy`·`BalanceRecovery` 가 `completeBuy` 를 부르는 경우다. 그때는 `?:` 때문에 **먼저 찍힌 전략이 살아남는다.** 규칙은 "마지막"이 아니라 **"포지션 구간 내 첫 번째 non-manual BUY"** 였고, pre-push codex 가 P1 으로 잡아낼 때까지 규칙은 세 번 교정됐다.
+
+가장 위험한 대목은 **결과가 우연히 같았다**는 것이다. 운영 데이터는 포지션당 엔진 BUY 가 1건뿐이라 어느 규칙으로 돌려도 집계가 `combined` 29 / `rsi_bounce` 1 로 나왔다. 잘못된 근거가 맞는 숫자를 내면 검증된 것처럼 보인다 — 여기서는 숫자가 아니라 **규칙**이 산출물이었으므로 결과 일치는 검증이 아니었다.
+
+**적용**: 조건식을 근거로 "항상 ~이다"라고 쓰기 전에 **그 식의 모든 분기에 도달하는 호출 경로를 세어본다.** 도달 불가를 주장하려면 호출부 전수로 보여야 한다. 실제로 같은 함수의 `position && !replace` 가지는 프로덕션에서 도달하지 않는데(`completeBuy` 가 항상 `replace = true`), 그 역시 호출부를 전수로 확인해야만 말할 수 있는 사실이다.
