@@ -60,6 +60,17 @@ object IntrabarExitModel {
         }
     }
 
+    /**
+     * 보유상한이 실제로 발동하는가. [BacktestConfig.holdLimitOnlyWhenProfitable] 이면 경계 시점 가격
+     * (`bar.open` = 라이브 KST 09:00)이 진입가 이상일 때만 발동한다(#128 2안 "리셋 대상 한정").
+     *
+     * D1 백테와 M1 replay 가 각자 구현하면 **같은 config 로 서로 다른 정책이 돌아** 측정이 조용히
+     * 어긋난다 — 이 repo 가 이미 겪은 함정이라 판정식을 여기 하나로 둔다([[exit-gates]]).
+     * 게이트는 gross 로 본다(수수료는 기록에서만 차감).
+     */
+    fun holdLimitFires(bar: Ohlc, buyPrice: Double, atHoldLimit: Boolean, config: BacktestConfig): Boolean =
+        atHoldLimit && (!config.holdLimitOnlyWhenProfitable || bar.open >= buyPrice)
+
     /** 이 봉까지 반영한 새 peak — 다음 봉 [evaluate] 의 armPeak 로 사용. */
     fun updatedPeak(prevPeak: Double, bar: Ohlc, atHoldLimit: Boolean): Double =
         max(prevPeak, if (atHoldLimit) bar.open else bar.high)

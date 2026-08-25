@@ -11,6 +11,20 @@ import kotlin.math.sqrt
 
 // 디폴트는 라이브(TradingProperties)와 정합 — 직접 생성(스윕 등) 베이스라인이 라이브를 대표하도록 (#27).
 // parity 는 BacktestEngineTest 의 `config defaults match live trading defaults` 가 가드한다.
+/**
+ * TIME_EXIT(라이브 `DAILY_RESET`) 직후 재진입을 어떻게 모델링할지.
+ *
+ * 라이브는 09:00 리셋 매도 후 ~10초 뒤 재매수가 가능한데(`boughtToday` 가 같은 경계에서 풀린다),
+ * 기존 백테는 청산 봉에서 진입 평가를 아예 하지 않아 **2봉 강제 공백**이 생긴다(#128).
+ */
+enum class ReentryMode {
+    /** 기존 동작 — 청산 봉 `i` → 신호 `i+1` → 체결 `i+2`. 기본값(계약 보존). */
+    LEGACY_NEXT_BAR,
+
+    /** TIME_EXIT 한정 same-bar 재진입 — 청산 봉 `D` 의 `open` 에 재진입(신호는 `D-1` 종가까지). */
+    LIVE_SAME_BAR,
+}
+
 data class BacktestConfig(
     val takeProfitPct: Double = 5.0,
     val maxLossPct: Double = 5.0,
@@ -21,7 +35,40 @@ data class BacktestConfig(
     val maxHoldDays: Int = 1,
     val useMarketFilter: Boolean = false,
     val chartExitEnabled: Boolean = false,
-)
+    /**
+     * true 면 보유상한 청산을 **수익 중일 때만** 낸다 — 손실이면 그대로 들고 간다(#128 2안 "리셋 대상 한정").
+     * 판정 기준가는 상한이 걸리는 시각의 가격 = `bar.open`(= 라이브 KST 09:00). 게이트는 gross 로 본다
+     * (수수료는 기록에서만 차감 — [[exit-gates]] 규약).
+     */
+    val holdLimitOnlyWhenProfitable: Boolean = false,
+    /**
+     * 기본값을 라이브(0공백)와 다르게 두는 이유 — `M1ReplayBiasTest`·`ParameterSweepTest`·
+     * `KneeStrategyComparisonTest` 가 `BacktestConfig()` 를 상속하므로, 기본값을 바꾸면 그 측정들의
+     * 모집단 자체가 달라진다. `/backtest` public 계약도 조용히 바뀐다. 전환은 라이브 변경을 결정하는
+     * 후속 작업에서 함께 판단한다(#128 plan Decision 6).
+     */
+    val reentryMode: ReentryMode = ReentryMode.LEGACY_NEXT_BAR,
+    /** [ReentryMode.LIVE_SAME_BAR] 에서 재진입을 몇 봉 막을지. 0 = 청산 봉 즉시 재진입. */
+    val reentryCooldownBars: Int = 0,
+) {
+    init {
+        // 음수면 reentryDueAt < i 가 되어 조용히 cooldown=1 처럼 동작하고, 거대값이면 `i + cooldown` 이
+        // 오버플로해 reentryDueAt 이 음수가 되면서 쿨다운이 통째로 사라진다. 셋 다 결과가 그럴듯해 보여
+        // 측정이 조용히 망가지므로 생성 시점에 막는다. 상한 365 는 maxHoldDays 관례와 같다
+        // (StrategyController 의 coerceIn(1, 365)).
+        require(reentryCooldownBars in 0..MAX_COOLDOWN_BARS) {
+            "reentryCooldownBars must be in 0..$MAX_COOLDOWN_BARS, was $reentryCooldownBars"
+        }
+        require(reentryMode == ReentryMode.LIVE_SAME_BAR || reentryCooldownBars == 0) {
+            "reentryCooldownBars has no effect in $reentryMode — set LIVE_SAME_BAR or leave it 0"
+        }
+    }
+
+    companion object {
+        /** `i + cooldown` 오버플로 방지 + 현실적 상한. `maxHoldDays` 와 같은 범위를 쓴다. */
+        const val MAX_COOLDOWN_BARS = 365
+    }
+}
 
 data class BacktestTrade(
     val buyIndex: Int,
@@ -87,26 +134,61 @@ class BacktestEngine(
         // 전략이 신호에서 읽는 config 필드는 kValue 뿐이라, 라이브 baseline 에 kValue 만 덮어 신호 판단에 넘긴다.
         val signalProps = tradingProperties.copy(kValue = config.kValue)
 
+        // LIVE_SAME_BAR 재진입 예약 — TIME_EXIT 이 난 봉 + 쿨다운. -1 = 예약 없음.
+        // "봉당 진입 1회"(라이브 boughtToday 등가)는 별도 플래그가 아니라 구조가 보장한다 — 한 반복은
+        // 재진입 경로나 통상 경로 중 하나에서만 체결하고, 체결하면 곧바로 다음 봉으로 넘어간다.
+        var reentryDueAt = -1
+
         for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
             // 신호는 봉 i 종가까지의 정보로만 판단(look-ahead 방지). 매수/매도(chartExit) 공용 window.
             val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
 
             if (state.position) {
-                processExit(state, strategy, i, chronological[i], window, config, signalProps)
-            } else {
-                // 체결은 다음 봉(i+1) 시가로.
-                val fillIndex = i + 1
-                if (fillIndex >= chronological.size) continue
-                val fillPrice = chronological[fillIndex].openingPrice
-                processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config, signalProps)
+                val reason = processExit(state, strategy, i, chronological[i], window, config, signalProps)
+                // 라이브는 09:00 리셋 매도와 동시에 boughtToday 가 풀려 곧바로 재매수가 가능하다.
+                // 가격게이트 청산은 제외 — 청산가가 실제 체결가가 아니라 게이트 임계가이고, 봉의 high/low 를
+                // 본 뒤 같은 봉에 사는 셈이라 look-ahead 다(#128 plan Decision 4).
+                if (config.reentryMode == ReentryMode.LIVE_SAME_BAR && reason == "TIME_EXIT") {
+                    reentryDueAt = i + config.reentryCooldownBars
+                }
+                // 청산이 난 봉에서는 기존 규약상 진입 평가를 하지 않는다. 예약된 재진입이 바로 이 봉일 때만 이어간다.
+                if (state.position || reentryDueAt != i) continue
             }
+
+            if (reentryDueAt >= 0) {
+                if (i < reentryDueAt) continue // 쿨다운 구간 — 기존 진입 규약도 멈춘다(지연 효과 격리)
+                reentryDueAt = -1
+                // 봉 i 시가에 체결하므로 신호는 봉 i-1 종가까지만 본다 — 공용 window 는 봉 i 를 포함해 쓸 수 없다.
+                val signalWindow = chronological.subList(max(0, i - MIN_CANDLES), i).reversed()
+                val entered = processEntry(
+                    state, strategy, i, chronological[i - 1].tradePrice, chronological[i].openingPrice,
+                    signalWindow, config, signalProps,
+                )
+                if (entered) {
+                    // 재진입 포지션도 이 봉의 intrabar 게이트를 받는다 — 빠뜨리면 churn 포지션만 손절·익절
+                    // 보호가 사라져 편향된다. 진입 신호·체결가는 이 봉 high/low 확정 전에 정해졌으므로
+                    // look-ahead 가 아니다(#128 plan Decision 5).
+                    processExit(state, strategy, i, chronological[i], window, config, signalProps)
+                    continue
+                }
+                // 재진입 신호가 없었으면 이 봉의 통상 진입 기회(신호=봉 i 종가, 체결=봉 i+1 시가)는 살아 있다.
+                // 여기서 continue 하면 legacy 가 갖는 그 기회를 쿨다운 팔만 잃어, 측정이 정책 차이가 아니라
+                // 구현 아티팩트를 재게 된다 — BacktestReentryEquivalenceTest 가 cooldown=2 == legacy 로 가둔다.
+            }
+
+            // 체결은 다음 봉(i+1) 시가로.
+            val fillIndex = i + 1
+            if (fillIndex >= chronological.size) continue
+            val fillPrice = chronological[fillIndex].openingPrice
+            processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config, signalProps)
         }
 
         closeOpenPosition(state, chronological, config)
         return state
     }
 
+    /** @return 청산 사유. 청산이 없었으면 null — 호출부가 TIME_EXIT 재진입 예약 여부를 가른다. */
     private suspend fun processExit(
         state: SimulationState,
         strategy: TradingStrategy,
@@ -115,10 +197,18 @@ class BacktestEngine(
         window: List<Candle>,
         config: BacktestConfig,
         signalProps: TradingProperties,
-    ) {
+    ): String? {
         val holdDays = index - state.buyIndex
-        val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
         val buyPrice = state.buyPrice
+        // 상한이 걸려도 손실이면 청산하지 않는 정책(#128 2안)은 M1 replay 와 공유해야 하므로
+        // 판정식은 IntrabarExitModel 이 소유한다. 억제되면 이 봉은 일반 보유 구간처럼 평가된다 —
+        // open 으로 눌리지 않고 high/low 를 그대로 본다.
+        val atHoldLimit = IntrabarExitModel.holdLimitFires(
+            bar,
+            buyPrice,
+            holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays),
+            config,
+        )
 
         // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
         // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
@@ -128,7 +218,7 @@ class BacktestEngine(
             strategy.shouldSell(window, bar.tradePrice, signalProps)
         val (reason, sellPrice) = IntrabarExitModel
             .evaluate(bar, buyPrice, armPeak, atHoldLimit, config, chartExitSignal)
-            ?.let { it.reason to it.sellPrice } ?: return
+            ?.let { it.reason to it.sellPrice } ?: return null
 
         val netPnl = ((sellPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         state.balance *= (1 + netPnl / 100.0)
@@ -137,6 +227,7 @@ class BacktestEngine(
         state.peakBalance = max(state.peakBalance, state.balance)
         state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
         state.position = false
+        return reason
     }
 
     private suspend fun processEntry(
@@ -148,20 +239,21 @@ class BacktestEngine(
         window: List<Candle>,
         config: BacktestConfig,
         signalProps: TradingProperties,
-    ) {
-        if (fillPrice <= 0) return
+    ): Boolean {
+        if (fillPrice <= 0) return false
         if (config.useMarketFilter) {
             val ma50 = Indicators.calculateMa(window, min(MIN_CANDLES, window.size))
-            if (ma50 > 0 && signalPrice < ma50) return
+            if (ma50 > 0 && signalPrice < ma50) return false
         }
 
-        // 신호는 봉 i 종가(signalPrice)로 판단, 체결가는 다음 봉 시가(fillPrice).
-        if (strategy.shouldBuy(window, signalPrice, signalProps)) {
-            state.buyPrice = fillPrice
-            state.peakPrice = fillPrice
-            state.buyIndex = fillIndex
-            state.position = true
-        }
+        // 신호는 window 최신 봉 종가(signalPrice)로 판단, 체결가는 fillPrice.
+        // 기존 규약은 신호 봉 i → 체결 i+1 시가, LIVE_SAME_BAR 재진입은 신호 봉 i-1 → 체결 i 시가다.
+        if (!strategy.shouldBuy(window, signalPrice, signalProps)) return false
+        state.buyPrice = fillPrice
+        state.peakPrice = fillPrice
+        state.buyIndex = fillIndex
+        state.position = true
+        return true
     }
 
     private fun closeOpenPosition(state: SimulationState, chronological: List<Candle>, config: BacktestConfig) {

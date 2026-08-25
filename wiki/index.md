@@ -48,4 +48,6 @@
 
 ## source / query
 
-아직 없음. 외부 원문을 ingest 하면 `source/`, 재사용 가치 있는 질의 결과는 `query/` 에 쌓인다.
+외부 원문을 ingest 하면 `source/`, 재사용 가치 있는 질의 결과는 `query/` 에 쌓인다. `source/` 는 아직 없음.
+
+- [[reset-churn-measurement]] — #128 일일리셋 반사실 측정: 신호 지속성의 가치는 ±0.5%p/건 이하이고 표본 선택에 취약하다
