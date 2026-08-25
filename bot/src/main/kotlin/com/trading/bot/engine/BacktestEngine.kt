@@ -50,7 +50,16 @@ data class BacktestConfig(
     val reentryMode: ReentryMode = ReentryMode.LEGACY_NEXT_BAR,
     /** [ReentryMode.LIVE_SAME_BAR] 에서 재진입을 몇 봉 막을지. 0 = 청산 봉 즉시 재진입. */
     val reentryCooldownBars: Int = 0,
-)
+) {
+    init {
+        // 음수면 reentryDueAt < i 가 되어 조용히 cooldown=1 처럼 동작하고, 거대값이면 남은 전 구간 진입이
+        // 에러 없이 차단된다. 둘 다 결과가 그럴듯해 보여 측정이 조용히 망가지므로 생성 시점에 막는다.
+        require(reentryCooldownBars >= 0) { "reentryCooldownBars must be >= 0, was $reentryCooldownBars" }
+        require(reentryMode == ReentryMode.LIVE_SAME_BAR || reentryCooldownBars == 0) {
+            "reentryCooldownBars has no effect in $reentryMode — set LIVE_SAME_BAR or leave it 0"
+        }
+    }
+}
 
 data class BacktestTrade(
     val buyIndex: Int,
@@ -116,9 +125,9 @@ class BacktestEngine(
         val signalProps = tradingProperties.copy(kValue = config.kValue)
 
         // LIVE_SAME_BAR 재진입 예약 — TIME_EXIT 이 난 봉 + 쿨다운. -1 = 예약 없음.
+        // "봉당 진입 1회"(라이브 boughtToday 등가)는 별도 플래그가 아니라 구조가 보장한다 — 한 반복은
+        // 재진입 경로나 통상 경로 중 하나에서만 체결하고, 체결하면 곧바로 다음 봉으로 넘어간다.
         var reentryDueAt = -1
-        // 봉당 재진입 1회 가드(라이브 boughtToday 등가).
-        var reentryDoneAt = -1
 
         for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
@@ -140,7 +149,6 @@ class BacktestEngine(
             if (reentryDueAt >= 0) {
                 if (i < reentryDueAt) continue // 쿨다운 구간 — 기존 진입 규약도 멈춘다(지연 효과 격리)
                 reentryDueAt = -1
-                if (i == reentryDoneAt) continue
                 // 봉 i 시가에 체결하므로 신호는 봉 i-1 종가까지만 본다 — 공용 window 는 봉 i 를 포함해 쓸 수 없다.
                 val signalWindow = chronological.subList(max(0, i - MIN_CANDLES), i).reversed()
                 val entered = processEntry(
@@ -148,7 +156,6 @@ class BacktestEngine(
                     signalWindow, config, signalProps,
                 )
                 if (entered) {
-                    reentryDoneAt = i
                     // 재진입 포지션도 이 봉의 intrabar 게이트를 받는다 — 빠뜨리면 churn 포지션만 손절·익절
                     // 보호가 사라져 편향된다. 진입 신호·체결가는 이 봉 high/low 확정 전에 정해졌으므로
                     // look-ahead 가 아니다(#128 plan Decision 5).
