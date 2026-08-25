@@ -23,10 +23,11 @@ KIS 주식 경로의 체결 기록(`trade_executions`)에 진입 전략과 매�
 - 2026-08-25: **V22 를 격리 컨테이너에서 실측** — 로컬 개발 DB 를 건드리지 않도록 임시 `postgres:17-alpine` 에 V1~V22 를 번호순 적용(22/22 ok), `strategy varchar(64) null=YES` · `reason varchar(32) null=YES` 확인.
 - 2026-08-25: **자체 code-review(subagent 미사용 — 세션 제약)에서 2건 발견·반영.** ① 수동 매도에 `reason` 을 안 실어 Upbit `TradeExecutionService:117,163`(`SellReason.MANUAL`)과 어긋났다 → `side == SELL` 이면 `MANUAL` 을 싣도록 수정. ② `StockOrderService` 가 command 값을 실제 WAL 행에 넣는지 검증하는 테스트가 없었다(`StockPositionManagerTest` 는 command 까지만 본다) → `StockOrderServiceTest` 에 추가. 수동 경로 테스트도 `KisTradeControllerTest` 에 추가.
 - 2026-08-25: **최종 검증 통과** — `compileKotlin`, `test --parallel`(CI 와 동일 명령), `build -x test` 전부 성공. wiki 검증 3종(link/verify/smoke 10-0) 통과.
+- 2026-08-25: **운영 DB 실측(read-only)으로 백필 불필요 확정.** `trade_executions` 의 KIS 행 **0건**(Upbit 66건), `stock_order_intent` **0행**, 비terminal 주문 **0건** — V22 적용 시 영향받을 미체결 주문도 없다. flyway 는 **V21 까지 21건 적용·실패 0**(첫 쿼리의 `max(version)=9` 는 version 이 varchar 라 사전순이었던 내 쿼리 결함이었고, 숫자 정렬로 재확인했다).
 
 # Next
 
-커밋 → PR → 머지. **머지 = 자동 배포**이므로(이 repo 의 `deploy-vultr` 는 push 트리거) 그 전에 남은 acceptance 1건을 처리한다: 운영 DB 에서 `SELECT count(*) FROM trade_executions WHERE exchange <> 'UPBIT'` 로 백필 대상이 0 인지 실측. 0 이 아니면 백필 판단을 다시 한다.
+push → PR → 머지. Acceptance 9/9 충족. 머지 시 자동 배포가 돌고 V22 가 적용된다 — 활성 주문 0건이라 마이그레이션이 건드릴 미체결 주문은 없다.
 
 # Decisions
 
@@ -63,7 +64,7 @@ KIS 주식 경로의 체결 기록(`trade_executions`)에 진입 전략과 매�
 - [x] **수동 주문 구분** — `KisTradeController` 로 낸 주문의 체결 기록은 `strategy = "manual"` 로 남아 엔진 체결과 구분된다
 - [x] **문서 동기화** — `wiki/pages/concept/kis-order-lifecycle.md` 갱신(WAL 이 무엇을 싣는지), `wiki/index.md` 는 설명 변경 시에만
 - [x] **검증 통과** — `./gradlew compileKotlin` + `./gradlew test`
-- [ ] **백필 불필요 실측(배포 전 남은 1건)** — 운영 DB 에서 `SELECT count(*) FROM trade_executions WHERE exchange <> 'UPBIT'` 로 0건 확인. 코드·설정 근거는 강하나(DRY_RUN terminal · `deploy/vultr/` 에 `KIS_LIVE_ENABLED` 부재) 과거에 잠시 live 였을 가능성은 실측으로만 배제된다
+- [x] **백필 불필요 실측** — 운영 DB 실측: KIS 체결 행 0건, `stock_order_intent` 0행, 비terminal 0건. 추정이 아니라 관측으로 확정됐다
 
 # Review Disposition
 
