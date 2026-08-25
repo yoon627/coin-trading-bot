@@ -431,4 +431,134 @@ class TradeRoundTripTest {
 
         assertEquals(2, rts.size, "매도가 시작된 뒤의 매수는 새 포지션으로 끊어야 한다")
     }
+
+    // ── #132: 엔진 스냅샷 이후의 수동 매수 ────────────────────────────────────────
+    // wiki `trade-record-volume-semantics` 의 규칙: 보유량 = 마지막 엔진 스냅샷 + 그 이후의 수동 증분들.
+
+    @Test
+    fun `엔진 매수 뒤에 온 수동 매수는 스냅샷에 더해진다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.5, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertEquals(1.5, rts[0].buyVolume, 1e-9, "엔진 스냅샷 1.0 에 이후 수동 증분 0.5 를 더해야 한다")
+        assertFalse(rts[0].open, "1.5 를 전량 매도했으므로 청산이다")
+        assertFalse(rts[0].partial, "수량이 맞으므로 oversold 가 아니다")
+        assertNotNull(rts[0].pnlAmountGross, "매수 수량을 알므로 손익 금액을 낼 수 있다")
+    }
+
+    @Test
+    fun `엔진 매수 뒤 수동 매수분을 남기고 팔면 보유중이다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.0, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertEquals(1.5, rts[0].buyVolume, 1e-9)
+        assertTrue(rts[0].open, "0.5 가 남았으므로 아직 보유중이다")
+        assertTrue(rts[0].partiallyClosed, "일부는 팔렸다")
+    }
+
+    @Test
+    fun `엔진 스냅샷 이전의 수동 매수는 더하지 않는다`() {
+        // 스냅샷은 그 시점 총 보유량이라 이미 앞선 수동 매수를 포함한다. 더하면 이중계상이다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 0.5, "2026-08-01T10:00", strategy = "manual"),
+                rec("KRW-BTC", "BUY", 105.0, 1.5, "2026-08-01T11:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 120.0, 1.5, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertEquals(1.5, rts[0].buyVolume, 1e-9, "스냅샷 1.5 가 앞선 수동 0.5 를 이미 포함한다")
+        assertFalse(rts[0].open)
+    }
+
+    @Test
+    fun `두 엔진 스냅샷 사이의 수동 매수도 더하지 않는다`() {
+        // 뒤 스냅샷이 그 수동분을 이미 포함한다. 마지막 스냅샷 '이후' 만 더하는 규칙의 경계 케이스.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "BUY", 105.0, 1.5, "2026-08-01T12:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 120.0, 1.5, "2026-08-01T13:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertEquals(1.5, rts[0].buyVolume, 1e-9, "마지막 스냅샷 이후에는 수동 매수가 없다")
+        assertFalse(rts[0].open)
+    }
+
+    @Test
+    fun `수동 strategy 는 대소문자를 가리지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5, "2026-08-01T11:00", strategy = "MANUAL"),
+                rec("KRW-BTC", "SELL", 120.0, 1.5, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1.5, rts[0].buyVolume, 1e-9, "MANUAL 도 수동 증분으로 봐야 한다")
+    }
+
+    // ── #132: 추정치가 섞인 그룹의 청산 판정 (상대 tolerance) ──────────────────────
+    // 수동 매수 수량은 `주문금액 / 조회시점가격` 추정이라 실측 매도와 정확히 상쇄되지 않는다.
+    // 오차 방향은 정해져 있지 않다(체결↔틱조회 사이 가격 변동이 수수료율을 넘나든다).
+
+    @Test
+    fun `수동 매수 수량이 과대 추정돼도 전량 매도면 청산으로 본다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5008, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.5, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertFalse(rts[0].open, "0.0008 은 추정 오차 범위다 — 영원히 보유중으로 남기면 안 된다")
+    }
+
+    @Test
+    fun `수동 매수 수량이 과소 추정돼도 oversold 로 보지 않는다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.4990, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.5, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertFalse(rts[0].open)
+        assertFalse(rts[0].partial, "0.001 초과분은 추정 오차 범위라 손익을 버릴 이유가 없다")
+        assertNotNull(rts[0].pnlAmountGross)
+    }
+
+    @Test
+    fun `실측만 있는 그룹은 상대 tolerance 를 적용하지 않는다`() {
+        // 엔진 스냅샷·엔진 매도는 모두 거래소 실측이라 완화할 근거가 없다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 120.0, 0.999, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertTrue(rts[0].open, "0.001 은 실측 잔량이다 — 상대 tolerance 를 적용했다면 청산으로 삼켰을 값이다")
+    }
 }
