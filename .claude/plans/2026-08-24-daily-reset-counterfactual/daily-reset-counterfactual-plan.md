@@ -26,12 +26,22 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
   ✅코드 확인)·R3(D1 은 재진입 가격 갭을 구조적으로 0으로만 표현) → `# Review Disposition` 참조.
 - 2026-08-25 **사용자 확정**: R3 을 받아들여 Goal 을 "신호 지속성의 가치"로 좁히고 그대로 진행.
   구현은 Claude(메인)가 맡는다(§9). baseline `:bot:test`+`:common:test` BUILD SUCCESSFUL — 사전 실패 없음.
+- 2026-08-25 **TDD Red**(`a5a09e7`) — `BacktestReentryTest` 7종 중 5종이 의도한 사유로 실패
+  (legacy 2봉 공백이 그대로라 `expected: <52> but was: <54>` 등). legacy 보존 가드·A2b 는 예상대로 통과.
+  전체 726 tests 중 실패가 정확히 그 5개뿐이라, `BacktestConfig` 필드 추가가 기존 테스트를 하나도
+  깨지 않음을 확인(**A3b legacy 보존 증거**).
+- 2026-08-25 **구현·Green**(`25750aa`) — `simulateTrades` 에 재진입 예약 상태머신(`reentryDueAt`/
+  `reentryDoneAt`) 추가, `processExit` 이 청산 사유를 반환하고 `processEntry` 가 진입 여부를 반환하도록 변경.
+  `:bot:test`+`:common:test`+`compileKotlin` BUILD SUCCESSFUL, 신규 7종 `tests=7 failures=0`.
+  **A3c** parity 가드에 `reentryMode`·`reentryCooldownBars` 명시 assert + 이유 주석 추가.
+- 2026-08-25 code-reviewer(+codex) 검토 중.
 
 # Next
 
-TDD Red — A1(same-bar 재진입: `holdDays>=1` · TIME_EXIT 한정 · 체결가=`bar.open` · 봉당 ≤1회) 과
-A2(쿨다운 N봉), 그리고 **R1 검증 항목**(재진입 신호가 봉 `D` 를 보지 않는다)을 먼저 쓰고
-의도한 이유로 실패하는지 확인한다. 그 다음 `BacktestEngine.simulateTrades` 구현.
+code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 × BEAR 8 / BULL 4 fixture, `maxHoldDays=1` 고정,
+`build/reports/` 표 생성) → A5 사전 판정기준으로 결론 → A6 문서 동기화.
+
+구현(A1~A3)은 끝났다. 남은 건 측정·판정·문서다.
 
 # Decisions
 
