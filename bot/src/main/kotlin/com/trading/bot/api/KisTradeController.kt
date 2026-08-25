@@ -1,6 +1,7 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
+import com.trading.bot.domain.SellReason
 import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.kis.domain.KisOrderType
 import com.trading.bot.kis.domain.KisSide
@@ -62,7 +63,11 @@ class KisTradeController(
         val orderType = parseOrderType(req.orderType)
 
         val client = kisClientFactory.forUser(user)
-        val cmd = SubmitOrderCommand(userId, cano, acntPrdtCd, symbol, side, orderType, req.qty, req.price)
+        val cmd = SubmitOrderCommand(
+            userId, cano, acntPrdtCd, symbol, side, orderType, req.qty, req.price,
+            strategy = "manual",
+            reason = if (side == KisSide.SELL) SellReason.MANUAL.name else null,
+        )
         val intent = try {
             stockOrderService.submit(client, cmd)
         } catch (e: StockOrderValidationException) {

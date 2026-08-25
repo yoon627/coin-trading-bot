@@ -221,4 +221,19 @@ class StockOrderServiceTest {
         coVerify(exactly = 0) { repository.save(any()) }
         coVerify(exactly = 0) { client.placeOrder(any()) }
     }
+
+    /** 귀속 근거는 WAL 행에 남아야 reconcile 이 읽는다 — command 까지만 실려서는 소용이 없다. */
+    @Test
+    fun `WAL row carries strategy and reason from the command`() = runTest {
+        val saved = slot<StockOrderIntentEntity>()
+        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured.copy(id = 100L)) }
+
+        service(liveEnabled = false).submit(
+            client,
+            cmd.copy(side = KisSide.SELL, strategy = "rsi_bounce", reason = "STOP_LOSS"),
+        )
+
+        assertEquals("rsi_bounce", saved.captured.strategy)
+        assertEquals("STOP_LOSS", saved.captured.reason)
+    }
 }
