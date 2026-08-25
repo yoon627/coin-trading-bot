@@ -11,6 +11,20 @@ import kotlin.math.sqrt
 
 // 디폴트는 라이브(TradingProperties)와 정합 — 직접 생성(스윕 등) 베이스라인이 라이브를 대표하도록 (#27).
 // parity 는 BacktestEngineTest 의 `config defaults match live trading defaults` 가 가드한다.
+/**
+ * TIME_EXIT(라이브 `DAILY_RESET`) 직후 재진입을 어떻게 모델링할지.
+ *
+ * 라이브는 09:00 리셋 매도 후 ~10초 뒤 재매수가 가능한데(`boughtToday` 가 같은 경계에서 풀린다),
+ * 기존 백테는 청산 봉에서 진입 평가를 아예 하지 않아 **2봉 강제 공백**이 생긴다(#128).
+ */
+enum class ReentryMode {
+    /** 기존 동작 — 청산 봉 `i` → 신호 `i+1` → 체결 `i+2`. 기본값(계약 보존). */
+    LEGACY_NEXT_BAR,
+
+    /** TIME_EXIT 한정 same-bar 재진입 — 청산 봉 `D` 의 `open` 에 재진입(신호는 `D-1` 종가까지). */
+    LIVE_SAME_BAR,
+}
+
 data class BacktestConfig(
     val takeProfitPct: Double = 5.0,
     val maxLossPct: Double = 5.0,
@@ -21,6 +35,15 @@ data class BacktestConfig(
     val maxHoldDays: Int = 1,
     val useMarketFilter: Boolean = false,
     val chartExitEnabled: Boolean = false,
+    /**
+     * 기본값을 라이브(0공백)와 다르게 두는 이유 — `M1ReplayBiasTest`·`ParameterSweepTest`·
+     * `KneeStrategyComparisonTest` 가 `BacktestConfig()` 를 상속하므로, 기본값을 바꾸면 그 측정들의
+     * 모집단 자체가 달라진다. `/backtest` public 계약도 조용히 바뀐다. 전환은 라이브 변경을 결정하는
+     * 후속 작업에서 함께 판단한다(#128 plan Decision 6).
+     */
+    val reentryMode: ReentryMode = ReentryMode.LEGACY_NEXT_BAR,
+    /** [ReentryMode.LIVE_SAME_BAR] 에서 재진입을 몇 봉 막을지. 0 = 청산 봉 즉시 재진입. */
+    val reentryCooldownBars: Int = 0,
 )
 
 data class BacktestTrade(
