@@ -6,6 +6,7 @@ import com.trading.common.strategy.TradingStrategy
 import java.time.LocalDateTime
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -63,7 +64,7 @@ class BacktestConditionalHoldLimitTest {
     }
 
     @Test
-    fun `M1 replay applies the same conditional hold limit as D1`() {
+    fun `M1 replay refuses conditional hold limit instead of silently diverging`() {
         // pre-push codex 지적 — 두 측정 경로가 같은 BacktestConfig 를 받는데 조건이 D1 에만 있으면
         // 같은 설정으로 서로 다른 정책이 돌아 측정이 조용히 어긋난다. 판정식을 IntrabarExitModel 이
         // 소유하게 바꿨고, 이 테스트가 그 공유를 가둔다.
@@ -80,11 +81,14 @@ class BacktestConditionalHoldLimitTest {
         val unconditional = M1ReplayEngine.replayExit(entryPrice, entryUtc, limitInstant, listOf(losingBar), gatesOff)
         assertEquals("TIME_EXIT", unconditional.exit?.reason, "무조건 상한이면 손실이어도 청산해야 한다")
 
-        val conditional = M1ReplayEngine.replayExit(
-            entryPrice, entryUtc, limitInstant, listOf(losingBar),
-            gatesOff.copy(holdLimitOnlyWhenProfitable = true),
-        )
-        assertEquals(null, conditional.exit, "손실 중이면 M1 replay 도 상한 청산을 억제해야 한다(D1 과 동일)")
+        // M1 은 경계를 하나만 알아 "다음 경계에 재확인" 을 표현할 수 없다. 분봉마다 재평가하면 실제
+        // 리셋 시점이 아닌 곳에 TIME_EXIT 이 찍히므로, 조용히 다른 정책을 도느니 입구에서 거부한다.
+        assertThrows(IllegalArgumentException::class.java) {
+            M1ReplayEngine.replayExit(
+                entryPrice, entryUtc, limitInstant, listOf(losingBar),
+                gatesOff.copy(holdLimitOnlyWhenProfitable = true),
+            )
+        }
     }
 
     private fun alwaysBuy() = object : TradingStrategy {
