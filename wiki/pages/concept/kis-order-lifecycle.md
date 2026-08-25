@@ -14,6 +14,7 @@ sources:
   - bot/src/main/kotlin/com/trading/bot/persistence/StockOrderIntentRepository.kt
   - bot/src/main/kotlin/com/trading/bot/persistence/entity/StockOrderIntentEntity.kt
   - bot/src/main/resources/db/migration/V15__create_stock_order_intent.sql
+  - bot/src/main/resources/db/migration/V22__add_stock_order_intent_strategy.sql
   - bot/src/main/resources/db/migration/V17__bot_state_exchange_and_wal_side.sql
 ---
 
@@ -54,6 +55,14 @@ PLACED / PARTIAL / FILLED / CANCELLED / NEEDS_REVIEW 확정
 3. **tx2** — 응답에 따라 `PLACED`, `FAILED`, `UNKNOWN`으로 조건부 전이한다.
 
 KIS 호출 뒤 프로세스가 죽을 수 있으므로 송신과 DB 기록을 한 트랜잭션으로 묶으면 안 된다. 그렇게 하면 송신은 됐는데 DB INSERT가 롤백되어 추적할 수 없는 주문이 생긴다. 반대로 `UNKNOWN`은 접수됐을 가능성을 보존하고 reconcile이 확정하도록 한다.
+
+## WAL이 귀속 근거까지 싣는 이유
+
+`stock_order_intent`에는 주문 파라미터뿐 아니라 **누가 왜 이 주문을 냈는지**도 들어간다(V22). `strategy`는 엔진 전략명이거나 수동 REST 주문의 `"manual"`이고, `reason`은 매도 사유(`SellReason.name`)로 매수에서는 NULL이다. `StockOrderReconciler`가 체결을 확정할 때 이 두 값을 그대로 `trade_executions`로 옮긴다.
+
+포지션 상태에서 조회하지 않고 주문 시점에 박아두는 이유는 **경합** 때문이다. reconcile은 `@Scheduled` 15초 주기로 엔진 루프와 독립해 돈다. 매도 체결이 거래소 잔고에 반영되면 엔진의 `syncFromHoldings`가 `stock_position_state.entry_strategy`를 지우는데(청산 시 고점·진입 메타를 끊지 않으면 다음 진입이 옛 고점을 물려받아 즉시 트레일링에 걸린다 — [[kis-stock-trading-flow]]), 기록 시점에 그 상태를 읽으면 전략을 잃는다. 반면 주문 접수 시점에는 `submitBuy`가 전략명을 인자로 받고 `submitSell`은 `pos.entryStrategy`가 아직 살아 있다. 그때 WAL에 실으면 reconcile이 언제 돌든 결과가 같다.
+
+Upbit 경로는 같은 문제를 겪고 V21에서 소급 복구했다([[persistence-schema]]). KIS는 그 실패를 구조로 막는다 — reconciler는 포지션 상태 리포지토리에 의존조차 없다.
 
 ## dry-run과 실제 KIS 송신
 

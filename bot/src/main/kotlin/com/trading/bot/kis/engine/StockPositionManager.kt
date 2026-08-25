@@ -53,7 +53,7 @@ class StockPositionManager(
             log.debug("Skip buy {} — qty=0 (insufficient budget or not buyable)", pos.symbol)
             return null
         }
-        val intent = submit(pos.symbol, KisSide.BUY, qty) ?: return null
+        val intent = submit(pos.symbol, KisSide.BUY, qty, strategy = strategyName) ?: return null
         if (intent.status == StockOrderStatus.DRY_RUN.name) {
             pos.markBoughtSimulated(currentPrice, strategyName)
         } else if (intent.status == StockOrderStatus.FAILED.name) {
@@ -86,7 +86,11 @@ class StockPositionManager(
         } else {
             pos.holdQty.coerceAtLeast(1)
         }
-        val intent = submit(pos.symbol, KisSide.SELL, qty) ?: return null
+        // entryStrategy 는 지금 읽어야 한다 — 청산은 다음 패스 getHoldings 가 반영하며
+        // 그때 syncFromHolding 이 이 값을 지운다(그 뒤에 도는 reconcile 은 못 읽는다).
+        val intent = submit(
+            pos.symbol, KisSide.SELL, qty, strategy = pos.entryStrategy, reason = reason.name,
+        ) ?: return null
         if (intent.status == StockOrderStatus.DRY_RUN.name) {
             pos.markSoldSimulated()
         }
@@ -95,8 +99,17 @@ class StockPositionManager(
         return intent
     }
 
-    private suspend fun submit(symbol: String, side: KisSide, qty: Long): StockOrderIntentEntity? {
-        val cmd = SubmitOrderCommand(userId, cano, acntPrdtCd, symbol, side, KisOrderType.MARKET, qty, price = null)
+    private suspend fun submit(
+        symbol: String,
+        side: KisSide,
+        qty: Long,
+        strategy: String? = null,
+        reason: String? = null,
+    ): StockOrderIntentEntity? {
+        val cmd = SubmitOrderCommand(
+            userId, cano, acntPrdtCd, symbol, side, KisOrderType.MARKET, qty,
+            price = null, strategy = strategy, reason = reason,
+        )
         return try {
             orderService.submit(client, cmd)
         } catch (e: StockOrderValidationException) {
