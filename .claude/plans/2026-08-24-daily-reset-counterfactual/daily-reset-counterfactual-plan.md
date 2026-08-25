@@ -55,6 +55,13 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
    **봉 D 의 intrabar 게이트가 새 포지션에 한 번도 평가되지 않는다** → 리셋 churn 포지션만 손절·익절 보호가 사라져 편향.
    라이브는 09:00 재매수 후 당일 장중 청산이 가능하므로(`boughtToday` 는 이미 해제됨) 봉 D 게이트를 평가해야 맞다.
    look-ahead 없음: 진입 신호(`D-1` 종가)와 체결가(`D`.open) 모두 봉 D 의 high/low 사용 **전에** 확정된다.
+   **✅ 봉 경계 검증 (2026-08-25)**: Upbit 일봉의 `candle_date_time_kst` 가 `T09:00:00` 이다
+   (`bot/src/test/resources/backtest/bear/KRW-BTC.json` 실측 — 전 레코드 09:00).
+   즉 봉 `D` 는 **09:00 KST day D → 09:00 KST day D+1** 구간이고 `openingPrice` 가 곧 일일리셋 시각이다.
+   `TradingDay` 의 09:00 경계가 Upbit 일봉 경계와 같게 설계돼 있어, 봉 D 시가에 재진입한 포지션은
+   봉 D 의 high/low **전 구간을 실제로 겪는다** → "겪지 않은 저점으로 손절되는" 팬텀 문제는 성립하지 않는다.
+   같은 이유로 리셋 churn 포지션은 라이브에서도 정확히 open-to-open 24h 보유라 백테와 1:1 대응한다
+   (최초 진입만 라이브가 장중 체결이라 ~19h — 기존 백테 divergence, 이번 범위 밖).
    - **봉당 재진입 ≤ 1회** 로 제한(라이브 `boughtToday` 등가). 무한 churn 방지 가드.
    - 재진입 포지션이 봉 D 에서 청산되면 그 뒤는 기존 규약(다음 봉 신호)으로 복귀 — Decision 4 와 일관.
 
