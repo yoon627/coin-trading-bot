@@ -37,7 +37,10 @@ object M1ReplayEngine {
             val t = LocalDateTime.parse(b.candleDateTimeUtc)
             if (t.isBefore(entryUtc)) continue
             seen++
-            val atHoldLimit = !t.isBefore(limitInstant) // t >= limitInstant → 한도봉(라이브 09:00 리셋 등가)
+            // t >= limitInstant → 한도봉(라이브 09:00 리셋 등가). 조건부 상한(#128 2안)은 D1 과 같은
+            // 판정식을 써야 한다 — 여기서 따로 구현하면 같은 config 로 두 측정 경로가 다른 정책을 돈다.
+            val atHoldLimit =
+                IntrabarExitModel.holdLimitFires(b, entryPrice, !t.isBefore(limitInstant), config)
             val armPeak = peak
             peak = IntrabarExitModel.updatedPeak(peak, b, atHoldLimit)
             val decision = IntrabarExitModel.evaluate(b, entryPrice, armPeak, atHoldLimit, config, chartExitSignal = false)
