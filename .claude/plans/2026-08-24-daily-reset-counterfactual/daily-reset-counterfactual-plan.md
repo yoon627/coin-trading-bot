@@ -35,16 +35,20 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
   `:bot:test`+`:common:test`+`compileKotlin` BUILD SUCCESSFUL, 신규 7종 `tests=7 failures=0`.
   **A3c** parity 가드에 `reentryMode`·`reentryCooldownBars` 명시 assert + 이유 주석 추가.
 - 2026-08-25 code-reviewer(+codex) 검토 중.
+- 2026-08-26 **최종 검증**(메인, 강제 재실행) — 내가 검증한 적 없던 커밋 `905fbac`·`902d781`·`393845e`·`31d63b8`
+  포함 상태에서 `:bot:test :common:test compileKotlin --rerun-tasks` **BUILD SUCCESSFUL**,
+  wiki 3종 clean / 30 pages / pass=10 fail=0. (직전 캐시 실행이 `8 up-to-date` 로 테스트를 건너뛰어 재실행함.)
+- 2026-08-26 code-review 처분 + simplify 체크 완료 → `# Review Disposition`. **A1~A6 전 항목 증거 충족.**
 
 # Next
 
-1. code-review 지적 처분 → simplify 체크
-2. `conditional-reset` 팔 구현(Decision 3·G2) + 회귀 테스트
-3. A3b legacy 골든 검증 — base 커밋(`1e78a18`)에서 `BacktestConfig()` × fixture 12 의 trade 리스트를 덤프해 현재와 대조
-4. **A4 측정 하네스** 작성·실행 → A4c 로 `wiki/pages/query/` 영속화
-5. A5 사전 판정기준으로 결론 → A6 문서 동기화
+**A1~A6 전부 완료·검증됨.** 남은 것은 마무리뿐이다:
 
-구현(A1~A3)은 끝났다(726 tests / 0 failures, `BacktestReentryTest` 7/7 — 2026-08-25 재검증).
+1. push → PR (`#128` 은 측정 결과 보고이지 이슈 종결이 아니다 — 처방을 내지 않았으므로 이슈는 열어 둔 채
+   측정 결과를 코멘트로 남기고, 후속 후보(`conditional-reset` / M1 fixture / 소액 실거래 실험)를 적는다)
+2. 머지 후 worktree 정리
+
+후속 판단은 이 작업 범위 밖이다(Decision 2 — 라이브 변경은 결과를 보고 별도 worktree).
 
 # Decisions
 
@@ -313,6 +317,19 @@ Claude plan-reviewer 2차 — gap 탐색 (2026-08-25, 구현 후 도착):
   `cooldown-2 == legacy` 무료 회귀(→ `# Next` step 3 에 포함).
 - minor 미수용: `reentryMode × reentryCooldownBars` 조합 검증(`init require`) → **defer**. 측정 하네스가
   유일한 호출자라 무의미 조합이 생길 경로가 없다. public 노출 시 재검토.
+
+Claude code-reviewer (2026-08-25, 세션 한도로 조기 종료):
+- 유일하게 보고된 지적은 "쿨다운 재진입 실패 시 그 봉의 통상 진입 기회를 잃는다" → **이미 fix 됨**
+  (`902d781`, 병렬 수정). 리뷰어 자체 확인. 그 외 지적 없이 종료.
+
+simplify 체크 (2026-08-26, 메인 직접 — dlc 13):
+- 테스트 헬퍼 중복 없음 — 캔들 빌더는 `BacktestReentryTest` 1곳뿐이고 나머지 3개 테스트 파일이 재사용.
+- **`reentryDoneAt` 가드가 도달 불가(죽은 분기)** — `BacktestEngine.simulateTrades` 의
+  `if (i == reentryDoneAt) continue`. 재진입 성공 시 항상 `continue` 하고 봉 인덱스는 단조증가라
+  같은 `i` 로 되돌아오는 경로가 없다(`902d781` 의 fallthrough 경로 포함해 확인). "봉당 ≤1회" 불변은
+  그 `continue` 가 이미 보장하고 A1c 테스트가 덮는다.
+  **제거하지 않고 제안만 남긴다** — 동작 보존 변경이지만 이 파일을 다른 에이전트가 동시 편집 중이라
+  충돌 비용이 이득을 넘는다(dlc "불확실하면 보류"). 후속에서 정리 가능.
 
 # Workflow Findings
 
