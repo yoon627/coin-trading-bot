@@ -36,6 +36,12 @@ data class BacktestConfig(
     val useMarketFilter: Boolean = false,
     val chartExitEnabled: Boolean = false,
     /**
+     * true 면 보유상한 청산을 **수익 중일 때만** 낸다 — 손실이면 그대로 들고 간다(#128 2안 "리셋 대상 한정").
+     * 판정 기준가는 상한이 걸리는 시각의 가격 = `bar.open`(= 라이브 KST 09:00). 게이트는 gross 로 본다
+     * (수수료는 기록에서만 차감 — [[exit-gates]] 규약).
+     */
+    val holdLimitOnlyWhenProfitable: Boolean = false,
+    /**
      * 기본값을 라이브(0공백)와 다르게 두는 이유 — `M1ReplayBiasTest`·`ParameterSweepTest`·
      * `KneeStrategyComparisonTest` 가 `BacktestConfig()` 를 상속하므로, 기본값을 바꾸면 그 측정들의
      * 모집단 자체가 달라진다. `/backtest` public 계약도 조용히 바뀐다. 전환은 라이브 변경을 결정하는
@@ -176,8 +182,11 @@ class BacktestEngine(
         signalProps: TradingProperties,
     ): String? {
         val holdDays = index - state.buyIndex
-        val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
         val buyPrice = state.buyPrice
+        // 상한이 걸려도 손실이면 청산하지 않는 정책(#128 2안). atHoldLimit=false 가 되면 이 봉은 일반 보유
+        // 구간처럼 평가된다 — IntrabarExitModel 이 open 으로 눌리지 않고 high/low 를 그대로 본다.
+        val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays) &&
+            (!config.holdLimitOnlyWhenProfitable || bar.openingPrice >= buyPrice)
 
         // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
         // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
