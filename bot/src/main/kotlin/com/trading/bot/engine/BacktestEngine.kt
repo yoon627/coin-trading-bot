@@ -109,26 +109,60 @@ class BacktestEngine(
         // 전략이 신호에서 읽는 config 필드는 kValue 뿐이라, 라이브 baseline 에 kValue 만 덮어 신호 판단에 넘긴다.
         val signalProps = tradingProperties.copy(kValue = config.kValue)
 
+        // LIVE_SAME_BAR 재진입 예약 — TIME_EXIT 이 난 봉 + 쿨다운. -1 = 예약 없음.
+        var reentryDueAt = -1
+        // 봉당 재진입 1회 가드(라이브 boughtToday 등가).
+        var reentryDoneAt = -1
+
         for (i in MIN_CANDLES until chronological.size) {
             val currentPrice = chronological[i].tradePrice
             // 신호는 봉 i 종가까지의 정보로만 판단(look-ahead 방지). 매수/매도(chartExit) 공용 window.
             val window = chronological.subList(max(0, i - (MIN_CANDLES - 1)), i + 1).reversed()
 
             if (state.position) {
-                processExit(state, strategy, i, chronological[i], window, config, signalProps)
-            } else {
-                // 체결은 다음 봉(i+1) 시가로.
-                val fillIndex = i + 1
-                if (fillIndex >= chronological.size) continue
-                val fillPrice = chronological[fillIndex].openingPrice
-                processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config, signalProps)
+                val reason = processExit(state, strategy, i, chronological[i], window, config, signalProps)
+                // 라이브는 09:00 리셋 매도와 동시에 boughtToday 가 풀려 곧바로 재매수가 가능하다.
+                // 가격게이트 청산은 제외 — 청산가가 실제 체결가가 아니라 게이트 임계가이고, 봉의 high/low 를
+                // 본 뒤 같은 봉에 사는 셈이라 look-ahead 다(#128 plan Decision 4).
+                if (config.reentryMode == ReentryMode.LIVE_SAME_BAR && reason == "TIME_EXIT") {
+                    reentryDueAt = i + config.reentryCooldownBars
+                }
+                // 청산이 난 봉에서는 기존 규약상 진입 평가를 하지 않는다. 예약된 재진입이 바로 이 봉일 때만 이어간다.
+                if (state.position || reentryDueAt != i) continue
             }
+
+            if (reentryDueAt >= 0) {
+                if (i < reentryDueAt) continue // 쿨다운 구간 — 기존 진입 규약도 멈춘다(지연 효과 격리)
+                reentryDueAt = -1
+                if (i == reentryDoneAt) continue
+                // 봉 i 시가에 체결하므로 신호는 봉 i-1 종가까지만 본다 — 공용 window 는 봉 i 를 포함해 쓸 수 없다.
+                val signalWindow = chronological.subList(max(0, i - MIN_CANDLES), i).reversed()
+                val entered = processEntry(
+                    state, strategy, i, chronological[i - 1].tradePrice, chronological[i].openingPrice,
+                    signalWindow, config, signalProps,
+                )
+                if (entered) {
+                    reentryDoneAt = i
+                    // 재진입 포지션도 이 봉의 intrabar 게이트를 받는다 — 빠뜨리면 churn 포지션만 손절·익절
+                    // 보호가 사라져 편향된다. 진입 신호·체결가는 이 봉 high/low 확정 전에 정해졌으므로
+                    // look-ahead 가 아니다(#128 plan Decision 5).
+                    processExit(state, strategy, i, chronological[i], window, config, signalProps)
+                }
+                continue
+            }
+
+            // 체결은 다음 봉(i+1) 시가로.
+            val fillIndex = i + 1
+            if (fillIndex >= chronological.size) continue
+            val fillPrice = chronological[fillIndex].openingPrice
+            processEntry(state, strategy, fillIndex, currentPrice, fillPrice, window, config, signalProps)
         }
 
         closeOpenPosition(state, chronological, config)
         return state
     }
 
+    /** @return 청산 사유. 청산이 없었으면 null — 호출부가 TIME_EXIT 재진입 예약 여부를 가른다. */
     private suspend fun processExit(
         state: SimulationState,
         strategy: TradingStrategy,
@@ -137,7 +171,7 @@ class BacktestEngine(
         window: List<Candle>,
         config: BacktestConfig,
         signalProps: TradingProperties,
-    ) {
+    ): String? {
         val holdDays = index - state.buyIndex
         val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
         val buyPrice = state.buyPrice
@@ -150,7 +184,7 @@ class BacktestEngine(
             strategy.shouldSell(window, bar.tradePrice, signalProps)
         val (reason, sellPrice) = IntrabarExitModel
             .evaluate(bar, buyPrice, armPeak, atHoldLimit, config, chartExitSignal)
-            ?.let { it.reason to it.sellPrice } ?: return
+            ?.let { it.reason to it.sellPrice } ?: return null
 
         val netPnl = ((sellPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         state.balance *= (1 + netPnl / 100.0)
@@ -159,6 +193,7 @@ class BacktestEngine(
         state.peakBalance = max(state.peakBalance, state.balance)
         state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
         state.position = false
+        return reason
     }
 
     private suspend fun processEntry(
@@ -170,20 +205,21 @@ class BacktestEngine(
         window: List<Candle>,
         config: BacktestConfig,
         signalProps: TradingProperties,
-    ) {
-        if (fillPrice <= 0) return
+    ): Boolean {
+        if (fillPrice <= 0) return false
         if (config.useMarketFilter) {
             val ma50 = Indicators.calculateMa(window, min(MIN_CANDLES, window.size))
-            if (ma50 > 0 && signalPrice < ma50) return
+            if (ma50 > 0 && signalPrice < ma50) return false
         }
 
-        // 신호는 봉 i 종가(signalPrice)로 판단, 체결가는 다음 봉 시가(fillPrice).
-        if (strategy.shouldBuy(window, signalPrice, signalProps)) {
-            state.buyPrice = fillPrice
-            state.peakPrice = fillPrice
-            state.buyIndex = fillIndex
-            state.position = true
-        }
+        // 신호는 window 최신 봉 종가(signalPrice)로 판단, 체결가는 fillPrice.
+        // 기존 규약은 신호 봉 i → 체결 i+1 시가, LIVE_SAME_BAR 재진입은 신호 봉 i-1 → 체결 i 시가다.
+        if (!strategy.shouldBuy(window, signalPrice, signalProps)) return false
+        state.buyPrice = fillPrice
+        state.peakPrice = fillPrice
+        state.buyIndex = fillIndex
+        state.position = true
+        return true
     }
 
     private fun closeOpenPosition(state: SimulationState, chronological: List<Candle>, config: BacktestConfig) {
