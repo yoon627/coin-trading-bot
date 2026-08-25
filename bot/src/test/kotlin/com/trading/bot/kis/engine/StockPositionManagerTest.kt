@@ -196,4 +196,34 @@ class StockPositionManagerTest {
         assertTrue(pm.checkTrailingStop(pos, 107)) // drop (110-107)/110=2.7% >= trail 2.0, arm 0
         assertFalse(pm.checkTrailingStop(StockPosition("x"), 100)) // no position
     }
+
+    /**
+     * 매도 귀속의 출발점. 값을 여기서 WAL 에 실어야 나중에 도는 reconcile 이 읽을 수 있다 —
+     * 그때는 청산이 반영돼 pos.entryStrategy 가 이미 지워져 있다.
+     */
+    @Test
+    fun `sell order carries entry strategy and reason into the WAL`() = runTest {
+        coEvery { client.getHoldings() } returns listOf(
+            KisHolding(pdno = "005930", hldgQty = "5", ordPsblQty = "5", pchsAvgPric = "100"),
+        )
+        val cmd = slot<SubmitOrderCommand>()
+        coEvery { orderService.submit(any(), capture(cmd)) } answers { intent(StockOrderStatus.PLACED, KisSide.SELL, cmd.captured.qty) }
+        val pos = StockPosition("005930").apply { position = true; entryStrategy = "rsi_bounce" }
+
+        pm.submitSell(pos, SellReason.STOP_LOSS, liveEnabled = true)
+
+        assertEquals("rsi_bounce", cmd.captured.strategy)
+        assertEquals("STOP_LOSS", cmd.captured.reason)
+    }
+
+    @Test
+    fun `buy order carries the deciding strategy into the WAL`() = runTest {
+        val cmd = slot<SubmitOrderCommand>()
+        coEvery { orderService.submit(any(), capture(cmd)) } answers { intent(StockOrderStatus.DRY_RUN, KisSide.BUY, cmd.captured.qty) }
+
+        pm.submitBuy(StockPosition("005930"), currentPrice = 70_000, strategyName = "knee", liveEnabled = false)
+
+        assertEquals("knee", cmd.captured.strategy)
+        assertNull(cmd.captured.reason)
+    }
 }

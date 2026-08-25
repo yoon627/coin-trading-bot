@@ -32,6 +32,8 @@ data class SubmitOrderCommand(
     val orderType: KisOrderType,
     val qty: Long,
     val price: Long? = null, // 지정가 단가(원). 시장가는 null.
+    val strategy: String? = null, // 엔진 전략명 또는 "manual". 체결 기록 귀속의 근거(V22)
+    val reason: String? = null,   // 매도 사유(SellReason.name). 매수는 null
 )
 
 /**
@@ -80,6 +82,8 @@ class StockOrderService(
                     orderType = cmd.orderType.name,
                     qty = cmd.qty,
                     price = cmd.price?.let(BigDecimal::valueOf),
+                    strategy = cmd.strategy,
+                    reason = cmd.reason,
                     status = initialStatus.name,
                     orderDate = LocalDate.now(clock).format(DateTimeFormatter.BASIC_ISO_DATE),
                 ),

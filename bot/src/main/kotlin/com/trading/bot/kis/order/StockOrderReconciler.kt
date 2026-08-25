@@ -210,6 +210,8 @@ class StockOrderReconciler(
             price = price,
             volume = executed.toDouble(),
             totalAmount = price * executed,
+            strategy = row.strategy,
+            reason = row.reason,
             exchangeOrderId = linkOdno ?: row.odno,
             status = "EXECUTED",
         )
