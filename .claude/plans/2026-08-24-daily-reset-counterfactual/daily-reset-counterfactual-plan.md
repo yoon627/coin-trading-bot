@@ -2,7 +2,7 @@
 title: daily-reset-counterfactual — 백테 재진입 모델 보정 후 #128 일일리셋 반사실 측정
 status: in_progress
 started: 2026-08-24
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 # Goal
@@ -39,16 +39,20 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
   포함 상태에서 `:bot:test :common:test compileKotlin --rerun-tasks` **BUILD SUCCESSFUL**,
   wiki 3종 clean / 30 pages / pass=10 fail=0. (직전 캐시 실행이 `8 up-to-date` 로 테스트를 건너뛰어 재실행함.)
 - 2026-08-26 code-review 처분 + simplify 체크 완료 → `# Review Disposition`. **A1~A6 전 항목 증거 충족.**
+- 2026-08-25 plan-reviewer 2차(gap) 처분 → 측정전략 `volatility_breakout` 고정(운영 실측), estimand 를 이벤트 단위로, 지표 규칙·판정기준 확정.
+- 2026-08-25 **A3b 실증**: base `db48763` 와 HEAD 를 fixture 12 × 전략 2 로 돌려 trade 단위 바이트 동일 확인 → `BacktestLegacyGoldenTest` 로 영구 고정(`905fbac`).
+- 2026-08-25 **버그 발견·수정**(`902d781`): 재진입 실패 시 그 봉의 통상 진입 기회를 삼켜 `cooldown-N` 이 legacy 보다 계통적으로 덜 거래했다. `cooldown-2 ≡ legacy` 를 실 fixture 로 가두는 회귀 추가. code-review 가 독립적으로 같은 결함을 Critical-1 로 확인(모델 2000/2000).
+- 2026-08-25 `conditional-reset` 팔(#128 2안) + 측정 하네스 완성(`393845e`), 결과를 wiki `reset-churn-measurement` 로 영속화(`31d63b8`).
+- 2026-08-26 code-review 반영(`e412bba`): dead guard 제거·config 검증·테스트 구멍 3종(재진입 실패 경로·window 길이·TP 짝). A4d/A3d 보강(`6d661d7`).
+- 2026-08-26 **최종 검증**: 736 tests / 0 failures, wiki 3종 clean, 측정 결과 정리 전후 불변.
 
 # Next
 
-**A1~A6 전부 완료·검증됨.** 남은 것은 마무리뿐이다:
+측정·검증·문서까지 끝났다. 남은 것은 머지 절차뿐이다.
 
-1. push → PR (`#128` 은 측정 결과 보고이지 이슈 종결이 아니다 — 처방을 내지 않았으므로 이슈는 열어 둔 채
-   측정 결과를 코멘트로 남기고, 후속 후보(`conditional-reset` / M1 fixture / 소액 실거래 실험)를 적는다)
-2. 머지 후 worktree 정리
-
-후속 판단은 이 작업 범위 밖이다(Decision 2 — 라이브 변경은 결과를 보고 별도 worktree).
+1. PR 생성 → 머지 (머지 시점에 `status: done`)
+2. #128 에 결과 코멘트 (wiki `reset-churn-measurement` 링크 + 핵심 3줄)
+3. 후속 이슈 2건 등록 — (a) 조건부 리셋 소액 카나리아 (b) M1 fixture 도입해 슬리피지 측정
 
 # Decisions
 
@@ -157,6 +161,15 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
       재현자마다 다른 표가 나오는 미등록 자유도가 된다.
     - **누적 수수료를 팔별로 분리 보고**한다 — churn 팔의 차이 상당 부분이 기계적 수수료 성분이라
       분해하지 않으면 "리셋 비용 X%p" 가 해석 불가능해진다.
+
+12. **`cooldown-N` 의 의미 = "N봉 차단 후 legacy 규약 복귀"** (code-review Open question 1 처분, 2026-08-26).
+    재진입 시도가 실패하면 그 봉의 통상 진입 기회(신호=봉 `i` 종가 → 체결 `i+1` 시가)로 폴백한다.
+    근거: 이 정의에서만 `cooldown-2 ≡ legacy` 가 성립하고, 그 등가성이 실 fixture 12×2 로 검증된다
+    (`BacktestReentryEquivalenceTest`). 폴백이 없으면 만료봉에서 신호 1개가 소실돼 쿨다운을 줄였는데
+    재진입이 더 늦어지는 비단조가 생긴다(code-review 모델: cd=1 → 봉 55, cd=2 → 봉 54).
+    ⚠️ 대가: TIME_EXIT 봉만 진입 평가 2회(시가 + 종가신호), 가격게이트 청산 봉은 0회라 사유별 비대칭이 있다.
+    라이브는 청산 후 그날 내내 매수 창이 열려 있는데 D1 은 두 점만 표현할 수 있으므로, 2회가 1회보다
+    라이브에 가깝다고 보고 채택했다. 팔 간에는 대칭이라(모든 팔이 만료봉에서 2회) 비교는 공정하다.
 
 # Key Files
 
@@ -315,8 +328,10 @@ Claude plan-reviewer 2차 — gap 탐색 (2026-08-25, 구현 후 도착):
   (codex 는 개정 **전** draft 에 1회). `# Review Disposition` 의 codex 항목은 C1/C2/M1~M5/m1~m4 다. → **false-positive**.
 - minor 수용: A4 구간 200봉 명시(Decision 11), fixture 밖 티커 명시(A5h), 팔별 수수료 분리(Decision 11),
   `cooldown-2 == legacy` 무료 회귀(→ `# Next` step 3 에 포함).
-- minor 미수용: `reentryMode × reentryCooldownBars` 조합 검증(`init require`) → **defer**. 측정 하네스가
-  유일한 호출자라 무의미 조합이 생길 경로가 없다. public 노출 시 재검토.
+- minor `reentryMode × reentryCooldownBars` 조합 검증(`init require`) → 처음엔 **defer**(측정 하네스가
+  유일한 호출자) 였으나, code-review 가 음수 cooldown 은 조용히 `cooldown=1` 처럼 동작하고 거대값은
+  잔여 구간을 전면 차단한다는 구체적 실패를 들어 재제기 → **fix** (`e412bba`, `BacktestConfig.init` require 2종).
+  둘 다 "결과가 그럴듯해 보여서 측정이 조용히 망가지는" 부류라 호출자 수와 무관하게 막는 게 옳다.
 
 Claude code-reviewer (2026-08-25, 세션 한도로 조기 종료):
 - 유일하게 보고된 지적은 "쿨다운 재진입 실패 시 그 봉의 통상 진입 기회를 잃는다" → **이미 fix 됨**
@@ -330,8 +345,30 @@ simplify 체크 (2026-08-26, 메인 직접 — dlc 13):
   그 `continue` 가 이미 보장하고 A1c 테스트가 덮는다.
   **제거하지 않고 제안만 남긴다** — 동작 보존 변경이지만 이 파일을 다른 에이전트가 동시 편집 중이라
   충돌 비용이 이득을 넘는다(dlc "불확실하면 보류"). 후속에서 정리 가능.
+  → **처리됨(`e412bba`)**: code-review 가 같은 항목을 Major 로 올렸고, 편집이 끝난 뒤 제거했다.
+  측정 결과·legacy 골든 모두 불변 확인.
 
-# Workflow Findings
+code-review 재실행분 (2026-08-26):
+- **Critical-1 재진입 실패 시 진입 기회 소실** → **fix**. 메인이 실측으로 먼저 발견해 `902d781` 로 수정,
+  리뷰가 상태머신 모델 2000회로 독립 확인. 방향 일치.
+- **Major reentryDoneAt dead guard** → **fix** (`e412bba`). "봉당 1회" 는 구조가 보장하므로 플래그 삭제 + 근거 주석.
+- **Major A1c 테스트가 dead guard 를 검증(vacuous)** → **partial**. 단언 자체("봉 D 진입 1회")는 구조 불변식이라
+  유효하므로 유지하고, 주석을 구조 근거로 교체. 실질 구멍이던 **재진입 실패 경로**는 신규 테스트로 덮었다.
+- **Major 테스트 미커버 5종** → **fix 4 / defer 1**. 실패 경로·window 길이·TP 짝·마지막 봉 경계는 추가.
+  A3e(`peakPrice` 리셋 단언)는 **defer** — 리뷰가 legacy 진입과 동일 코드경로임을 반증으로 확인했고
+  A1 의 `buyPrice`/pnl 단언이 실질을 덮는다.
+- **Major A3b 근거 불충분** → **해소됨**. `905fbac` 골든이 `db48763` 대조로 닫음(리뷰도 그렇게 판정).
+- **Minor cooldown 무검증** → **fix** (`BacktestConfig.init` require 2종).
+- **Minor 공허 통과 `if (next != null)`** → **fix** (assertNotNull).
+- **Minor `AlwaysBuy.seen` 죽은 필드** → **fix** — window 길이 단언에 실제로 쓰이게 했다.
+- **Minor wiki `backtest-engine.md:24` 모드 의존** → **fix** (`31d63b8`).
+- **Minor 두 번째 `processExit` 반환값 버림** → **wontfix**. `effectiveMaxHoldDays` 가 최소 1 이라
+  `holdDays=0` 에서 TIME_EXIT 이 나올 수 없다(리뷰도 무해로 확인). 주석 추가는 하지 않았다 — Decision 5 가 이미 근거다.
+- refuted 7종(chartExit look-ahead·트레일링 arm·무한 churn·이중진입·인덱스 초과·예약 미해소·legacy no-op)은
+  리뷰가 스스로 반증했고 메인도 동의 — 조치 없음.
+- **Open question 1(cooldown 의미)** → Decision 12 로 확정. **Open question 2(cd=0 진입 2회)** → Decision 12 에 함께 기록.
+  **Open question 3(수수료 분리)** → Decision 11 이 이미 요구, 리포트 원표에 팔별 수수료 컬럼 존재.
+
 
 - Claude subagent 2개(plan-reviewer·architecture-reviewer) 동시 실행이 세션 한도로 전멸(2026-08-24).
   memory `project_subagent_quota_deaths` 의 3회 실측 패턴 재현 — 동시 2개도 위험. 이후 1개씩 순차 실행으로 전환.
