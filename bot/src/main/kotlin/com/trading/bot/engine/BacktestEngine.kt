@@ -147,8 +147,11 @@ class BacktestEngine(
                     // 보호가 사라져 편향된다. 진입 신호·체결가는 이 봉 high/low 확정 전에 정해졌으므로
                     // look-ahead 가 아니다(#128 plan Decision 5).
                     processExit(state, strategy, i, chronological[i], window, config, signalProps)
+                    continue
                 }
-                continue
+                // 재진입 신호가 없었으면 이 봉의 통상 진입 기회(신호=봉 i 종가, 체결=봉 i+1 시가)는 살아 있다.
+                // 여기서 continue 하면 legacy 가 갖는 그 기회를 쿨다운 팔만 잃어, 측정이 정책 차이가 아니라
+                // 구현 아티팩트를 재게 된다 — BacktestReentryEquivalenceTest 가 cooldown=2 == legacy 로 가둔다.
             }
 
             // 체결은 다음 봉(i+1) 시가로.
