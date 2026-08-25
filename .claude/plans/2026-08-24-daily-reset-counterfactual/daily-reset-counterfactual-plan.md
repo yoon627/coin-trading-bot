@@ -1,6 +1,6 @@
 ---
 title: daily-reset-counterfactual — 백테 재진입 모델 보정 후 #128 일일리셋 반사실 측정
-status: in_progress
+status: done
 started: 2026-08-24
 updated: 2026-08-26
 ---
@@ -45,14 +45,24 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
 - 2026-08-25 `conditional-reset` 팔(#128 2안) + 측정 하네스 완성(`393845e`), 결과를 wiki `reset-churn-measurement` 로 영속화(`31d63b8`).
 - 2026-08-26 code-review 반영(`e412bba`): dead guard 제거·config 검증·테스트 구멍 3종(재진입 실패 경로·window 길이·TP 짝). A4d/A3d 보강(`6d661d7`).
 - 2026-08-26 **최종 검증**: 736 tests / 0 failures, wiki 3종 clean, 측정 결과 정리 전후 불변.
+- 2026-08-26 **머지 완료** — PR #139 (merge commit `6d3e8dc`). push 가 pre-push codex 에 3회 막혔고
+  전부 실제 결함이라 `CODEX_ACK` 우회 없이 수정: ① M1 replay 가 조건부 상한을 안 받아 같은 config 로
+  두 측정 경로가 다른 정책을 돌던 것(`1d57e79`) ② 그 수정이 M1 을 분봉마다 재평가하게 만들어 D1(경계마다
+  한 번)과 갈린 것 → `replayExit` 가 경계를 하나만 알아 표현 불가하므로 입구에서 거부(`5c311a6`)
+  ③ `i + cooldown` 오버플로로 쿨다운이 조용히 사라지던 것(`e6ba0f1`). 최종 738 tests / 0 failures.
 
 # Next
 
-측정·검증·문서까지 끝났다. 남은 것은 머지 절차뿐이다.
+이 plan 은 닫혔다(`status: done`). 이어지는 작업은 별도 plan/worktree 로 시작한다.
 
-1. PR 생성 → 머지 (머지 시점에 `status: done`)
-2. #128 에 결과 코멘트 (wiki `reset-churn-measurement` 링크 + 핵심 3줄)
-3. 후속 이슈 2건 등록 — (a) 조건부 리셋 소액 카나리아 (b) M1 fixture 도입해 슬리피지 측정
+- **#128 에 결과 코멘트** — wiki `reset-churn-measurement` 링크 + 핵심 3줄(효과 ±0.5%p/건 이하 /
+  쿨다운은 근거 없음 / 조건부 리셋만 운영 전략에서 부호 일관).
+- **후속 이슈 (a)** 조건부 리셋 소액 카나리아 — 이 측정에서 유일하게 두 국면 부호가 일관됐다.
+  단 처방이 아니라 "다음에 볼 후보" 수준이다(A5g).
+- **후속 이슈 (b)** M1 fixture 도입 — 진짜 비용(재진입 슬리피지)은 D1 에서 구조적으로 측정 불가.
+  현재 `M1ReplayBiasTest` 는 API 실시간 fetch 라 스윕이 안 된다.
+- **후속 이슈 (c)** `reentryMode` 기본값을 라이브 정합(`LIVE_SAME_BAR`)으로 전환할지 —
+  라이브 전략 변경을 결정할 때 함께 판단하기로 유보해 둔 항목(Decision 6).
 
 # Decisions
 
