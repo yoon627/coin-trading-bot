@@ -67,10 +67,13 @@ class StockOrderReconcilerTest {
         qty: Long = 10,
         createdAt: Instant = now,
         side: String = "BUY",
+        strategy: String? = null,
+        reason: String? = null,
     ) = StockOrderIntentEntity(
         id = 100, userId = 1, clientRef = "r", accountNo = "12345678-01", symbol = "005930",
         side = side, orderType = "LIMIT", qty = qty, price = BigDecimal(70_000),
         status = status.name, odno = odno, orderDate = "20260614", createdAt = createdAt, updatedAt = createdAt,
+        strategy = strategy, reason = reason,
     )
 
     private fun ccld(
@@ -170,5 +173,38 @@ class StockOrderReconcilerTest {
         reconciler.reconcileNow()
 
         coVerify(exactly = 0) { tradeExecutionRepository.save(any()) }
+    }
+
+    @Test
+    fun `execution record carries the strategy the order was placed with`() = runTest {
+        activate(
+            row(StockOrderStatus.PLACED, odno = "0000117057", strategy = "rsi_bounce"),
+            listOf(ccld(totCcld = "10", rmn = "0")),
+        )
+        val exec = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(exec)) } returns Mono.just(mockk(relaxed = true))
+
+        reconciler.reconcileNow()
+
+        assertEquals("rsi_bounce", exec.captured.strategy)
+    }
+
+    /**
+     * 매도 귀속이 이 수정의 핵심이다. 값이 WAL 에서 오므로 stock_position_state 가 이미 청산으로
+     * 비워졌든 아니든 결과가 같다 — reconciler 는 포지션 상태를 아예 조회하지 않는다.
+     */
+    @Test
+    fun `sell execution carries entry strategy and sell reason from the WAL`() = runTest {
+        activate(
+            row(StockOrderStatus.PLACED, odno = "0000117057", side = "SELL", strategy = "combined", reason = "STOP_LOSS"),
+            listOf(ccld(side = "01", totCcld = "10", rmn = "0")),
+        )
+        val exec = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(exec)) } returns Mono.just(mockk(relaxed = true))
+
+        reconciler.reconcileNow()
+
+        assertEquals("combined", exec.captured.strategy)
+        assertEquals("STOP_LOSS", exec.captured.reason)
     }
 }
