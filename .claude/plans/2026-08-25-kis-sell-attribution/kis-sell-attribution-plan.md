@@ -1,8 +1,8 @@
 ---
 title: kis-sell-attribution — KIS 체결 기록의 전략·사유 귀속 복구 (#130)
-status: in_progress
+status: done
 started: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 # Goal
@@ -24,10 +24,11 @@ KIS 주식 경로의 체결 기록(`trade_executions`)에 진입 전략과 매�
 - 2026-08-25: **자체 code-review(subagent 미사용 — 세션 제약)에서 2건 발견·반영.** ① 수동 매도에 `reason` 을 안 실어 Upbit `TradeExecutionService:117,163`(`SellReason.MANUAL`)과 어긋났다 → `side == SELL` 이면 `MANUAL` 을 싣도록 수정. ② `StockOrderService` 가 command 값을 실제 WAL 행에 넣는지 검증하는 테스트가 없었다(`StockPositionManagerTest` 는 command 까지만 본다) → `StockOrderServiceTest` 에 추가. 수동 경로 테스트도 `KisTradeControllerTest` 에 추가.
 - 2026-08-25: **최종 검증 통과** — `compileKotlin`, `test --parallel`(CI 와 동일 명령), `build -x test` 전부 성공. wiki 검증 3종(link/verify/smoke 10-0) 통과.
 - 2026-08-25: **운영 DB 실측(read-only)으로 백필 불필요 확정.** `trade_executions` 의 KIS 행 **0건**(Upbit 66건), `stock_order_intent` **0행**, 비terminal 주문 **0건** — V22 적용 시 영향받을 미체결 주문도 없다. flyway 는 **V21 까지 21건 적용·실패 0**(첫 쿼리의 `max(version)=9` 는 version 이 varchar 라 사전순이었던 내 쿼리 결함이었고, 숫자 정렬로 재확인했다).
+- 2026-08-26: **PR #136 머지(`63911f8`) → 자동 배포 성공 → 운영 검증 완료.** pre-push codex `no blocking issues`, CI `test pass 1m36s`. 배포 3 job(test·build-and-push·deploy-vultr) 전부 success — 이번엔 머지가 몰리지 않아 `Check deployment commit is current main` 가드에 걸리지 않았다. **운영 DB 실측: `flyway_applied=22`·`flyway_max=22`·`flyway_failed=0`, `stock_order_intent` 에 `strategy:64`·`reason:32` 존재.** worktree·로컬·원격 브랜치 정리 완료, 로컬 main 최신화.
 
 # Next
 
-push → PR → 머지. Acceptance 9/9 충족. 머지 시 자동 배포가 돌고 V22 가 적용된다 — 활성 주문 0건이라 마이그레이션이 건드릴 미체결 주문은 없다.
+없음 — 머지·배포·운영검증까지 완료. 후속 후보는 `# Deferred` 참조(KIS `pnl_amount`, `"manual"` 리터럴 상수화, CLAUDE.md 검증명령 stale). 관련 이슈는 #129(수동거래 귀속)·#115(라운드트립 net).
 
 # Decisions
 
