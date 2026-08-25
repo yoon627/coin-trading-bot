@@ -38,6 +38,7 @@
 - [[lesson-branch-checkout-drift]] — checkout 이 미커밋 변경을 끌고 간다
 - [[lesson-resume-state-sources]] — "진행하던 작업" 은 6곳을 모두 봐야 찾는다
 - [[lesson-llm-alpha-verification]] — LLM 알파는 과거 백테스트로 증명 불가(학습 오염), 전향적 shadow mode + LLM 없는 baseline 선행
+- [[lesson-rollback-removal]] — 롤백 보험을 거두기 전에 "무엇으로 되돌리는가"를 먼저 정의할 것
 
 ## entity — 외부 사실·버전
 
