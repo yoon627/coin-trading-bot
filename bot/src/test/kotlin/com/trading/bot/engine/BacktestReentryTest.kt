@@ -216,6 +216,29 @@ class BacktestReentryTest {
     }
 
     @Test
+    fun `re-entry on the final bar stays in range`() = runTest {
+        // A3d — 마지막 봉에서 TIME_EXIT + 재진입이 나면 fillIndex 가 배열 끝과 같아진다.
+        // 크래시는 없지만(closeOpenPosition 은 인덱스 접근이 없다) 그 포지션이 END 로 마감되는지,
+        // 인덱스가 범위 안인지를 고정해 둔다. LIVE 팔에만 END 가 1건 더 생기는 것이 A4 표의
+        // 팔 간 거래수 차이로 나타나므로 근거를 남긴다.
+        val count = 120
+        val result = engineOf(AlwaysBuy())
+            .run("always_buy", flatRisingCandles(count), "KRW-BTC", timeExitConfig(ReentryMode.LIVE_SAME_BAR))
+
+        assertNotNull(result)
+        result!!.trades.forEach {
+            assertTrue(
+                it.buyIndex in 0 until count && it.sellIndex in 0 until count,
+                "인덱스가 범위를 벗어났다: $it",
+            )
+            assertTrue(it.sellIndex >= it.buyIndex, "청산이 진입보다 앞설 수 없다: $it")
+        }
+        val last = result.trades.last()
+        assertEquals("END", last.reason, "마지막 trade 는 시리즈 말미 마크투마켓이어야 한다: $last")
+        assertEquals(count - 1, last.sellIndex, "END 는 마지막 봉에서 마감돼야 한다: $last")
+    }
+
+    @Test
     fun `re-entered position can take profit in the same bar`() = runTest {
         // A1b 의 TP 짝 — 기존 시나리오는 open=high=close 라 TP 게이트가 구조적으로 발동 불가였고
         // 손절만 검증됐다. 봉 52 에 +6% 고점을 심어 익절 경로도 같은 봉에서 도는지 본다.

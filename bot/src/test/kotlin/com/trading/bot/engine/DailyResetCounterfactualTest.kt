@@ -179,6 +179,8 @@ class DailyResetCounterfactualTest {
 
             report.appendLine(verdict(perRegimePerEvent))
             report.appendLine()
+            report.appendLine(holdDaysSensitivity(strategy))
+            report.appendLine()
         }
 
         report.appendLine("## 이 측정이 재지 못하는 성분 (A5h — 결론과 반드시 함께 읽을 것)")
@@ -194,6 +196,34 @@ class DailyResetCounterfactualTest {
         out.writeText(report.toString())
         println(report)
         println("리포트: ${out.absolutePath}")
+    }
+
+    /**
+     * A4d — `maxHoldDays` 민감도. **primary 결론과 섞지 않는다**: 팔 비교는 `maxHoldDays=1` 고정이 원칙이고
+     * (Decision 3, 교락 회피) 이 표는 "상한 자체를 며칠로 두느냐"라는 별개 축이다.
+     */
+    private suspend fun holdDaysSensitivity(strategy: String): String {
+        val sb = StringBuilder("### maxHoldDays 민감도 (별도 축 — primary 와 섞지 말 것)\n\n")
+        sb.append("`live-reproduction` 팔에서 상한만 바꾼다. 값은 마켓 균등가중 가법수익합%p / 리셋이벤트 수.\n\n")
+        sb.append("| 국면 | h=1 | h=2 | h=3 | h=5 |\n|---|---|---|---|---|\n")
+        for (regime in BacktestFixtures.Regime.values()) {
+            val cols = listOf(1, 2, 3, 5).map { h ->
+                val cells = BacktestFixtures.markets(regime).mapNotNull { market ->
+                    engine.run(
+                        strategy,
+                        BacktestFixtures.load(regime, market),
+                        market,
+                        BacktestConfig(maxHoldDays = h, reentryMode = ReentryMode.LIVE_SAME_BAR),
+                    )?.let { toCell(it, BacktestConfig(maxHoldDays = h)) }
+                }
+                if (cells.isEmpty()) "-" else "%.2f / %.1f".format(
+                    cells.map { it.sumPnl }.average(),
+                    cells.map { it.resetEvents }.average(),
+                )
+            }
+            sb.append("| ${regime.label} | ${cols.joinToString(" | ")} |\n")
+        }
+        return sb.toString()
     }
 
     private fun toCell(result: BacktestResult, config: BacktestConfig): Cell {
