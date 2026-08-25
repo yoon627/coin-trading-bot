@@ -180,6 +180,27 @@ codex plan 리뷰 (2026-08-24):
 메인 추가 발견:
 - 재진입 포지션의 진입 봉 게이트 누락 편향 → **fix** (Decision 5, A1b)
 
+Claude plan-reviewer + codex medium (2026-08-25, 세션 한도 후 재실행분 — 결과 도착):
+- P0-1 same-bar 재진입 look-ahead → **선반영됨** (Decision 4 의 TIME_EXIT 한정이 이미 닫음).
+  단 **구현 함정이 남는다** → 아래 R1.
+- P0-2 진입 봉(`holdDays=0`)에서 재진입하면 봉당 진입 2회 → **선반영됨** (Decision 4 제외 + Decision 5 "봉당 ≤1회").
+- P0-3 Goal↔A5 모순, 사전 판정규칙 부재 → **선반영됨** (A5a~A5f).
+- **R1. 신호 window 구현 함정 — Acceptance 항목 필요 (신규)**
+  Decision 4 는 "신호 window = 직전 봉 종가까지"라고 선언하지만, `BacktestEngine.kt:91` 의 기존 `window` 는
+  `subList(max(0, i-(MIN_CANDLES-1)), i+1)` 로 **봉 `i` 를 포함**한다(현행은 체결이 `i+1` 시가라 무해).
+  same-bar 재진입은 봉 `D` 시가에 체결하므로, 구현에서 그 `window` 변수를 그대로 재사용하면
+  **봉 D 의 종가·고저를 보고 봉 D 시가에 사는** look-ahead 가 된다. 재진입 신호는 `subList(..., i)` 로
+  별도 계산해야 하고, 그것을 검증하는 Acceptance 항목이 지금 없다(A1 은 체결가만 본다).
+- **R2. Decision 4·5 의 "라이브도 09:00 엔 당일 봉 미형성" 전제가 틀렸다 (신규, ✅코드 확인)**
+  `TradingEngine.loadStoreDailyCandles`(`:370-375`)는 store D1 을 **진행 중인 당일 봉까지 포함**해 반환하고,
+  `MarketDataStore`(`:51`)는 `openTime upsert` 로 분봉마다 그 봉을 갱신한다. 즉 09:00:10 라이브 신호 window 에는
+  거래량이 막 쌓이기 시작한 **당일 봉이 이미 들어 있다**. 백테의 "직전 봉 종가까지"와 다르므로
+  거래량 조건(`vol >= avg`)을 쓰는 전략에서 신호가 갈릴 수 있다 → `live-reproduction` 팔의 충실도 문제.
+  **처분 필요**: (a) 이 divergence 를 알려진 한계로 A5/문서에 명시하거나, (b) 영향 받는 전략을 식별해
+  측정에서 분리하거나, (c) 백테 재진입 신호에 부분 봉을 흉내내는 건 look-ahead 라 **불가**.
+- 참고: 리뷰어가 `TRADING_MAX_HOLD_DAYS`(`deploy/vultr/.env:66`, `deploy.sh:167` 배선 완료)를
+  **코드 0줄 실거래 실험** 경로로 제시했다. Decision 2(종점=측정)와 별개 선택지라 `# Deferred` 에 남긴다.
+
 # Workflow Findings
 
 - Claude subagent 2개(plan-reviewer·architecture-reviewer) 동시 실행이 세션 한도로 전멸(2026-08-24).
