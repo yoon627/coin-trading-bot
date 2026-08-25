@@ -55,7 +55,14 @@ class DailyResetCounterfactualTest {
         Arm("cooldown-1", BacktestConfig(maxHoldDays = 1, reentryMode = ReentryMode.LIVE_SAME_BAR, reentryCooldownBars = 1)),
         Arm("cooldown-2", BacktestConfig(maxHoldDays = 1, reentryMode = ReentryMode.LIVE_SAME_BAR, reentryCooldownBars = 2)),
         Arm("cooldown-3", BacktestConfig(maxHoldDays = 1, reentryMode = ReentryMode.LIVE_SAME_BAR, reentryCooldownBars = 3)),
+        Arm(
+            "conditional-reset",
+            BacktestConfig(maxHoldDays = 1, reentryMode = ReentryMode.LIVE_SAME_BAR, holdLimitOnlyWhenProfitable = true),
+        ),
     )
+
+    /** 현행(`live-reproduction`) 대비 개선폭을 재는 대안들 — #128 의 1안(쿨다운)·2안(조건부)·3안(제거). */
+    private val alternatives = listOf("cooldown-1", "cooldown-2", "cooldown-3", "conditional-reset", "hold-through")
 
     private val engine = BacktestEngine(listOf(VolatilityBreakout(), CombinedStrategy()), TradingProperties())
 
@@ -97,6 +104,9 @@ class DailyResetCounterfactualTest {
                 report.appendLine("|---|---|---|---|---|---|---|")
 
                 val perEvent = mutableMapOf<String, Double>()
+                // 대안 label -> (마켓 -> 현행 대비 %p/건). 분모를 현행의 리셋 이벤트 수로 고정해
+                // 모든 대안을 같은 척도(지금 실제로 일어나는 리셋 1건당)에 올린다.
+                val altPerEvent = alternatives.associateWith { mutableMapOf<String, Double>() }
 
                 for (market in BacktestFixtures.markets(regime)) {
                     val candles = BacktestFixtures.load(regime, market)
@@ -119,8 +129,13 @@ class DailyResetCounterfactualTest {
 
                     val live = cells["live-reproduction"]
                     val hold = cells["hold-through"]
-                    if (live != null && hold != null && live.resetEvents >= MIN_RESET_EVENTS) {
-                        perEvent[market] = (live.sumPnl - hold.sumPnl) / live.resetEvents
+                    if (live != null && live.resetEvents >= MIN_RESET_EVENTS) {
+                        if (hold != null) perEvent[market] = (live.sumPnl - hold.sumPnl) / live.resetEvents
+                        alternatives.forEach { label ->
+                            cells[label]?.let { alt ->
+                                altPerEvent.getValue(label)[market] = (alt.sumPnl - live.sumPnl) / live.resetEvents
+                            }
+                        }
                     }
                 }
 
@@ -137,6 +152,26 @@ class DailyResetCounterfactualTest {
                 perEvent.toSortedMap().forEach { (m, v) -> report.appendLine("| $m | %.3f |".format(v)) }
                 report.appendLine()
                 report.appendLine(summarize(perEvent.values.toList()))
+                report.appendLine()
+                report.appendLine("**정책 대안 — 현행(`live-reproduction`) 대비 리셋 1건당 %p (양수 = 개선)**")
+                report.appendLine()
+                report.appendLine("| 정책 | #128 안 | 마켓 균등가중 | 개선된 마켓 |")
+                report.appendLine("|---|---|---|---|")
+                alternatives.forEach { label ->
+                    val v = altPerEvent.getValue(label).values.toList()
+                    val tag = when (label) {
+                        "conditional-reset" -> "2안 대상한정"
+                        "hold-through" -> "3안 리셋제거"
+                        else -> "1안 쿨다운"
+                    }
+                    if (v.isEmpty()) {
+                        report.appendLine("| `$label` | $tag | (표본 없음) | - |")
+                    } else {
+                        report.appendLine(
+                            "| `$label` | $tag | %.3f | %d/%d |".format(v.average(), v.count { it > 0 }, v.size),
+                        )
+                    }
+                }
                 report.appendLine()
 
                 perRegimePerEvent[regime] = perEvent
@@ -207,10 +242,31 @@ class DailyResetCounterfactualTest {
         }
         val pairedMeans = paired.mapValues { (_, v) -> if (v.isEmpty()) Double.NaN else v.average() }
         sb.append("국면 간 비교는 `PAIRED_MARKETS`(${BacktestFixtures.PAIRED_MARKETS.joinToString()}) 로만 한다(A5d).\n\n")
+        val fullMeans = perRegime.mapValues { (_, m) -> if (m.isEmpty()) Double.NaN else m.values.average() }
         pairedMeans.forEach { (regime, mean) ->
-            sb.append("- ${regime.label}: %.3f %%p/건 (N=%d)\n".format(mean, paired.getValue(regime).size))
+            sb.append(
+                "- ${regime.label}: paired %.3f %%p/건 (N=%d) / 전체마켓 %.3f (N=%d)\n".format(
+                    mean, paired.getValue(regime).size,
+                    fullMeans.getValue(regime), perRegime.getValue(regime).size,
+                ),
+            )
         }
         sb.append("\n")
+
+        // 마켓 선택에 대한 강건성 — paired 부분집합과 전체의 부호가 갈리면 방향 주장이 표본 선택에 좌우된다는 뜻이다.
+        // 판정 게이트는 아니고(사전 기준은 paired 고정) 결론 강도를 낮추는 공시다.
+        val fragile = pairedMeans.keys.filter {
+            val a = pairedMeans.getValue(it)
+            val b = fullMeans.getValue(it)
+            !a.isNaN() && !b.isNaN() && (a < 0) != (b < 0)
+        }
+        if (fragile.isNotEmpty()) {
+            sb.append(
+                "⚠️ **표본 선택에 취약** — ${fragile.joinToString { it.label }} 에서 paired 부분집합과 전체 마켓의 " +
+                    "평균 부호가 반대다. 마켓 간 분산이 효과 크기를 압도한다는 뜻이므로 아래 방향 판정을 " +
+                    "정량 근거로 쓰지 말 것.\n\n",
+            )
+        }
 
         if (pairedMeans.values.any { it.isNaN() }) {
             return sb.append("**판정 유보** — paired 마켓 표본이 비어 있는 국면이 있다(A5f).\n").toString()
