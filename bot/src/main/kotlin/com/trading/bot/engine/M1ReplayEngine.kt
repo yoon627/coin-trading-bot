@@ -31,6 +31,13 @@ object M1ReplayEngine {
         m1BarsAsc: List<Candle>,
         config: BacktestConfig,
     ): M1ReplayResult {
+        // 조건부 상한(#128 2안)은 "경계에서 손실이면 넘기고 **다음 경계에 다시 본다**" 인데, 이 함수는
+        // limitInstant 를 하나만 받아 다음 경계를 모른다. 분봉마다 재평가하면 첫 회복 분봉에서 청산해
+        // 실제 리셋 시점이 아닌 곳에 TIME_EXIT 이 찍히고 reachedLimit 도 뒤틀린다. 조용히 다른 정책을
+        // 도느니 막는다 — #128 측정은 D1 엔진만 쓴다(DailyResetCounterfactualTest).
+        require(!config.holdLimitOnlyWhenProfitable) {
+            "M1 replay cannot model conditional hold limits — it only knows one boundary instant"
+        }
         var peak = entryPrice
         var seen = 0
         for (b in m1BarsAsc) {
