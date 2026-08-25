@@ -5,6 +5,7 @@ import com.trading.common.strategy.CombinedStrategy
 import com.trading.common.strategy.VolatilityBreakout
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
 /**
@@ -20,6 +21,25 @@ import org.junit.jupiter.api.Test
 class BacktestReentryEquivalenceTest {
 
     private val engine = BacktestEngine(listOf(VolatilityBreakout(), CombinedStrategy()), TradingProperties())
+
+    @Test
+    fun `config rejects cooldown values that would silently disable the cooldown`() {
+        // 음수는 reentryDueAt < i 라 다음 봉에 바로 풀리고, Int.MAX_VALUE 는 i + cooldown 이 오버플로해
+        // reentryDueAt 이 음수가 되면서 쿨다운이 통째로 사라진다. 둘 다 예외 없이 '그럴듯한' 결과를 내므로
+        // 생성 시점에 막혀야 한다 — 측정 도구에서 조용한 오작동이 가장 위험하다.
+        val live = { n: Int ->
+            BacktestConfig(maxHoldDays = 1, reentryMode = ReentryMode.LIVE_SAME_BAR, reentryCooldownBars = n)
+        }
+        assertThrows(IllegalArgumentException::class.java) { live(-1) }
+        assertThrows(IllegalArgumentException::class.java) { live(Int.MAX_VALUE) }
+        assertThrows(IllegalArgumentException::class.java) { live(BacktestConfig.MAX_COOLDOWN_BARS + 1) }
+        live(BacktestConfig.MAX_COOLDOWN_BARS) // 경계값은 허용
+
+        // LEGACY 모드에서 쿨다운을 주는 것은 조용히 무시되므로 이것도 막는다.
+        assertThrows(IllegalArgumentException::class.java) {
+            BacktestConfig(reentryMode = ReentryMode.LEGACY_NEXT_BAR, reentryCooldownBars = 3)
+        }
+    }
 
     @Test
     fun `cooldown 2 reproduces legacy exactly on real fixtures`() = runBlocking {
