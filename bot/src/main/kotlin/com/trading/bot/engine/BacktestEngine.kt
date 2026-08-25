@@ -52,12 +52,21 @@ data class BacktestConfig(
     val reentryCooldownBars: Int = 0,
 ) {
     init {
-        // 음수면 reentryDueAt < i 가 되어 조용히 cooldown=1 처럼 동작하고, 거대값이면 남은 전 구간 진입이
-        // 에러 없이 차단된다. 둘 다 결과가 그럴듯해 보여 측정이 조용히 망가지므로 생성 시점에 막는다.
-        require(reentryCooldownBars >= 0) { "reentryCooldownBars must be >= 0, was $reentryCooldownBars" }
+        // 음수면 reentryDueAt < i 가 되어 조용히 cooldown=1 처럼 동작하고, 거대값이면 `i + cooldown` 이
+        // 오버플로해 reentryDueAt 이 음수가 되면서 쿨다운이 통째로 사라진다. 셋 다 결과가 그럴듯해 보여
+        // 측정이 조용히 망가지므로 생성 시점에 막는다. 상한 365 는 maxHoldDays 관례와 같다
+        // (StrategyController 의 coerceIn(1, 365)).
+        require(reentryCooldownBars in 0..MAX_COOLDOWN_BARS) {
+            "reentryCooldownBars must be in 0..$MAX_COOLDOWN_BARS, was $reentryCooldownBars"
+        }
         require(reentryMode == ReentryMode.LIVE_SAME_BAR || reentryCooldownBars == 0) {
             "reentryCooldownBars has no effect in $reentryMode — set LIVE_SAME_BAR or leave it 0"
         }
+    }
+
+    companion object {
+        /** `i + cooldown` 오버플로 방지 + 현실적 상한. `maxHoldDays` 와 같은 범위를 쓴다. */
+        const val MAX_COOLDOWN_BARS = 365
     }
 }
 
