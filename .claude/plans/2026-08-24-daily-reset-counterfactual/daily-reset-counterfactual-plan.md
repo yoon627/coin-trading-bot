@@ -2,70 +2,146 @@
 title: daily-reset-counterfactual — 백테 재진입 모델 보정 후 #128 일일리셋 반사실 측정
 status: in_progress
 started: 2026-08-24
-updated: 2026-08-24
+updated: 2026-08-25
 ---
 
 # Goal
 
 `BacktestEngine` 이 라이브의 "일일 리셋 후 0공백 재매수"를 재현하도록 재진입 모델을 보정하고,
-그 위에서 반사실(재진입 쿨다운 0/1/N × `maxHoldDays`)을 실데이터 fixture 로 측정해
+그 위에서 **세 대조군**(hold-through / live-reproduction / cooldown-N)을 실데이터 fixture 로 측정해
 GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 이번 범위가 아니다.**
 
 # Progress
 
-- 2026-08-24 Explore 완료. 라이브 메커니즘·백테 divergence 확정, 범위 2건 사용자 확정, draft plan 작성.
+- 2026-08-24 Explore 완료. 라이브 메커니즘·백테 divergence 확정, 범위 2건 사용자 확정, draft plan 작성·커밋(e7e78ae).
+- 2026-08-24 codex plan 리뷰 완료(Critical 2 / Major 5 / Minor 4). Claude plan-reviewer·architecture-reviewer 는 세션 한도로 조기 종료 → 재실행 예정.
+- 2026-08-25 리뷰 반영해 plan 전면 개정 (대조군 3팔·재진입 가격모델 한정·기본값 legacy 전환·사전 판정기준).
 
 # Next
 
-plan-reviewer + architecture-reviewer 검토 → 지적 반영 → TDD Red(재진입 갭 회귀 테스트).
+개정 plan 을 plan-reviewer 로 재검토(gap 탐색 집중) → 지적 반영 → TDD Red(A1~A2 재진입 회귀 테스트).
 
 # Decisions
 
-1. **접근 = 백테 재진입 모델 보정 후 스윕** (사용자 선택 2026-08-24).
-   이유: 현 `BacktestEngine.simulateTrades` 는 `if (position) processExit else processEntry` 라
-   청산한 봉에서 진입 평가를 하지 않는다 → 청산 봉 `i` → 신호 `i+1` → 체결 `i+2` = **2봉 강제 공백**.
+1. **접근 = 백테 재진입 모델 보정 후 측정** (사용자 확정 2026-08-24).
+   근거: `BacktestEngine.simulateTrades` 가 `if (position) processExit else processEntry` 라
+   청산 봉에서 진입 평가를 하지 않는다 → 청산 봉 `i` → 신호 `i+1` → 체결 `i+2` = **2봉 강제 공백**.
    라이브는 09:00 리셋 매도 후 ~10초 뒤 재매수(#128 KRW-SOL 0.0h) = **0공백**.
-   즉 현 백테 baseline 은 이미 #128 1안(쿨다운)에 가까워, `maxHoldDays` 만 바꾸는 스윕으로는
-   이슈가 지목한 비용을 **측정 자체가 불가능**하다.
+   현 백테 baseline 은 이미 #128 1안(쿨다운)에 가까워 이슈가 지목한 비용을 측정할 수 없다.
 
-2. **종점 = 반사실 결과까지** (사용자 선택 2026-08-24).
+2. **종점 = 반사실 결과까지** (사용자 확정 2026-08-24).
    라이브 변경(쿨다운 도입 / 리셋 대상 한정 / 리셋 제거)은 결과를 보고 별도 worktree 에서 결정·구현.
 
-3. **재진입 모델 = same-bar 재진입, 체결가 = 청산가.**
-   라이브는 청산 후 다음 tick(~10초)에 매수 평가를 돌리므로 재진입가 ≈ 청산가다.
-   TIME_EXIT 은 청산가가 `bar.open` 이라 재진입도 `bar.open` — #128 이 관찰한 "같은 시각 재매수"와 정확히 일치.
-   신호 window 는 기존 진입 규약 그대로 **직전 봉 종가까지**(라이브도 09:00 시점엔 당일 봉 미형성이라 동일).
+3. **대조군은 3팔** (codex C1/M1 반영 — 개정).
+   기존 draft 의 "쿨다운 × maxHoldDays 그리드" 는 *매도 자체의 효과*와 *재진입 지연 효과*를 분리하지 못했다.
+   | 팔 | 정의 | 필요한 기계장치 |
+   |---|---|---|
+   | `hold-through` | 일일리셋 청산 없음. 보유 지속, 나머지 게이트만 작동 | **없음** — `maxHoldDays=999` 로 기존 엔진 그대로 |
+   | `live-reproduction` | 리셋 청산 + 0공백 재진입 (= 현 라이브) | **신규** (Decision 4) |
+   | `cooldown-N` | 리셋 청산 + N봉 재진입 차단 (N=1,2,3) | 신규 (같은 기계장치) |
+   `maxHoldDays` 는 primary 비교에서 **라이브 값 1 로 고정**. maxHoldDays 스윕은 별도 민감도 분석으로 분리한다(교락 회피).
 
-4. **라이브의 "거래일 1회 진입" 제약을 모델에 유지.** `boughtToday` 는 매수 시 `true`,
-   `resetDaily` 에서만 해제되므로 라이브는 거래일당 재진입 1회다. 백테 루프는 봉당 1회 진입이라 자연히 충족.
+4. **재진입 모델 = TIME_EXIT 한정 same-bar 재진입** (codex C2 반영 — draft 에서 축소).
+   - **적용 대상**: `TIME_EXIT`(= 라이브 `DAILY_RESET`) **만**. 청산가가 `bar.open` 이라 look-ahead 없이 확정된다.
+   - **제외 대상**: `STOP_LOSS`/`TAKE_PROFIT`/`TRAILING_STOP`. `IntrabarExitModel` 이 내는 값은 실제 체결가가 아니라
+     **게이트 임계가**이고, 청산 시각·재진입 시각을 D1 봉에서 알 수 없다. 봉의 high/low 를 본 뒤 같은 봉에 재진입하면
+     미래 정보 사용이다. 이들은 기존 규약(다음 봉 신호 → 그 다음 봉 시가)을 유지한다.
+   - **신호 window**: 기존 규약 그대로 **직전 봉 종가까지**. 라이브도 09:00 시점엔 당일 봉이 미형성이라 동일.
+   - **체결가**: `bar.open` (= 청산가). 라이브가 ~10초 뒤 재매수하므로 근사 타당.
 
-5. **`reentryCooldownBars` 기본값 = 0 (라이브 정합).**
-   `BacktestConfig` 의 명시 계약이 "디폴트는 라이브와 정합"(`BacktestEngineTest.config defaults match live trading defaults`)이므로
-   라이브가 0공백인 이상 기본값도 0이어야 한다.
-   ⚠️ **이건 `/backtest` public API 의 동작 변경**이다 — 기존 백테 결과가 달라진다. README·wiki 동기화 필수.
+5. **재진입한 포지션은 같은 봉의 청산 게이트를 받는다** (내 추가 발견 — codex 미지적).
+   통상 진입 규약은 "체결 봉 `X`.open → 봉 `X` 에서 게이트 평가"다(`processEntry(fillIndex=i+1)` → 다음 반복 `holdDays=0` → intrabar 평가).
+   same-bar 재진입에서 `buyIndex=D` 로만 두고 넘어가면 다음 반복이 `holdDays=1` → 곧장 `atHoldLimit` TIME_EXIT 이라
+   **봉 D 의 intrabar 게이트가 새 포지션에 한 번도 평가되지 않는다** → 리셋 churn 포지션만 손절·익절 보호가 사라져 편향.
+   라이브는 09:00 재매수 후 당일 장중 청산이 가능하므로(`boughtToday` 는 이미 해제됨) 봉 D 게이트를 평가해야 맞다.
+   look-ahead 없음: 진입 신호(`D-1` 종가)와 체결가(`D`.open) 모두 봉 D 의 high/low 사용 **전에** 확정된다.
+   - **봉당 재진입 ≤ 1회** 로 제한(라이브 `boughtToday` 등가). 무한 churn 방지 가드.
+   - 재진입 포지션이 봉 D 에서 청산되면 그 뒤는 기존 규약(다음 봉 신호)으로 복귀 — Decision 4 와 일관.
+
+6. **`reentryMode` 기본값 = `LEGACY_NEXT_BAR` (기존 동작 보존)** — draft Decision 5(기본 0) **철회**.
+   철회 근거(코드 실측):
+   - `M1ReplayBiasTest.kt:66` 가 `BacktestConfig()` 를 쓴다 → 기본값을 바꾸면 D1 trade set 이 달라져
+     **편향 측정의 모집단 자체가 바뀐다**. 그 테스트의 "진입 변수 격리" 전제가 깨진다.
+   - `ParameterSweepTest.kt:70` baseline, `KneeStrategyComparisonTest.kt:45` `liveDefault` 도 기본값 상속.
+   - `/backtest` REST 에서 파라미터 생략한 기존 호출자의 결과가 전부 달라진다(public 계약 변경).
+   - 이번 범위는 *측정*이지 public API 의미 변경이 아니다(Decision 2).
+   대신 **침묵하지 않게** 한다: `BacktestEngineTest.config defaults match live trading defaults` 에
+   `reentryMode` 명시 assert + 이유 주석을 추가한다(`useMarketFilter` 선례와 동일 형식) — "라이브와 다르게 두는 중"임을 CI 가 들고 있게.
+   기본값 전환은 라이브 변경을 결정하는 후속 worktree 에서 함께 판단한다.
+
+7. **세 가지를 분리해 선언한다** (codex M3 — 순환논증 회피).
+   - *구현 검증*: 백테가 라이브 순서를 재현하는가 (A1~A3)
+   - *효과 측정*: 팔 간 paired 차이는 얼마인가 (A4)
+   - *판정 기준*: 어떤 효과크기·불확실성에서 정책 변경을 고려하는가 (A5, 사전 고정)
+   "라이브가 0공백이므로 그게 baseline" 은 **재현성 결정**이지 0공백이 옳다는 근거가 아니다.
+
+8. **결론 대상은 DAILY_RESET churn 으로 한정** (codex M5).
+   라이브는 `boughtToday` 가 09:00 에 풀리므로 SL/TP/트레일링 청산 후에도 같은 거래일 재진입이 가능하다.
+   그러나 Decision 4 대로 D1 백테는 그 경로를 모델링하지 않는다 → 해당 표본은 **"측정하지 않음"으로 명시 제외**하고
+   결론에 넣지 않는다. 관찰만 하고 판단은 별도 이슈(`# Deferred`).
 
 # Key Files
 
-- `bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt` — `simulateTrades` 루프가 변경 본체. `BacktestConfig` 에 필드 추가.
-- `bot/src/main/kotlin/com/trading/bot/engine/IntrabarExitModel.kt` — 청산 판정. **변경 없음** 예상(청산가를 재진입가로 재사용만).
-- `bot/src/main/kotlin/com/trading/bot/api/StrategyController.kt` — `/backtest` 요청 DTO·검증. 새 파라미터 노출 여부 결정 필요.
-- `bot/src/test/kotlin/com/trading/bot/engine/BacktestFixtures.kt` — 실데이터 fixture 로더(BEAR 8마켓 / BULL 4마켓, paired, in/out-of-sample).
-- `bot/src/test/kotlin/com/trading/bot/engine/ParameterSweepTest.kt` — 수동 스윕 하네스 패턴(`@EnabledIfEnvironmentVariable`, `build/reports/*.md`).
-- `bot/src/test/kotlin/com/trading/bot/engine/M1ReplayBiasTest.kt` — 통계 보고 패턴(N·±CI 병기, 표본 미달 시 유보).
-- `bot/src/main/kotlin/com/trading/bot/engine/DailyResetManager.kt` — 라이브 리셋 판정(참조 전용, 무변경).
-- `wiki/pages/concept/backtest-engine.md` — 재진입 갭 서술 보정 대상.
-- `wiki/pages/concept/exit-gates.md` — 라이브/백테 순서 차이 표에 재진입 갭 추가 대상.
+변경 대상:
+- `bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt` — `simulateTrades` 루프 + `BacktestConfig.reentryMode`/`reentryCooldownBars`.
+- `bot/src/test/kotlin/com/trading/bot/engine/BacktestEngineTest.kt` — A1/A2/A3 회귀 + parity assert 추가(Decision 6).
+- (신규) `bot/src/test/kotlin/com/trading/bot/engine/DailyResetCounterfactualTest.kt` — A4 측정 하네스(`@EnabledIfEnvironmentVariable`).
+
+영향 받되 변경 최소(기본값 보존 덕분 — Decision 6):
+- `bot/src/main/kotlin/com/trading/bot/api/StrategyController.kt` — 새 파라미터 노출 여부 결정 필요. **미노출이 기본**(측정은 테스트 하네스로 충분).
+- `bot/src/main/kotlin/com/trading/bot/engine/M1ReplayEngine.kt` — config 공유하나 재진입 미모델링. 기본값 보존이므로 모집단 불변(A3 로 확인).
+- `bot/src/test/kotlin/com/trading/bot/engine/{M1ReplayBiasTest,ParameterSweepTest,KneeStrategyComparisonTest,KneeStrategyBacktestTest}.kt` — 기본값 보존 확인용(무변경 기대).
+
+참조 전용(무변경):
+- `bot/src/main/kotlin/com/trading/bot/engine/{IntrabarExitModel,DailyResetManager,TradingEngine}.kt`
+- `bot/src/test/kotlin/com/trading/bot/engine/BacktestFixtures.kt` — BEAR 8마켓 / BULL 4마켓, paired, in/out-of-sample.
+
+문서 동기화 대상:
+- `wiki/pages/concept/backtest-engine.md` — 재진입 갭 서술 보정(현 서술은 `boughtToday` 만 언급, 2봉 공백 누락).
+- `wiki/pages/concept/exit-gates.md` — 라이브/백테 차이 표에 재진입 갭 추가.
+- `bot/src/test/resources/backtest/README.md` — 해석 한계에 재진입 모델 항목 추가 여부 판단.
+- `M1ReplayBiasTest.kt:13-19` docstring — "진입 변수 격리" 서술이 여전히 정확한지 확인.
 
 # Acceptance
 
+**구현 검증 (Decision 7)**
+
 | # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
 |---|---|---|---|
-| A1 | 백테가 라이브 0공백 재진입을 재현한다 | 신규 단위테스트: TIME_EXIT 난 봉에서 신호 true 면 같은 봉 `open` 에 재진입 | 재진입 trade 의 `buyIndex` == 청산 trade 의 `sellIndex`, `buyPrice` == 청산가 |
-| A2 | 쿨다운 N 이 실제로 N봉 막는다 | `reentryCooldownBars=1,2` 회귀테스트 | 재진입 `buyIndex` >= 청산 `sellIndex` + N |
-| A3 | 기존 백테 동작 회귀 없음 | `./gradlew :bot:test` 전체 | 기존 테스트 전부 green (기본값 변경으로 깨지는 것은 의도된 갱신임을 명시) |
-| A4 | 반사실이 실데이터로 측정된다 | 신규 스윕 테스트(`RUN_*=true` 수동) 를 BEAR/BULL fixture 에 실행 | `build/reports/` 에 쿨다운 0/1/2/3 × maxHoldDays 1/2/3/999 표 생성, 마켓별·국면별 분해 포함 |
-| A5 | 결론이 표본 한계와 함께 보고된다 | 리포트 본문 | 마켓 N·국면별 부호 일치 여부 명시, 상관 0.49(실효 표본 ~2) 한계 재확인, 단정 금지 |
-| A6 | 문서 동기화 | `wiki/verify.sh`·`check_links.py`·`smoke.sh` + README 확인 | wiki 3종 통과, `backtest-engine`·`exit-gates` 갱신, `/backtest` 계약 변경 시 README 반영 |
+| A1 | TIME_EXIT 후 0공백 재진입이 라이브를 재현한다 | 단위테스트: `reentryMode=LIVE_SAME_BAR`, 신호 true 인 합성 캔들 | 재진입 trade 의 `buyIndex` == 직전 trade 의 `sellIndex`, `buyPrice` == 그 `sellPrice` == `bar.open` |
+| A1b | 재진입 포지션이 같은 봉 게이트를 받는다 (Decision 5) | 봉 D 에 손절 도달 low 를 심은 합성 캔들 | 재진입 포지션이 봉 D 에서 `STOP_LOSS` 로 청산됨 |
+| A1c | 봉당 재진입 ≤ 1회 | 위 시나리오에서 봉 D 재청산 후 | 봉 D 에 세 번째 진입 없음 |
+| A2 | 쿨다운 N 이 정확히 N봉 막는다 | `reentryCooldownBars=1,2,3` 회귀 | 재진입 `buyIndex` == 청산 `sellIndex` + N (초과·미달 모두 실패) |
+| A2b | 가격게이트 청산엔 same-bar 재진입이 없다 (Decision 4) | SL/TP/트레일링 청산 시나리오 | 재진입 `buyIndex` >= 청산 `sellIndex` + 2 (기존 규약) |
+| A3a | 기존 테스트 suite 통과 | `:bot:test` 전체 | green |
+| A3b | **legacy 결과 보존** — 기본값 변경 없음 확인 | 변경 전/후 `BacktestConfig()` 로 동일 fixture 실행, trade 리스트 비교 | trade 수·buyIndex·sellIndex·reason·pnl 전부 동일 |
+| A3c | parity 테스트가 `reentryMode` 를 들고 있다 | `config defaults match live trading defaults` | `reentryMode` 명시 assert + 이유 주석 존재 |
+| A3d | 말미 경계 안전 | 마지막 봉 재진입 시나리오 | `fillIndex` 범위 초과 없음, `closeOpenPosition` 정상 |
+| A3e | 상태 초기화 (codex m1) | 재진입 후 상태 검사 | `peakPrice`·`buyIndex`·수수료·balance 가 새 포지션 기준으로 초기화, trade 중복기록 없음 |
+
+**효과 측정 (Decision 7)**
+
+| # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
+|---|---|---|---|
+| A4 | 세 팔이 실데이터로 측정된다 | 신규 측정 테스트를 BEAR 8 / BULL 4 fixture 에 실행 | `build/reports/` 에 팔 × 마켓 × 국면 표. `maxHoldDays=1` 고정. 마켓별 원값 포함(집계만 내지 않는다) |
+| A4b | maxHoldDays 민감도는 분리 보고 | 별도 표 | primary 결론과 섞지 않음 |
+
+**판정 기준 (사전 고정 — codex M4, 사후 체리피킹 방지)**
+
+| # | 항목 | 사전 고정값 |
+|---|---|---|
+| A5a | primary estimand | 마켓별 `live-reproduction` − `hold-through` 총수익률(%p) 차이 |
+| A5b | 집계 단위 | **마켓 균등가중** (trade 가중 금지 — 회전율 높은 팔에 가중이 쏠린다) |
+| A5c | 불확실성 | 마켓 across paired 95% CI 병기. **실효 독립표본 ~2**(fixture README: 상관 평균 0.49, BTC/ETH 0.90) 이므로 CI 는 참고값 |
+| A5d | 방향성 인정 조건 | 두 국면 **모두** 같은 부호 **AND** BEAR ≥6/8 · BULL ≥3/4 마켓에서 같은 부호 |
+| A5e | 유보 조건 | A5d 미충족 또는 CI 가 0 포함 → **"판정 유보"** 로 보고. 그리드 최선 조합을 결론으로 뽑지 않는다 |
+| A5f | 결론 강도 상한 | 실효표본 ~2 이므로 **설명적 분석**까지. "리셋을 없애야 한다" 류 처방 금지 |
+
+**문서 동기화**
+
+| # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
+|---|---|---|---|
+| A6 | wiki·README 동기화 | `check_links.py` / `verify.sh` / `smoke.sh` | 3종 통과 + `backtest-engine`·`exit-gates` 갱신 + fixture README·`M1ReplayBiasTest` docstring 판정 |
 
 # Blockers
 
@@ -73,16 +149,31 @@ plan-reviewer + architecture-reviewer 검토 → 지적 반영 → TDD Red(재�
 
 # Deferred
 
-- `wiki/pages/concept/backtest-engine.md` 의 "라이브는 boughtToday 제약을 받지만 백테는 받지 않는다" 서술이
-  불완전하다 — 일봉 기준으로는 백테가 **더** restrictive(2봉 공백 강제)다. (경미·문서) → A6 에서 함께 교정.
-- 라이브는 TIME_EXIT 뿐 아니라 STOP_LOSS/TAKE_PROFIT/트레일링 청산 후에도 **같은 거래일 재진입**이 가능하다
-  (`boughtToday` 는 09:00 에 이미 해제됨). #128 은 DAILY_RESET 만 다루지만 동일 churn 이 다른 사유에도
-  존재할 수 있다. (중간·전략) → 이번 스윕 결과에 사유별 분해를 넣어 관찰만 하고, 판단은 별도 이슈.
+- 라이브는 TIME_EXIT 뿐 아니라 SL/TP/트레일링 청산 후에도 같은 거래일 재진입이 가능하다(`boughtToday` 는 09:00 해제).
+  D1 백테로는 모델링 불가(Decision 4·8) → 이번 결론에서 명시 제외. 동일 churn 이 다른 사유에도 있는지는 별도 이슈. (중간·전략)
+- `wiki/pages/concept/backtest-engine.md` 의 "라이브는 boughtToday 제약을 받지만 백테는 받지 않는다" 는 불완전 —
+  일봉 기준으로는 백테가 **더** restrictive(2봉 공백). (경미·문서) → A6 에서 교정.
 
 # Review Disposition
 
-(리뷰 후 기록)
+codex plan 리뷰 (2026-08-24):
+- C1 스윕이 반사실에 답 못함 → **fix** (Decision 3, 대조군 3팔)
+- C2 same-bar 재진입 가격모델이 모든 사유에 적용되면 look-ahead → **fix** (Decision 4, TIME_EXIT 한정)
+- M1 maxHoldDays × cooldown 교락 → **fix** (Decision 3, maxHoldDays 고정)
+- M2 기본값 0 의 파급·rollback 부족 → **fix** (Decision 6, legacy 기본값으로 철회)
+- M3 순환논증 / estimand 미정의 → **fix** (Decision 7)
+- M4 A5 가 표본한계 대비 약함 → **fix** (A5a~A5f 사전 고정)
+- M5 Deferred 2번째가 측정 의미를 결정 → **fix** (Decision 8, 명시 제외)
+- m1 A1/A2 상태전이 검증 부족 → **fix** (A1b·A1c·A3d·A3e)
+- m2 A3 "회귀 없음" 이 기본값 변경과 모순 → **fix** (A3a~A3e 분리. 단 Decision 6 으로 기본값 불변이 되어 모순 자체가 해소)
+- m3 Key Files 누락 → **fix** (Key Files 3분류로 재작성)
+- m4 문서 동기화 대상 확인 필요 → **fix** (A6 에 fixture README·docstring 추가)
+- plan untracked 지적 → **fix** (e7e78ae 커밋)
+
+메인 추가 발견:
+- 재진입 포지션의 진입 봉 게이트 누락 편향 → **fix** (Decision 5, A1b)
 
 # Workflow Findings
 
-(없음)
+- Claude subagent 2개(plan-reviewer·architecture-reviewer) 동시 실행이 세션 한도로 전멸(2026-08-24).
+  memory `project_subagent_quota_deaths` 의 3회 실측 패턴 재현 — 동시 2개도 위험. 이후 1개씩 순차 실행으로 전환.
