@@ -38,10 +38,13 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
 
 # Next
 
-code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 × BEAR 8 / BULL 4 fixture, `maxHoldDays=1` 고정,
-`build/reports/` 표 생성) → A5 사전 판정기준으로 결론 → A6 문서 동기화.
+1. code-review 지적 처분 → simplify 체크
+2. `conditional-reset` 팔 구현(Decision 3·G2) + 회귀 테스트
+3. A3b legacy 골든 검증 — base 커밋(`1e78a18`)에서 `BacktestConfig()` × fixture 12 의 trade 리스트를 덤프해 현재와 대조
+4. **A4 측정 하네스** 작성·실행 → A4c 로 `wiki/pages/query/` 영속화
+5. A5 사전 판정기준으로 결론 → A6 문서 동기화
 
-구현(A1~A3)은 끝났다. 남은 건 측정·판정·문서다.
+구현(A1~A3)은 끝났다(726 tests / 0 failures, `BacktestReentryTest` 7/7 — 2026-08-25 재검증).
 
 # Decisions
 
@@ -61,6 +64,7 @@ code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 �
    | `hold-through` | 일일리셋 청산 없음. 보유 지속, 나머지 게이트만 작동 | **없음** — `maxHoldDays=999` 로 기존 엔진 그대로 |
    | `live-reproduction` | 리셋 청산 + 0공백 재진입 (= 현 라이브) | **신규** (Decision 4) |
    | `cooldown-N` | 리셋 청산 + N봉 재진입 차단 (N=1,2,3) | 신규 (같은 기계장치) |
+   | `conditional-reset` | **수익 중일 때만** 리셋 청산, 손실이면 보유 유지 | 신규 (G2 지적 — #128 2안) |
    `maxHoldDays` 는 primary 비교에서 **라이브 값 1 로 고정**. maxHoldDays 스윕은 별도 민감도 분석으로 분리한다(교락 회피).
 
 4. **재진입 모델 = TIME_EXIT 한정 same-bar 재진입** (codex C2 반영 — draft 에서 축소).
@@ -117,6 +121,39 @@ code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 �
    그러나 Decision 4 대로 D1 백테는 그 경로를 모델링하지 않는다 → 해당 표본은 **"측정하지 않음"으로 명시 제외**하고
    결론에 넣지 않는다. 관찰만 하고 판단은 별도 이슈(`# Deferred`).
 
+9. **측정 전략을 고정한다 — primary `volatility_breakout`, secondary `combined`** (G1 blocker 반영 2026-08-25).
+   근거: 운영 배포는 `TRADING_STRATEGY=volatility_breakout`(`deploy/vultr/.env` 실측)이고 `combined` 는
+   코드 기본값(`TradingProperties.strategy`)일 뿐이다. 기존 하네스 두 개가 `combined` 하드코딩이라
+   (`ParameterSweepTest.kt:70`, `M1ReplayBiasTest.kt:68`) 선례를 복사하면 **라이브가 돌리지 않는 전략으로
+   "live-reproduction" 을 측정**하게 된다.
+   **둘 다 사전 등록해 둘 다 보고한다** — 전략 선택은 A5 가 막지 못하는 미등록 자유도이므로, 사후 선택을
+   원천 차단하려면 사전 고정 + 전량 보고가 유일한 방어다.
+   ⚠️ **`volatility_breakout` 의 라이브 divergence (✅공식 확인, R3 의 귀속 교정)**:
+   `Indicators.calculateTargetPrice` = `candles[0].open + (candles[1].high − candles[1].low) × k`,
+   매수 조건 `currentPrice > target`. 라이브 09:00:10 은 store 가 당일 봉을 포함해(R2) `candles[0].open` 이
+   당일 시가이므로 `currentPrice ≈ 시가` 에서 `currentPrice > 시가 + k×전일레인지` 는 **k>0 이면 불가능**.
+   즉 **라이브는 09:00 에 재진입하지 못하고**, 장중 target 돌파 시점에 더 비싸게 산다(#128 의 07:32·08:43·14:27,
+   +2.88~3.09% 가 이 식의 귀결). 백테는 봉 D-1 돌파를 신호로 봉 D 시가에 재진입하므로 **트리거 시점·가격·빈도가
+   모두 다르다**. 방향이 단순 부호로 정해지지 않으므로 "알려진 미측정 성분"으로 리포트에 명시한다.
+   (R3 이 이 현상을 `MeanReversion` 거래량 게이트로 귀속한 것은 오귀속 — MeanReversion 은 라이브 전략이 아니다.)
+
+10. **primary estimand = 이벤트 단위 (%p / 리셋 1건)** — A5a 의 "총수익률 차이" 에서 변경 (G5 반영).
+    근거: 총수익률은 경로의존 복리(`state.balance *= (1 + netPnl/100)`)라 Decision 8 이 요구하는
+    "특정 표본 제외" 가 **기계적으로 불가능**하다(그 경로가 만든 잔고가 이후 모든 거래 사이즈를 바꾼다).
+    이벤트 단위는 제외가 정의되고, #128 의 "−13.3%p / 7건 ≈ 1.9%p/건" 과 **직접 대조**된다.
+    총수익률·거래수는 보조 지표로 함께 싣되 결론의 근거로 쓰지 않는다.
+
+11. **A4 지표·구간 규칙** (G3 반영).
+    - **팔 간 비교 허용 지표**: 이벤트당 %p, 총수익률, 거래수, 누적 수수료. **끝.**
+    - **팔 간 비교 금지**: `maxDrawdownPct`(청산 시점에만 갱신 — `hold-through` 의 미실현 낙폭이 안 보인다),
+      `sharpeRatio`(거래당·비연율화 — 보유기간이 다른 팔끼리 단위가 다르다). 팔 **내부** 참고로만 표기.
+    - **END trade 는 전 팔에서 제외 후 재계산**하고 개수·기여를 별도 컬럼으로 병기.
+      `hold-through` 는 보유가 길어 END 가 한쪽 팔에만 계통적으로 붙는다(선례: `M1ReplayBiasTest.kt:77`).
+    - **구간은 200봉 전체**(in/out 분할 없음). 파라미터 적합이 없어 분할 이유가 없고, 명시하지 않으면
+      재현자마다 다른 표가 나오는 미등록 자유도가 된다.
+    - **누적 수수료를 팔별로 분리 보고**한다 — churn 팔의 차이 상당 부분이 기계적 수수료 성분이라
+      분해하지 않으면 "리셋 비용 X%p" 가 해석 불가능해진다.
+
 # Key Files
 
 변경 대상:
@@ -156,23 +193,27 @@ code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 �
 | A3d | 말미 경계 안전 | 마지막 봉 재진입 시나리오 | `fillIndex` 범위 초과 없음, `closeOpenPosition` 정상 |
 | A3e | 상태 초기화 (codex m1) | 재진입 후 상태 검사 | `peakPrice`·`buyIndex`·수수료·balance 가 새 포지션 기준으로 초기화, trade 중복기록 없음 |
 
-**효과 측정 (Decision 7)**
+**효과 측정 (Decision 7·10·11)**
 
 | # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
 |---|---|---|---|
-| A4 | 세 팔이 실데이터로 측정된다 | 신규 측정 테스트를 BEAR 8 / BULL 4 fixture 에 실행 | `build/reports/` 에 팔 × 마켓 × 국면 표. `maxHoldDays=1` 고정. 마켓별 원값 포함(집계만 내지 않는다) |
-| A4b | maxHoldDays 민감도는 분리 보고 | 별도 표 | primary 결론과 섞지 않음 |
+| A4 | 네 팔이 실데이터로 측정된다 | 측정 하네스를 BEAR 8 / BULL 4 fixture × {`volatility_breakout`, `combined`} 에 실행 | 팔 × 마켓 × 국면 × 전략 표. `maxHoldDays=1` 고정, 200봉 전체. **마켓별 원값 포함**(집계만 내지 않는다) |
+| A4b | 지표 규칙 준수 (Decision 11) | 리포트 컬럼 | 비교지표는 이벤트당 %p·총수익률·거래수·수수료만. MDD/Sharpe 는 팔 내부 표기. END 제외 재계산 + 개수 병기 |
+| A4c | 결과가 gitignored 밖에 영속된다 (G7) | `build/` 는 `.gitignore` 대상 | 표 + 한계 + fixture 수집일 + 전략명 + 커밋 sha 를 `wiki/pages/query/` 페이지로 커밋 |
+| A4d | maxHoldDays 민감도는 분리 보고 | 별도 표 | primary 결론과 섞지 않음 |
 
-**판정 기준 (사전 고정 — codex M4, 사후 체리피킹 방지)**
+**판정 기준 (사전 고정 — 사후 체리피킹 방지)**
 
 | # | 항목 | 사전 고정값 |
 |---|---|---|
-| A5a | primary estimand | 마켓별 `live-reproduction` − `hold-through` 총수익률(%p) 차이 |
+| A5a | primary estimand | 마켓별 **리셋 이벤트 1건당 %p** 차이: `live-reproduction` − `hold-through` (Decision 10) |
 | A5b | 집계 단위 | **마켓 균등가중** (trade 가중 금지 — 회전율 높은 팔에 가중이 쏠린다) |
-| A5c | 불확실성 | 마켓 across paired 95% CI 병기. **실효 독립표본 ~2**(fixture README: 상관 평균 0.49, BTC/ETH 0.90) 이므로 CI 는 참고값 |
-| A5d | 방향성 인정 조건 | 두 국면 **모두** 같은 부호 **AND** BEAR ≥6/8 · BULL ≥3/4 마켓에서 같은 부호 |
-| A5e | 유보 조건 | A5d 미충족 또는 CI 가 0 포함 → **"판정 유보"** 로 보고. 그리드 최선 조합을 결론으로 뽑지 않는다 |
-| A5f | 결론 강도 상한 | 실효표본 ~2 이므로 **설명적 분석**까지. "리셋을 없애야 한다" 류 처방 금지 |
+| A5c | 불확실성 | 마켓 across 95% CI **병기**. 실효 독립표본 ~2(상관 평균 0.49, BTC/ETH 0.90)이므로 **참고값이며 게이트가 아니다** |
+| A5d | 방향성 인정 조건 | **국면 비교는 `PAIRED_MARKETS` 4종(XRP/BTC/ETH/DOGE)으로만** — BEAR 8 vs BULL 4 는 마켓 구성 교락. 두 국면 모두 같은 부호면 "방향성 있음" |
+| A5e | **국면별 부호가 갈리면** | 자동 유보 **아님** → "**국면 의존 효과**" 로 결론하고 국면 필터 검토를 후속 이슈로 넘긴다. (A5c 의 CI 는 게이트가 아니므로 유보 사유가 될 수 없다 — 옛 A5e 의 A5c 모순 해소) |
+| A5f | 유보 조건 | 리셋 이벤트 수가 마켓당 3건 미만이면 그 마켓 제외, 남은 마켓이 국면당 2개 미만이면 **판정 유보** |
+| A5g | 결론 강도 상한 | 실효표본 ~2 → **설명적 분석**까지. "리셋을 없애야 한다" 류 처방 금지. 그리드 최선 조합을 결론으로 뽑지 않는다 |
+| A5h | 미측정 성분 명시 | 재진입 슬리피지(R3), 라이브 당일 부분봉(R2), `volatility_breakout` 트리거 divergence(Decision 9), fixture 밖 티커(SOL/AVAX/ADA) — 리포트에 **반드시** 병기 |
 
 **문서 동기화**
 
@@ -182,7 +223,7 @@ code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 �
 
 # Blockers
 
-없음.
+없음. (G1 blocker 는 Decision 9 로 처분 완료 — 측정 전략 고정)
 
 # Deferred
 
@@ -190,6 +231,12 @@ code-review 지적 처분 → simplify 체크 → **A4 효과 측정**(세 팔 �
   D1 백테로는 모델링 불가(Decision 4·8) → 이번 결론에서 명시 제외. 동일 churn 이 다른 사유에도 있는지는 별도 이슈. (중간·전략)
 - `wiki/pages/concept/backtest-engine.md` 의 "라이브는 boughtToday 제약을 받지만 백테는 받지 않는다" 는 불완전 —
   일봉 기준으로는 백테가 **더** restrictive(2봉 공백). (경미·문서) → A6 에서 교정.
+
+- `volatility_breakout` 의 라이브 재진입은 장중 target 돌파 시점이라, 재려면 **intrabar 진입 모델**(봉 D high 가
+  target 을 넘으면 target 가에 체결)이 필요하다. `IntrabarExitModel` 과 같은 근사 철학이라 구현은 가능하나
+  통상 진입 규약까지 바꾸는 별개 작업이다. (중간·측정정확도)
+- `TRADING_MAX_HOLD_DAYS` 를 운영에서 조정하는 **코드 0줄 실거래 실험**이 슬리피지 성분을 얻는 유일하게 싼 방법
+  (배선 완료: `deploy/vultr/.env`·`deploy.sh:167`). Decision 2 종점 밖 — 별도 판단. (중간·운영)
 
 # Review Disposition
 
@@ -244,6 +291,28 @@ Claude plan-reviewer + codex medium (2026-08-25, 세션 한도 후 재실행분 
 - 참고: 리뷰어가 `TRADING_MAX_HOLD_DAYS`(`deploy/vultr/.env:66`, `deploy.sh:167` 배선 완료)를
   **코드 0줄 실거래 실험** 경로로 제시했다. Decision 2(종점=측정)와 별개 선택지라 `# Deferred` 에 남긴다.
   R3 을 감안하면 이 경로가 슬리피지 성분을 얻는 **유일하게 싼 방법**이다.
+
+Claude plan-reviewer 2차 — gap 탐색 (2026-08-25, 구현 후 도착):
+- **G1. 측정 전략이 plan 에 미고정, 운영은 `volatility_breakout`** (blocker) → **fix** (Decision 9).
+  ✅ 내가 직접 확인: `deploy/vultr/.env` 의 `TRADING_STRATEGY=volatility_breakout`,
+  `Indicators.calculateTargetPrice` = `candles[0].open + k×전일레인지` → 09:00 즉시 재매수 수학적 불가.
+  리뷰의 R3 오귀속(`MeanReversion` 거래량 게이트) 교정 포함.
+- **G2. #128 2안(리셋 대상 한정)에 대응하는 팔이 없다** (major) → **fix** (Decision 3 `conditional-reset` 추가).
+- **G3. `hold-through` 의 END 비대칭 + MDD/Sharpe 팔 간 비교 불가** (major) → **fix** (Decision 11).
+- **G4. A5c↔A5e 모순(CI 가 참고값이자 게이트), A5d 가 국면의존 결과를 자동 유보로 보냄, BEAR8 vs BULL4 마켓 교락**
+  (major) → **fix** (A5c 게이트 아님 명시 / A5e 국면의존 결론 / A5d `PAIRED_MARKETS` 한정).
+- **G5. A5a 복리 총수익률과 Decision 8 의 표본 제외가 기계적으로 양립 불가** (major) → **fix** (Decision 10, 이벤트 단위).
+- **G6. A3b 골든 스냅샷 순서** (major) → **fix** (`# Next` step 3 — base `1e78a18` 대조. 구현이 이미 끝나
+  base 덤프가 필요하지만 `BacktestEngine.run` 은 시각·난수 비의존이라 재현 가능).
+- **G7. 결정 근거가 gitignored `build/` 에만 남는다** (major) → **fix** (A4c, `wiki/pages/query/`).
+- **G8. `# Blockers: 없음` 이 R1~R3 미처분과 불일치** (blocker 주장) → **partial**. R1 은 구현(`25750aa`)에서
+  `subList(max(0, i-MIN_CANDLES), i)` 로 닫혔고 R2·R3 은 처분됐다(Goal 축소). Disposition 문구만 stale 이었다 → 갱신.
+- **G9. 리뷰가 plan 을 잘못 인용한 부분** — "2026-08-25 codex 가 이 개정본에 실행됨" 은 사실이 아니다
+  (codex 는 개정 **전** draft 에 1회). `# Review Disposition` 의 codex 항목은 C1/C2/M1~M5/m1~m4 다. → **false-positive**.
+- minor 수용: A4 구간 200봉 명시(Decision 11), fixture 밖 티커 명시(A5h), 팔별 수수료 분리(Decision 11),
+  `cooldown-2 == legacy` 무료 회귀(→ `# Next` step 3 에 포함).
+- minor 미수용: `reentryMode × reentryCooldownBars` 조합 검증(`init require`) → **defer**. 측정 하네스가
+  유일한 호출자라 무의미 조합이 생길 경로가 없다. public 노출 시 재검토.
 
 # Workflow Findings
 
