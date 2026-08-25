@@ -32,18 +32,29 @@ class BacktestReentryTest {
 
     private fun engineOf(strategy: TradingStrategy) = BacktestEngine(listOf(strategy), tradingProperties)
 
-    private fun flatRisingCandles(count: Int, lowAt: Map<Int, Double> = emptyMap()): List<Candle> =
+    private fun flatRisingCandles(
+        count: Int,
+        lowAt: Map<Int, Double> = emptyMap(),
+        highAt: Map<Int, Double> = emptyMap(),
+    ): List<Candle> =
         (0 until count).map { i ->
             val price = 10_000.0 + i
             Candle(
                 market = "KRW-BTC",
                 tradePrice = price,
                 openingPrice = price,
-                highPrice = price,
+                highPrice = highAt[i] ?: price,
                 lowPrice = lowAt[i] ?: price,
                 candleAccTradeVolume = 100.0,
             )
         }.reversed() // 엔진이 다시 reversed 하므로 최신순으로 넘긴다
+
+    /** 특정 신호가(currentPrice)에서만 false 를 내는 전략 — 재진입 실패 경로를 만든다. */
+    private class BuyExceptAt(private val skipPrice: Double) : TradingStrategy {
+        override val name = "always_buy"
+        override suspend fun shouldBuy(candles: List<Candle>, currentPrice: Double, config: TradingProperties) =
+            currentPrice != skipPrice
+    }
 
     private fun timeExitConfig(mode: ReentryMode, cooldown: Int = 0) = BacktestConfig(
         maxHoldDays = 1,
@@ -163,11 +174,60 @@ class BacktestReentryTest {
         val sl = result!!.trades.firstOrNull { it.reason == "STOP_LOSS" }
         assertNotNull(sl, "손절 trade 가 있어야 한다: ${result.trades.take(4)}")
         val next = result.trades.firstOrNull { it.buyIndex > sl!!.sellIndex }
-        if (next != null) {
-            assertTrue(
-                next.buyIndex >= sl!!.sellIndex + 2,
-                "가격게이트 청산 뒤에는 기존 2봉 공백을 유지해야 한다 (sell=${sl.sellIndex}, buy=${next.buyIndex})",
-            )
-        }
+        assertNotNull(next, "후속 진입이 없으면 이 단언은 공허하다 — 시나리오가 깨진 것: ${result.trades.take(4)}")
+        assertTrue(
+            next!!.buyIndex >= sl!!.sellIndex + 2,
+            "가격게이트 청산 뒤에는 기존 2봉 공백을 유지해야 한다 (sell=${sl.sellIndex}, buy=${next.buyIndex})",
+        )
+    }
+
+    @Test
+    fun `failed re-entry falls back to the normal entry convention`() = runTest {
+        // Critical-1 회귀 — 재진입 신호가 false 일 때 그 봉의 통상 진입 기회(신호=봉 i 종가 → 체결 i+1)까지
+        // 삼키면 안 된다. 삼키면 cooldown 팔이 legacy 보다 계통적으로 덜 거래해, 측정이 정책 차이가 아니라
+        // 구현 아티팩트를 재게 된다. 이 구멍이 열려 있던 이유는 기존 7종이 전부 AlwaysBuy 라
+        // entered=false 분기를 한 번도 타지 않았기 때문이다.
+        // 첫 진입 51 → 한도 청산 52 → 봉 52 재진입 신호는 봉 51 종가(10_051)를 본다. 그것만 막는다.
+        val result = engineOf(BuyExceptAt(skipPrice = 10_051.0))
+            .run("always_buy", flatRisingCandles(120), "KRW-BTC", timeExitConfig(ReentryMode.LIVE_SAME_BAR))
+
+        assertNotNull(result)
+        val afterExit = result!!.trades.filter { it.buyIndex >= 52 }
+        assertTrue(afterExit.isNotEmpty(), "청산 후 재진입이 아예 없다: ${result.trades.take(4)}")
+        assertEquals(
+            53,
+            afterExit.first().buyIndex,
+            "봉 52 재진입 실패 후에는 봉 52 종가 신호로 봉 53 에 체결돼야 한다(54 면 기회를 삼킨 것)",
+        )
+    }
+
+    @Test
+    fun `both entry paths see the same window length`() = runTest {
+        // 재진입 window 는 봉 i 를 제외하되 길이는 통상 경로와 같은 50 이어야 한다.
+        // 49 로 잘리면 RSI(리스트 전체로 Wilder smoothing)·MA50 이 달라져 두 경로의 신호가 갈리는데,
+        // 기존 look-ahead 테스트는 "봉 i 를 보는가"만 보고 좌측 경계를 보지 않아 49 여도 통과했다.
+        val strategy = AlwaysBuy()
+        engineOf(strategy)
+            .run("always_buy", flatRisingCandles(120), "KRW-BTC", timeExitConfig(ReentryMode.LIVE_SAME_BAR))
+
+        assertTrue(strategy.seen.isNotEmpty(), "신호 평가가 한 번도 일어나지 않았다")
+        val sizes = strategy.seen.map { it.size }.toSet()
+        assertEquals(setOf(50), sizes, "두 진입 경로의 window 길이가 달라졌다: $sizes")
+    }
+
+    @Test
+    fun `re-entered position can take profit in the same bar`() = runTest {
+        // A1b 의 TP 짝 — 기존 시나리오는 open=high=close 라 TP 게이트가 구조적으로 발동 불가였고
+        // 손절만 검증됐다. 봉 52 에 +6% 고점을 심어 익절 경로도 같은 봉에서 도는지 본다.
+        val exitBar = 52
+        val candles = flatRisingCandles(120, highAt = mapOf(exitBar to (10_000.0 + exitBar) * 1.06))
+        val result = engineOf(AlwaysBuy())
+            .run("always_buy", candles, "KRW-BTC", timeExitConfig(ReentryMode.LIVE_SAME_BAR))
+
+        assertNotNull(result)
+        assertTrue(
+            result!!.trades.any { it.buyIndex == exitBar && it.sellIndex == exitBar && it.reason == "TAKE_PROFIT" },
+            "봉 $exitBar 재진입 포지션이 같은 봉 익절을 받아야 한다: ${result.trades.take(4)}",
+        )
     }
 }
