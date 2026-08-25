@@ -1,10 +1,10 @@
 ---
-title: DB 스키마 — Flyway V1~V21 와 Upbit·KIS 핵심 테이블
+title: DB 스키마 — Flyway V1~V22 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-08-23
+updated: 2026-08-25
 claim_state: current
-verified: 2026-08-23 — V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
+verified: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
 sources:
   - bot/src/main/resources/db/migration/
   - PROJECT_ANALYSIS.md
@@ -13,7 +13,7 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V21** 이다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V22** 다.
 
 | 버전 | 내용 |
 |---|---|
@@ -30,6 +30,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다([[marketdata-pipeline]]) |
 | V20 | `trading_states.pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림의 판정 기준을 카운터에서 경과시간으로 |
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구(아래) |
+| V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130). 값을 주문 시점 WAL 에 실어 reconcile 경합을 피한다([[kis-order-lifecycle]]) |
 
 > ⚠️ `trade_records.volume` 은 기록 경로에 따라 **총 보유량 스냅샷**(엔진)과 **증분**(수동)이 섞인다.
 > 합산하면 조회·집계가 조용히 틀린다 — [[trade-record-volume-semantics]] 참조.
@@ -50,7 +51,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 
 대상에 `id`·시각 상한을 두지 **않는다**. 마이그레이션이 도는 시점은 새 앱 기동 시이고 그때 `strategy` 가 빈 매도 행은 정의상 전부 구버전 코드가 쓴 것이다. 측정 시점의 max id 로 고정하면 측정과 배포 사이에 체결된 거래가 영구 미보정으로 남는다 — 봇은 그 사이에도 돈다. 다만 **페어링 순서와 tie-break 은 `created_at` 이 아니라 `id`** 로 한다: 두 테이블이 서로 다른 시각을 담고 타입도 다르며(`TIMESTAMP` vs `TIMESTAMPTZ`, 같은 리터럴이 세션 TimeZone 에 따라 다르게 해석된다) 마이크로초 동률도 가능하기 때문이다.
 
-⚠️ **수동 매도는 여전히 귀속을 틀린다** — `executeSellAll`/`executeSellVolume` 이 `strategy="manual"` 을 하드코딩해서, 엔진이 잡은 포지션을 사람이 청산하면 진입 전략이 크레딧을 못 받는다. KIS 경로(`StockOrderReconciler.buildExecution`)도 같은 결함이 남아 있다.
+⚠️ **수동 매도는 여전히 귀속을 틀린다** — `executeSellAll`/`executeSellVolume` 이 `strategy="manual"` 을 하드코딩해서, 엔진이 잡은 포지션을 사람이 청산하면 진입 전략이 크레딧을 못 받는다(Upbit 경로). **KIS 경로는 V22 에서 해소됐다** — 주문 WAL 이 전략·사유를 싣고 `buildExecution` 이 그대로 옮긴다([[kis-order-lifecycle]]). 다만 "수동 매도가 엔진 포지션을 청산했을 때 진입 전략을 크레딧한다"는 문제는 양쪽 모두 미해결이다.
 
 ⚠️ **`trade_executions.fee` 는 V21 부터만 채워진다.** 그 이전 행은 `0`(미기록)이다 — `saveAudit` 이 값을 넘기지 않았다. 소급하지 않은 이유는 수수료율이 `TRADING_ROUND_TRIP_FEE_RATE` 로 환경마다 다를 수 있어 SQL 에 상수로 박으면 기본값이 아닌 환경에서 과거와 현재가 다른 기준이 되기 때문이다. 총 수수료를 집계할 일이 생기면 V21 이전 행을 제외해야 한다. 채워지는 값도 **체결 응답의 실제 수수료가 아니라 설정값 기반 추정**이다(`Order` 가 Upbit `paid_fee` 를 파싱하지 않는다).
 

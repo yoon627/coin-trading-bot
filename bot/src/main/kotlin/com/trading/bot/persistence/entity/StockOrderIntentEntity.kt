@@ -21,6 +21,8 @@ data class StockOrderIntentEntity(
     val orderType: String,          // LIMIT / MARKET
     val qty: Long,
     val price: BigDecimal? = null,
+    val strategy: String? = null,   // 엔진 전략명 또는 "manual" — 체결 기록 귀속의 근거
+    val reason: String? = null,     // 매도 사유(SellReason.name). 매수는 null
     val status: String,
     val odno: String? = null,
     val orgNo: String? = null,

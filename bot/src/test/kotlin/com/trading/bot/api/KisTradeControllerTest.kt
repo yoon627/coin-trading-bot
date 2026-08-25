@@ -18,6 +18,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.reactor.mono
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.http.HttpStatus
@@ -96,6 +97,8 @@ class KisTradeControllerTest {
         assertEquals("12345678", cmd.captured.cano)
         assertEquals("01", cmd.captured.acntPrdtCd)
         assertEquals("005930", cmd.captured.symbol)
+        assertEquals("manual", cmd.captured.strategy)
+        assertNull(cmd.captured.reason) // 매수는 사유 개념이 없다
         coVerify { kisClientFactory.forUser(any()) }
     }
 
@@ -146,5 +149,24 @@ class KisTradeControllerTest {
         assertEquals(1, result.size)
         assertEquals("005930", result[0]["symbol"])
         assertEquals("FILLED", result[0]["status"])
+    }
+
+    /** 수동 매도도 Upbit 경로(TradeExecutionService)와 같은 사유를 남겨야 집계가 갈리지 않는다. */
+    @Test
+    fun `manual sell is attributed to manual strategy with MANUAL reason`() {
+        every { userRepo.findById(userId) } returns Mono.just(userWithKeys())
+        every { kisClientFactory.forUser(any()) } returns mockk<KisClient>()
+        val cmd = slot<SubmitOrderCommand>()
+        coEvery { stockOrderService.submit(any(), capture(cmd)) } returns StockOrderIntentEntity(
+            id = 2, userId = userId, clientRef = "ref", accountNo = "12345678-01", symbol = "005930",
+            side = "SELL", orderType = "LIMIT", qty = 10, status = "DRY_RUN", orderDate = "20260614",
+        )
+
+        authed {
+            controller.placeOrder(KisOrderApiRequest(symbol = "005930", side = "sell", orderType = "limit", qty = 10, price = 70000))
+        }
+
+        assertEquals("manual", cmd.captured.strategy)
+        assertEquals("MANUAL", cmd.captured.reason)
     }
 }
