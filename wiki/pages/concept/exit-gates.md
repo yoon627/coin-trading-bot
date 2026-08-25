@@ -2,7 +2,7 @@
 title: 청산 게이트 — 손절·트레일링·익절·차트·보유상한
 category: concept
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-25
 claim_state: current
 verified: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
@@ -39,6 +39,8 @@ sources:
 의도된 차이다. 라이브는 10초 tick 이라 두 조건이 상호배타적으로 도달하지만, 백테는 봉 하나를 붕괴시켜 판정하므로 "하강 경로에서 라이브가 먼저 닿는 순서"(트레일링선 > 진입가 > 손절선)를 따라야 한다. 라이브 순서를 그대로 옮기면 **트레일링으로 이익 실현했을 거래가 −maxLoss 손절로 오기록**된다.
 
 따라서 백테의 청산 사유(reason) 분포를 라이브와 1:1로 비교하면 안 된다.
+
+**청산 직후의 재진입도 다르다.** 라이브는 09:00 경계에서 `boughtToday` 가 풀려 보유상한 청산 직후 재매수가 가능하지만(공백 ~0), 백테는 기본 설정에서 2봉 공백이 강제된다. `BacktestConfig.reentryMode` 가 이 축을 노브로 노출한다 — 배경과 측정 결과는 [[backtest-engine]]·[[reset-churn-measurement]].
 
 ## 비자명한 지점
 
