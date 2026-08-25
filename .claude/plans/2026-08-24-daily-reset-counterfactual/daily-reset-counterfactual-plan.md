@@ -11,15 +11,27 @@ updated: 2026-08-25
 그 위에서 **세 대조군**(hold-through / live-reproduction / cooldown-N)을 실데이터 fixture 로 측정해
 GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 이번 범위가 아니다.**
 
+**측정 대상은 "신호 지속성의 가치"로 좁힌다** (R3 반영, 사용자 확정 2026-08-25) — 보유상한이 걸렸을 때
+계속 들고 가는 것과, 신호를 재평가해 신호가 유지될 때만 남는 것의 차이. **#128 이 헤드라인으로 든
+재진입 슬리피지(+1.80%)는 이 설계로 측정할 수 없다** — D1 에서 재진입가 = 청산가(`bar.open`)라 가격 갭이
+구조적으로 0이기 때문이다. 리포트에 "측정 못 하는 성분"으로 명시한다.
+
 # Progress
 
 - 2026-08-24 Explore 완료. 라이브 메커니즘·백테 divergence 확정, 범위 2건 사용자 확정, draft plan 작성·커밋(e7e78ae).
 - 2026-08-24 codex plan 리뷰 완료(Critical 2 / Major 5 / Minor 4). Claude plan-reviewer·architecture-reviewer 는 세션 한도로 조기 종료 → 재실행 예정.
 - 2026-08-25 리뷰 반영해 plan 전면 개정 (대조군 3팔·재진입 가격모델 한정·기본값 legacy 전환·사전 판정기준).
+- 2026-08-25 **Claude plan-reviewer(+codex medium) 결과 도착·반영**(`3a515e7`·`730cff1`). P0 3건 중 2건은
+  위 전면 개정이 이미 선반영. 신규 3건 R1(신호 window look-ahead 구현 함정)·R2(라이브 당일 봉 전제 오류,
+  ✅코드 확인)·R3(D1 은 재진입 가격 갭을 구조적으로 0으로만 표현) → `# Review Disposition` 참조.
+- 2026-08-25 **사용자 확정**: R3 을 받아들여 Goal 을 "신호 지속성의 가치"로 좁히고 그대로 진행.
+  구현은 Claude(메인)가 맡는다(§9). baseline `:bot:test`+`:common:test` BUILD SUCCESSFUL — 사전 실패 없음.
 
 # Next
 
-개정 plan 을 plan-reviewer 로 재검토(gap 탐색 집중) → 지적 반영 → TDD Red(A1~A2 재진입 회귀 테스트).
+TDD Red — A1(same-bar 재진입: `holdDays>=1` · TIME_EXIT 한정 · 체결가=`bar.open` · 봉당 ≤1회) 과
+A2(쿨다운 N봉), 그리고 **R1 검증 항목**(재진입 신호가 봉 `D` 를 보지 않는다)을 먼저 쓰고
+의도한 이유로 실패하는지 확인한다. 그 다음 `BacktestEngine.simulateTrades` 구현.
 
 # Decisions
 
@@ -46,7 +58,15 @@ GitHub #128 개선안 결정 근거를 만든다. **라이브 전략 코드는 �
    - **제외 대상**: `STOP_LOSS`/`TAKE_PROFIT`/`TRAILING_STOP`. `IntrabarExitModel` 이 내는 값은 실제 체결가가 아니라
      **게이트 임계가**이고, 청산 시각·재진입 시각을 D1 봉에서 알 수 없다. 봉의 high/low 를 본 뒤 같은 봉에 재진입하면
      미래 정보 사용이다. 이들은 기존 규약(다음 봉 신호 → 그 다음 봉 시가)을 유지한다.
-   - **신호 window**: 기존 규약 그대로 **직전 봉 종가까지**. 라이브도 09:00 시점엔 당일 봉이 미형성이라 동일.
+   - **신호 window**: **직전 봉(`D-1`) 종가까지** — 봉 `D` 를 제외한다.
+     ⚠️ **구현 함정(R1)**: `BacktestEngine.kt:91` 의 기존 `window` 는 `subList(max(0, i-(MIN_CANDLES-1)), i+1)` 로
+     **봉 `i` 를 포함**한다(현행은 체결이 `i+1` 시가라 무해). same-bar 재진입에 그 변수를 그대로 재사용하면
+     봉 D 의 종가·고저를 보고 봉 D 시가에 사는 look-ahead 다 → 재진입 신호는 `subList(..., i)` 로 별도 계산.
+     ⚠️ **라이브와의 divergence(R2, ✅확인)**: "라이브도 09:00 엔 당일 봉 미형성"은 **사실이 아니다**.
+     `loadStoreDailyCandles`(`TradingEngine.kt:370-375`)가 진행 중 당일 봉을 포함해 반환하고
+     `MarketDataStore`(`:51`)가 분봉마다 그 봉을 upsert 한다. 거래량 조건 전략(`MeanReversion.kt:36`
+     `currentVolume >= avgVolume * 0.8`)에서 신호가 갈릴 수 있다. 백테가 부분 봉을 흉내내는 건 look-ahead 라
+     불가 — **알려진 한계로 A5·리포트에 명시**한다.
    - **체결가**: `bar.open` (= 청산가). 라이브가 ~10초 뒤 재매수하므로 근사 타당.
 
 5. **재진입한 포지션은 같은 봉의 청산 게이트를 받는다** (내 추가 발견 — codex 미지적).
