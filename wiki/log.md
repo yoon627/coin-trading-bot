@@ -83,3 +83,9 @@
 `verified` 갱신: deployment-stack 은 live Actions 배포를 **처음으로 실제 관찰**(2026-08-23 03:40:44, Flyway v21)해 "merge 후 과제" 단서를 해소했다.
 
 부수 수정: `index.md` 의 stale 2줄(`persistence-schema` V1~V20 → V1~V21, `deployment-stack` EC2 t4g.medium → Vultr vc2-1c-2gb).
+
+## [2026-08-26] ingest | lesson-rollback-removal 1페이지 추가
+
+V21 백업 테이블을 DROP 하려다 pre-push codex P1 지적으로 폐기한 건에서 나온 교훈. 근거 두 개가 모두 틀렸다 — "백업이 전부 NULL 이라 무가치"(NULL 이 바로 복원 대상 상태다)와 "배포 전 pg_dump 가 남아 있다"(확인하지 않고 썼고, 실제로 없다).
+
+작업 자체의 현재 상태는 이슈 #137 이 소유한다(wiki 는 진행 상태를 담지 않는다). 여기 남긴 것은 재사용 가능한 판단 규칙뿐이다.
