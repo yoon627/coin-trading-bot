@@ -3,6 +3,7 @@ package com.trading.bot.engine
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.strategy.TradingStrategy
+import java.time.LocalDateTime
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -59,6 +60,31 @@ class BacktestConditionalHoldLimitTest {
 
         val timeExits = result!!.trades.filter { it.reason == "TIME_EXIT" }
         assertTrue(timeExits.isNotEmpty(), "수익 구간에서는 상한 청산이 그대로 나야 한다")
+    }
+
+    @Test
+    fun `M1 replay applies the same conditional hold limit as D1`() {
+        // pre-push codex 지적 — 두 측정 경로가 같은 BacktestConfig 를 받는데 조건이 D1 에만 있으면
+        // 같은 설정으로 서로 다른 정책이 돌아 측정이 조용히 어긋난다. 판정식을 IntrabarExitModel 이
+        // 소유하게 바꿨고, 이 테스트가 그 공유를 가둔다.
+        val entryPrice = 10_000.0
+        val entryUtc = LocalDateTime.parse("2026-08-20T00:00:00")
+        val limitInstant = LocalDateTime.parse("2026-08-21T00:00:00")
+        // 한도봉의 시가가 진입가보다 낮다(손실 중) — 가격게이트는 건드리지 않도록 변동 폭을 0으로 둔다.
+        val losingBar = Candle(
+            candleDateTimeUtc = "2026-08-21T00:00:00",
+            openingPrice = 9_900.0, highPrice = 9_900.0, lowPrice = 9_900.0, tradePrice = 9_900.0,
+        )
+        val gatesOff = BacktestConfig(maxHoldDays = 1, maxLossPct = 99.0, takeProfitPct = 99.0, trailingStopPct = 99.0)
+
+        val unconditional = M1ReplayEngine.replayExit(entryPrice, entryUtc, limitInstant, listOf(losingBar), gatesOff)
+        assertEquals("TIME_EXIT", unconditional.exit?.reason, "무조건 상한이면 손실이어도 청산해야 한다")
+
+        val conditional = M1ReplayEngine.replayExit(
+            entryPrice, entryUtc, limitInstant, listOf(losingBar),
+            gatesOff.copy(holdLimitOnlyWhenProfitable = true),
+        )
+        assertEquals(null, conditional.exit, "손실 중이면 M1 replay 도 상한 청산을 억제해야 한다(D1 과 동일)")
     }
 
     private fun alwaysBuy() = object : TradingStrategy {

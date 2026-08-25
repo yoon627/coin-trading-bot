@@ -190,10 +190,15 @@ class BacktestEngine(
     ): String? {
         val holdDays = index - state.buyIndex
         val buyPrice = state.buyPrice
-        // 상한이 걸려도 손실이면 청산하지 않는 정책(#128 2안). atHoldLimit=false 가 되면 이 봉은 일반 보유
-        // 구간처럼 평가된다 — IntrabarExitModel 이 open 으로 눌리지 않고 high/low 를 그대로 본다.
-        val atHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays) &&
-            (!config.holdLimitOnlyWhenProfitable || bar.openingPrice >= buyPrice)
+        // 상한이 걸려도 손실이면 청산하지 않는 정책(#128 2안)은 M1 replay 와 공유해야 하므로
+        // 판정식은 IntrabarExitModel 이 소유한다. 억제되면 이 봉은 일반 보유 구간처럼 평가된다 —
+        // open 으로 눌리지 않고 high/low 를 그대로 본다.
+        val atHoldLimit = IntrabarExitModel.holdLimitFires(
+            bar,
+            buyPrice,
+            holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays),
+            config,
+        )
 
         // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
         // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
