@@ -50,17 +50,25 @@ private const val MANUAL_STRATEGY = "manual"
  * `체결가 / 조회시점가격` 이 `1 - 수수료율(≈0.0005)` 보다 큰지에 달렸고, 체결과 틱 조회 사이의 가격
  * 변동이 그 폭을 양방향으로 넘나든다. 그래서 단방향이 아니라 대칭 비율로 흡수한다.
  *
- * 폭은 **결정적 성분에 여유를 더한 만큼**으로 좁게 잡는다 — 수수료 0.05% + 드리프트 여유. 넓힐수록
- * 진짜 잔여분(이전 포지션에서 넘어온 수량)까지 삼켜 없는 손익을 만들어낸다. 0.3% 초과분을 실제
- * 잔여분으로 보는 기존 계약(`추정 매수라도 기록보다 많이 팔렸으면 손익을 비운다`)이 상한을 정한다.
+ * 폭은 결정적 성분(수수료 0.05%)에 드리프트 여유를 더한 만큼으로 좁게 잡는다. 넓힐수록 진짜 잔여분
+ * (이전 포지션에서 넘어온 수량)까지 삼켜 없는 손익을 만들어낸다.
  *
- * 이 비율 이내의 잔량은 청산으로 본다. 대가로 실제 잔여분이 이 비율 미만이면 청산으로 표시된다.
+ * **상한은 계약에 눌려 있다** — `추정 매수라도 기록보다 많이 팔렸으면 손익을 비운다` 가 초과 0.3% 를
+ * 실제 잔여분으로 본다. 다만 그 0.3% 는 허용 오차가 `1e-8` 이던 시절 임의로 고른 수치이고 "0.29% 는
+ * 추정 오차"라고 주장한 적이 없다. 도메인 사실이 아니라 **현재의 제약**으로 읽어야 한다.
+ *
+ * 이 비율 이내의 잔량은 청산으로 본다. 대가로 실제 잔여분이 이 비율 미만이면 청산으로 표시되고,
+ * 나중에 그 dust 를 실제로 팔면 매수 없는 고아 SELL 행이 목록에 하나 더 생긴다.
  * 근본 해결은 수동 주문도 실제 체결 수량을 기록하는 것이다(이슈 #105).
  */
-private const val ESTIMATE_TOLERANCE_RATIO = 0.002
+private const val ESTIMATE_TOLERANCE_RATIO = 0.0025
 
-/** 엔진이 남긴 기록인가 — 수량이 거래소 실측이라는 뜻이다. 출처 불명(`strategy == null`)은 아니라고 본다. */
-private fun TradeRecordEntity.isEngineBuy(): Boolean =
+/**
+ * 이 행을 **스냅샷으로 분류하는가**. 사실 판정이 아니라 정책이다 — `strategy` 가 비어 있으면 출처를
+ * 알 수 없어 스냅샷이 아닌 쪽(증분·합산)으로 보낸다. 엔진이 `strategy` 없이 기록하는 경로가 실재하면
+ * (`PositionManager.kt` 의 pendingBuyStrategy null 허용) 그 행은 증분으로 잘못 합산된다 — 이슈로 남겼다.
+ */
+private fun TradeRecordEntity.isSnapshotBuy(): Boolean =
     strategy != null && !strategy.equals(MANUAL_STRATEGY, ignoreCase = true)
 
 /**
@@ -85,31 +93,34 @@ private data class BuySide(
     val volume: Double,
     val amount: Double,
     val count: Int,
-    /** 추정 수량(수동 증분)이 섞였다 — 실측 매도와 정확히 상쇄되지 않으므로 잔량 판정을 완화해야 한다. */
-    val hasEstimated: Boolean,
+    /**
+     * 이 중 추정으로 얻은 수량(수동 증분). 오차는 **여기서만** 생긴다 — 스냅샷과 매도는 거래소 실측이다.
+     * 매도 쪽 추정(`executeSellVolume` 이 요청 수량을 적는 문제, #105)은 이 판정 밖이다.
+     */
+    val estimatedVolume: Double,
 ) {
-    /** 잔량 0 판정에 쓸 허용 오차. 추정치가 섞였을 때만 상대항을 쓴다 — 실측뿐이면 완화할 근거가 없다. */
+    /**
+     * 잔량 0 판정에 쓸 허용 오차. **추정이 들어간 수량에만** 비례한다 — 포지션 전체에 비례시키면
+     * 수동 증분이 포지션의 그 비율보다 작을 때 증분이 통째로 삼켜져, 실제로는 보유 중인 포지션이
+     * 청산으로 표시된다(이 수정이 고치려던 #132 증상 그 자체).
+     */
     val closureTolerance: Double
-        get() = if (hasEstimated) maxOf(VOLUME_EPSILON, volume * ESTIMATE_TOLERANCE_RATIO) else VOLUME_EPSILON
+        get() = maxOf(VOLUME_EPSILON, estimatedVolume * ESTIMATE_TOLERANCE_RATIO)
 
     companion object {
         fun of(buys: List<TradeRecordEntity>): BuySide {
-            val lastSnapshot = buys.indexOfLast { it.isEngineBuy() }
-            if (lastSnapshot < 0) {
-                return BuySide(
-                    volume = buys.sumOf { it.volume },
-                    amount = buys.sumOf { it.totalAmount },
-                    count = buys.size,
-                    hasEstimated = buys.isNotEmpty(),
-                )
-            }
-            val snapshot = buys[lastSnapshot]
-            val increments = buys.subList(lastSnapshot + 1, buys.size)
+            // 스냅샷이 없으면(-1) 전부가 증분이고, 있으면 그 뒤만 증분이다.
+            val lastSnapshot = buys.indexOfLast { it.isSnapshotBuy() }
+            val snapshot = buys.getOrNull(lastSnapshot)
+            // 수량 0 인데 금액만 있는 행은 제외한다 — `executeBuy` 가 시세 조회 실패 시 그렇게 남긴다
+            // (`currentPrice=0` → `volume=0`, `totalAmount`=주문 전액). 금액만 더하면 평단이 부풀려진다.
+            val increments = buys.drop(lastSnapshot + 1).filter { it.volume > 0.0 }
+            val incrementVolume = increments.sumOf { it.volume }
             return BuySide(
-                volume = snapshot.volume + increments.sumOf { it.volume },
-                amount = snapshot.totalAmount + increments.sumOf { it.totalAmount },
+                volume = (snapshot?.volume ?: 0.0) + incrementVolume,
+                amount = (snapshot?.totalAmount ?: 0.0) + increments.sumOf { it.totalAmount },
                 count = buys.size,
-                hasEstimated = increments.isNotEmpty(),
+                estimatedVolume = incrementVolume,
             )
         }
     }
@@ -185,13 +196,12 @@ private fun roundTrip(
     val exitAt = if (hasSells) sells.lastOrNull()?.createdAt else null
     // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다(수동 sellAll 은
     // 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
-    // 기록된 매수보다 많이 팔렸으면 그 초과분의 원가를 알 수 없다 — 이전 포지션 잔여분일 수도, 외부
-    // 입금분일 수도 있다. 비율 여유를 두면 그만큼의 정체 모를 수량이 손익에 섞이므로, 흡수하는 것은
-    // 부동소수 반올림뿐이다.
     //
-    // 부작용: 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) `sellAll` 은
-    // 실제 잔고를 판다. 그래서 이전 포지션이 없는 정상 매매도 초과로 잡혀 손익이 비는 경우가 생긴다.
-    // 틀린 손익을 보여주느니 비우는 편을 택했다 — 근본 해결은 #105 에서 실제 체결 수량을 기록하는 것이다.
+    // 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) `sellAll` 은 실제
+    // 잔고를 판다. 그래서 이전 포지션이 없는 정상 매매도 초과로 잡힐 수 있다. 추정분에 비례하는 허용
+    // 오차까지는 그 오차로 보고 흡수하고, 넘으면 원가 미상으로 보아 손익을 비운다 — 틀린 손익을
+    // 보여주느니 비우는 편이다. 근본 해결은 #105 에서 실제 체결 수량을 기록하는 것이다.
+    //
     // 청산 판정과 같은 허용 오차를 쓴다. 기준이 다르면 "청산됐는데 매수 기록을 못 믿는다" 는 모순이 생긴다.
     val oversold = buys.isNotEmpty() && sellVolume > buyVolume + buySide.closureTolerance
     // 매수 기록이 없거나(고아 SELL) 앞이 잘렸거나 초과 매도면 매수 기반 값을 믿을 수 없다.

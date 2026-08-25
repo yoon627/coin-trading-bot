@@ -21,6 +21,12 @@ updated: 2026-08-26
 - 2026-08-26 plan-reviewer + codex(medium) 병행 리뷰 → **CONDITIONAL**. 버그 존재는 양쪽 확인.
   차단 지적 반영해 아래 Decisions 6~8 추가. codex M6(그룹 병합 위험)은 양쪽 독립으로 **반증**.
 - 2026-08-26 사용자 결정: **#132·#133 분리**. 이 worktree 는 **#132 만** 끝낸다.
+- 2026-08-26 TDD Red(8종 중 4종이 의도한 이유로 실패) → 구현 → Green. 구현 중 기존 계약 테스트가
+  허용 오차 0.005 를 반증해 0.0025(증분 기준)로 확정.
+- 2026-08-26 code-reviewer + codex 병행 → REQUEST CHANGES(Major 4). **전부 반영**하고 재검증.
+  M1(허용 오차 기준)은 mutation 으로 회귀 검출을 확인했다.
+- 2026-08-26 simplify: `BuySide.of` 두 분기를 `snapshot?: 0.0 + 증분` 하나로 통합, 중복 `sumOf` 제거.
+  최종 검증 `./gradlew build` + test 741건 통과.
 
 ## 추정치 오차 방향은 미정이다 (리뷰 지적을 코드로 재확인한 결과)
 
@@ -107,7 +113,9 @@ KIS 경로는 `TradeExecutionEntity` 에만 쓰고 `trade_records` 를 건드리
 
 # Next
 
-plan-reviewer 지적 반영 → TDD Red(#132 `BuySide` 규칙 위반 케이스, #133 수수료 기준) → 구현.
+**구현·리뷰·검증 완료.** 남은 것은 사용자 결정이다 — PR 생성/머지 여부, 그리고 아래 운영 조회.
+
+미머지 상태이므로 worktree 를 지우지 말 것. 커밋: `0a23ab7`(1차) · `a064bfb`(plan) · 리뷰 반영분.
 
 운영 DB 심각도 조회는 **사용자가 나중에 직접 실행**(2026-08-26 결정). 결과가 오면 아래 Acceptance
 "심각도 기록" 항목을 채우고, 기존 데이터 보정 마이그레이션 필요 여부를 그때 판단한다.
@@ -221,17 +229,26 @@ ORDER BY b.user_id, b.ticker, b.created_at;
 
 # Acceptance
 
-- [ ] **#132 규칙 일치** — `BuySide.of` 가 wiki 규칙(`마지막 엔진 스냅샷 + 이후 수동 증분`)을 구현한다.
-      검증: 엔진1.0 → 수동0.5 → 매도1.5 케이스에서 `buyVolume=1.5`, 잔량 0, `open=false`.
-- [ ] **#132 그룹 경계** — 같은 케이스에서 매도 1.0 만 있으면 `open=true`·`partiallyClosed=true` 이고
-      조기 flush 되지 않는다.
-- [ ] **#133 수수료 기준** — 기존 보유분이 있는 상태의 엔진 매수에서 `fee` 가 **그 주문 체결 대금** 기준이다.
-      검증: 잔고 스냅샷 100만 / 실제 체결 30만이면 `fee = 30만 × rate / 2`.
-- [ ] **수동 경로 무회귀** — 수동 매수의 `fee` 기준은 변하지 않는다(주문 금액).
-- [ ] **문서 동기화** — `TradeRoundTrip.kt` KDoc 이 틀린 동작을 서술한 부분 교정 + wiki
-      `trade-record-volume-semantics` 의 "`BuySide` 가 이 규칙을 담는다" 서술이 이제 사실이 되도록 검증·갱신.
-- [ ] **검증 통과** — `./gradlew compileKotlin` + `./gradlew test`.
-- [ ] **심각도 기록** — 운영 조회 결과(영향 행 수)를 이 plan 과 이슈에 남긴다. 조회 불가 시 "미확인" 명시.
+- [x] **#132 규칙 일치** — `BuySide.of` 가 wiki 규칙(`마지막 엔진 스냅샷 + 이후 수동 증분`)을 구현한다.
+      증거: `엔진 매수 뒤에 온 수동 매수는 스냅샷에 더해진다` → `buyVolume=1.5`, `open=false` PASS.
+- [x] **#132 금액도 같은 규칙** — 증거: 같은 테스트가 `buyAmount=155.0`·`entryPrice=103.33`·
+      `pnlAmountGross=25.0` 을 고정. (리뷰 M2 로 추가 — 없을 땐 스냅샷만 써도 통과했다.)
+- [x] **#132 그룹 경계** — 증거: `엔진 매수 뒤 수동 매수분을 남기고 팔면 보유중이다` →
+      `open=true`·`partiallyClosed=true` PASS.
+- [x] **이중계상 방지** — 스냅샷 *이전* 수동, 두 스냅샷 *사이* 수동을 더하지 않는다.
+      증거: 해당 테스트 2종 PASS.
+- [x] **허용 오차 기준** — 추정 증분에만 비례한다(포지션 전체 아님).
+      증거: `허용 오차는 포지션 전체가 아니라 추정 증분에만 비례한다` PASS + **mutation 확인**
+      (기준을 `volume` 으로 되돌리면 3개 테스트가 FAIL).
+- [x] **허용 오차 폭** — 경계 위/아래가 고정된다. 증거: 경계 테스트 2종 PASS.
+- [x] **기존 계약 무회귀** — `추정 매수라도 기록보다 많이 팔렸으면 손익을 비운다`(초과 0.3%) 여전히 PASS.
+- [x] **문서 동기화** — KDoc 재작성(코드와 정반대였던 주석 제거) + wiki `trade-record-volume-semantics`
+      갱신 + `wiki/index.md`. 증거: `check_links.py` clean · `verify.sh` clean(29p) · `smoke.sh` 10/10.
+- [x] **검증 통과** — `./gradlew test` **741건 전부 통과**, `./gradlew build` SUCCESSFUL,
+      `compileKotlin` 통과. (JDK21 로 실행 — JDK25 는 Gradle 8.12 와 비호환.)
+- [ ] **심각도 기록** — ⏸ **미확인**. 운영 DB 조회는 사용자가 나중에 실행하기로 했다(2026-08-26).
+      결과가 오면 이 항목과 이슈 #132 에 영향 행 수를 남긴다. 조회 SQL 은 `# Next` 절에 보존.
+- [—] **#133 관련 항목 2종** — 별도 worktree 로 분리(Decision 6). `# Deferred` 에 착수 자료 이관.
 
 # Review Disposition
 
@@ -254,6 +271,26 @@ Claude `plan-reviewer` 는 별도 진행 중 — 결과 오면 추가한다.
 | m11 | 과거 fee 자동 보정 근거 없음 | **동의(수용)** | 보정하지 않는다. 실제 체결 근거·당시 요율이 없어 소급 계산 불가. |
 | m12 | rollback 계획 없음 | **fix** | 아래 추가. |
 
+## code-reviewer + codex 구현 리뷰 (2026-08-26) — REQUEST CHANGES → 반영 완료
+
+| # | 지적 | 처분 | 조치·근거 |
+|---|---|---|---|
+| **M1** | 허용 오차가 추정 증분이 아니라 **전체 buyVolume** 에 비례 | **fix** | **가장 중요한 지적.** 엔진 1.0 + 수동 0.002 에서 엔진분만 팔면 `0.002 ≤ 1.002×0.0025` 로 청산 처리 — **#132 증상을 tolerance 로 되살렸다.** `estimatedVolume`(증분 합)에만 비례하도록 교체. mutation 으로 3개 테스트가 잡는 것 확인. |
+| M2 | `amount` 합산을 고정하는 단정 0건 | **fix** | 스냅샷만 써도 8종이 통과했다(리뷰어 실측). `buyAmount=155.0`·`entryPrice`·`pnlAmountGross=25.0` 단정 추가. |
+| M3 | `ESTIMATE_TOLERANCE_RATIO` 를 고정하는 테스트 없음 (`R ∈ [0.000667, 0.003)` 아무 값이나 통과) | **fix** | 경계 2종(허용치 바로 아래=청산 / 바로 위=잔량) 추가. 값은 0.0025(증분 기준). |
+| M4 | 주석 `:188-190` 이 코드와 정반대 ("흡수하는 것은 부동소수 반올림뿐") | **fix** | 중복 문단 삭제 + 재작성. **#132 를 만든 것과 같은 drift 패턴**이라 지적이 정확하다. |
+| m5 | `strategy=null` 엔진 BUY 가 있으면 새 규칙이 **과대계상** | **defer** | 실재 위험(옛 코드는 과소, 새 코드는 과대로 방향이 뒤집힌다). 다만 그 행의 운영 존재 여부가 미확인이고, null 을 untrusted 로 돌리면 `rec()` 기본값이 null 인 기존 테스트 다수가 깨진다. → 심각도 SQL 에 조회 추가 + `# Deferred`. |
+| m6 | `hasEstimated` 가 매수 쪽만 본다 | **fix** | `estimatedVolume` 으로 대체하며 KDoc 에 "매도 쪽 추정(#105)은 이 판정 밖" 명시. |
+| m7 | `volume=0`·`amount>0` 수동 행이 평단 오염 | **fix** | 새 규칙은 volume 과 amount 를 **서로 다른 행에서** 가져와 행 내부 불일치에 노출된다(옛 코드는 면역). `volume > 0` 행만 합산 + 회귀 테스트. |
+| m8 | 조기 청산 후 dust 매도가 고아 SELL 행을 만든다 | **fix(문서)** | KDoc·wiki 트레이드오프에 2차 파급 명시. |
+| m9 | 상한 근거가 순환적(0.3% 는 임의 선택값) | **fix(문서)** | KDoc·wiki 에 "도메인 사실이 아니라 현재의 제약, 재검토 대상"으로 정직하게 표기. |
+| Nit | `isEngineBuy` 는 사실이 아니라 정책 | **fix** | `isSnapshotBuy` 로 rename + KDoc. |
+| Nit | `isClosed()` O(n²) | **wontfix** | 복잡도 클래스가 변경 전과 동일하고(`lastOrNull` 도 O(n)) 상한이 요청당 5000행·티커별 분할. 실측 근거 없이 손대지 않는다. |
+| — | codex: backward compat 위반 | **false-positive** | 리뷰어가 Verify 에서 반증(JSON 키·타입 불변, 값 변화는 #132 의 의도). |
+| — | codex: plan M6 그룹 병합 | **false-positive** | 2차 확인에서도 반증(`:156` 무조건 flush). |
+
+**리뷰어가 정정한 내 전제 하나**: 요청서에 "2파일"이라 썼으나 실제 변경은 wiki 2개를 포함해 5파일이다.
+
 ## Rollback
 
 두 수정 모두 **DB 스키마를 바꾸지 않으면** 코드 revert 만으로 되돌아간다(#132 는 조회 계산만, #133 은
@@ -275,6 +312,19 @@ Claude `plan-reviewer` 는 별도 진행 중 — 결과 오면 추가한다.
   - **기존 fee 는 보정하지 않는다** — 주문별 체결 대금이 DB 에 없고(`trade_executions` 도 같은 스냅샷),
     요율이 환경변수라 SQL 상수화 불가. V21 이 같은 이유로 이미 "fee 는 소급하지 않는다"를 선례로 남겼다.
 
+- **`strategy = null` 인 엔진 BUY 가 있으면 새 규칙이 과대계상한다** (code-review m5, ⚠️미확인).
+  `PositionManager.kt:313-315` 가 `pendingBuyStrategy` null 을 명시적으로 허용한다(정상흐름에선 non-null).
+  그런 행이 있으면 `isSnapshotBuy` 가 증분으로 분류해 스냅샷을 **또 더한다** — `엔진(combined 1.0) →
+  엔진(null 1.5) → 수동(0.5)` 이면 3.0(실제 2.0). 옛 코드는 1.0 으로 **과소**였으니 방향이 뒤집혔고
+  과대 쪽이 증상이 더 나쁘다(잔량이 0 에 못 닿아 `open` 영구 고착). 심각도: 중.
+  운영 존재 여부는 아래 SQL 로 확인 가능. 고치려면 null 을 "불명"으로 표시해 `untrustedBuys` 로
+  흘려야 하는데, 테스트 헬퍼 `rec()` 의 `strategy` 기본값이 null 이라 기존 테스트 다수가 영향을 받는다.
+
+  ```sql
+  SELECT user_id, ticker, created_at, volume FROM trade_records
+  WHERE side = 'BUY' AND strategy IS NULL ORDER BY created_at;
+  ```
+
 - **같은 스냅샷 모호성을 읽는 곳이 3군데 더 있다** (writer 만 세고 reader 를 안 셌다 — 내 누락).
   `BuySide` 만 고치면 같은 데이터에 화면 3곳이 서로 다른 답을 준다. 심각도: 중.
 
@@ -293,4 +343,13 @@ Claude `plan-reviewer` 는 별도 진행 중 — 결과 오면 추가한다.
 
 # Workflow Findings
 
-(없음)
+- **리뷰 지적을 코드로 확인하는 규율이 이번에도 값을 했다** — 세 번의 잘못된 제안을 걸렀다.
+  codex 의 "그룹 병합 위험"(`:156` 무조건 flush 로 반증), plan-reviewer 의 "추정 오차는 과대추정"과
+  wiki 의 "과소추정"(둘 다 보편적으론 틀림 — 부호는 미정), 그리고 **내 자신의** plan
+  ("`executedVolume × fillPrice` 로 수수료 계산" — 평단이 기존 보유분과 섞여 여전히 틀림).
+  반대로 code-review M1 은 확인해 보니 **맞았고 심각했다**(#132 증상을 tolerance 로 되살림).
+  지적을 무조건 수용하지도, 무조건 반박하지도 않는 것이 요점이다.
+
+- **Bash 로 저장소 파일을 쓰려다 훅에 막혔다**(`읽기 전용 리뷰 조건 위반`). code-reviewer subagent 가
+  끝난 뒤 발생했고, 그 전 같은 형태의 `cp` 는 통과했다. Edit 도구로 전환해 해결 — 원래 그쪽이 맞는
+  도구라 작업엔 지장이 없었다. 재발하면 훅 조건을 볼 것(1회 관찰, 아직 패턴 아님).

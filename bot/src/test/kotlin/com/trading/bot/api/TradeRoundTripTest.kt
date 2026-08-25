@@ -449,7 +449,11 @@ class TradeRoundTripTest {
         assertEquals(1.5, rts[0].buyVolume, 1e-9, "엔진 스냅샷 1.0 에 이후 수동 증분 0.5 를 더해야 한다")
         assertFalse(rts[0].open, "1.5 를 전량 매도했으므로 청산이다")
         assertFalse(rts[0].partial, "수량이 맞으므로 oversold 가 아니다")
-        assertNotNull(rts[0].pnlAmountGross, "매수 수량을 알므로 손익 금액을 낼 수 있다")
+        // 금액도 같은 규칙으로 더한다 — 스냅샷 amount(평단×총보유량 100.0) + 증분 amount(주문금액 55.0).
+        // 스냅샷만 쓰면 80.0 이 나오는데 그래도 non-null 이라, 값을 고정하지 않으면 회귀를 못 잡는다.
+        assertEquals(155.0, rts[0].buyAmount, 1e-9)
+        assertEquals(155.0 / 1.5, rts[0].entryPrice!!, 1e-9)
+        assertEquals(25.0, rts[0].pnlAmountGross!!, 1e-9, "매도 180.0 − 매수원가 155.0")
     }
 
     @Test
@@ -560,5 +564,77 @@ class TradeRoundTripTest {
 
         assertEquals(1, rts.size)
         assertTrue(rts[0].open, "0.001 은 실측 잔량이다 — 상대 tolerance 를 적용했다면 청산으로 삼켰을 값이다")
+    }
+
+    // ── 허용 오차의 기준과 폭을 고정한다 ──────────────────────────────────────────
+    // 이 테스트들이 없으면 ESTIMATE_TOLERANCE_RATIO 를 넓은 밴드 안 아무 값으로 바꿔도 통과한다.
+
+    @Test
+    fun `허용 오차는 포지션 전체가 아니라 추정 증분에만 비례한다`() {
+        // 엔진 1.0 + 수동 0.002 에서 엔진분만 매도. 전체(1.002)에 비례시키면 허용치가 증분보다 커져
+        // 남은 수동 매수분이 통째로 삼켜진다 — 이 수정이 고치려던 #132 증상이 그대로 되살아난다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 100.0, 0.002, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.0, "2026-08-01T12:00", pnlPercent = 20.0),
+            )
+        )
+
+        assertEquals(1, rts.size)
+        assertTrue(rts[0].open, "수동 매수분 0.002 를 그대로 보유 중이다")
+    }
+
+    @Test
+    fun `추정 증분 대비 허용 오차 이내면 청산으로 본다`() {
+        // 잔량 0.001 < 허용치(증분 0.5 × 0.0025 = 0.00125).
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.499, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertFalse(rts[0].open, "잔량 0.001 은 증분 0.5 기준 허용 오차 이내다")
+    }
+
+    @Test
+    fun `추정 증분 대비 허용 오차를 넘으면 잔량으로 본다`() {
+        // 잔량 0.002 > 허용치 0.00125.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "BUY", 110.0, 0.5, "2026-08-01T11:00", strategy = "manual"),
+                rec("KRW-BTC", "SELL", 120.0, 1.498, "2026-08-01T12:00", pnlPercent = 15.0),
+            )
+        )
+
+        assertTrue(rts[0].open, "잔량 0.002 는 허용 오차를 넘으므로 실제 잔량이다")
+    }
+
+    @Test
+    fun `수량 0 인데 금액만 있는 수동 행은 평단을 오염시키지 않는다`() {
+        // `executeBuy` 는 시세 조회가 빈 응답이면 volume=0 · totalAmount=주문 전액으로 남긴다.
+        // 금액만 더하면 entryPrice 가 부풀려져 이익 거래가 손실로 보인다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                TradeRecordEntity(
+                    ticker = "KRW-BTC",
+                    side = "BUY",
+                    price = 0.0,
+                    volume = 0.0,
+                    totalAmount = 50_000.0,
+                    strategy = "manual",
+                    userId = 1L,
+                    createdAt = LocalDateTime.parse("2026-08-01T11:00"),
+                ),
+                rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T12:00", pnlPercent = 10.0),
+            )
+        )
+
+        assertEquals(100.0, rts[0].entryPrice!!, 1e-9, "수량 없는 행의 금액은 평단에 섞이면 안 된다")
+        assertEquals(10.0, rts[0].pnlAmountGross!!, 1e-9)
     }
 }
