@@ -58,6 +58,38 @@ internal object PointInTimeUniverse {
         val excluded: Map<String, String>,
     )
 
-    fun select(snapshot: Snapshot): Selection =
-        Selection(snapshot.asOf, incomplete = false, universe = emptyList(), ranked = emptyList(), excluded = emptyMap())
+    fun select(snapshot: Snapshot): Selection {
+        // 완전성 먼저 — 누락이 있으면 랭킹 자체를 내지 않는다. 부분 결과를 내면 누락분이 거래대금 0 으로
+        // 취급돼 탈락하고, 그 자리를 다른 마켓이 부당하게 채운 top-N 이 진단 결론으로 쓰인다.
+        if (snapshot.missing.isNotEmpty()) {
+            return Selection(snapshot.asOf, incomplete = true, emptyList(), emptyList(), emptyMap())
+        }
+
+        val excluded = mutableMapOf<String, String>()
+        val eligible = mutableListOf<Ranked>()
+
+        for (market in snapshot.candidates.distinct().sorted()) {
+            if (market in STABLECOINS) {
+                excluded[market] = EXCLUDED_STABLECOIN
+                continue
+            }
+            val window = snapshot.candles[market].orEmpty()
+            if (window.size < MIN_HISTORY_DAYS) {
+                excluded[market] = EXCLUDED_SHORT_HISTORY
+                continue
+            }
+            // 합계가 아니라 평균 — 봉 수가 다르면 합계는 이력이 긴 쪽을 유리하게 만든다.
+            eligible += Ranked(market, window.sumOf { it.candleAccTradePrice } / window.size)
+        }
+
+        // 동점은 마켓 코드 오름차순으로 가른다(정렬은 안정적이고 입력은 이미 코드순이라 재현된다).
+        val ranked = eligible.sortedWith(compareByDescending<Ranked> { it.avgTradePrice }.thenBy { it.market })
+        return Selection(
+            asOf = snapshot.asOf,
+            incomplete = false,
+            universe = ranked.take(UNIVERSE_SIZE).map { it.market },
+            ranked = ranked,
+            excluded = excluded,
+        )
+    }
 }
