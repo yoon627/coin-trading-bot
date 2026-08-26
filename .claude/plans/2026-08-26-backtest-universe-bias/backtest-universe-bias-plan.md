@@ -17,13 +17,38 @@ updated: 2026-08-26
 - 2026-08-26 Explore — fixture README·`BacktestFixtures`·`BacktestFixturesTest` 확인, 영향 범위 6곳 식별.
 - 2026-08-26 researcher 가 세션 한도로 2회 죽어 **메인이 Upbit 공개 API 를 직접 호출해 확정**(아래 Decisions 3).
 - 2026-08-26 시점 유니버스 실측 완료 — 30일 평균 거래대금 기준 상위 8 확정, 사용자 결정 2건 수신.
+- 2026-08-26 **수집 스크립트 + fixture 교체**(`1d80c0e`) — `scripts/collect_backtest_fixtures.py`.
+  부수 발견: 기존 bear fixture 의 마지막 봉(2026-08-18)이 **미완성 봉**이었다(2026-08-19 수집).
+  재수집으로 완결됐고 BTC/ETH/XRP 에서 200봉 중 그 1봉만 바뀐다.
+- 2026-08-26 **로더·핀·골든 갱신**(`6d178ee`). 골든 재생성에서 함정 둘을 겪어 docstring 에 기록:
+  `GOLDEN_OUT` 상대경로가 `bot/bot/` 에 조용히 쓰이는 것, env 변경이 Gradle up-to-date 판정에 안 잡혀
+  태스크가 skip 되는 것. 둘 다 "재생성했다"고 착각하게 만든다.
+- 2026-08-26 **#128 재측정 + 문서 정정**(`b58a45c`). **결론이 바뀌었다** — 아래 Progress 요약 참조.
+- 2026-08-26 최종 검증: `:bot:test :common:test compileKotlin --rerun-tasks` **BUILD SUCCESSFUL** (760 tests / 0 failures).
+  wiki: check_links clean / smoke 10 pass / verify.sh 는 **base 부터 실패**(Deferred).
+
+**#128 결론 변화 (편향 제거의 실익)**
+
+| 정책 | 편향 fixture (vb 하락/상승) | 시점 중립 (vb 하락/상승) |
+|---|---|---|
+| `conditional-reset` | **+0.470 / +0.284** | **−0.013 / +0.187** |
+| `hold-through` | +0.263 / −0.004 | −0.044 / −0.423 |
+| `cooldown-1` | −0.093 / +0.020 | −0.109 / −0.207 |
+
+"조건부 리셋만 두 국면에서 부호가 일관된다" 는 최초 결론은 **편향의 산물이었다** — 철회했다.
+`combined` 의 판정도 "방향성 있음(비용)" → "국면 의존" 으로 바뀌었다.
+유지된 결론: 효과 크기가 작다(관측 1.9%p/건에 못 미침), 쿨다운은 개선 근거가 없다.
+
+국면 성격도 바뀌었다 — 옛 bull 은 1/4 마이너스로 균일한 상승장처럼 보였으나
+시점 중립에서는 **8개 중 4개가 마이너스**다. 오늘의 승자만 담았던 결과다.
 
 # Next
 
-1. 수집 스크립트 작성 — 시점 유니버스 선정 + 200봉 수집 + 정규화(재현 가능해야 함)
-2. fixture 교체 → `BacktestFixtures.kt`·`BacktestFixturesTest.kt` 갱신
-3. 다운스트림 재생성: `legacy-golden.txt` → #128 측정 재실행 → `reset-churn-measurement` 갱신 → 무릎 비교 수치
-4. README·wiki 동기화 → plan-reviewer/code-review → 검증
+구현·검증·문서는 끝났다(A1~A11 충족, A12 는 wiki 본문에 반영).
+
+1. code-review (+codex) — 수집 스크립트와 로더 변경이 주 대상
+2. simplify 체크 → 최종 검증 → PR
+3. 머지 후: #112 종료, #128 wiki 정정 사실을 이슈에도 코멘트할지 판단
 
 # Decisions
 
@@ -118,5 +143,13 @@ updated: 2026-08-26
 # Review Disposition
 
 # Deferred
+
+- **`wiki/verify.sh` 의 페이지 수 band(26~30)가 실제 31페이지에 못 미친다** — base(`origin/main`)에서
+  이미 실패한다(입증: 내 wiki 변경은 `M` 하나뿐, `git ls-tree origin/main` 도 31). 위키가 정상적으로
+  자란 결과이고 band 를 올리는 1줄 유지보수다. #112 와 무관해 이 브랜치에 섞지 않는다(§8). (경미·유지보수)
+- 무릎 전략(`KneeStrategyComparisonTest`·`KneeRsiWindowTest`)은 fixture 교체 후에도 통과했다 —
+  하드코딩된 기대 수치가 없어서다. 다만 **그 전략들의 과거 결론도 편향 fixture 위에서 나온 것**이라
+  재해석이 필요할 수 있다. 관련 plan 3개(knee-backtest-calibration·knee-bull-market-sample·
+  knee-review-followup)의 수치는 이번에 갱신하지 않았다. (중간·분석)
 
 # Workflow Findings
