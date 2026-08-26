@@ -58,6 +58,9 @@ interface TradingStrategy {
   "하락장이라 나빴다"는 해석을 뒷받침하는 증거가 없다. 어깨 청산을 켜면 네 조합 모두 성과가 낮아졌다
   (예: `knee_pullback` 하락장 −0.084 → −2.527). ⚠️ 셀당 거래가 **4~18건**이고 조합끼리 독립이 아니라
   크기는 신뢰할 수 없다 — 방향만 참고할 관찰이다. 재현: `KneeStrategyComparisonTest`.
+  ⚠️ **상승장 4마켓은 데이터 부족이 아니라 유니버스 선정 방식 때문이다**(#112 실측) — 시점 중립으로 고르면
+  그 구간에도 8마켓이 있다. 위 paired 비교의 표본이 좁은 것은 fixture 를 오늘 기준 거래대금 상위로
+  고른 결과다. 상세는 [[universe-look-ahead-audit]].
 - ⚠️ 어깨 청산은 `chartExitEnabled` 가 꺼져 있으면 호출되지 않고, `maxHoldDays=1` 이면 백테에서도 `atHoldLimit` 게이트에 막혀 CHART_EXIT 대신 TIME_EXIT 이 난다([[exit-gates]]). 즉 **기본 설정에서는 dead path** 다.
 
 기본 전략은 **`combined`** (`TradingProperties.strategy` 기본값)이며 세 조건의 AND 다:

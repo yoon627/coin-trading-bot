@@ -51,3 +51,4 @@
 외부 원문을 ingest 하면 `source/`, 재사용 가치 있는 질의 결과는 `query/` 에 쌓인다. `source/` 는 아직 없음.
 
 - [[reset-churn-measurement]] — #128 일일리셋 반사실 측정: 신호 지속성의 가치는 ±0.5%p/건 이하이고 표본 선택에 취약하다
+- [[universe-look-ahead-audit]] — #112 유니버스 look-ahead 실측: 상승장 4마켓은 데이터 부족이 아니라 선정 방식 탓이고, 시점 중립으로 고르면 8마켓이 된다
