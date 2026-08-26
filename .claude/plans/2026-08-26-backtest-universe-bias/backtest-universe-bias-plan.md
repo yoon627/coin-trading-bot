@@ -27,6 +27,9 @@ updated: 2026-08-26
 
 # Decisions
 
+1. ~~실현 가능성(폐지 종목 조회 가부)을 먼저 확정한다~~ → **3 으로 종결** (불가 확정, Goal 축소).
+2. ~~fixture 교체 vs 병행 미결~~ → **5 로 종결** (교체 + 다운스트림 재생성).
+
 3. **✅ Upbit API 실측 (2026-08-26, 메인 직접 호출)** — 문서 추정이 아니라 실제 응답 근거다.
    - `GET /v1/market/all?isDetails=true` 스키마 = `market`·`korean_name`·`english_name`·`market_event`.
      **상장일 필드 없음** → 과거 시점 목록을 직접 주는 엔드포인트는 없다.
@@ -80,7 +83,37 @@ updated: 2026-08-26
 
 # Acceptance
 
-(researcher 결과 + Decisions 2 확정 후 항목화)
+**수집 재현성**
+
+| # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
+|---|---|---|---|
+| A1 | 유니버스 선정이 재현 가능하다 | 수집 스크립트를 커밋하고 재실행 | 같은 입력(구간 시작일·TOP_N·WINDOW)에 같은 마켓 목록. 규칙이 코드에 있고 문서에만 있지 않다 |
+| A2 | 선정에 look-ahead 가 없다 | 스크립트 리뷰 + 주석 | 순위 창이 구간 시작 **이전** 30봉이고, 구간 내부·이후 데이터를 순위에 쓰지 않는다 |
+| A3 | 미상장/폐지 구별이 정확하다 | 빈 배열 vs 404 분기 | 미상장(빈 배열)은 후보 제외, 404 는 폐지로 기록·집계(제거 불가 한계의 증거) |
+
+**fixture 교체**
+
+| # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
+|---|---|---|---|
+| A4 | 새 fixture 가 기존 계약을 지킨다 | `BacktestFixturesTest` | 200봉·최신순·키 7개·가격 무변형. 로스터 하드코딩은 새 목록으로 갱신 |
+| A5 | 로더가 새 유니버스를 반영한다 | `BacktestFixtures.kt` | `MARKETS_BY_REGIME` 8+8, `PAIRED_MARKETS` = 실제 교집합(BTC·SOL·XRP) |
+
+**다운스트림 재생성 (Decisions 5)**
+
+| # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
+|---|---|---|---|
+| A6 | legacy 골든 재생성 | `GOLDEN_OUT=... :bot:test --tests "*LegacyGolden*"` 후 커밋 | `BacktestLegacyGoldenTest` green. **재생성 사유를 커밋 메시지에 명시**(기본값 변경이 아니라 fixture 교체) |
+| A7 | #128 측정 재실행 | `RUN_COUNTERFACTUAL=true` | 새 표 생성. **결론이 바뀌면 바뀐 대로 보고**(기존 결론에 맞추지 않는다) |
+| A8 | 무릎 비교 수치 갱신 | `KneeStrategyComparisonTest`·`KneeRsiWindowTest` | green. 하드코딩 기대값이 있으면 새 수치로 교체하되 **약화가 아닌지 확인** |
+| A9 | 전체 스위트 | `:bot:test :common:test` | 0 failures |
+
+**문서**
+
+| # | 무엇이 충족되나 | 어떻게 검증 | 통과 기준 |
+|---|---|---|---|
+| A10 | fixture README 갱신 | 본문 | 새 선정 규칙·수집일·마켓 목록. **생존편향은 제거 불가 한계로 명시**(폐지 404 근거 포함) |
+| A11 | wiki 동기화 | `check_links.py`/`verify.sh`/`smoke.sh` | 3종 clean. `reset-churn-measurement` 수치 갱신 + 유니버스 변경 사실 명시 |
+| A12 | #128 결과 재해석 | wiki 페이지 | paired 3개로 줄어든 것과 그 영향(A5d 약화)을 본문에 적는다 |
 
 # Review Disposition
 
