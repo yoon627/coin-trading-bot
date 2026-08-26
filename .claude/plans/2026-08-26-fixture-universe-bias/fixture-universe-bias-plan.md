@@ -18,11 +18,26 @@ updated: 2026-08-26
 - 2026-08-26 Explore 완료. 선행 외부 사실 2건 확정(D1), 파급 범위 확인(D2), 범위를 진단으로 확정.
 - 2026-08-26 plan-review(Claude subagent + codex 0.149.1 medium) → **CONDITIONAL, P0 4건 / P1 8건**.
   전부 코드로 재확인해 수용, **D3 전면 재작성** + D6·D7 신설. 상세는 `# Review Disposition`.
+- 2026-08-26 **TDD Red**(`cb3cde0`) — selector 순수함수 API + 결정성 6종. stub 상태에서 6/6 실패,
+  5건은 의도한 단언(빈 유니버스·`incomplete=false`·제외사유 null), 1건은 명시 단언으로 보강.
+- 2026-08-26 **구현·Green**(`91db3e0`) — 완전성 게이트 → 스테이블 제외 → 30봉 완비 → 평균 랭킹 → top-8,
+  동점은 마켓코드 오름차순. 6/6 통과 + 전체 스위트 통과.
+- 2026-08-26 **감사 하네스**(`71541ef`) 후 **실행 완료** — 후보 287 KRW 마켓, 4패스.
+  결과는 wiki `query/universe-look-ahead-audit`.
+  - **3단 감쇠**: 하락장 229 → 222 → **8**, 상승장 102 → 102 → **8**
+  - **overlap**: 하락장 3/8, 상승장 2/4. **placebo(절차 노이즈 바닥)**: 5/8, 3/4 → 시점 이동 몫이 따로 있다
+  - **horizon**: 하락장 200일, 상승장 1001일 (같은 잣대 비교 금지)
+- 2026-08-26 **D7 사전 규칙 판정: 트리거 발동** — 상승장 top-8 중 구간 200봉 충족 **8 ≥ 6**.
+  → `bull/` 한정 재수집을 후속 이슈로 제안한다. **BULL 4마켓은 데이터 부족이 아니라 선정 방식 탓**이었다.
+- 2026-08-26 문서 동기화 + 최종 검증 — wiki 3종(32 pages, pass=10 fail=0),
+  `:bot:test :common:test compileKotlin --rerun-tasks` BUILD SUCCESSFUL.
 
 # Next
 
-TDD Red — D3 의 selector 를 **순수 함수**로 분리해(D5') 스냅샷 입력 픽스처로 결정적 테스트를 먼저 쓴다.
-네트워크 단계는 그 뒤 별도 수동 하네스로.
+1. **후속 이슈 제안** — D7 트리거 발동(BULL ③=8 ≥ 6) → `bull/` 한정 재수집을 이슈로 올린다.
+2. push → PR.
+
+진단(A1~A9)은 끝났다.
 
 # Decisions
 
@@ -201,4 +216,15 @@ plan-review(2026-08-26, Claude subagent + codex 0.149.1 medium) 처분:
 - **`BacktestFixturesTest` 의 마켓 간 날짜 일치 assert** — 현재 정렬만 검증한다(`:38-47`).
   새 마켓을 수집하면 `count=200` 이 "존재하는 200봉"이라 구간이 어긋날 수 있다 → 재수집 착수 시 전제로 추가.
 
+- **`wiki/verify.sh` 페이지 수 가드가 main 에서 이미 stale 했다** — `origin/main` 은 페이지 31개인데
+  그쪽 `verify.sh` 가드가 `26..30` 이라 **내 변경 전부터 실패**하던 baseline 이다(증명: `git ls-tree`
+  31개 + `git show origin/main:wiki/verify.sh` 의 상한 30). 내 페이지 추가가 걸린 검사라 미루지 않고
+  `32±2` 로 갱신했다. 이 가드는 페이지가 늘 때마다 stale 해지므로 ±2 밴드 자체가 재검토 대상일 수 있다.
+
 # Workflow Findings
+
+- **wiki 페이지 이름을 worktree slug 와 같게 지으면 `smoke.sh` 음성검사에 걸린다.**
+  그 검사는 "실재하는 브랜치 이름이 wiki 에 등장하는가"를 보는데, 페이지명 `fixture-universe-bias` 가
+  브랜치명과 그대로 겹쳐 오탐이 아니라 **정탐**으로 잡혔다. 검사 취지("확정된 지식은 특정 브랜치를 지목할
+  이유가 없다")가 옳으므로 검사를 약화시키지 않고 페이지를 `universe-look-ahead-audit` 로 개명했다.
+  → **wiki 페이지는 작업 slug 가 아니라 지식 내용으로 이름 짓는다.**
