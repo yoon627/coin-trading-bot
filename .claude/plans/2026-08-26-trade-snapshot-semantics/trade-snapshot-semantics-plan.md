@@ -306,6 +306,18 @@ Claude `plan-reviewer` 는 별도 진행 중 — 결과 오면 추가한다.
 
 # Deferred
 
+**전부 GitHub Issues 로 이관했다 (2026-08-26) — 이 plan 이 닫혀도 유실되지 않는다.**
+
+| 항목 | 이슈 |
+|---|---|
+| 매수 수수료가 스냅샷 금액 기준 | **#133** (기존 이슈에 확정 내용 코멘트 — 해법·충돌지점·오염구간) |
+| `strategy=null` 엔진 BUY 과대계상 | **#145** (신규) |
+| 스냅샷을 그대로 읽는 곳 3군데(집계 SUM·SPA·Discord) | **#146** (신규) |
+| 부분 매도 후 재매수 시 이중 계상 | **#147** (신규) |
+| `estimatedFee` ↔ `TradePnl.amount` 기준 불일치 | **#148** (신규) |
+
+아래는 이관 당시의 원본 기록이다.
+
 - **#133 전체** — 사용자 결정으로 별도 worktree. 착수 시 필요한 것은 이미 확정돼 있다:
   - 해법은 `Order` 에 `paid_fee`(+`trades[].funds`) 파싱 추가 → 추정 제거 (Decision 4).
   - `recoverFromBalance` 경로는 basis 미상 — 0 으로 채우지 말 것(선례: `sell-strategy-attribution-plan.md:137`
