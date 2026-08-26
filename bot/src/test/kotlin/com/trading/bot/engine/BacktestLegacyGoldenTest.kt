@@ -16,8 +16,16 @@ import org.junit.jupiter.api.Test
  * 대조해 확인했다. 기본값을 바꾸면 `M1ReplayBiasTest`·`ParameterSweepTest`·`/backtest` 호출자의 모집단이
  * 조용히 달라지므로, 그 변경이 여기서 먼저 빨갛게 뜨도록 둔다.
  *
- * 의도적으로 기본값을 바꿀 때만 재생성한다:
- *   `GOLDEN_OUT=bot/src/test/resources/backtest/legacy-golden.txt ./gradlew :bot:test --tests "*LegacyGolden*"`
+ * fixture 유니버스나 기본값을 **의도적으로** 바꿀 때만 재생성한다:
+ *   `GOLDEN_OUT="$PWD/bot/src/test/resources/backtest/legacy-golden.txt" ./gradlew :bot:test --tests "*LegacyGolden*" --rerun-tasks`
+ *
+ * 함정 둘 — 겪고 나서 적는다:
+ * 1. **`GOLDEN_OUT` 은 절대경로여야 한다.** 테스트의 작업 디렉토리가 `bot/` 이라 상대경로를 주면
+ *    `bot/bot/src/...` 에 조용히 쓰이고, 원본은 그대로인 채 "재생성했다"고 착각하게 된다.
+ * 2. **`--rerun-tasks` 가 필요하다.** env 변경은 Gradle up-to-date 판정에 안 잡혀 태스크가 통째로 skip 된다.
+ *
+ * 골든은 classpath(`build/resources/test/`)의 fixture 로 만들어진다 — 리소스 복사 후에 돌려야
+ * stale 데이터로 만든 골든을 커밋하지 않는다.
  */
 class BacktestLegacyGoldenTest {
 

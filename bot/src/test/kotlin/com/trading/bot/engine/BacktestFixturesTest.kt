@@ -48,18 +48,18 @@ class BacktestFixturesTest {
 
     @Test
     fun `regime market rosters are pinned`() {
-        // 현재 거래대금 상위 8개 중 4개는 2023-11 에 미상장이었다 — 유니버스 선정의 생존편향 증거이자,
-        // paired 비교를 4마켓으로 제한해야 하는 이유다.
+        // 각 구간 시작 시점 기준 30일 평균 거래대금 상위 8 (#112). 예전에는 수집 시점 상위를 과거에
+        // 소급해 BULL 이 4개로 쪼그라들었다 — 그 자체가 look-ahead 의 증거였다.
         // 기대값을 구현 상수(PAIRED_MARKETS)로 쓰면 그 상수가 바뀔 때 테스트도 같이 바뀌어 통과한다.
         // 실제 fixture 에 있어야 하는 목록을 여기 독립적으로 적는다.
         assertEquals(
-            listOf("KRW-XRP", "KRW-BTC", "KRW-MMT", "KRW-ETH", "KRW-WLD", "KRW-RVN", "KRW-ONDO", "KRW-DOGE"),
+            listOf("KRW-XRP", "KRW-BTC", "KRW-ETH", "KRW-AXS", "KRW-DATA", "KRW-ENSO", "KRW-SOL", "KRW-BERA"),
             BacktestFixtures.markets(Regime.BEAR),
         )
         assertEquals(
-            listOf("KRW-XRP", "KRW-BTC", "KRW-ETH", "KRW-DOGE"),
+            listOf("KRW-GAS", "KRW-XRP", "KRW-BTC", "KRW-SOL", "KRW-ARK", "KRW-MINA", "KRW-BLUR", "KRW-POLYX"),
             BacktestFixtures.markets(Regime.BULL),
-            "BULL 은 2023-11 당시 상장돼 있던 4개여야 한다",
+            "BULL 도 8개다 — 2023-11 시점 상위 8이지, 오늘의 상위 8 중 그때 살아있던 것이 아니다",
         )
         // 하드코딩끼리 비교하면 "교집합" 이라는 관계 자체는 검증되지 않는다. 관계를 직접 계산해 고정한다.
         assertEquals(
