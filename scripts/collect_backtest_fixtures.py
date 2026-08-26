@@ -21,6 +21,12 @@
 
 - 현재 상장 + 그 시점 미상장 → `200 OK` + **빈 배열** → 후보에서 정당하게 제외(존재하지 않았다).
 - 폐지 → `404 Code not found` → 현재 목록에 없으므로 애초에 순회 대상이 아니다.
+
+## 재현성의 조건
+
+순위 후보는 **오늘의** KRW 목록이다. 새 상장이 늘면 "미상장" 카운트만 늘고 상위 N 은 그대로다
+(신규 상장은 과거 데이터가 없으므로 과거 순위에 못 든다). 다만 **폐지됐다 재상장된 코드**가 있다면
+과거 데이터를 들고 순위에 새로 들어올 수 있다 — 드물지만 출력이 달라질 수 있는 유일한 경로다.
 """
 import argparse
 import json
@@ -76,11 +82,13 @@ def select_universe(markets: list[str], start: date) -> tuple[list[tuple[str, fl
     """구간 시작 **이전** RANK_WINDOW 봉의 평균 거래대금으로 순위. 반환 (상위 N, 미상장 수, 이력부족 수)."""
     ranked, unlisted, too_new = [], 0, 0
     for market in markets:
-        candles, _ = _get("candles/days", market=market, count=RANK_WINDOW,
-                          to=f"{start.isoformat()}T00:00:00Z")
+        candles, status = _get("candles/days", market=market, count=RANK_WINDOW,
+                               to=f"{start.isoformat()}T00:00:00Z")
         time.sleep(THROTTLE_SEC)
         if candles is None:
-            continue
+            # 조용히 건너뛰면 그 마켓이 원래 상위였을 때 유니버스가 말없이 달라진다 —
+            # 재현 가능해야 하는 도구에서 가장 위험한 실패다.
+            sys.exit(f"{market} 순위 조회 실패 (HTTP {status}) — 유니버스가 달라질 수 있어 중단한다.")
         if not candles:
             unlisted += 1  # 그 시점 미상장 — 정당한 제외
             continue
@@ -141,14 +149,20 @@ def main() -> None:
             print()
             continue
 
+        # 전부 받은 뒤에 쓴다. 지우고 받다가 실패하면 fixture 디렉토리가 반만 찬 채 남고,
+        # 그 상태로 돌린 백테는 "유니버스가 줄었다"는 사실을 아무도 모르는 채 결과를 낸다.
+        fetched = []
+        for market, _ in top:
+            candles = fetch_window(market, start)
+            if candles is None:
+                sys.exit(f"{market}: {BARS}봉 확보 실패 — 유니버스 선정과 모순이다. 아무것도 쓰지 않고 중단한다.")
+            fetched.append((market, candles))
+
         out_dir = FIXTURE_DIR / regime
         out_dir.mkdir(parents=True, exist_ok=True)
         for old in out_dir.glob("KRW-*.json"):
             old.unlink()  # 유니버스가 바뀌므로 옛 마켓 파일이 남으면 안 된다
-        for market, _ in top:
-            candles = fetch_window(market, start)
-            if candles is None:
-                sys.exit(f"{market}: {BARS}봉 확보 실패 — 유니버스 선정과 모순이다. 중단한다.")
+        for market, candles in fetched:
             (out_dir / f"{market}.json").write_text(json.dumps(candles, separators=(",", ":")) + "\n")
             print(f"   wrote {regime}/{market}.json")
         print()
