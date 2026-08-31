@@ -44,6 +44,7 @@ internal object PointInTimeUniverse {
     const val EXCLUDED_STABLECOIN = "stablecoin"
     const val EXCLUDED_SHORT_HISTORY = "history<$MIN_HISTORY_DAYS"
     const val EXCLUDED_GAPPED_WINDOW = "window>${MAX_WINDOW_SPAN_DAYS}d"
+    const val EXCLUDED_UNPARSEABLE_DATE = "unparseable-date"
 
     /**
      * 선정 입력. [candles] 는 마켓별로 **t0 직전** 일봉(최대 [MIN_HISTORY_DAYS]개)이다.
@@ -68,12 +69,17 @@ internal object PointInTimeUniverse {
         val excluded: Map<String, String>,
     )
 
-    /** 창의 가장 오래된 봉부터 t0 까지의 달력일. 날짜가 없는 입력은 검사를 건너뛴다(0 반환). */
-    private fun windowSpanDays(asOf: String, window: List<Candle>): Long {
-        val oldest = window.lastOrNull()?.candleDateTimeKst?.take(10)?.takeIf { it.isNotBlank() } ?: return 0
+    /**
+     * 창의 가장 오래된 봉부터 t0 까지의 달력일. 날짜를 읽지 못하면 **null** — 호출부가 판정을 막는다.
+     *
+     * 0 을 돌려주면 창 검사가 조용히 통과하고, 그냥 제외하면 top-8 에 들어야 할 마켓이 빠져 랭킹이
+     * 오염된다. 둘 다 "불완전을 흡수하지 않는다"는 이 selector 의 원칙에 어긋난다.
+     */
+    private fun windowSpanDays(asOf: String, window: List<Candle>): Long? {
+        val oldest = window.lastOrNull()?.candleDateTimeKst?.take(10)?.takeIf { it.isNotBlank() } ?: return null
         return runCatching {
             ChronoUnit.DAYS.between(LocalDate.parse(oldest), LocalDate.parse(asOf))
-        }.getOrDefault(0)
+        }.getOrNull()
     }
 
     fun select(snapshot: Snapshot): Selection {
@@ -85,6 +91,8 @@ internal object PointInTimeUniverse {
 
         val excluded = mutableMapOf<String, String>()
         val eligible = mutableListOf<Ranked>()
+        // 날짜를 읽지 못한 창 — 하나라도 있으면 판정을 막는다(누락과 같은 부류의 불완전).
+        val malformed = mutableListOf<String>()
 
         for (market in snapshot.candidates.distinct().sorted()) {
             if (market in STABLECOINS) {
@@ -97,12 +105,27 @@ internal object PointInTimeUniverse {
                 continue
             }
             // 봉 수가 찼어도 창이 늘어져 있으면 다른 종목과 같은 기준으로 비교할 수 없다.
-            if (windowSpanDays(snapshot.asOf, window) > MAX_WINDOW_SPAN_DAYS) {
+            val span = windowSpanDays(snapshot.asOf, window)
+            if (span == null) {
+                malformed += market
+                continue
+            }
+            if (span > MAX_WINDOW_SPAN_DAYS) {
                 excluded[market] = EXCLUDED_GAPPED_WINDOW
                 continue
             }
             // 합계가 아니라 평균 — 봉 수가 다르면 합계는 이력이 긴 쪽을 유리하게 만든다.
             eligible += Ranked(market, window.sumOf { it.candleAccTradePrice } / window.size)
+        }
+
+        if (malformed.isNotEmpty()) {
+            return Selection(
+                snapshot.asOf,
+                incomplete = true,
+                universe = emptyList(),
+                ranked = emptyList(),
+                excluded = malformed.associateWith { EXCLUDED_UNPARSEABLE_DATE },
+            )
         }
 
         // 동점은 마켓 코드 오름차순으로 가른다(정렬은 안정적이고 입력은 이미 코드순이라 재현된다).
