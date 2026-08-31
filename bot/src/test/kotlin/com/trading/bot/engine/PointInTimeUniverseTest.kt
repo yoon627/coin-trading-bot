@@ -161,6 +161,17 @@ class PointInTimeUniverseTest {
     }
 
     @Test
+    fun `distinguishes not-listed from short history`() {
+        // 빈 응답(t0 시점 미상장)과 이력 부족은 다른 사유다 — 뭉치면 3단 감쇠 ①②의 의미가 흐려진다.
+        val notListed = "KRW-NONE"
+        val result = PointInTimeUniverse.select(
+            snapshotOf(count = 12, extra = mapOf(notListed to emptyList())),
+        )
+
+        assertEquals(PointInTimeUniverse.EXCLUDED_NOT_LISTED, result.excluded[notListed])
+    }
+
+    @Test
     fun `breaks ties deterministically by market code`() {
         // 같은 거래대금이면 순서가 흔들리면 안 된다 — 재현성이 깨진다.
         val tied = (1..10).associate { i ->
