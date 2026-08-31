@@ -67,8 +67,10 @@ class PointInTimeUniverseAuditTest {
             val committed = BacktestFixtures.markets(period.regime)
             val horizonDays = period.start.toEpochDay().let { period.collectedOn.toEpochDay() - it }
 
-            val pit = snapshotAt(client, candidates, period.start)
-            val placebo = snapshotAt(client, candidates, period.collectedOn)
+            val pitCollected = snapshotAt(client, candidates, period.start)
+            val placeboCollected = snapshotAt(client, candidates, period.collectedOn)
+            val pit = pitCollected.snapshot
+            val placebo = placeboCollected.snapshot
             val pitSel = PointInTimeUniverse.select(pit)
             val placeboSel = PointInTimeUniverse.select(placebo)
 
@@ -83,8 +85,11 @@ class PointInTimeUniverseAuditTest {
             out.appendLine()
 
             if (pitSel.incomplete) {
-                out.appendLine("> ⚠️ **판정 불가** — 후보 조회 누락 ${pit.missing.size}건: ${pit.missing.joinToString(" ")}")
-                out.appendLine("> 누락을 거래대금 0 으로 흡수하면 다른 마켓이 부당하게 상위로 올라간다.")
+                // 불완전 사유는 둘이다 — 조회 누락, 그리고 날짜를 읽지 못한 창. 둘 다 상세를 남긴다.
+                out.appendLine("> ⚠️ **판정 불가** — 후보 조회 누락 ${pit.missing.size}건 / 날짜 불량 ${pitSel.excluded.size}건")
+                pitCollected.failures.forEach { (m, why) -> out.appendLine("> - `$m` — $why") }
+                pitSel.excluded.forEach { (m, why) -> out.appendLine("> - `$m` — $why") }
+                out.appendLine("> 불완전을 흡수하면 그 마켓이 탈락하면서 다른 마켓이 부당하게 상위로 올라간다.")
                 out.appendLine()
                 continue
             }
@@ -134,10 +139,19 @@ class PointInTimeUniverseAuditTest {
         println("리포트: ${report.absolutePath}")
     }
 
+    /**
+     * 스냅샷 + **조회 실패 상세**. `incomplete` 일 때 rate limit·서버 장애·기타 오류를 구분하려면
+     * 마켓명만으로는 부족하다 — HTTP 상태(또는 예외 종류)를 함께 남긴다(plan D3').
+     */
+    private data class Collected(
+        val snapshot: PointInTimeUniverse.Snapshot,
+        val failures: Map<String, String>,
+    )
+
     /** t0 **직전** [PointInTimeUniverse.MIN_HISTORY_DAYS] 봉을 마켓별로 모아 스냅샷을 만든다. */
-    private fun snapshotAt(client: WebClient, candidates: List<String>, asOf: LocalDate): PointInTimeUniverse.Snapshot {
+    private fun snapshotAt(client: WebClient, candidates: List<String>, asOf: LocalDate): Collected {
         val candles = LinkedHashMap<String, List<Candle>>()
-        val missing = mutableListOf<String>()
+        val failures = LinkedHashMap<String, String>()
         for ((i, market) in candidates.withIndex()) {
             if (i > 0) Thread.sleep(SPACING_MS)
             val fetched = try {
@@ -145,10 +159,10 @@ class PointInTimeUniverseAuditTest {
             } catch (e: WebClientResponseException) {
                 // 4xx 중 400/404 는 "그 시점에 데이터 없음"(미상장)으로 읽는다. 그 외는 조회 실패 = 누락.
                 if (e.statusCode.value() == 400 || e.statusCode.value() == 404) emptyList() else {
-                    missing += market; continue
+                    failures[market] = "HTTP ${e.statusCode.value()} (재시도 ${MAX_RETRIES}회 소진)"; continue
                 }
             } catch (e: Exception) {
-                missing += market; continue
+                failures[market] = "${e::class.simpleName}: ${e.message?.take(80)}"; continue
             }
             // `to` 타임존이 어긋나면 "직전 30일"이 통째로 하루 밀린다 — 최신 봉이 t0 이전인지 확인한다.
             fetched.firstOrNull()?.let {
@@ -157,7 +171,10 @@ class PointInTimeUniverseAuditTest {
             }
             candles[market] = fetched
         }
-        return PointInTimeUniverse.Snapshot(asOf.toString(), candidates, candles, missing)
+        return Collected(
+            PointInTimeUniverse.Snapshot(asOf.toString(), candidates, candles, failures.keys.toList()),
+            failures,
+        )
     }
 
     /**
@@ -199,7 +216,7 @@ class PointInTimeUniverseAuditTest {
             } catch (e: WebClientResponseException) {
                 // 429/5xx 만 지수 백오프 — 그 외 4xx 는 재시도가 무의미하다(M1ReplayBiasTest 와 동일).
                 val retryable = e.statusCode.value() == 429 || e.statusCode.is5xxServerError
-                if (!retryable || attempt++ >= 3) throw e
+                if (!retryable || attempt++ >= MAX_RETRIES) throw e
                 Thread.sleep(1000L * attempt)
             }
         }
@@ -243,6 +260,9 @@ class PointInTimeUniverseAuditTest {
 
         /** `MarketDataIngestionService.CANDLE_REQUEST_SPACING_MS` 와 같은 값 — 실측 상한 초당 10회. */
         const val SPACING_MS = 150L
+
+        /** 429/5xx 지수 백오프 상한 — 실패 상세에 함께 남긴다. */
+        const val MAX_RETRIES = 3
 
         /** 구간 종료일 근처까지 닿으면 덮은 것으로 본다 — 마지막 며칠 결측까지 탈락시키지는 않는다. */
         const val TAIL_TOLERANCE_DAYS = 3L
