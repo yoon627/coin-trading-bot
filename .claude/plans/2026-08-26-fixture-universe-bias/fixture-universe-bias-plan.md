@@ -220,6 +220,14 @@ plan-review(2026-08-26, Claude subagent + codex 0.149.1 medium) 처분:
   그쪽 `verify.sh` 가드가 `26..30` 이라 **내 변경 전부터 실패**하던 baseline 이다(증명: `git ls-tree`
   31개 + `git show origin/main:wiki/verify.sh` 의 상한 30). 내 페이지 추가가 걸린 검사라 미루지 않고
   `32±2` 로 갱신했다. 이 가드는 페이지가 늘 때마다 stale 해지므로 ±2 밴드 자체가 재검토 대상일 수 있다.
+- **pre-push 리뷰 P2 "평균을 관측 봉 수로 나눈다"** — `MAX_WINDOW_SPAN_DAYS=32` 로 결측 2일을 허용하므로
+  결측이 있는 종목의 평균은 엄밀히 *30일 평균*이 아니라 *관측 30봉 평균*이다. **wontfix + 문서화**:
+  결측일을 0 으로 채우면 "거래가 없던 날 = 거래대금 0" 으로 추정량이 바뀌어 비교 기준 자체가 달라진다.
+  허용폭이 30일 중 2일이고 4회 실행에서 순위 변동이 관측되지 않았다.
+  wiki `query/universe-look-ahead-audit` 의 "읽을 때의 제약"에 명시했다.
+- **fix loop 상한 초과** — push 게이트 findings 에 대해 5라운드를 돌았다(dlc 상한 2). 3라운드 이후로는
+  지적이 "Upbit 이 실제로 내지 않는 malformed 응답" 영역으로 옮겨갔고, 값싸고 원칙에 맞는 것만 고치고
+  나머지는 명시적 risk accept 로 닫았다.
 
 # Workflow Findings
 

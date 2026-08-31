@@ -165,8 +165,14 @@ class PointInTimeUniverseAuditTest {
                 failures[market] = "${e::class.simpleName}: ${e.message?.take(80)}"; continue
             }
             // `to` 타임존이 어긋나면 "직전 30일"이 통째로 하루 밀린다 — 최신 봉이 t0 이전인지 확인한다.
-            fetched.firstOrNull()?.let {
-                val newest = LocalDate.parse(it.candleDateTimeKst.substring(0, 10))
+            // 날짜가 비었거나 형식이 깨지면 감사를 중단시키지 않고 **누락으로 기록**한다 — 예외로 죽으면
+            // selector 의 "불완전이면 판정 불가" 게이트에 닿지도 못하고 전체가 날아간다.
+            val newest = fetched.firstOrNull()?.let { parseKstDate(it.candleDateTimeKst) }
+            if (fetched.isNotEmpty() && newest == null) {
+                failures[market] = "malformed candle_date_time_kst"
+                continue
+            }
+            if (newest != null) {
                 check(newest.isBefore(asOf)) { "to 경계 오류: $market 최신봉 $newest 가 t0 $asOf 이전이 아니다" }
             }
             candles[market] = fetched
@@ -191,10 +197,15 @@ class PointInTimeUniverseAuditTest {
             return false
         }
         if (candles.size < 200) return false
-        val newest = LocalDate.parse(candles.first().candleDateTimeKst.substring(0, 10))
-        val oldest = LocalDate.parse(candles.last().candleDateTimeKst.substring(0, 10))
+        // 날짜를 못 읽으면 커버 여부를 확인할 수 없다 — 확인 못 한 것을 "충족"으로 세지 않는다.
+        val newest = parseKstDate(candles.first().candleDateTimeKst) ?: return false
+        val oldest = parseKstDate(candles.last().candleDateTimeKst) ?: return false
         return !oldest.isAfter(start) && !newest.isBefore(end.minusDays(TAIL_TOLERANCE_DAYS))
     }
+
+    /** `2023-11-23T09:00:00` 앞 10자를 날짜로. 비었거나 형식이 깨지면 null — 호출부가 판정을 막는다. */
+    private fun parseKstDate(raw: String): LocalDate? =
+        runCatching { LocalDate.parse(raw.take(10)) }.getOrNull()
 
     private fun fetchKrwMarkets(client: WebClient): List<String> {
         val body = client.get().uri("/v1/market/all").retrieve()
