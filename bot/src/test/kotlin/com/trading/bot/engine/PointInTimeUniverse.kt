@@ -76,11 +76,15 @@ internal object PointInTimeUniverse {
      * 오염된다. 둘 다 "불완전을 흡수하지 않는다"는 이 selector 의 원칙에 어긋난다.
      */
     private fun windowSpanDays(asOf: String, window: List<Candle>): Long? {
-        val oldest = window.lastOrNull()?.candleDateTimeKst?.take(10)?.takeIf { it.isNotBlank() } ?: return null
-        return runCatching {
-            ChronoUnit.DAYS.between(LocalDate.parse(oldest), LocalDate.parse(asOf))
-        }.getOrNull()
+        // 양끝만 보면 중간 봉의 날짜가 불량이어도 평균·선정에 그대로 섞인다 — 전부 검증한다.
+        val dates = window.map { parseDate(it.candleDateTimeKst) ?: return null }
+        val oldest = dates.minOrNull() ?: return null
+        val t0 = parseDate(asOf) ?: return null
+        return ChronoUnit.DAYS.between(oldest, t0)
     }
+
+    private fun parseDate(raw: String): LocalDate? =
+        runCatching { LocalDate.parse(raw.take(10)) }.getOrNull()
 
     fun select(snapshot: Snapshot): Selection {
         // 완전성 먼저 — 누락이 있으면 랭킹 자체를 내지 않는다. 부분 결과를 내면 누락분이 거래대금 0 으로
