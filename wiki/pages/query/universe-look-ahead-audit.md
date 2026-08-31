@@ -2,9 +2,9 @@
 title: 백테 fixture 유니버스 look-ahead 편향 실측 — 상승장 4마켓은 고칠 수 있다
 category: query
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-08-31
 claim_state: current
-verified: 2026-08-31 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit 86293c2, clean tree, 후보 288 KRW 마켓). 후보 287 로 돌린 첫 실행(2026-08-26)·판정 규칙을 조이기 전 실행과 모든 수치가 일치
+verified: 2026-08-31 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit 6fd1377, clean tree, 후보 288 KRW 마켓). 후보 287 로 돌린 첫 실행(2026-08-26)·판정 규칙을 조이기 전 실행과 모든 수치가 일치
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/PointInTimeUniverse.kt
   - bot/src/test/kotlin/com/trading/bot/engine/PointInTimeUniverseAuditTest.kt
@@ -96,7 +96,7 @@ selector 는 순수 함수라 CI 에서도 검증된다(`PointInTimeUniverseTest
 네트워크 단계는 스냅샷 해시를 리포트에 남긴다 — `/v1/market/all` 은 시간 불변이 아니어서(신규상장·폐지로
 후보군이 바뀐다) 그 해시가 있어야 같은 입력이었는지 대조할 수 있다.
 
-**실측 재현성**: 세 번 돌렸고 결과가 모두 일치한다.
+**실측 재현성**: 네 번 돌렸고 결과가 모두 일치한다.
 
 1. 2026-08-26 (후보 287)
 2. 2026-08-31 (후보 288 — 그 사이 신규상장으로 후보 집합이 바뀌었다)
@@ -104,8 +104,10 @@ selector 는 순수 함수라 CI 에서도 검증된다(`PointInTimeUniverseTest
    `fills200` 이 봉 수와 시작 도달만 봐서 거래 중단으로 **구간 종료에 못 닿는** 마켓도 통과했고,
    selector 가 봉 **수**만 세어 30봉이 60일을 덮는 종목도 통과했다. 양끝 커버와 창 달력일 span 을
    검증하도록 고쳤다.
+4. 2026-08-31, **불완전 입력 처리를 마감한 뒤** — 날짜를 읽지 못한 창은 조용히 통과시키지도, 조용히
+   제외하지도 않고 **판정 자체를 막는다**(제외해도 top-8 이 오염되므로). 조회 실패는 HTTP 상태까지 남긴다.
 
-**셋 다 3단 감쇠·overlap·placebo·top-8 구성이 동일하다.** 즉 그 판정 구멍은 실재했지만 **이 결론은
+**넷 다 3단 감쇠·overlap·placebo·top-8 구성이 동일하다.** 즉 그 판정 구멍은 실재했지만 **이 결론은
 구멍에 의존하지 않았다**(느슨한 규칙으로 통과한 마켓이 실제로는 없었다). 결론이 후보 집합의 사소한
 변동에도 걸려 있지 않다.
 
