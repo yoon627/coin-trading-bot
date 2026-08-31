@@ -127,6 +127,26 @@ class PointInTimeUniverseTest {
     }
 
     @Test
+    fun `refuses to judge when a window has unparseable dates`() {
+        // 날짜를 못 읽으면 창이 진짜 30일인지 확인할 수 없다. 조용히 통과시키면 창 검사가 무력화되고,
+        // 조용히 제외하면 top-8 에 들어야 할 마켓이 빠져 랭킹이 오염된다 — 둘 다 P0-4 와 같은 부류다.
+        val broken = "KRW-BROKEN"
+        val result = PointInTimeUniverse.select(
+            snapshotOf(
+                count = 12,
+                extra = mapOf(
+                    broken to List(PointInTimeUniverse.MIN_HISTORY_DAYS) {
+                        Candle(market = broken, candleAccTradePrice = 99_000_000_000.0, tradePrice = 1000.0)
+                    },
+                ),
+            ),
+        )
+
+        assertTrue(result.incomplete, "날짜를 못 읽는 창이 있으면 판정하지 않는다")
+        assertTrue(result.universe.isEmpty(), "incomplete 면 유니버스를 내지 않는다: ${result.universe}")
+    }
+
+    @Test
     fun `breaks ties deterministically by market code`() {
         // 같은 거래대금이면 순서가 흔들리면 안 된다 — 재현성이 깨진다.
         val tied = (1..10).associate { i ->
