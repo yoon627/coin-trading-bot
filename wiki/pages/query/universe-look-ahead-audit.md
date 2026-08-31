@@ -4,7 +4,7 @@ category: query
 created: 2026-08-26
 updated: 2026-08-26
 claim_state: current
-verified: 2026-08-26 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit 91db3e0, 후보 287 KRW 마켓)
+verified: 2026-08-31 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit b27055f, clean tree, 후보 288 KRW 마켓). 2026-08-26 후보 287 로 돌린 첫 실행과 모든 수치가 일치
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/PointInTimeUniverse.kt
   - bot/src/test/kotlin/com/trading/bot/engine/PointInTimeUniverseAuditTest.kt
@@ -95,3 +95,11 @@ RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTe
 selector 는 순수 함수라 CI 에서도 검증된다(`PointInTimeUniverseTest`, 네트워크 없음).
 네트워크 단계는 스냅샷 해시를 리포트에 남긴다 — `/v1/market/all` 은 시간 불변이 아니어서(신규상장·폐지로
 후보군이 바뀐다) 그 해시가 있어야 같은 입력이었는지 대조할 수 있다.
+
+**실측 재현성**: 5일 간격으로 두 번 돌렸고(2026-08-26 후보 287 / 2026-08-31 후보 288), 그 사이 신규상장으로
+후보 집합이 바뀌었는데도 **3단 감쇠·overlap·placebo·top-8 구성이 전부 일치**했다. 결론이 후보 집합의
+사소한 변동에 걸려 있지 않다는 뜻이다. 입력 해시는 후보가 달라져 바뀌었으므로, 해시 불일치가 곧
+결과 불일치는 아니다 — 해시는 "같은 입력이었나"만 답한다.
+
+리포트에는 실행 시점의 **working tree 오염 여부**도 함께 남는다. 하네스를 커밋하기 전에 돌리면 기록된
+커밋에 그 테스트가 없어 "그 커밋에서 재현하라"가 거짓이 되는데, 실제로 그렇게 새어 pre-push 리뷰가 잡았다.
