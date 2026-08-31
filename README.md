@@ -64,6 +64,15 @@ $env:DB_PORT = "5432"
 
 Windows에서는 `./gradlew` 대신 `.\gradlew.bat`을 사용합니다.
 
+DB 매핑·제약을 실제 PostgreSQL로 검증하는 통합테스트는 접속 정보가 있을 때만 실행되고, 없으면 건너뜁니다. 임시 컨테이너를 띄워 함께 돌리려면:
+
+```bash
+./scripts/run-db-tests.sh          # DB 통합테스트만
+./scripts/run-db-tests.sh --all    # 전체 테스트
+```
+
+CI는 `services: postgres`로 DB를 제공하고 `DB_TESTS_REQUIRED=true`를 켜 두므로, 이 테스트가 조용히 건너뛰어지면 빌드가 실패합니다.
+
 ## 아키텍처
 
 ```text
