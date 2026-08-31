@@ -2,7 +2,7 @@
 title: deploy-paths-ignore — 문서 전용 push 가 운영 봇을 재시작시키지 않게 한다
 status: in_progress
 started: 2026-08-26
-updated: 2026-08-26
+updated: 2026-08-31
 ---
 
 # Goal
@@ -38,8 +38,11 @@ updated: 2026-08-26
 
 # Next
 
-code-reviewer + codex 리뷰 → PR. 머지 후 **실제로 문서 push 가 워크플로를 건너뛰는지 관찰**해야
-검증이 끝난다(정적 확인만으로는 부족).
+**PR #149 머지·배포 완료** (squash `e8ed9d4`, `App healthy!` 확인). worktree·브랜치 정리 완료.
+
+남은 것은 **필터 실동작 관찰** 하나다 — 이 plan 을 닫는 커밋이 그 조건(`.claude/**` 전용)에
+정확히 해당하므로, push 후 `gh run list --branch main` 에 새 실행이 생기지 않으면 검증 완료다.
+생기면 필터가 안 먹는 것이므로 `paths-ignore` 패턴(특히 `.claude/**`)을 재조사한다.
 
 # Decisions
 
@@ -113,10 +116,16 @@ code-reviewer + codex 리뷰 → PR. 머지 후 **실제로 문서 push 가 워�
       ⚠️ `verify.sh` 는 페이지 수 tripwire 로 실패하나 **baseline 실패로 입증**(아래 `# Deferred`).
 - [x] **저장소 무회귀** — `./gradlew build` SUCCESSFUL, 테스트 **760건 / 실패 0 / 에러 0**.
       (이 변경은 코드를 건드리지 않으므로 무회귀 확인용이다.)
-- [ ] ⏸ **머지 후 관찰 — 미검증.** 다음 문서 전용 push 에서 워크플로 실행이 생성되지 않아야 한다.
-      **정적 검증으로는 확인 불가** — GitHub 이 실제로 필터를 적용하는지는 관찰해야 안다.
-      확인법: 머지 후 문서만 바꾼 커밋을 push 하고 `gh run list --branch main` 에 새 실행이
-      **생기지 않는지** 본다. 반대로 코드 커밋에서는 생겨야 한다.
+- [x] **가드 변경이 정상 배포를 막지 않는다** — PR #149 머지(`e8ed9d4`)의 배포가 **실제로 실행**됐다
+      (스킵 아님). 증거: run `33378753372` 로그
+      `=== 대상 SHA=e8ed9d487b4f LAST_GOOD=9350bd6d9f51 자동롤백=rollback-ok ===` →
+      `Container app-app-1 Recreated` → `App healthy! (e8ed9d48…)`.
+      이 PR 은 `.yml` 변경이라 필터에 걸리지 않는 것도 함께 확인됐다(실행이 생성됐다).
+
+- [ ] ⏸ **필터 실동작 — 관찰 대기.** 문서 전용 push 가 워크플로를 만들지 않아야 한다.
+      **정적 검증으로는 확인 불가** — GitHub 서버가 필터를 적용하는 동작이라 로컬 재현이 안 된다.
+      확인법: 이 plan 을 닫는 커밋(`.claude/**` 전용)을 push 한 뒤 `gh run list --branch main` 에
+      새 실행이 **생기지 않는지** 본다. 생기면 필터가 의도대로 동작하지 않는 것이므로 재조사한다.
 
 # Review Disposition
 
