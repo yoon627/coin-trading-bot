@@ -294,6 +294,11 @@ main push    ──> test ──> multi-arch Docker image ──> GHCR ──> S
 main manual  ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
 ```
 
+**문서 전용 push 는 배포하지 않는다.** `on.push.paths-ignore` 가 `**.md`·`.claude/**`·`wiki/**`·`docs/**`
+만 바뀐 push 에서 워크플로를 건너뛴다 — main push 가 곧 컨테이너 재생성(=트레이딩 엔진 재시작)이라
+문서 커밋으로 봇을 재시작시키지 않기 위해서다. 코드와 문서가 섞인 push 는 정상 배포된다.
+문서만 바꾼 뒤 그래도 배포해야 하면 Actions 에서 `workflow_dispatch` 로 수동 실행한다.
+
 Vultr 자동 배포는 `test`와 GHCR push가 모두 성공한 뒤에만 실행된다. Actions repository secrets에
 `VULTR_DEPLOY_ENV`(운영 배포용 `.env`), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`,
 `VULTR_SSH_USER`를 등록해야 한다. `VULTR_API_KEY`는 기존 인스턴스에 SSH로 배포하는 경로에서는
