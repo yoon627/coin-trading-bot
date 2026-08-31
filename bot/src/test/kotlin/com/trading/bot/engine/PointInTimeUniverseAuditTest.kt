@@ -77,7 +77,9 @@ class PointInTimeUniverseAuditTest {
             out.appendLine("- 구간: ${period.start} ~ ${period.end}, 수집일 ${period.collectedOn}")
             out.appendLine("- **look-ahead horizon: ${horizonDays}일** (국면 간 비교 시 병기 — 낮은 overlap 이 국면 탓인지 horizon 탓인지 못 가린다)")
             out.appendLine("- 커밋된 로스터(${committed.size}): ${committed.joinToString(" ")}")
-            out.appendLine("- 입력 해시: pit=${hash(pit)} placebo=${hash(placebo)}")
+            val pitHash = dumpAndHash(pit, "${period.regime.dir}-pit")
+            val placeboHash = dumpAndHash(placebo, "${period.regime.dir}-placebo")
+            out.appendLine("- 입력 해시: pit=$pitHash placebo=$placeboHash (원본은 `build/reports/universe-snapshot-*.json`)")
             out.appendLine()
 
             if (pitSel.incomplete) {
@@ -158,7 +160,12 @@ class PointInTimeUniverseAuditTest {
         return PointInTimeUniverse.Snapshot(asOf.toString(), candidates, candles, missing)
     }
 
-    /** 구간 끝 기준 200봉이 실제로 존재하고 구간 시작까지 닿는가 — fixture 를 만들 수 있는지의 실측. */
+    /**
+     * 구간 끝 기준 200봉이 실제로 존재하고 **구간 전체를 덮는가** — fixture 를 만들 수 있는지의 실측.
+     *
+     * 봉 수와 시작 도달만 보면 부족하다. 거래가 중단된 마켓은 `to=구간끝+1d` 로 받아도 최신 봉이 구간
+     * 종료보다 한참 이전일 수 있고, 그러면 200봉이 있어도 **구간을 덮지 못한다**. 양끝을 다 본다.
+     */
     private fun fills200(client: WebClient, market: String, end: LocalDate, start: LocalDate): Boolean {
         Thread.sleep(SPACING_MS)
         val candles = try {
@@ -167,8 +174,9 @@ class PointInTimeUniverseAuditTest {
             return false
         }
         if (candles.size < 200) return false
+        val newest = LocalDate.parse(candles.first().candleDateTimeKst.substring(0, 10))
         val oldest = LocalDate.parse(candles.last().candleDateTimeKst.substring(0, 10))
-        return !oldest.isAfter(start)
+        return !oldest.isAfter(start) && !newest.isBefore(end.minusDays(TAIL_TOLERANCE_DAYS))
     }
 
     private fun fetchKrwMarkets(client: WebClient): List<String> {
@@ -197,10 +205,21 @@ class PointInTimeUniverseAuditTest {
         }
     }
 
-    private fun hash(snapshot: PointInTimeUniverse.Snapshot): String {
+    /**
+     * 스냅샷을 파일로 **보존하고** 해시를 돌려준다.
+     *
+     * 해시만 남기면 provenance 요구가 실질적으로 충족되지 않는다 — `/v1/market/all` 과 과거 응답이 바뀌면
+     * 같은 해시의 입력을 다시 만들 수 없어서 selector 재실행이 불가능하다. 원본을 함께 떠 둬야
+     * "이 입력으로 이 답이 나왔다"가 검증 가능해진다(순수 함수라 입력만 있으면 결정적으로 재현된다).
+     */
+    private fun dumpAndHash(snapshot: PointInTimeUniverse.Snapshot, label: String): String {
         val bytes = mapper.writeValueAsBytes(snapshot)
-        return MessageDigest.getInstance("SHA-256").digest(bytes).take(8)
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).take(8)
             .joinToString("") { "%02x".format(it) }
+        val file = File("build/reports/universe-snapshot-$label-$digest.json")
+        file.parentFile.mkdirs()
+        file.writeBytes(bytes)
+        return digest
     }
 
     /**
@@ -224,5 +243,8 @@ class PointInTimeUniverseAuditTest {
 
         /** `MarketDataIngestionService.CANDLE_REQUEST_SPACING_MS` 와 같은 값 — 실측 상한 초당 10회. */
         const val SPACING_MS = 150L
+
+        /** 구간 종료일 근처까지 닿으면 덮은 것으로 본다 — 마지막 며칠 결측까지 탈락시키지는 않는다. */
+        const val TAIL_TOLERANCE_DAYS = 3L
     }
 }

@@ -1,6 +1,8 @@
 package com.trading.bot.engine
 
 import com.trading.common.domain.Candle
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 /**
  * 시점 중립 유니버스 selector (#112).
@@ -32,8 +34,16 @@ internal object PointInTimeUniverse {
     /** 변동성이 없어 전략 비교에 무의미하다. README 가 `KRW-USDT` 하나만 적어 재현이 안 되던 것을 상수로 고정. */
     val STABLECOINS = setOf("KRW-USDT", "KRW-USDC", "KRW-DAI", "KRW-TUSD", "KRW-BUSD", "KRW-PYUSD")
 
+    /**
+     * 30봉이 덮어도 되는 최대 달력일. 봉 **수**만 세면 거래 공백이 있는 종목이 통과해, 랭킹 기준이
+     * "t0 직전 30일 평균"이 아니라 "관측된 30 거래일 평균"으로 종목마다 달라진다.
+     * 업비트는 24/7 이라 정상 종목은 30봉 = 30일이고, 여유 2일은 결측 한두 개를 허용하는 폭이다.
+     */
+    const val MAX_WINDOW_SPAN_DAYS = MIN_HISTORY_DAYS + 2L
+
     const val EXCLUDED_STABLECOIN = "stablecoin"
     const val EXCLUDED_SHORT_HISTORY = "history<$MIN_HISTORY_DAYS"
+    const val EXCLUDED_GAPPED_WINDOW = "window>${MAX_WINDOW_SPAN_DAYS}d"
 
     /**
      * 선정 입력. [candles] 는 마켓별로 **t0 직전** 일봉(최대 [MIN_HISTORY_DAYS]개)이다.
@@ -58,6 +68,14 @@ internal object PointInTimeUniverse {
         val excluded: Map<String, String>,
     )
 
+    /** 창의 가장 오래된 봉부터 t0 까지의 달력일. 날짜가 없는 입력은 검사를 건너뛴다(0 반환). */
+    private fun windowSpanDays(asOf: String, window: List<Candle>): Long {
+        val oldest = window.lastOrNull()?.candleDateTimeKst?.take(10)?.takeIf { it.isNotBlank() } ?: return 0
+        return runCatching {
+            ChronoUnit.DAYS.between(LocalDate.parse(oldest), LocalDate.parse(asOf))
+        }.getOrDefault(0)
+    }
+
     fun select(snapshot: Snapshot): Selection {
         // 완전성 먼저 — 누락이 있으면 랭킹 자체를 내지 않는다. 부분 결과를 내면 누락분이 거래대금 0 으로
         // 취급돼 탈락하고, 그 자리를 다른 마켓이 부당하게 채운 top-N 이 진단 결론으로 쓰인다.
@@ -76,6 +94,11 @@ internal object PointInTimeUniverse {
             val window = snapshot.candles[market].orEmpty()
             if (window.size < MIN_HISTORY_DAYS) {
                 excluded[market] = EXCLUDED_SHORT_HISTORY
+                continue
+            }
+            // 봉 수가 찼어도 창이 늘어져 있으면 다른 종목과 같은 기준으로 비교할 수 없다.
+            if (windowSpanDays(snapshot.asOf, window) > MAX_WINDOW_SPAN_DAYS) {
+                excluded[market] = EXCLUDED_GAPPED_WINDOW
                 continue
             }
             // 합계가 아니라 평균 — 봉 수가 다르면 합계는 이력이 긴 쪽을 유리하게 만든다.

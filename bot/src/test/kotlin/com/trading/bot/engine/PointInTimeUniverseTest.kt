@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.common.domain.Candle
+import java.time.LocalDate
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -14,9 +15,23 @@ import org.junit.jupiter.api.Test
  */
 class PointInTimeUniverseTest {
 
-    private fun candles(market: String, count: Int, tradePrice: Double): List<Candle> =
-        (0 until count).map {
-            Candle(market = market, candleAccTradePrice = tradePrice, tradePrice = 1000.0)
+    private val ASOF: LocalDate = LocalDate.parse("2023-11-23")
+
+    /** t0 직전부터 하루씩 거슬러 올라가는 연속 일봉(최신순) — 실제 API 응답과 같은 순서·간격. */
+    private fun candles(
+        market: String,
+        count: Int,
+        tradePrice: Double,
+        stepDays: Long = 1,
+    ): List<Candle> =
+        (0 until count).map { i ->
+            val d = ASOF.minusDays(1L + i * stepDays)
+            Candle(
+                market = market,
+                candleDateTimeKst = "${d}T09:00:00",
+                candleAccTradePrice = tradePrice,
+                tradePrice = 1000.0,
+            )
         }
 
     /** 거래대금이 큰 순서대로 이름을 붙인 후보 n개. m01 이 가장 크다. */
@@ -32,7 +47,7 @@ class PointInTimeUniverseTest {
         }
         val all = generated + extra
         return PointInTimeUniverse.Snapshot(
-            asOf = "2023-11-23",
+            asOf = ASOF.toString(),
             candidates = all.keys.toList() + missing,
             candles = all,
             missing = missing,
@@ -93,6 +108,25 @@ class PointInTimeUniverseTest {
     }
 
     @Test
+    fun `excludes markets whose window has date gaps`() {
+        // 봉 **수**만 세면 거래 공백이 있는 종목이 통과한다 — 30봉이 30일이 아니라 60일을 덮으면
+        // "t0 직전 30일 평균"이 아니라 "관측된 30 거래일 평균"이 되어 랭킹 기준이 종목마다 달라진다.
+        val gapped = "KRW-GAP"
+        val result = PointInTimeUniverse.select(
+            snapshotOf(
+                count = 12,
+                extra = mapOf(
+                    // 봉 수는 30개로 완비지만 이틀에 하나씩이라 60일을 덮는다.
+                    gapped to candles(gapped, PointInTimeUniverse.MIN_HISTORY_DAYS, 99_000_000_000.0, stepDays = 2),
+                ),
+            ),
+        )
+
+        assertFalse(result.universe.contains(gapped), "창이 늘어진 종목은 제외: ${result.universe}")
+        assertEquals(PointInTimeUniverse.EXCLUDED_GAPPED_WINDOW, result.excluded[gapped])
+    }
+
+    @Test
     fun `breaks ties deterministically by market code`() {
         // 같은 거래대금이면 순서가 흔들리면 안 된다 — 재현성이 깨진다.
         val tied = (1..10).associate { i ->
@@ -100,7 +134,7 @@ class PointInTimeUniverseTest {
             market to candles(market, PointInTimeUniverse.MIN_HISTORY_DAYS, 5_000_000_000.0)
         }
         val snapshot = PointInTimeUniverse.Snapshot(
-            asOf = "2023-11-23",
+            asOf = ASOF.toString(),
             candidates = tied.keys.shuffled(),
             candles = tied,
         )
