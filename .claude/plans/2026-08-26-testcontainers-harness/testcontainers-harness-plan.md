@@ -33,10 +33,11 @@ updated: 2026-08-26
 - 2026-08-31: **세션 공백 사이 worktree 디렉토리가 삭제됐다** — 커밋은 브랜치에 온전했고(`35fa222`) worktree 재생성 후 최신 `origin/main`(3커밋 앞섬) 위로 rebase, **충돌 없음**. 그 사이 머지된 #149 의 `paths-ignore` 와 이 브랜치의 `services:` 가 모두 보존됨을 확인했다(`paths-ignore` 는 push 전용이라 PR CI 에는 영향 없음).
 - 2026-08-31: **pre-push codex 2차 지적 2건 반영 후 통과**(`no blocking issues`). PR #153 생성, CI 통과.
 - 2026-08-31: ⚠️ **CI 초록불만으로는 acceptance 를 못 채운다는 걸 확인.** gradle 은 성공 시 테스트별 결과를 남기지 않아 CI 로그에서 skip 여부를 관찰할 수 없었다(`DB_TESTS_REQUIRED: true` 라인만 보임). 논리적으로는 강제 실패 장치가 보장하지만 *관찰* 은 아니므로, **CI 에 결과 XML 을 검증해 로그에 남기는 스텝을 추가**했다(로컬 스크립트와 같은 판정).
+- 2026-08-31: **CI 로그에서 실행을 관찰**했다 — `DB 통합테스트: 실행 3건 / skip 0건`. Acceptance 7/7 충족.
 
 # Next
 
-CI 재실행에서 "DB 통합테스트: 실행 3건 / skip 0건" 이 로그에 찍히는지 확인 → 머지.
+머지 → worktree·브랜치 정리. 머지 시 자동 배포가 돌지만 앱 코드 변경은 없다(테스트·CI·문서만).
 
 # Decisions
 
@@ -66,7 +67,7 @@ CI 재실행에서 "DB 통합테스트: 실행 3건 / skip 0건" 이 로그에 �
 - [x] **매핑 왕복이 값을 보존한다** — `upsert` → `loadStates` 로 20개 필드가 되돌아온다. 타입 경계(JSON·enum·LocalDate·Instant)를 **명시값으로** 채운 픽스처로 검증(전부 null 이면 vacuous)
 - [x] **`uq_trading_states_user_ticker` 가 작동한다** — 같은 (user, ticker) 두 번째 insert 가 거부되고, `upsert` 는 그 경로에서 update 로 동작
 - [x] **부분 unique index 가 작동한다** — `trade_executions` 의 `exchange_order_id` 가 NULL 이면 중복 허용, non-NULL 이면 거부
-- [ ] **CI 통과 + skip 되지 않음** — `services: postgres` + `DB_TESTS_REQUIRED=true` 에 더해, **CI 스텝이 결과 XML 을 검증해 "실행 N건 / skip N건" 을 로그에 남긴다**. 그 줄을 눈으로 확인해야 충족(초록불만 보고 통과로 치지 않는다)
+- [x] **CI 통과 + skip 되지 않음** — `services: postgres` + `DB_TESTS_REQUIRED=true` 에 더해, **CI 스텝이 결과 XML 을 검증해 "실행 N건 / skip N건" 을 로그에 남긴다**. **CI 로그에서 관찰 완료: `DB 통합테스트: 실행 3건 / skip 0건`**(run 33404887625, conclusion success)
 - [x] **비용 보고** — 13s(전) → 14s(skip) → 16s(DB 포함). 의존성 순증 0
 - [x] **문서 동기화** — README 「빌드와 테스트」에 실행법 추가. wiki 는 갱신 대상 아님(`deployment-stack` 의 test 언급은 배포 타이밍 맥락, `jdk-gradle-toolchain` 은 JDK 호환성 주제). **Testcontainers 를 피한 이유는 wiki ingest 후보** — Report 에서 제안
 
