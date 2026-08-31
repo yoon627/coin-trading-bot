@@ -1,8 +1,8 @@
 ---
 title: testcontainers-harness — 실제 Postgres 로 R2DBC 매핑을 검증하는 통합테스트 하네스 (#53)
-status: in_progress
+status: done
 started: 2026-08-26
-updated: 2026-08-26
+updated: 2026-09-01
 ---
 
 # Goal
@@ -34,10 +34,11 @@ updated: 2026-08-26
 - 2026-08-31: **pre-push codex 2차 지적 2건 반영 후 통과**(`no blocking issues`). PR #153 생성, CI 통과.
 - 2026-08-31: ⚠️ **CI 초록불만으로는 acceptance 를 못 채운다는 걸 확인.** gradle 은 성공 시 테스트별 결과를 남기지 않아 CI 로그에서 skip 여부를 관찰할 수 없었다(`DB_TESTS_REQUIRED: true` 라인만 보임). 논리적으로는 강제 실패 장치가 보장하지만 *관찰* 은 아니므로, **CI 에 결과 XML 을 검증해 로그에 남기는 스텝을 추가**했다(로컬 스크립트와 같은 판정).
 - 2026-08-31: **CI 로그에서 실행을 관찰**했다 — `DB 통합테스트: 실행 3건 / skip 0건`. Acceptance 7/7 충족.
+- 2026-09-01: **PR #153 머지(`58cb5c9`).** CI `test pass 2m16s`, pre-push codex `no blocking issues`. worktree·로컬·원격 브랜치 정리 완료, 로컬 main 최신화.
 
 # Next
 
-머지 → worktree·브랜치 정리. 머지 시 자동 배포가 돌지만 앱 코드 변경은 없다(테스트·CI·문서만).
+없음 — 완료. 후속 후보는 `# Deferred` 참조(Testcontainers 재도입 가능성, DB 테스트 공통 베이스 추출).
 
 # Decisions
 
