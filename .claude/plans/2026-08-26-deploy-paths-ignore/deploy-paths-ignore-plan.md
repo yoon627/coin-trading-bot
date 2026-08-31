@@ -155,6 +155,15 @@ tripwire baseline 실패)이며, 둘 다 이 작업 범위 밖이다.
 
 # Deferred
 
+**GitHub Issues 로 이관했다 (2026-08-31)** — 이 plan 이 닫혀도 유실되지 않는다.
+
+| 항목 | 이슈 |
+|---|---|
+| 가드 목록 ↔ `paths-ignore` 동기를 CI 로 강제 | **#151** |
+| `wiki/verify.sh` 페이지 수 tripwire baseline 실패 | **#152** |
+
+아래는 이관 당시의 원본 기록이다.
+
 - **배포가 스킵돼도 job 은 `success` 로 보인다.** `d21a3eb` 실행이 stale 가드에 걸려 전 단계를
   건너뛰었는데 결론은 success 였다. 배포 확인은 job 결론이 아니라 `App healthy!` 로그로 해야 한다.
   심각도: 중.
