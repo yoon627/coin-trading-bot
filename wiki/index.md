@@ -24,6 +24,7 @@
 - [[plan-git-tracking]] — `.claude/plans/` 를 git 추적하는 이유
 - [[worktree-workflow]] — 분기·병렬 제약·머지 후 자동 정리
 - [[prepush-codex-review]] — push 게이트: P0/P1 차단, fail-closed, 480초 timeout
+- [[db-integration-test-harness]] — DB 통합테스트는 Testcontainers 가 아니라 외부 제공 Postgres 를 쓴다 (Docker 29 비호환)
 - [[docs-code-sync]] — 어떤 변경이 어떤 문서를 갱신시키는가
 - [[github-issues-backlog]] — 백로그는 이슈 단일 소스, wiki 는 백로그가 아니다
 - [[strategy-evolution-expectations]] — 반자동 루프이며 연 0~2건 승격이 정상
@@ -39,6 +40,7 @@
 - [[lesson-resume-state-sources]] — "진행하던 작업" 은 6곳을 모두 봐야 찾는다
 - [[lesson-llm-alpha-verification]] — LLM 알파는 과거 백테스트로 증명 불가(학습 오염), 전향적 shadow mode + LLM 없는 baseline 선행
 - [[lesson-rollback-removal]] — 롤백 보험을 거두기 전에 "무엇으로 되돌리는가"를 먼저 정의할 것
+- [[lesson-skip-is-not-pass]] — 건너뛴 테스트는 통과가 아니다 (초록불이 미검증을 가린다)
 
 ## entity — 외부 사실·버전
 
