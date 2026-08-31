@@ -147,6 +147,20 @@ class PointInTimeUniverseTest {
     }
 
     @Test
+    fun `refuses to judge when a middle candle has an unparseable date`() {
+        // 양끝만 검증하면 중간 봉의 날짜가 깨져도 그 봉의 거래대금이 평균에 섞인 채 감사가 "정상 완료"된다.
+        val broken = "KRW-MID"
+        val window = candles(broken, PointInTimeUniverse.MIN_HISTORY_DAYS, 99_000_000_000.0)
+            .toMutableList()
+        window[10] = window[10].copy(candleDateTimeKst = "")
+
+        val result = PointInTimeUniverse.select(snapshotOf(count = 12, extra = mapOf(broken to window)))
+
+        assertTrue(result.incomplete, "중간 봉 날짜가 불량이면 판정하지 않는다")
+        assertTrue(result.universe.isEmpty(), "incomplete 면 유니버스를 내지 않는다: ${result.universe}")
+    }
+
+    @Test
     fun `breaks ties deterministically by market code`() {
         // 같은 거래대금이면 순서가 흔들리면 안 된다 — 재현성이 깨진다.
         val tied = (1..10).associate { i ->
