@@ -3,6 +3,7 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitApiException
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
+import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradeRecord
@@ -275,6 +276,7 @@ class TradeExecutionServiceTest {
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
             exchangeOrderId = "dup-1", userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         service.saveAndNotify(record, client, null, null)
@@ -291,6 +293,7 @@ class TradeExecutionServiceTest {
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
             exchangeOrderId = "new-1", userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         service.saveAndNotify(record, client, null, null)
@@ -308,6 +311,7 @@ class TradeExecutionServiceTest {
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
             exchangeOrderId = "fill-1", userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         val recorded = service.commitFill(
@@ -350,9 +354,9 @@ class TradeExecutionServiceTest {
         coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
     }
 
-    // --- 감사 기록의 파생값 ---
-    // fee 는 도메인이 아니라 saveAudit 이 유도한다. 그래야 TradeRecord 생성 경로 다섯 곳이 전부
-    // 한 지점으로 수렴해 공식이 흩어지지 않고, 손익이 없는 매수 행에도 수수료가 남는다.
+    // --- 감사 기록의 수수료 ---
+    // 공식은 saveAudit 한 곳에 모으되, **어떤 기준을 쓸지는 경로가 정한다**(#133). totalAmount 가 그 체결의
+    // 대금이 아닌 경로(엔진 매수 = 포지션 전체 원가)가 있어서, 무조건 유도하면 수수료가 부풀려진다.
 
     @Test
     fun `saveAudit derives the fee for buy rows too`() = runTest {
@@ -366,11 +370,53 @@ class TradeExecutionServiceTest {
                 ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.002,
                 totalAmount = 100000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
                 exchangeOrderId = "fee-buy", userId = 1L,
+                fee = FeeBasis.Estimate,
             )
         )
 
         // 편도 = 왕복(0.001)의 절반 → 100,000 × 0.0005 = 50원
         assertEquals(50.0, entity.captured.fee, 1e-9)
+    }
+
+    @Test
+    fun `saveAudit stores the measured fee verbatim instead of deriving it`() = runTest {
+        // totalAmount(1,040,000)로 유도하면 520원이 된다. 실측이 있으면 그 값이 이긴다 — 이게 #133 의 요지다.
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fee-measured") } returns Mono.just(false)
+        val entity = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(entity)) } returns
+            Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
+
+        service.saveAudit(
+            TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.BUY, price = 52000000.0, volume = 0.02,
+                totalAmount = 1040000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+                fee = FeeBasis.Measured(12.3),
+                exchangeOrderId = "fee-measured", userId = 1L,
+            )
+        )
+
+        assertEquals(12.3, entity.captured.fee, 1e-9)
+    }
+
+    @Test
+    fun `saveAudit leaves the fee unrecorded rather than deriving a wrong one`() = runTest {
+        // basis 를 모르는 경로(주문 응답 없음). 0 = 미기록은 V21 이 세운 규약이다.
+        // 여기서 추정으로 떨어지면 부풀려진 값이 맞는 값과 구분되지 않는다.
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fee-unknown") } returns Mono.just(false)
+        val entity = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(entity)) } returns
+            Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
+
+        service.saveAudit(
+            TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.BUY, price = 52000000.0, volume = 0.02,
+                totalAmount = 1040000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+                fee = FeeBasis.Unrecorded,
+                exchangeOrderId = "fee-unknown", userId = 1L,
+            )
+        )
+
+        assertEquals(0.0, entity.captured.fee, 1e-9)
     }
 
     @Test
@@ -385,6 +431,7 @@ class TradeExecutionServiceTest {
                 ticker = "KRW-BTC", side = TradeSide.SELL, price = 52000000.0, volume = 0.002,
                 totalAmount = 104000.0, pnlPercent = 3.9, pnlAmount = 3900.0, strategy = "knee_reversal",
                 exchangeOrderId = "audit-sell", userId = 1L,
+                fee = FeeBasis.Estimate,
             )
         )
 
