@@ -27,8 +27,8 @@ echo "pages: $count"
 if [ "$count" -eq 0 ]; then
   echo "FAIL: 페이지를 하나도 찾지 못했다 (검사가 통째로 생략되는 상태)"; exit 1
 fi
-if [ "$count" -lt 26 ] || [ "$count" -gt 30 ]; then
-  echo "FAIL: 페이지 수 $count 가 기대 범위(28±2) 밖"; fail=1
+if [ "$count" -lt 31 ] || [ "$count" -gt 35 ]; then
+  echo "FAIL: 페이지 수 $count 가 기대 범위(33±2) 밖"; fail=1
 fi
 
 # 선두 `---` 블록(frontmatter)만 출력. 첫 줄이 `---` 이 아니면 아무것도 내지 않는다.
