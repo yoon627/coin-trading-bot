@@ -198,8 +198,10 @@ class PointInTimeUniverseAuditTest {
         }
         if (candles.size < 200) return false
         // 날짜를 못 읽으면 커버 여부를 확인할 수 없다 — 확인 못 한 것을 "충족"으로 세지 않는다.
-        val newest = parseKstDate(candles.first().candleDateTimeKst) ?: return false
-        val oldest = parseKstDate(candles.last().candleDateTimeKst) ?: return false
+        // 양끝만 보면 중간 봉이 깨져도 통과하므로 200봉 전부를 검증한다(selector 의 창 검증과 같은 규칙).
+        val dates = candles.map { parseKstDate(it.candleDateTimeKst) ?: return false }
+        val newest = dates.max()
+        val oldest = dates.min()
         return !oldest.isAfter(start) && !newest.isBefore(end.minusDays(TAIL_TOLERANCE_DAYS))
     }
 
