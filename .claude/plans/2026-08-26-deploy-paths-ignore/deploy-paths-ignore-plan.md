@@ -1,6 +1,6 @@
 ---
 title: deploy-paths-ignore — 문서 전용 push 가 운영 봇을 재시작시키지 않게 한다
-status: in_progress
+status: done
 started: 2026-08-26
 updated: 2026-08-31
 ---
@@ -15,6 +15,12 @@ updated: 2026-08-31
 - 2026-08-26 실제 사고로 발견. `#132` 작업 마무리 중 plan 커밋 `bcef6ec` 이 배포를 트리거해
   운영 로그에 `Container app-app-1 Recreated` 가 찍혔다 — **문서 커밋이 실거래 봇을 재시작시켰다.**
 - 2026-08-26 Explore 완료. 아래 4가지를 코드·문서로 확인.
+- 2026-08-26 code-reviewer + codex → **REQUEST CHANGES**. 내가 놓친 Critical(자가치유 파괴)을 반영해
+  stale 가드를 코드 diff 기준으로 함께 전환. wiki·README 동기화 추가.
+- 2026-08-31 PR #149 머지(squash `e8ed9d4`) → 배포 **실제 실행** 확인(`App healthy!`).
+  worktree·로컬(`6540f61`)·원격 브랜치 정리, 로컬 main 동기화.
+- 2026-08-31 **필터 실동작 관찰 완료** — `253fe58`(plan 전용 push)이 워크플로를 만들지 않았다.
+  이것으로 마지막 Acceptance 항목이 충족돼 **done**.
 
 ## 확인한 것
 
@@ -38,11 +44,11 @@ updated: 2026-08-31
 
 # Next
 
-**PR #149 머지·배포 완료** (squash `e8ed9d4`, `App healthy!` 확인). worktree·브랜치 정리 완료.
+**종료.** PR #149 머지·배포(`e8ed9d4`, `App healthy!`) → 필터 실동작 관찰까지 확인 완료.
+Acceptance 전 항목이 증거로 충족됐다.
 
-남은 것은 **필터 실동작 관찰** 하나다 — 이 plan 을 닫는 커밋이 그 조건(`.claude/**` 전용)에
-정확히 해당하므로, push 후 `gh run list --branch main` 에 새 실행이 생기지 않으면 검증 완료다.
-생기면 필터가 안 먹는 것이므로 `paths-ignore` 패턴(특히 `.claude/**`)을 재조사한다.
+이 plan 이 닫혀도 남는 것은 `# Deferred` 2건(가드 목록 동기 CI 강제 / `wiki/verify.sh` 페이지 수
+tripwire baseline 실패)이며, 둘 다 이 작업 범위 밖이다.
 
 # Decisions
 
@@ -122,10 +128,11 @@ updated: 2026-08-31
       `Container app-app-1 Recreated` → `App healthy! (e8ed9d48…)`.
       이 PR 은 `.yml` 변경이라 필터에 걸리지 않는 것도 함께 확인됐다(실행이 생성됐다).
 
-- [ ] ⏸ **필터 실동작 — 관찰 대기.** 문서 전용 push 가 워크플로를 만들지 않아야 한다.
-      **정적 검증으로는 확인 불가** — GitHub 서버가 필터를 적용하는 동작이라 로컬 재현이 안 된다.
-      확인법: 이 plan 을 닫는 커밋(`.claude/**` 전용)을 push 한 뒤 `gh run list --branch main` 에
-      새 실행이 **생기지 않는지** 본다. 생기면 필터가 의도대로 동작하지 않는 것이므로 재조사한다.
+- [x] **필터 실동작 — 관찰로 확인 완료 (2026-08-31).**
+      `253fe58`(`.claude/**` 전용 push)이 원격 main 에 올라갔는데
+      **그 커밋의 워크플로 실행이 생성되지 않았다** — `gh run list --branch main` 의 최신 실행은
+      여전히 직전 코드 커밋 `e8ed9d4` 다. 변경 전이었다면 전체 빌드 + 운영 배포 + 봇 재시작을
+      일으켰을 커밋이다. `**.md`·`wiki/**`·`docs/**` 는 같은 원리라 별도 관찰 없이 성립한다고 본다.
 
 # Review Disposition
 
