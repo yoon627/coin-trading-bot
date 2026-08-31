@@ -420,6 +420,28 @@ class TradeExecutionServiceTest {
     }
 
     @Test
+    fun `saveAudit refuses a measured fee that would poison the column`() = runTest {
+        // FeeBasis.Measured 는 public 생성자라 파싱 가드를 우회한 값이 들어올 수 있다.
+        // NaN 이 double precision 컬럼에 들어가면 이후 SUM(fee) 이 영구히 NaN 이 된다.
+        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fee-nan") } returns Mono.just(false)
+        val entity = slot<TradeExecutionEntity>()
+        every { tradeExecutionRepository.save(capture(entity)) } returns
+            Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
+
+        service.saveAudit(
+            TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.BUY, price = 52000000.0, volume = 0.02,
+                totalAmount = 1040000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
+                fee = FeeBasis.Measured(Double.NaN),
+                exchangeOrderId = "fee-nan", userId = 1L,
+            )
+        )
+
+        assertEquals(0.0, entity.captured.fee, 1e-9)
+        assertFalse(entity.captured.fee.isNaN(), "NaN 은 컬럼에 절대 들어가면 안 된다")
+    }
+
+    @Test
     fun `saveAudit carries the strategy and realized amount onto the execution row`() = runTest {
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "audit-sell") } returns Mono.just(false)
         val entity = slot<TradeExecutionEntity>()

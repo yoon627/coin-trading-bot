@@ -207,7 +207,10 @@ class TradeExecutionService(
                 // 추정끼리는 매수·매도 양쪽에서 편도로 잡혀 두 행을 합치면 왕복분이 되지만, 엔진
                 // 라운드트립은 매수=실측·매도=추정 혼합이라 그 등식이 정확히 성립하지 않는다.
                 fee = when (val basis = record.fee) {
-                    is FeeBasis.Measured -> basis.amount
+                    // 파싱 단계에서 이미 거르지만 여기서 한 번 더 본다 — `Measured` 는 public 생성자라
+                    // 다른 경로가 생기면 검증을 건너뛸 수 있고, NaN 이 컬럼에 들어가면 이후 SUM(fee) 이
+                    // 영구히 NaN 이 된다(되돌릴 수 없다). DB 에 닿는 마지막 지점이 방어할 자리다.
+                    is FeeBasis.Measured -> basis.amount.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
                     FeeBasis.Estimate -> TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
                     // 0 = 미기록. V21 이 세운 규약이라 이 값을 새로 정의하지 않는다.
                     FeeBasis.Unrecorded -> 0.0

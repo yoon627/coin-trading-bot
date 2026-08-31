@@ -200,6 +200,22 @@ codex M3 의 fixture 케이스를 그대로 채택한다.
 | — | `TradeRecord` 필수 인자 = compat 파괴 | **false-positive** | 리뷰어가 반증 — `common` 참조 0건, 발행 아티팩트 없음, 기본값 금지는 의도된 설계. |
 | — | `recoverSellFromBalance` 도 `Unrecorded` 여야 | **false-positive** | 원칙은 "주문 응답 유무"가 아니라 "`totalAmount` 가 그 체결의 대금인가". 매도 복구는 전량 소진 확인 후 기록해 대금 성격이 맞다. |
 
+## codex 최종 diff 재검토 (2026-09-01) — Critical 0 · Major 0 · Minor 2
+
+**pre-push codex 게이트가 이 push 에서 실행되지 않았다**(로그 없음·출력 없음). 훅 `:46-48` 이 stdin 에서
+ref 를 못 읽으면 조용히 `exit 0` 하는데, 같은 백그라운드 방식으로 돌린 이전 push 는 정상 동작해
+원인은 ⚠️미확정이다. 실질 공백은 따로 있었다 — code-review 의 codex 는 **반영 이전 diff** 를 봤고
+그 뒤 추가한 NaN 가드·fixture·simplify 는 검토를 안 거쳤다. 그래서 최종 diff 로 직접 돌렸다.
+
+| # | 지적 | 처분 |
+|---|---|---|
+| m1 | `FeeBasis.Measured` 가 public 생성자라 `Measured(NaN)` 을 직접 만들 수 있어 **타입이 주장하는 불변식을 강제 못 한다** | **fix** — DB 에 닿는 마지막 지점(`saveAudit`)에 최종 방어 + 테스트. 파싱 가드와 중복이지만, 되돌릴 수 없는 결과(SUM 영구 NaN)를 막는 경계 방어라 정당하다 |
+| m2 | `getOrder → … → DB fee` 전 구간을 한 테스트가 잇지 않는다 | **wontfix** — 양쪽 절반이 각각 덮인다(`result.fee` 단언 + `saveAudit` 매핑 테스트). 이음매는 직접 호출이라 세 번째 테스트는 중복이다. codex 도 "구현 결함은 아님"으로 분류 |
+
+codex 가 확인해 준 것: smart-cast 변경은 **동작 보존**(`filled == null && executed > 0.0` 불가) ·
+`volume: null` 역직렬화 정상 · `TradeRecord` 생성부 누락 없음 · 이번 변경과 충돌하는 주석 drift 없음 ·
+`Measured(0.0)` 을 유효 실측으로 받는 것이 옳고 **상한은 두지 않는 편이 낫다**(정상 거래 오판 위험).
+
 **mutation 으로 세 가드를 검증했다** — 각각 되돌리면 테스트가 잡는다:
 
 | mutation | 결과 |
