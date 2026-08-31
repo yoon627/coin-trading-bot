@@ -71,6 +71,25 @@ jobs:
           DB_TESTS_REQUIRED: 'true'
         run: ./gradlew test --parallel
 
+      # gradle 은 성공하면 테스트별 결과를 남기지 않는다 — 그래서 DB 통합테스트가 조용히 건너뛰어져도
+      # 초록불로 보인다. 실제로 실행됐는지를 결과 XML 로 확인해 로그에 남긴다.
+      - name: DB 통합테스트가 실제로 실행됐는지 확인
+        run: |
+          set -euo pipefail
+          XML=bot/build/test-results/test/TEST-com.trading.bot.persistence.TradingStateRoundTripTest.xml
+          if [ ! -f "$XML" ]; then
+            echo "::error::DB 통합테스트 결과가 없다 — 실행되지 않았다 ($XML)"
+            exit 1
+          fi
+          attrs="$(head -3 "$XML")"
+          ran="$(printf '%s' "$attrs" | grep -o 'tests="[0-9]*"' | head -1 | tr -dc '0-9')"
+          skipped="$(printf '%s' "$attrs" | grep -o 'skipped="[0-9]*"' | head -1 | tr -dc '0-9')"
+          echo "DB 통합테스트: 실행 ${ran:-?}건 / skip ${skipped:-?}건"
+          if [ "${ran:-0}" = "0" ] || [ "${skipped:-1}" != "0" ]; then
+            echo "::error::DB 통합테스트가 건너뛰어졌다 — services: postgres 와 TEST_DB_* 를 확인하라"
+            exit 1
+          fi
+
   build-and-push:
     needs: test
     # PR 에선 빌드/푸시하지 않음 (테스트만 게이트). main 푸시·수동 실행에서만 이미지 생성.
