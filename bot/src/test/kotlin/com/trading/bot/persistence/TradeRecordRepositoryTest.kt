@@ -1,5 +1,6 @@
 package com.trading.bot.persistence
 
+import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.persistence.entity.TradeRecordEntity
@@ -37,6 +38,7 @@ class TradeRecordRepositoryTest {
                 strategy = "knee_reversal",
                 reason = "TAKE_PROFIT",
                 userId = 1L,
+                fee = FeeBasis.Estimate,
             )
         )
 
