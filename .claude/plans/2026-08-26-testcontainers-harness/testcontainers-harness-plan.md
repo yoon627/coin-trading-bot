@@ -30,10 +30,13 @@ updated: 2026-08-26
 - 2026-08-26: **구현·로컬 검증 완료.** 테스트 3건이 실제 Postgres 에서 통과(`tests=3 skipped=0 failures=0`). **안전장치 3경로를 각각 관찰로 확인**했다 — DB 있음 → 3 실행/0 skip, DB 없음 → 3 skip/BUILD SUCCESS, DB 없음+`DB_TESTS_REQUIRED=true` → `IllegalStateException`/BUILD FAILED.
 - 2026-08-26: **자체 리뷰에서 결함 1건 발견·수정** — 남의 DB 를 빌려 쓰면서 만든 데이터를 안 지웠다. `@AfterEach` 정리를 넣고 **실제로 지워지는지 관찰**했다(같은 컨테이너에 2회 연속 실행 후 `users/trading_states/trade_executions = 0/0/0`).
 - 2026-08-26: **비용 측정** — 하네스 전 13s → DB 없이(skip) 14s → DB 포함 전체 16s(+컨테이너 기동 수 초). **의존성은 순증 0** — Testcontainers 를 넣었다 뺐고 `build.gradle.kts` 는 원복됐다.
+- 2026-08-31: **세션 공백 사이 worktree 디렉토리가 삭제됐다** — 커밋은 브랜치에 온전했고(`35fa222`) worktree 재생성 후 최신 `origin/main`(3커밋 앞섬) 위로 rebase, **충돌 없음**. 그 사이 머지된 #149 의 `paths-ignore` 와 이 브랜치의 `services:` 가 모두 보존됨을 확인했다(`paths-ignore` 는 push 전용이라 PR CI 에는 영향 없음).
+- 2026-08-31: **pre-push codex 2차 지적 2건 반영 후 통과**(`no blocking issues`). PR #153 생성, CI 통과.
+- 2026-08-31: ⚠️ **CI 초록불만으로는 acceptance 를 못 채운다는 걸 확인.** gradle 은 성공 시 테스트별 결과를 남기지 않아 CI 로그에서 skip 여부를 관찰할 수 없었다(`DB_TESTS_REQUIRED: true` 라인만 보임). 논리적으로는 강제 실패 장치가 보장하지만 *관찰* 은 아니므로, **CI 에 결과 XML 을 검증해 로그에 남기는 스텝을 추가**했다(로컬 스크립트와 같은 판정).
 
 # Next
 
-push → CI 에서 이 테스트가 **실제로 실행됐는지**(skip 0) 확인 → PR. 초록불만 보고 통과로 치지 않는다.
+CI 재실행에서 "DB 통합테스트: 실행 3건 / skip 0건" 이 로그에 찍히는지 확인 → 머지.
 
 # Decisions
 
@@ -63,7 +66,7 @@ push → CI 에서 이 테스트가 **실제로 실행됐는지**(skip 0) 확인
 - [x] **매핑 왕복이 값을 보존한다** — `upsert` → `loadStates` 로 20개 필드가 되돌아온다. 타입 경계(JSON·enum·LocalDate·Instant)를 **명시값으로** 채운 픽스처로 검증(전부 null 이면 vacuous)
 - [x] **`uq_trading_states_user_ticker` 가 작동한다** — 같은 (user, ticker) 두 번째 insert 가 거부되고, `upsert` 는 그 경로에서 update 로 동작
 - [x] **부분 unique index 가 작동한다** — `trade_executions` 의 `exchange_order_id` 가 NULL 이면 중복 허용, non-NULL 이면 거부
-- [ ] **CI 통과 + skip 되지 않음** — `services: postgres` 로 DB 가 뜨고, `DB_TESTS_REQUIRED=true` 라 skip 이 실패로 바뀐다. CI 로그에서 이 테스트가 **실제로 실행됐음**을 확인한다(초록불만 보고 통과로 치지 않는다)
+- [ ] **CI 통과 + skip 되지 않음** — `services: postgres` + `DB_TESTS_REQUIRED=true` 에 더해, **CI 스텝이 결과 XML 을 검증해 "실행 N건 / skip N건" 을 로그에 남긴다**. 그 줄을 눈으로 확인해야 충족(초록불만 보고 통과로 치지 않는다)
 - [x] **비용 보고** — 13s(전) → 14s(skip) → 16s(DB 포함). 의존성 순증 0
 - [x] **문서 동기화** — README 「빌드와 테스트」에 실행법 추가. wiki 는 갱신 대상 아님(`deployment-stack` 의 test 언급은 배포 타이밍 맥락, `jdk-gradle-toolchain` 은 JDK 호환성 주제). **Testcontainers 를 피한 이유는 wiki ingest 후보** — Report 에서 제안
 
@@ -76,6 +79,7 @@ push → CI 에서 이 테스트가 **실제로 실행됐는지**(skip 0) 확인
 | **pre-push codex P2** Gradle daemon 이 환경변수를 고정해 스크립트가 조용히 skip 될 수 있다 | **fix** | 지적이 타당하다 — daemon 이 재사용되면 `DB_TESTS_REQUIRED` 까지 안 보여 강제 실패 장치마저 무력화된다. `--no-daemon` 을 넣고, 더 강한 방어로 **스크립트가 결과 XML 의 skip=0 을 직접 검증**하게 했다(daemon 이든 오타든 모든 조용한 skip 을 잡는다). 판정 로직은 3케이스(0 skip/3 skip/0 실행)로 확인 |
 | **pre-push codex P2(2차)** `cleanup` 이 고정 이름 컨테이너를 소유권 확인 없이 `rm -f` | **fix** | 동시 실행 시 남의 DB 를 죽이고 고정 포트도 겹친다. 이름에 PID 를 붙이고(`...-$$`) 포트는 동적 할당(`-p 127.0.0.1::5432` + `docker port`), 내가 띄운 경우에만 지우도록 `CTR_STARTED` 가드를 뒀다 |
 | **pre-push codex P2(2차)** plan `# Key Files`·`# Goal` 이 stale | **fix** | 최종 diff 에 없는 testcontainers 의존성과 삭제한 `logback-test.xml` 을 여전히 적고 있었다. 다음 세션이 없는 변경을 쫓지 않도록 실제 구현(외부 DB 방식)에 맞춰 갱신 |
+| **자기점검** CI 초록불로는 skip 여부를 관찰할 수 없음 | **fix** | gradle 이 성공 시 테스트별 결과를 안 남긴다. 강제 실패 장치의 논리적 보장에만 기대지 않고, CI 에 결과 XML 검증 스텝을 추가해 실행/ skip 건수를 로그에 남긴다 |
 | **자체리뷰 3** Flyway 를 `@BeforeAll` 에서 돌리면 DB 테스트 클래스가 늘 때 중복 실행 | **defer** | Flyway 는 멱등이라 지금은 무해하다. 두 번째 DB 테스트 클래스가 생길 때 공통 베이스로 추출하며 함께 정리 |
 
 # Deferred
