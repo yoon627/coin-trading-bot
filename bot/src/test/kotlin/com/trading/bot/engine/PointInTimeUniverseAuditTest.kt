@@ -203,10 +203,21 @@ class PointInTimeUniverseAuditTest {
             .joinToString("") { "%02x".format(it) }
     }
 
+    /**
+     * 실행 시점 커밋 + **working tree 오염 여부**.
+     *
+     * SHA 만 적으면 거짓 provenance 가 조용히 남는다 — 하네스를 커밋하기 전에 돌리면 기록된 커밋에는
+     * 그 테스트가 없어서 "그 커밋에서 재현하라"가 성립하지 않는다(실제로 그렇게 새어 pre-push 리뷰가 잡았다).
+     */
     private fun gitSha(): String = runCatching {
-        ProcessBuilder("git", "rev-parse", "--short", "HEAD").start()
-            .inputStream.bufferedReader().readText().trim()
+        val sha = exec("git", "rev-parse", "--short", "HEAD")
+        val dirty = exec("git", "status", "--porcelain").isNotEmpty()
+        if (dirty) "$sha ⚠️ working tree dirty — 이 커밋만으로는 재현되지 않는다" else sha
     }.getOrDefault("(unknown)")
+
+    private fun exec(vararg cmd: String): String =
+        ProcessBuilder(*cmd).redirectErrorStream(true).start()
+            .inputStream.bufferedReader().readText().trim()
 
     private companion object {
         const val BASE = "https://api.upbit.com"
