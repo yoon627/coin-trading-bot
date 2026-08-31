@@ -4,7 +4,7 @@ category: query
 created: 2026-08-26
 updated: 2026-08-26
 claim_state: current
-verified: 2026-08-31 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit b27055f, clean tree, 후보 288 KRW 마켓). 2026-08-26 후보 287 로 돌린 첫 실행과 모든 수치가 일치
+verified: 2026-08-31 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit 86293c2, clean tree, 후보 288 KRW 마켓). 후보 287 로 돌린 첫 실행(2026-08-26)·판정 규칙을 조이기 전 실행과 모든 수치가 일치
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/PointInTimeUniverse.kt
   - bot/src/test/kotlin/com/trading/bot/engine/PointInTimeUniverseAuditTest.kt
@@ -96,10 +96,22 @@ selector 는 순수 함수라 CI 에서도 검증된다(`PointInTimeUniverseTest
 네트워크 단계는 스냅샷 해시를 리포트에 남긴다 — `/v1/market/all` 은 시간 불변이 아니어서(신규상장·폐지로
 후보군이 바뀐다) 그 해시가 있어야 같은 입력이었는지 대조할 수 있다.
 
-**실측 재현성**: 5일 간격으로 두 번 돌렸고(2026-08-26 후보 287 / 2026-08-31 후보 288), 그 사이 신규상장으로
-후보 집합이 바뀌었는데도 **3단 감쇠·overlap·placebo·top-8 구성이 전부 일치**했다. 결론이 후보 집합의
-사소한 변동에 걸려 있지 않다는 뜻이다. 입력 해시는 후보가 달라져 바뀌었으므로, 해시 불일치가 곧
-결과 불일치는 아니다 — 해시는 "같은 입력이었나"만 답한다.
+**실측 재현성**: 세 번 돌렸고 결과가 모두 일치한다.
+
+1. 2026-08-26 (후보 287)
+2. 2026-08-31 (후보 288 — 그 사이 신규상장으로 후보 집합이 바뀌었다)
+3. 2026-08-31, **판정 규칙을 조인 뒤** — pre-push 리뷰가 두 구멍을 잡았다:
+   `fills200` 이 봉 수와 시작 도달만 봐서 거래 중단으로 **구간 종료에 못 닿는** 마켓도 통과했고,
+   selector 가 봉 **수**만 세어 30봉이 60일을 덮는 종목도 통과했다. 양끝 커버와 창 달력일 span 을
+   검증하도록 고쳤다.
+
+**셋 다 3단 감쇠·overlap·placebo·top-8 구성이 동일하다.** 즉 그 판정 구멍은 실재했지만 **이 결론은
+구멍에 의존하지 않았다**(느슨한 규칙으로 통과한 마켓이 실제로는 없었다). 결론이 후보 집합의 사소한
+변동에도 걸려 있지 않다.
+
+입력 해시는 후보가 달라지면 바뀌므로 **해시 불일치가 곧 결과 불일치는 아니다** — 해시는 "같은
+입력이었나"만 답한다. 그래서 스냅샷 **원본**을 `build/reports/universe-snapshot-*.json` 으로 함께 보존한다.
+해시만 남기면 API 응답이 바뀐 뒤 같은 입력을 재구성할 수 없어 selector 재실행이 불가능하다.
 
 리포트에는 실행 시점의 **working tree 오염 여부**도 함께 남는다. 하네스를 커밋하기 전에 돌리면 기록된
 커밋에 그 테스트가 없어 "그 커밋에서 재현하라"가 거짓이 되는데, 실제로 그렇게 새어 pre-push 리뷰가 잡았다.
