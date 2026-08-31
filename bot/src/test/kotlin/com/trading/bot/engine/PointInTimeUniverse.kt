@@ -45,6 +45,7 @@ internal object PointInTimeUniverse {
     const val EXCLUDED_SHORT_HISTORY = "history<$MIN_HISTORY_DAYS"
     const val EXCLUDED_GAPPED_WINDOW = "window>${MAX_WINDOW_SPAN_DAYS}d"
     const val EXCLUDED_UNPARSEABLE_DATE = "unparseable-date"
+    const val EXCLUDED_NOT_LISTED = "not-listed-at-t0"
 
     /**
      * 선정 입력. [candles] 는 마켓별로 **t0 직전** 일봉(최대 [MIN_HISTORY_DAYS]개)이다.
@@ -104,6 +105,11 @@ internal object PointInTimeUniverse {
                 continue
             }
             val window = snapshot.candles[market].orEmpty()
+            // 빈 응답 = t0 시점 미상장. "이력 부족"과 뭉치면 3단 감쇠 ①②의 의미가 흐려진다.
+            if (window.isEmpty()) {
+                excluded[market] = EXCLUDED_NOT_LISTED
+                continue
+            }
             if (window.size < MIN_HISTORY_DAYS) {
                 excluded[market] = EXCLUDED_SHORT_HISTORY
                 continue
