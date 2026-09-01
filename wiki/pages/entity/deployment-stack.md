@@ -2,7 +2,7 @@
 title: 배포 스택 — Vultr 서울 + Caddy TLS + GHCR
 category: entity
 created: 2026-07-28
-updated: 2026-08-26
+updated: 2026-09-01
 claim_state: current
 verified: 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
 sources:
@@ -61,6 +61,9 @@ sources:
   그래서 같은 변경에서 가드를 **SHA 비교가 아니라 코드 diff 비교**로 바꿨다: main 이 앞서 있어도
   그 차이가 전부 배포 무관 경로면 배포를 진행한다. 가드의 제외 목록은 `on.push.paths-ignore` 와
   **쌍으로 유지**해야 하며, 한쪽만 넓히면 그 경로가 다시 조용한 미배포 구간이 된다.
+  이 쌍은 주석이 아니라 **테스트가 강제한다**(#151) — `DeployWorkflowPathListTest` 가 두 목록이
+  정확히 같은지, 그리고 배포 산출물 경로(`deploy/`·`Dockerfile`·`gradle/`·`bot/` 등)가 제외 목록에
+  섞이지 않았는지 확인한다. `./gradlew test` 가 CI 게이트이므로 어긋난 채로는 머지되지 않는다.
 - GitHub-hosted runner의 동적 출발 IP 때문에 Vultr cloud firewall의 `ctb-ssh-github-actions` 22/tcp
   `0.0.0.0/0` 규칙이 필요하며, 운영 SSH는 password 금지·root key-only로 hardening되어 있다.
 - 수동 SSH는 `SSH_ALLOW_CIDR`로 제한하고, `setup_firewall`은 전용 규칙이 잘못되거나 중복되면
