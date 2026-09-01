@@ -2,7 +2,7 @@
 title: backtest-universe-bias — #112 백테 fixture 유니버스의 look-ahead/생존편향 제거
 status: in_progress
 started: 2026-08-26
-updated: 2026-08-26
+updated: 2026-09-02
 ---
 
 # Goal
@@ -26,6 +26,12 @@ updated: 2026-08-26
 - 2026-08-26 **#128 재측정 + 문서 정정**(`b58a45c`). **결론이 바뀌었다** — 아래 Progress 요약 참조.
 - 2026-08-26 최종 검증: `:bot:test :common:test compileKotlin --rerun-tasks` **BUILD SUCCESSFUL** (760 tests / 0 failures).
   wiki: check_links clean / smoke 10 pass / verify.sh 는 **base 부터 실패**(Deferred).
+- 2026-08-26 수집 스크립트 하드닝(`d8bb793`→rebase 후 `e5df6fe`) — 순위 조회 실패를 조용히 넘기던 것과
+  `--write` 가 지우고 받다 실패하면 fixture 가 반만 남던 것. 둘 다 "조용히 틀린 결과" 부류라 중단으로 바꿨다.
+- 2026-09-02 **작업 중 worktree 가 외부에서 삭제**됐다(push 직전). 커밋은 브랜치에 남아 유실 없음.
+- 2026-09-02 worktree 재생성 후 **현재 main(`9376452`) 위로 rebase — 충돌 0**, `:bot:test :common:test`
+  BUILD SUCCESSFUL. 현재 tip `e5df6fe` (8커밋).
+- 2026-09-02 **#112 가 두 브랜치로 갈린 것을 발견** — 아래 Blockers.
 
 **#128 결론 변화 (편향 제거의 실익)**
 
@@ -44,11 +50,13 @@ updated: 2026-08-26
 
 # Next
 
-구현·검증·문서는 끝났다(A1~A11 충족, A12 는 wiki 본문에 반영).
+**사용자 결정 대기 중** (Blockers 참조). 이 브랜치 자체는 rebase·검증까지 끝나 바로 PR 가능하다.
 
-1. code-review (+codex) — 수집 스크립트와 로더 변경이 주 대상
-2. simplify 체크 → 최종 검증 → PR
-3. 머지 후: #112 종료, #128 wiki 정정 사실을 이슈에도 코멘트할지 판단
+결정되면:
+1. (합의안) `fixture-universe-bias` 머지 후 그 위로 재-rebase → `backtest/README.md`·`wiki/` 충돌 해소
+2. 그쪽 placebo 결과(절차 노이즈 바닥 5/8·3/4)를 읽고 **내 wiki 정정문의 효과 크기를 재검토** —
+   "겹침 3/8" 중 시점 이동 몫이 얼마인지가 거기 있다. 과대평가면 정정문을 다시 고친다.
+3. push → PR → 머지
 
 # Decisions
 
@@ -100,7 +108,22 @@ updated: 2026-08-26
 
 # Blockers
 
-없음. (가정 A 는 Decisions 3 으로 해소 — 폐지 종목 조회 불가 확정, Goal 을 아래로 축소)
+**#112 가 두 브랜치로 갈렸고, 어느 쪽을 먼저 머지할지가 미결이다.**
+
+| 브랜치 | 내용 | 상태 |
+|---|---|---|
+| `backtest-universe-bias` (이 plan) | fixture **실제 교체** + 골든·로더·핀 재생성 + #128 결론 정정 | rebase·검증 완료, 미푸시 |
+| `fixture-universe-bias` | **진단 전용** — Kotlin selector·감사 하네스(3단 감쇠·placebo·provenance)·신규 wiki 페이지 | **다른 세션이 활성 작업 중**, 미푸시 |
+
+원인: 같은 이슈에 대해 두 세션이 **반대 범위를 각각 확정**받았다 —
+그쪽은 "재수집은 이번 범위가 아니다(사용자 확정 2026-08-26)", 이쪽은 "교체 + 다운스트림 재생성(같은 날 확정)".
+세션이 서로를 못 봐서 생긴 일이고, 결과가 상보적이라 둘 다 살릴 수 있다.
+
+사용자 선택은 "진단 먼저 머지 → 이 브랜치를 그 위로 rebase" 였으나, **그쪽이 아직 머지되지 않았다**
+(codex P1/P2 지적을 그 세션이 수정 중 — `b27055f`·`6101fc2`). 그 브랜치는 소유 세션이 있으므로
+이쪽에서 push·수정하지 않는다.
+
+**풀 조건**: `fixture-universe-bias` 가 머지되면 재-rebase 후 진행. 또는 순서를 뒤집기로 결정되면 즉시 PR 가능.
 
 **Goal 축소 (Decisions 3 의 귀결)**: "생존편향 제거"는 이 데이터 소스로 달성 불가다.
 이번 작업이 실제로 없애는 것은 **신규상장 배제 편향 + '오늘의 승자를 과거에 소급 적용하는' look-ahead** 이고,
@@ -153,3 +176,12 @@ updated: 2026-08-26
   knee-review-followup)의 수치는 이번에 갱신하지 않았다. (중간·분석)
 
 # Workflow Findings
+
+- **같은 이슈에 두 세션이 반대 범위를 확정받아 중복 작업이 발생**(2026-08-26). 세션 격리 때문에 구조적으로
+  재발 가능하다. 이번엔 결과가 상보적이라 살렸지만, 정반대였으면 한쪽이 통째로 버려졌다.
+  착수 전 `git worktree list` + 같은 이슈 브랜치 확인 절차가 있으면 막힌다. → `/improve` 후보.
+- **브랜치 ref 만 보고 "주인 없는 브랜치"로 단정해 남의 활성 브랜치를 push·수정하려 했다**(2026-09-02).
+  `git worktree list` 를 먼저 봤으면 worktree 가 살아 있고 tip 이 이미 앞서 있음을 알 수 있었다.
+  codex 게이트에 막혀 실제 변경은 없었다. → 남의 브랜치를 건드리기 전 worktree 존재 확인을 선행한다.
+- **codex-pre-push 리뷰 락 경합으로 push 가 3회 실패**(각 10분 대기, pid 4774·83061).
+  세션 병렬 실행 시 push 가 서로를 막는다. 훅의 stale 판정은 정상 동작했다(락 홀더가 실제로 살아 있었다).
