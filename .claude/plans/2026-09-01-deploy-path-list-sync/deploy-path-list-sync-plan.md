@@ -1,6 +1,6 @@
 ---
 title: deploy-path-list-sync — deploy.yml 의 경로 제외 목록 두 곳을 자동으로 묶는다 (#151)
-status: in_progress
+status: done
 started: 2026-09-01
 updated: 2026-09-01
 ---
@@ -21,6 +21,7 @@ updated: 2026-09-01
 - 2026-09-01: 검증 통과 — `test --parallel`·`build`·wiki 3종(link/verify/smoke 10-0).
 - 2026-09-01: **pre-push codex 5라운드 7건 반영(P1 4 + P2 3).** 매 라운드가 앞선 방어의 우회 경로를 짚었다 — 리터럴 매칭 → glob, 샘플 하드코딩 → 입력 열거, 패턴 나열 → 표지 기반, 형식 가정 → fail-closed. 마지막 지적으로 대표 경로 하드코딩을 **배포 입력 실제 열거**로 바꿨다 — 샘플 방식은 계속 빠지는 게 생긴다. 내가 만든 안전장치가 정작 가장 위험한 케이스를 놓치고 있었다 — `**` 하나로 전체를 제외해도, 큰따옴표 pathspec 을 써도 통과했다. 둘 다 고치고 4케이스로 재관찰(baseline PASS / 목록 불일치 FAIL / `**` FAIL / 큰따옴표 FAIL / 복구 PASS).
 - 2026-09-01: **PR #157 생성, CI `test: success`.** 6번째 codex 리뷰는 지적이 아니라 도구 오류(샌드박스가 `rm -f` 거부)로 중단돼, 사용자 승인 후 `CODEX_SKIP=1` 로 push 했다.
+- 2026-09-01: **PR #157 머지(`a21ef41`), 이슈 #151 종료.** worktree·로컬·원격 브랜치 정리, main 최신화 완료.
 
 # Next
 
