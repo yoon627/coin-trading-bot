@@ -55,10 +55,11 @@ class PositionManager(
         private const val MIN_ORDER_AMOUNT_KRW = 5000.0
         private const val FILL_POLL_ATTEMPTS = 10
         private const val FILL_POLL_DELAY_MS = 300L
-        // 적립 단은 요청 대비 이 비율 이상 체결됐을 때만 rung 을 증감한다 — 10% 체결로 한 단을 소모하면 사다리가 어긋난다.
+        // 적립 단 매도는 요청 대비 이 비율 이상 체결됐을 때만 rung 을 소모한다 — 10% 체결로 한 단을 지우면 사다리가 어긋난다.
         private const val RUNG_FILL_RATIO = 0.9
         private const val BUDGET_TOLERANCE_KRW = 1.0
         private const val VOLUME_SCALE = 8
+        private const val VOLUME_EPSILON = 1e-8
     }
 
     /** 거래소 계좌 목록에서 해당 통화 계좌 조회 (#21 — getAccounts().find 중복 헬퍼화). */
@@ -185,7 +186,8 @@ class PositionManager(
             log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
             return null
         }
-        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null)
+        // 스윙은 position=false 가드를 지나왔으므로 주문 전 보유량은 0 이다.
+        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = 0.0)
     }
 
     /**
@@ -210,7 +212,8 @@ class PositionManager(
         }
         val krw = accounts.find { it.currency == "KRW" }?.balanceDouble() ?: 0.0
         val coin = accounts.find { it.currency == ticker.substringAfter("-") }
-        val investedKrw = coin?.let { it.avgBuyPriceDouble() * heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+        val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+        val investedKrw = (coin?.avgBuyPriceDouble() ?: 0.0) * priorVolume
         val skip = when {
             investedKrw + action.amountKrw > params.budgetKrw + BUDGET_TOLERANCE_KRW ->
                 "budget: invested %.0f + rung %.0f > %.0f".format(investedKrw, action.amountKrw, params.budgetKrw)
@@ -224,7 +227,7 @@ class PositionManager(
             return null
         }
         state.accumulateSkipReason = null
-        return placeBuy(ticker, state, currentPrice, action.amountKrw, AccumulateLadder.STRATEGY_NAME, action.triggerPrice)
+        return placeBuy(ticker, state, currentPrice, action.amountKrw, AccumulateLadder.STRATEGY_NAME, action.triggerPrice, priorVolume)
     }
 
     /** 주문 발행 이후의 공용 경로 — pending durable 기록 → 체결 확인 → 확정. 가드·금액 결정은 호출부 몫. */
@@ -235,6 +238,7 @@ class PositionManager(
         investAmount: Double,
         strategyName: String,
         triggerPrice: Double?,
+        priorVolume: Double,
     ): TradeRecord? {
         // placeOrder 까지: 실패하면 주문이 나가지 않았으므로 그대로 종료(pending 없음 → 다음 tick 정상 재매수).
         val order = try {
@@ -259,6 +263,7 @@ class PositionManager(
         state.pendingBuyUuid = order.uuid
         state.pendingBuyStrategy = strategyName
         state.pendingBuyTriggerPrice = triggerPrice
+        state.pendingBuyPriorVolume = priorVolume
         // 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에
         // 재시작해도(syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
         state.clearEntryMeta()
@@ -338,7 +343,7 @@ class PositionManager(
                 // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
                 val account = findAccount(ticker.substringAfter("-"))
                 // ord_type=price 의 `price` 는 요청 KRW — 적립 단의 체결 비율 판정 근거.
-                completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis(), filled.price?.toDoubleOrNull())
+                completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis())
             }
             filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
             else -> {
@@ -347,6 +352,7 @@ class PositionManager(
                 state.pendingBuyUuid = null
                 state.pendingBuyStrategy = null
                 state.pendingBuyTriggerPrice = null
+                state.pendingBuyPriorVolume = null
                 persist(state)
                 null
             }
@@ -372,11 +378,15 @@ class PositionManager(
         return try {
             val account = findAccount(ticker.substringAfter("-"))
             val balance = account?.balanceDouble() ?: 0.0
-            if (balance > 0.0) {
+            // 적립 추가 단은 주문 전부터 코인이 있다 — 주문 시점 보유량을 넘는 증분만 이 주문의 체결로 본다.
+            // 그 값이 없는 옛 pending 은 종전대로 잔고 전체(스윙은 position=false 였으므로 0 과 같다).
+            val prior = state.pendingBuyPriorVolume ?: 0.0
+            val executed = balance - prior
+            if (executed > VOLUME_EPSILON) {
                 // 주문 응답이 없어 실제 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거이지
                 // 수수료 복원의 근거가 아니므로, 틀린 추정 대신 미기록으로 남긴다(#133).
                 BalanceRecovery.Filled(
-                    completeBuy(ticker, state, currentPrice, balance, account, FeeBasis.Unrecorded, requestedKrw = null)
+                    completeBuy(ticker, state, currentPrice, executed, account, FeeBasis.Unrecorded)
                 )
             } else {
                 log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
@@ -403,16 +413,16 @@ class PositionManager(
         executedVolume: Double,
         account: Account?,
         feeBasis: FeeBasis,
-        requestedKrw: Double?,
     ): TradeRecord {
         // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
         // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
         val strategy = state.pendingBuyStrategy
         val orderUuid = state.pendingBuyUuid // markBought 가 clear 하기 전에 캡처 — 멱등 dedup 키.
-        // 적립 단이면 트리거가가 있다. 요청 금액을 모르면(잔고 복원) 실제 코인이 들어왔으므로 한 단으로 센다.
+        // 적립 단이면 트리거가가 있다. 체결이 조금이라도 있으면 한 단으로 센다 — 시장가 매수(ord_type=price)는 잔량 환불로
+        // 종결되므로 미달 체결은 드물고, "미달이면 안 센다"는 규칙은 다음 tick 의 장부 정합(원가 기반 rung 추정)과 모순된다.
+        // 총 투입은 어차피 실측 원가 예산 게이트가 막는다.
         val triggerPrice = state.pendingBuyTriggerPrice
-        val rungFilled = triggerPrice != null &&
-            (requestedKrw == null || requestedKrw <= 0.0 || executedVolume * currentPrice >= RUNG_FILL_RATIO * requestedKrw)
+        val rungFilled = triggerPrice != null
         // 매수 직후라 우리 매도 주문은 없다 → 상한 0 = free 만 센다(holdVolume 정의를 매수 경로도 공유).
         val volume = account?.let { heldVolume(it, 0.0) }?.takeIf { it > 0.0 } ?: executedVolume
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
@@ -448,6 +458,7 @@ class PositionManager(
                 s.lastActionPrice = triggerPrice!!
             }
             s.pendingBuyTriggerPrice = null
+            s.pendingBuyPriorVolume = null
         }
         // 전이가 반영된 사본을 감사 기록과 한 트랜잭션으로 커밋한 뒤 원본 메모리 전이를 적용한다(#52).
         commitFillAndApply(state, record, applyTransition)

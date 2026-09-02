@@ -67,6 +67,8 @@ data class TradingState(
     var flatPeak: Double = 0.0,
     // 주문 시점 트리거가. 체결 확정(즉시·reconcile 어느 경로든)에서 lastActionPrice 로 옮긴다.
     var pendingBuyTriggerPrice: Double? = null,
+    // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 "주문 전부터 있던 코인"을 체결로 오판하지 않게 한다.
+    var pendingBuyPriorVolume: Double? = null,
     var pendingSellTriggerPrice: Double? = null,
     // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 상태 API 노출용, 비영속.
     var accumulateSkipReason: String? = null,

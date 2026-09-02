@@ -56,6 +56,11 @@ class TradingEngine(
     // 적립 티커 집합은 설정에서 한 번 만든다 — tick 마다 문자열을 파싱하지 않고, start() 의 합집합과 같은 소스를 쓴다.
     private val accumulateTickers: Set<String> = accumulateProperties.tickerList().toSet()
 
+    // 자동 선정이 마지막으로 고른 알트 집합. 보유 때문에 잔류한 티커는 여기 없으므로 청산 뒤 재진입하지 못한다 —
+    // 잔류의 의미는 "청산될 때까지"이지 "다음 갱신까지 새로 사도 된다"가 아니다. null = 자동 선정 미적용.
+    @Volatile
+    private var swingUniverse: Set<String>? = null
+
     internal fun profileOf(ticker: String): TickerProfile =
         if (ticker in accumulateTickers) TickerProfile.ACCUMULATE else TickerProfile.SWING
 
@@ -280,6 +285,7 @@ class TradingEngine(
         }
         states.keys.filter { it !in active }.forEach { states.remove(it) }
         activeTickers = active
+        swingUniverse = next.toSet()
     }
 
     internal fun getRealtimePrice(ticker: String): Double? {
@@ -375,6 +381,8 @@ class TradingEngine(
 
         // 당일 1회 진입: 이미 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
         if (state.position || state.boughtToday) return
+        // 자동 유니버스에서 빠졌는데 보유 때문에 잔류했던 티커 — 청산됐으면 새로 사지 않는다(다음 갱신에서 빠진다).
+        if (swingUniverse?.let { ticker !in it } == true) return
 
         // 매수도 청산과 동일: store 에 충분한 D1 이 있으면 store, 부족하면(부팅 직후/신규 마켓) REST 폴백.
         // 구 `size>=2` 게이트는 오염(중복 누적)에 가려 늘 store 를 탔고, 오염 제거 후엔 warm-up 동안 적은 캔들로
