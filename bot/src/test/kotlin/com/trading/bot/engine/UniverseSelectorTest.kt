@@ -4,7 +4,6 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.MarketEvent
 import com.trading.bot.domain.MarketInfo
 import com.trading.bot.domain.Ticker
-import com.trading.common.config.UniverseProperties
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -40,7 +39,7 @@ class UniverseSelectorTest {
     }
 
     private fun selector(client: UpbitClient, clock: Clock = Clock.fixed(Instant.parse("2026-09-02T00:00:00Z"), ZoneOffset.UTC)) =
-        UniverseSelector(client, UniverseProperties(auto = true, altCount = 8), clock)
+        UniverseSelector(client, clock)
 
     @Test
     fun `select excludes the given tickers and caps the count`() = runTest {

@@ -33,7 +33,7 @@
 - **체결 비율 조건부**: 요청 대비 90% 이상 체결됐을 때만 rung 증감. 매수는 `Order.price`(요청 KRW) 대비 `executedVolume × currentPrice`, 매도는 `pendingSellVolume` 대비 체결량. 미달이면 rung 유지, 잔량은 다음 tick 재평가 — 예산 실측 게이트가 과투입을 막는다.
 - **매도 전이 단일화**: 즉시 done·reconcile 부분·reconcile 전량·잔고 복원 4경로가 `sellTransition()` 하나를 쓴다. 갈라지면 어느 한 경로에서 rung 이 안 줄어 같은 단을 반복 매도한다.
 - **진입점 분리**: `buy()`(5중 가드 + investRatio 사이징 − reservedKrw) / `buyRung()`(`position` 가드만 제외, 주문 직전 거래소 재측정으로 예산 판정). 플래그로 가드를 우회하지 않는다.
-- **정합**: `LadderStateMapper.reconcile` 를 프로세스당 티커별 1회 — `hold>0 && rungs==0` → 실측 원가로 rung 추정 + `lastActionPrice=avg`(컷오버 편입), `hold<=0 && rungs>0` → 비움(수동 청산 추정), `flatPeak==0` → 현재가. 이후 tick 은 장부를 신뢰한다.
+- **정합**: `LadderStateMapper.reconcile` 를 매 tick(정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다) — `hold>0 && rungs==0` → 실측 원가로 rung 추정 + `lastActionPrice=avg`(컷오버 편입), `hold<=0 && rungs>0` → 비움(수동 청산 추정), `flatPeak==0` → 현재가. 런타임에 장부와 잔고가 갈라져도(부분체결·수동 매매) 다음 tick 에 스스로 맞춘다.
 - **현금 경쟁**: `reservedKrw = Σ max(0, budget − avg×hold)` 를 스윙 사이징에서 뺀다. 단 skip 사유는 `TradingState.accumulateSkipReason` → `/api/bot/status.positions[].accumulate_skip`.
 - **기록**: BUY 는 기존 스냅샷 규약, SELL 은 `reason=ACCUMULATE_STEP`·`strategy=accumulate`·`volume=판 수량`. 리더보드 집계는 accumulate 행 제외.
 - **durable(V23)**: `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_sell_trigger_price`. 잔고·평단은 종전대로 거래소 복원.
@@ -41,7 +41,7 @@
 ### 2.3 알트 유니버스 자동 선정
 
 - `UniverseSelector`(싱글톤 `@Service`, `publicUpbitClient`): `/v1/market/all?is_details=true` 의 `market_event.warning` 제외, `PeggedAssets` 제외, `/v1/ticker` 배치의 `acc_trade_price_24h` 내림차순. 1분 TTL 스냅샷을 유저 엔진들이 공유. 실패 시 null(불완전 순위로 판정하지 않음).
-- `TradingEngine.applyTickers(next)` 가 활성 집합 교체의 유일한 경로 — 적립 티커 + 보유/pending 티커 고정, 총수 20 상한, 신규 시딩+`syncPosition`, 제거분 `states` 정리. 기동 시와 09:00 경계에 `refreshUniverse()`.
+- `TradingEngine.applyTickers(next)` 가 활성 집합 교체의 유일한 경로 — 적립 티커 + 보유/pending 티커 고정, 알트 몫은 20 까지(적립·보유는 예외), 신규 시딩+`syncPosition`, 제거분 `states` 정리. 기동 시와 09:00 경계에 `refreshUniverse()`.
 - `bot_state.tickers` 는 사용자 의도만 저장한다(파생 집합을 되쓰면 끄고도 되돌릴 수 없다).
 - watchlist 밖 티커는 REST 폴백. D1 캔들은 60초 TTL 캐시(ingestion 주기와 동일).
 

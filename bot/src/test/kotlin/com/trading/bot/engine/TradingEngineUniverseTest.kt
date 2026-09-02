@@ -43,7 +43,7 @@ class TradingEngineUniverseTest {
     private fun createEngine(
         accumulate: AccumulateProperties = AccumulateProperties(),
         universe: UniverseProperties = UniverseProperties(),
-        source: UniverseSource = UniverseSource.NONE,
+        source: UniverseSource? = null,
     ) = TradingEngine(
         upbitClient = upbitClient,
         positionManager = positionManager,
@@ -71,6 +71,21 @@ class TradingEngineUniverseTest {
         assertEquals(listOf("KRW-ETH", "KRW-P", "KRW-A"), engine.getActiveTickers())
         assertEquals(setOf("KRW-ETH", "KRW-P", "KRW-A"), engine.getStates().keys)
         coVerify(exactly = 1) { positionManager.syncPosition("KRW-A", any()) }
+    }
+
+    @Test
+    fun `applyTickers seeds a new ticker from its durable state, not a blank one`() = runBlocking {
+        // 재시작 전 남긴 pending uuid·halt 가 빈 상태로 덮이면 reconcile 이 영영 돌지 않고 다음 upsert 가 DB 행까지 지운다.
+        val engine = createEngine()
+        engine.start(listOf("KRW-ETH"))
+        engine.stop()
+        coEvery { positionManager.loadState("KRW-A") } returns TradingState("KRW-A", pendingBuyUuid = "orphan", halted = true)
+
+        engine.applyTickers(listOf("KRW-A"))
+
+        val seeded = engine.getStates().getValue("KRW-A")
+        assertEquals("orphan", seeded.pendingBuyUuid)
+        assertTrue(seeded.halted)
     }
 
     @Test

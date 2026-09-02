@@ -3,7 +3,6 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.MarketInfo
 import com.trading.bot.domain.Ticker
-import com.trading.common.config.UniverseProperties
 import com.trading.common.domain.PeggedAssets
 import java.time.Clock
 import java.time.Duration
@@ -15,14 +14,10 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 
-/** 엔진이 보는 유니버스 공급자. 자동 선정이 꺼진 엔진은 [NONE] 을 받는다(null 분기 대신 no-op). */
+/** 엔진이 보는 유니버스 공급자. 켜짐 여부는 `UniverseProperties.auto` 가 정하고, 이 인터페이스는 조회만 담당한다. */
 fun interface UniverseSource {
     /** @return 거래대금 순 알트 목록. 조회 실패면 **null** — 불완전한 순위로 판정하지 않는다(호출부가 직전 목록 유지). */
     suspend fun select(exclude: Set<String>, count: Int): List<String>?
-
-    companion object {
-        val NONE = UniverseSource { _, _ -> null }
-    }
 }
 
 /**
@@ -34,7 +29,6 @@ fun interface UniverseSource {
 @Service
 class UniverseSelector(
     @Qualifier("publicUpbitClient") private val client: UpbitClient,
-    private val properties: UniverseProperties,
     private val clock: Clock = Clock.systemUTC(),
 ) : UniverseSource {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -61,11 +55,11 @@ class UniverseSelector(
         val now = clock.instant()
         snapshot?.takeIf { Duration.between(it.at, now) < SNAPSHOT_TTL }?.let { return it.ranked }
         val markets = client.getMarkets().filter { it.market.startsWith(KRW_PREFIX) }
-        // /v1/ticker 는 markets 를 콤마로 받는다 — 300종 가까운 목록은 나눠 보낸다.
+        // /v1/ticker 는 markets 를 콤마로 받는다 — 300종 가까운 목록은 나눠 보낸다(100 단위 실호출 확인 2026-09-02).
         val tickers = markets.map { it.market }.chunked(TICKER_BATCH).flatMap { client.getTicker(it.joinToString(",")) }
         val ranked = rank(markets, tickers)
         snapshot = Snapshot(now, ranked)
-        log.info("Universe snapshot refreshed: {} KRW markets ranked (auto={}, altCount={})", ranked.size, properties.auto, properties.altCount)
+        log.info("Universe snapshot refreshed: {} KRW markets ranked", ranked.size)
         ranked
     }
 
