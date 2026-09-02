@@ -32,6 +32,7 @@ updated: 2026-09-02
 - 2026-09-02 worktree 재생성 후 **현재 main(`9376452`) 위로 rebase — 충돌 0**, `:bot:test :common:test`
   BUILD SUCCESSFUL. 현재 tip `e5df6fe` (8커밋).
 - 2026-09-02 **#112 가 두 브랜치로 갈린 것을 발견** — 아래 Blockers.
+- 2026-09-02 **해금** — `fixture-universe-bias` 가 PR #160 으로 먼저 머지됐다(main `8f36928`). 그 위로 rebase(9커밋, 충돌은 `backtest/README.md` 한계 절 1곳 — 그쪽 "look-ahead 크기를 쟀다" 항목을 "실측한 뒤 제거했다" 로 고쳐 이쪽 생존편향 항목과 나란히 둠). 검증: `:bot:test :common:test` 787 tests / 0 failures / skip 9(전부 env 게이트: `RUN_UNIVERSE_AUDIT`·`RUN_COUNTERFACTUAL`·sweep·M1·`TEST_DB_HOST`·KIS smoke), wiki 3종 clean(34페이지). `# Next` 2항(정정문 효과 크기 재검토) 결론: **수정 불필요** — 정정문의 근거는 overlap 이 아니라 재측정 수치라 placebo 바닥(5/8·3/4)과 무관하다. push → PR 진행.
 
 **#128 결론 변화 (편향 제거의 실익)**
 
@@ -50,13 +51,8 @@ updated: 2026-09-02
 
 # Next
 
-**사용자 결정 대기 중** (Blockers 참조). 이 브랜치 자체는 rebase·검증까지 끝나 바로 PR 가능하다.
-
-결정되면:
-1. (합의안) `fixture-universe-bias` 머지 후 그 위로 재-rebase → `backtest/README.md`·`wiki/` 충돌 해소
-2. 그쪽 placebo 결과(절차 노이즈 바닥 5/8·3/4)를 읽고 **내 wiki 정정문의 효과 크기를 재검토** —
-   "겹침 3/8" 중 시점 이동 몫이 얼마인지가 거기 있다. 과대평가면 정정문을 다시 고친다.
-3. push → PR → 머지
+1. push → PR 생성 → CI → 머지(`Closes #112`). 머지되면 worktree·브랜치 정리 + `status: done`.
+2. 머지 후 이슈 판단: fixture 쪽 D7 트리거(`bull/` 한정 재수집 제안)는 이 브랜치가 **두 국면 전부 재수집**으로 흡수했으므로 별도 이슈 불필요. `# Deferred` 의 무릎 plan 3개 수치 재해석은 필요 시 이슈로.
 
 # Decisions
 
@@ -108,22 +104,9 @@ updated: 2026-09-02
 
 # Blockers
 
-**#112 가 두 브랜치로 갈렸고, 어느 쪽을 먼저 머지할지가 미결이다.**
+없음. (2026-09-02 해소 — 아래는 이력)
 
-| 브랜치 | 내용 | 상태 |
-|---|---|---|
-| `backtest-universe-bias` (이 plan) | fixture **실제 교체** + 골든·로더·핀 재생성 + #128 결론 정정 | rebase·검증 완료, 미푸시 |
-| `fixture-universe-bias` | **진단 전용** — Kotlin selector·감사 하네스(3단 감쇠·placebo·provenance)·신규 wiki 페이지 | **다른 세션이 활성 작업 중**, 미푸시 |
-
-원인: 같은 이슈에 대해 두 세션이 **반대 범위를 각각 확정**받았다 —
-그쪽은 "재수집은 이번 범위가 아니다(사용자 확정 2026-08-26)", 이쪽은 "교체 + 다운스트림 재생성(같은 날 확정)".
-세션이 서로를 못 봐서 생긴 일이고, 결과가 상보적이라 둘 다 살릴 수 있다.
-
-사용자 선택은 "진단 먼저 머지 → 이 브랜치를 그 위로 rebase" 였으나, **그쪽이 아직 머지되지 않았다**
-(codex P1/P2 지적을 그 세션이 수정 중 — `b27055f`·`6101fc2`). 그 브랜치는 소유 세션이 있으므로
-이쪽에서 push·수정하지 않는다.
-
-**풀 조건**: `fixture-universe-bias` 가 머지되면 재-rebase 후 진행. 또는 순서를 뒤집기로 결정되면 즉시 PR 가능.
+~~**#112 가 두 브랜치로 갈렸고, 어느 쪽을 먼저 머지할지가 미결이다.**~~ → 사용자 합의대로 진단(`fixture-universe-bias`, PR #160)을 먼저 머지하고 이 브랜치를 그 위로 rebase 했다.
 
 **Goal 축소 (Decisions 3 의 귀결)**: "생존편향 제거"는 이 데이터 소스로 달성 불가다.
 이번 작업이 실제로 없애는 것은 **신규상장 배제 편향 + '오늘의 승자를 과거에 소급 적용하는' look-ahead** 이고,
