@@ -117,13 +117,13 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
-    fun `buyRung under-filled below ninety percent does not count the rung`() = runTest {
+    fun `buyRung counts a rung on any fill so the ledger never disagrees with the balance`() = runTest {
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(krw("200000")),
             listOf(btc("0.0001", "50000000")),
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "rung-p")
-        // 요청 20,000 중 0.0001 × 50,000,000 = 5,000 만 체결(25%).
+        // 요청 20,000 중 0.0001 × 50,000,000 = 5,000 만 체결(25%) — 그래도 한 단. 총 투입은 예산 게이트가 막는다.
         coEvery { upbitClient.getOrder("rung-p") } returns Order(uuid = "rung-p", state = "cancel", executedVolume = "0.0001", price = "20000")
 
         val state = TradingState("KRW-BTC")
@@ -131,8 +131,35 @@ class PositionManagerAccumulateTest {
 
         assertNotNull(record)
         assertTrue(state.position)
-        assertEquals(0, state.rungsFilled)
-        assertEquals(0.0, state.lastActionPrice)
+        assertEquals(1, state.rungsFilled)
+        assertEquals(49_000_000.0, state.lastActionPrice)
+    }
+
+    @Test
+    fun `balance recovery of a rung buy only counts the increase over the pre-order holding`() = runTest {
+        // 2단째 주문 뒤 getOrder 가 죽었다. 잔고 0.0004 는 주문 전부터 있던 것 — 증분이 없으니 체결로 보지 않는다.
+        coEvery { upbitClient.getAccounts() } returns listOf(krw("200000"), btc("0.0004", "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "rung-2")
+        coEvery { upbitClient.getOrder("rung-2") } throws RuntimeException("getOrder down")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.0004, rungsFilled = 1, lastActionPrice = 50_000_000.0)
+        assertNull(manager.buyRung("KRW-BTC", state, 48_500_000.0, LadderAction.Buy(20_000.0, 48_500_000.0), params))
+        assertEquals("rung-2", state.pendingBuyUuid)
+        assertEquals(0.0004, state.pendingBuyPriorVolume)
+
+        assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 48_500_000.0))
+        assertEquals(1, state.rungsFilled)
+        assertEquals("rung-2", state.pendingBuyUuid)
+
+        // 잔고가 늘었으면 그 증분만 이 주문의 체결이다.
+        coEvery { upbitClient.getAccounts() } returns listOf(krw("180000"), btc("0.0008", "49500000"))
+        val record = manager.reconcilePendingBuy("KRW-BTC", state, 48_500_000.0)
+
+        assertNotNull(record)
+        assertEquals(2, state.rungsFilled)
+        assertEquals(48_500_000.0, state.lastActionPrice)
+        assertEquals(0.0008, state.holdVolume)
+        assertNull(state.pendingBuyUuid)
     }
 
     // --- sellVolume ---

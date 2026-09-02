@@ -122,6 +122,26 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `a ticker kept only because it was held does not re-enter after it is sold`() = runBlocking {
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-A")
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+        val eth = held("KRW-ETH")
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-ETH" to eth))
+        engine.stop()
+        engine.refreshUniverse()
+        assertEquals(listOf("KRW-ETH", "KRW-A"), engine.getActiveTickers())
+
+        // 청산됨 — 목록엔 아직 있지만 유니버스 밖이라 새로 사지 않는다.
+        eth.markSold()
+        coEvery { upbitClient.getTicker("KRW-ETH") } returns listOf(com.trading.bot.domain.Ticker(tradePrice = 100.0))
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        engine.processTicker("KRW-ETH", eth, strategy)
+
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
     fun `refreshUniverse keeps the previous list when the source fails`() = runBlocking {
         val source = mockk<UniverseSource>()
         coEvery { source.select(any(), any()) } returns null
