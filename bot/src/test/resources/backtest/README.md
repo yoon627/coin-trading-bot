@@ -22,7 +22,9 @@ DOGE +102%·XRP −16% 로 균일하게 오르는 장처럼 보였는데, 그건
 - 수집일: 2026-08-26 (두 국면 모두 재수집 — #112)
 - 과거 구간은 `to` 파라미터로 받는다: `&to=2024-06-10T00:00:00Z` (그 시각 **이전** 200봉)
 - **마켓 선정 = 구간 시작 시점 기준** (`scripts/collect_backtest_fixtures.py` 가 규칙의 단일 소스):
-  구간 시작 **이전** 30일 평균 거래대금 상위 8, 스테이블코인 제외, 순위 근거 30봉 미만(상장 직후) 제외
+  구간 시작 **이전** 30일 평균 거래대금 상위 8, 스테이블코인 제외, 순위 근거 30봉 미만(상장 직후) 제외,
+  30봉이 달력상 32일을 넘는 창(거래 공백) 제외 — 감사 selector `PointInTimeUniverse` 와 같은 규칙
+  - 200봉은 개수가 아니라 **달력 날짜**로 구간 충족을 판정한다(거래 없는 날은 봉이 생략되므로)
   - `bear/`: `KRW-XRP` `KRW-BTC` `KRW-ETH` `KRW-AXS` `KRW-DATA` `KRW-ENSO` `KRW-SOL` `KRW-BERA`
   - `bull/`: `KRW-GAS` `KRW-XRP` `KRW-BTC` `KRW-SOL` `KRW-ARK` `KRW-MINA` `KRW-BLUR` `KRW-POLYX`
   - 순위 창이 구간 시작 **이전**이라 구간 내부·이후 정보를 쓰지 않는다(look-ahead 없음)

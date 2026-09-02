@@ -126,10 +126,10 @@ class KneeStrategyComparisonTest {
 
     @Test
     fun `paired comparison isolates regime from market selection`() = runTest {
-        // 같은 4마켓을 두 국면에서 돌린다. 마켓 구성이 동일하므로 차이는 국면에서만 온다 —
+        // 같은 paired 마켓을 두 국면에서 돌린다. 마켓 구성이 동일하므로 차이는 국면에서만 온다 —
         // 서로 다른 마켓 집합을 비교하면 국면 효과와 종목 효과가 섞인다.
         val report = buildString {
-            appendLine("국면 paired 비교 — 같은 4마켓(${BacktestFixtures.PAIRED_MARKETS.joinToString(", ")})")
+            appendLine("국면 paired 비교 — 같은 ${BacktestFixtures.PAIRED_MARKETS.size}마켓(${BacktestFixtures.PAIRED_MARKETS.joinToString(", ")})")
             appendLine()
             for (regime in Regime.entries) {
                 val paired = BacktestFixtures.loadPaired(regime)

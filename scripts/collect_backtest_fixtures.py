@@ -43,8 +43,11 @@ FIXTURE_DIR = pathlib.Path(__file__).resolve().parent.parent / "bot/src/test/res
 BARS = 200
 TOP_N = 8
 RANK_WINDOW = 30
-# 변동성이 없어 전략 비교에 무의미하다.
-STABLECOINS = {"KRW-USDT", "KRW-USDC", "KRW-DAI", "KRW-BUSD", "KRW-TUSD"}
+# 변동성이 없어 전략 비교에 무의미하다. PointInTimeUniverse.STABLECOINS(감사 selector)와 같은 목록을 유지한다.
+STABLECOINS = {"KRW-USDT", "KRW-USDC", "KRW-DAI", "KRW-BUSD", "KRW-TUSD", "KRW-PYUSD"}
+# 봉 수가 찼어도 달력상 창이 이보다 늘어지면(거래 공백) 다른 마켓과 같은 기준의 30일 평균이 아니다 —
+# PointInTimeUniverse.MAX_WINDOW_SPAN_DAYS 와 같은 값.
+MAX_WINDOW_SPAN_DAYS = RANK_WINDOW + 2
 
 # 구간 = [시작, 시작+199]. 국면이 둘인 이유는 fixture README 참조.
 REGIMES = {"bear": date(2026, 1, 31), "bull": date(2023, 11, 23)}
@@ -78,9 +81,17 @@ def krw_markets() -> list[str]:
             if m["market"].startswith("KRW-") and m["market"] not in STABLECOINS]
 
 
-def select_universe(markets: list[str], start: date) -> tuple[list[tuple[str, float]], int, int]:
-    """구간 시작 **이전** RANK_WINDOW 봉의 평균 거래대금으로 순위. 반환 (상위 N, 미상장 수, 이력부족 수)."""
-    ranked, unlisted, too_new = [], 0, 0
+def candle_date(candle: dict) -> date:
+    try:
+        return date.fromisoformat(candle["candle_date_time_kst"][:10])
+    except (KeyError, ValueError):
+        sys.exit(f"{candle.get('market')}: 봉 날짜를 읽을 수 없다({candle.get('candle_date_time_kst')!r}) — 중단한다.")
+
+
+def select_universe(markets: list[str], start: date) -> tuple[list[tuple[str, float]], int, int, int]:
+    """구간 시작 **이전** RANK_WINDOW 봉의 평균 거래대금으로 순위.
+    반환 (상위 N, 미상장 수, 이력부족 수, 창 늘어짐 수)."""
+    ranked, unlisted, too_new, gapped = [], 0, 0, 0
     for market in markets:
         candles, status = _get("candles/days", market=market, count=RANK_WINDOW,
                                to=f"{start.isoformat()}T00:00:00Z")
@@ -95,9 +106,13 @@ def select_universe(markets: list[str], start: date) -> tuple[list[tuple[str, fl
         if len(candles) < RANK_WINDOW:
             too_new += 1  # 상장 직후라 순위 근거가 얇다
             continue
+        span = (start - min(candle_date(c) for c in candles)).days
+        if span > MAX_WINDOW_SPAN_DAYS:
+            gapped += 1  # 30봉이 30일을 훌쩍 넘는 마켓 — 같은 잣대의 평균이 아니다
+            continue
         ranked.append((market, sum(c["candle_acc_trade_price"] for c in candles) / len(candles)))
-    ranked.sort(key=lambda r: -r[1])
-    return ranked[:TOP_N], unlisted, too_new
+    ranked.sort(key=lambda r: (-r[1], r[0]))
+    return ranked[:TOP_N], unlisted, too_new, gapped
 
 
 def normalize(candle: dict) -> dict:
@@ -118,15 +133,34 @@ def normalize(candle: dict) -> dict:
     }
 
 
-def fetch_window(market: str, start: date) -> list[dict] | None:
-    """[start, start+BARS-1] 200봉. API 는 `to` **이전**을 주므로 마지막 날 +1 을 넘긴다."""
+def window_gap(candles: list[dict], start: date) -> str | None:
+    """[start, start+BARS-1] 의 모든 날짜가 정확히 한 번씩 있어야 한다. 어긋나면 사유 문자열."""
+    expected = {start + timedelta(days=i) for i in range(BARS)}
+    actual = [candle_date(c) for c in candles]
+    missing = sorted(expected - set(actual))
+    extra = sorted(set(actual) - expected)
+    if len(actual) != len(set(actual)):
+        return "중복 날짜"
+    if missing or extra:
+        return f"구간 밖/누락 날짜 — 누락 {len(missing)}({missing[:3]}…) 잉여 {len(extra)}({extra[:3]}…)"
+    return None
+
+
+def fetch_window(market: str, start: date) -> tuple[list[dict] | None, str]:
+    """[start, start+BARS-1] 200봉. API 는 `to` **이전**을 주므로 마지막 날 +1 을 넘긴다.
+    거래가 없는 날은 봉이 생략되므로 개수가 아니라 **달력 날짜**로 구간 충족을 판정한다."""
     end_exclusive = start + timedelta(days=BARS)
-    candles, _ = _get("candles/days", market=market, count=BARS,
-                      to=f"{end_exclusive.isoformat()}T00:00:00Z")
+    candles, status = _get("candles/days", market=market, count=BARS,
+                           to=f"{end_exclusive.isoformat()}T00:00:00Z")
     time.sleep(THROTTLE_SEC)
-    if not candles or len(candles) < BARS:
-        return None
-    return [normalize(c) for c in candles]  # 최신순 유지 — BacktestEngine.run 이 뒤집는다
+    if not candles:
+        return None, f"응답 없음 (HTTP {status})"
+    if len(candles) != BARS:
+        return None, f"{len(candles)}봉 (기대 {BARS})"
+    gap = window_gap(candles, start)
+    if gap is not None:
+        return None, gap
+    return [normalize(c) for c in candles], ""  # 최신순 유지 — BacktestEngine.run 이 뒤집는다
 
 
 def main() -> None:
@@ -137,27 +171,35 @@ def main() -> None:
     markets = krw_markets()
     print(f"현재 상장 KRW 마켓 {len(markets)}개 (스테이블 {len(STABLECOINS)}종 제외)\n")
 
+    # 네트워크 작업을 두 국면 모두 끝낸 뒤에야 파일을 건드린다. 한 국면을 먼저 쓰고 다음 국면에서
+    # 실패하면 새 bear + 옛 bull 이 섞인 fixture 가 남고, 그 상태의 백테는 아무도 모르는 채 결과를 낸다.
+    prepared: dict[str, list[tuple[str, list[dict]]]] = {}
     for regime, start in REGIMES.items():
-        top, unlisted, too_new = select_universe(markets, start)
+        top, unlisted, too_new, gapped = select_universe(markets, start)
         end = start + timedelta(days=BARS - 1)
         print(f"## {regime}  {start} ~ {end} ({BARS}봉)")
-        print(f"   그 시점 미상장 {unlisted} / 상장 직후({RANK_WINDOW}봉 미만) {too_new} 제외")
+        print(f"   그 시점 미상장 {unlisted} / 상장 직후({RANK_WINDOW}봉 미만) {too_new} / "
+              f"창 {MAX_WINDOW_SPAN_DAYS}일 초과 {gapped} 제외")
         for i, (market, avg) in enumerate(top, 1):
             print(f"   {i}. {market:<12} {RANK_WINDOW}일 평균 거래대금 {avg / 1e8:>9,.0f} 억원")
+        print()
 
         if not args.write:
-            print()
             continue
 
-        # 전부 받은 뒤에 쓴다. 지우고 받다가 실패하면 fixture 디렉토리가 반만 찬 채 남고,
-        # 그 상태로 돌린 백테는 "유니버스가 줄었다"는 사실을 아무도 모르는 채 결과를 낸다.
         fetched = []
         for market, _ in top:
-            candles = fetch_window(market, start)
+            candles, reason = fetch_window(market, start)
             if candles is None:
-                sys.exit(f"{market}: {BARS}봉 확보 실패 — 유니버스 선정과 모순이다. 아무것도 쓰지 않고 중단한다.")
+                sys.exit(f"{regime}/{market}: {BARS}봉 구간 확보 실패({reason}) — 아무것도 쓰지 않고 중단한다.")
             fetched.append((market, candles))
+        prepared[regime] = fetched
 
+    if not args.write:
+        print("미리보기만 했다. 파일까지 쓰려면 --write.")
+        return
+
+    for regime, fetched in prepared.items():
         out_dir = FIXTURE_DIR / regime
         out_dir.mkdir(parents=True, exist_ok=True)
         for old in out_dir.glob("KRW-*.json"):
@@ -165,10 +207,6 @@ def main() -> None:
         for market, candles in fetched:
             (out_dir / f"{market}.json").write_text(json.dumps(candles, separators=(",", ":")) + "\n")
             print(f"   wrote {regime}/{market}.json")
-        print()
-
-    if not args.write:
-        print("미리보기만 했다. 파일까지 쓰려면 --write.")
 
 
 if __name__ == "__main__":
