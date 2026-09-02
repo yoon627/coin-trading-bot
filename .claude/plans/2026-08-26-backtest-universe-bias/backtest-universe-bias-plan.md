@@ -33,6 +33,7 @@ updated: 2026-09-02
   BUILD SUCCESSFUL. 현재 tip `e5df6fe` (8커밋).
 - 2026-09-02 **#112 가 두 브랜치로 갈린 것을 발견** — 아래 Blockers.
 - 2026-09-02 **해금** — `fixture-universe-bias` 가 PR #160 으로 먼저 머지됐다(main `8f36928`). 그 위로 rebase(9커밋, 충돌은 `backtest/README.md` 한계 절 1곳 — 그쪽 "look-ahead 크기를 쟀다" 항목을 "실측한 뒤 제거했다" 로 고쳐 이쪽 생존편향 항목과 나란히 둠). 검증: `:bot:test :common:test` 787 tests / 0 failures / skip 9(전부 env 게이트: `RUN_UNIVERSE_AUDIT`·`RUN_COUNTERFACTUAL`·sweep·M1·`TEST_DB_HOST`·KIS smoke), wiki 3종 clean(34페이지). `# Next` 2항(정정문 효과 크기 재검토) 결론: **수정 불필요** — 정정문의 근거는 overlap 이 아니라 재측정 수치라 placebo 바닥(5/8·3/4)과 무관하다. push → PR 진행.
+- 2026-09-02 codex 게이트 findings 6건 fix(`15ba380`) → 재push 에서 codex 크레딧 소진(`# Workflow Findings`). fix 커밋은 Claude code-reviewer(sonnet)로 대체 검토 — Critical/Major 확정 0, 순수 로직 테스트 부재 지적 → `scripts/test_collect_backtest_fixtures.py`(unittest 6건) 추가. `CODEX_SKIP=1` push → PR.
 
 **#128 결론 변화 (편향 제거의 실익)**
 
@@ -161,6 +162,7 @@ pre-push codex 게이트(2026-09-02, `CODEX_TIMEOUT=1200` 재시도 — 480s 기
 
 # Deferred
 
+- **수집 스크립트 쓰기 단계의 잔여 비원자성** — 네트워크는 두 국면 모두 끝낸 뒤 쓰지만, 파일 기록 중 디스크 IO 실패면 한 국면이 반쪽으로 남을 수 있다(code-reviewer Minor, 2026-09-02). 수동 1회성 도구라 즉시 눈에 띈다. 필요하면 임시 디렉토리 + rename 스왑. (경미·범위 밖)
 - **`wiki/verify.sh` 의 페이지 수 band(26~30)가 실제 31페이지에 못 미친다** — base(`origin/main`)에서
   이미 실패한다(입증: 내 wiki 변경은 `M` 하나뿐, `git ls-tree origin/main` 도 31). 위키가 정상적으로
   자란 결과이고 band 를 올리는 1줄 유지보수다. #112 와 무관해 이 브랜치에 섞지 않는다(§8). (경미·유지보수)
@@ -170,6 +172,11 @@ pre-push codex 게이트(2026-09-02, `CODEX_TIMEOUT=1200` 재시도 — 480s 기
   knee-review-followup)의 수치는 이번에 갱신하지 않았다. (중간·분석)
 
 # Workflow Findings
+
+- **pre-push codex 게이트가 크레딧 소진으로 중단**(2026-09-02 17:17, `turn.failed: Your workspace is out of credits`).
+  같은 세션에서 480s 타임아웃 2회(fixture JSON 읽기로 느림) → `CODEX_TIMEOUT=1200` 재시도로 findings 6건 수신·전부 fix →
+  재push 에서 크레딧 소진. fix 커밋(`15ba380`)은 Claude code-reviewer 로 대체 검토한 뒤 `CODEX_SKIP=1` 로 push 했다.
+  외부 조건이라 workflow 결함은 아니지만, **대용량 fixture diff 는 480s 를 넘긴다**는 점은 게이트 설정 재검토 후보.
 
 - **같은 이슈에 두 세션이 반대 범위를 확정받아 중복 작업이 발생**(2026-08-26). 세션 격리 때문에 구조적으로
   재발 가능하다. 이번엔 결과가 상보적이라 살렸지만, 정반대였으면 한쪽이 통째로 버려졌다.
