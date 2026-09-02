@@ -58,6 +58,9 @@ sealed interface LadderAction {
 object AccumulateLadder {
     const val MIN_ORDER_KRW = 5_000.0
 
+    /** 기록·집계의 `strategy` 귀속명. 스윙 전략 집계와 섞이지 않게 별도 이름을 쓴다. */
+    const val STRATEGY_NAME = "accumulate"
+
     // 원가 합산의 부동소수 오차 흡수 — 1원 미만 차이로 마지막 단이 막히지 않게.
     private const val BUDGET_TOLERANCE_KRW = 1.0
 

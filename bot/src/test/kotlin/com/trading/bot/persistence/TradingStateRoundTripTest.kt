@@ -131,6 +131,11 @@ class TradingStateRoundTripTest {
         halted = true,
         haltReason = "unexplained locked balance",
         reconcileFailureCount = 3,
+        rungsFilled = 3,
+        lastActionPrice = 70_100.0,
+        flatPeak = 72_000.0,
+        pendingBuyTriggerPrice = 69_000.0,
+        pendingSellTriggerPrice = 71_000.0,
         exitParams = ExitParamsSnapshot(
             takeProfitPct = 5.0,
             maxLossPct = 3.0,
@@ -166,6 +171,11 @@ class TradingStateRoundTripTest {
         assertThat(restored.haltReason).isEqualTo(original.haltReason)
         assertThat(restored.reconcileFailureCount).isEqualTo(original.reconcileFailureCount)
         assertThat(restored.exitParams).isEqualTo(original.exitParams)
+        assertThat(restored.rungsFilled).isEqualTo(original.rungsFilled)
+        assertThat(restored.lastActionPrice).isEqualTo(original.lastActionPrice)
+        assertThat(restored.flatPeak).isEqualTo(original.flatPeak)
+        assertThat(restored.pendingBuyTriggerPrice).isEqualTo(original.pendingBuyTriggerPrice)
+        assertThat(restored.pendingSellTriggerPrice).isEqualTo(original.pendingSellTriggerPrice)
     }
 
     /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신으로 흘러야 한다 — 두 번 불러도 행이 하나다. */
