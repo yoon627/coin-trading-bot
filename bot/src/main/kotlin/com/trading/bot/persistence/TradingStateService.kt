@@ -64,6 +64,11 @@ class TradingStateService(
             halted = halted,
             haltReason = haltReason,
             reconcileFailureCount = reconcileFailureCount,
+            rungsFilled = rungsFilled,
+            lastActionPrice = lastActionPrice,
+            flatPeak = flatPeak,
+            pendingBuyTriggerPrice = pendingBuyTriggerPrice,
+            pendingSellTriggerPrice = pendingSellTriggerPrice,
             updatedAt = Instant.now(),
         )
 
@@ -88,6 +93,11 @@ class TradingStateService(
             haltReason = haltReason,
             reconcileFailureCount = reconcileFailureCount,
             exitParams = exitParamsJson?.let { decodeExitParams(ticker, it) },
+            rungsFilled = rungsFilled,
+            lastActionPrice = lastActionPrice,
+            flatPeak = flatPeak,
+            pendingBuyTriggerPrice = pendingBuyTriggerPrice,
+            pendingSellTriggerPrice = pendingSellTriggerPrice,
         )
 
     // 손상 필드는 그 필드만 버린다 — pending uuid·halt 는 어떤 경우에도 복원돼야 한다(위 loadStates 주석).

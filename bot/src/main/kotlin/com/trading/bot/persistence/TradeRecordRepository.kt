@@ -43,6 +43,7 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
                COALESCE(SUM(pnl_percent), 0) AS total_pnl
         FROM trade_records
         WHERE side = 'SELL' AND pnl_percent IS NOT NULL
+          AND (strategy IS NULL OR strategy <> 'accumulate')
         GROUP BY user_id
         """
     )
