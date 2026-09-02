@@ -148,6 +148,17 @@ updated: 2026-09-02
 
 # Review Disposition
 
+pre-push codex 게이트(2026-09-02, `CODEX_TIMEOUT=1200` 재시도 — 480s 기본값은 fixture JSON 읽기로 두 번 타임아웃) findings:
+
+| # | 지적 | 처분 | 조치 |
+|---|---|---|---|
+| P2-1 | 수집 스크립트가 순위 창의 달력 범위(32일)를 검증하지 않아 감사 selector 와 다른 로스터를 고를 수 있다 | fix | `MAX_WINDOW_SPAN_DAYS` 동일값 + `gapped` 제외 카운트 |
+| P2-2 | 200봉 개수만 보고 구간 충족을 판정 — 거래 공백 마켓이 다른 기간을 백테할 수 있다 | fix | `window_gap` — 200 날짜 집합 완전 일치 검증. 커밋된 16 파일 오프라인 검증 OK |
+| P2-3 | bear 를 쓴 뒤 bull 에서 실패하면 두 국면이 섞인다 | fix | 네트워크 전부 끝낸 뒤 `prepared` 를 한 번에 기록 |
+| P2-4 | fixture 를 `sources` 로 둔 wiki(`swing-strategies`·`universe-look-ahead-audit`)가 교체 전 로스터를 현재로 서술 | fix | historical 표기 + 대조표 제목 변경. 무릎 재실행은 `# Deferred` 유지 |
+| P2-5 | `KneeStrategyComparisonTest` 리포트가 "같은 4마켓" 하드코딩 | fix | `PAIRED_MARKETS.size` |
+| P3 | 스크립트 스테이블코인 목록에 `KRW-PYUSD` 누락 | fix | 추가. 두 국면 top-8 에 PYUSD 없음 → 로스터 불변(미리보기 재실행으로 확인) |
+
 # Deferred
 
 - **`wiki/verify.sh` 의 페이지 수 band(26~30)가 실제 31페이지에 못 미친다** — base(`origin/main`)에서
