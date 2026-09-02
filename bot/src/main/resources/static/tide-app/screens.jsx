@@ -337,7 +337,7 @@ function fmtHolding(sec) {
 
 const SELL_REASON_LABEL = {
   TAKE_PROFIT: '익절', TRAILING_STOP: '트레일링', STOP_LOSS: '손절',
-  CHART_EXIT: '차트청산', DAILY_RESET: '일일리셋', MANUAL: '수동',
+  CHART_EXIT: '차트청산', DAILY_RESET: '일일리셋', MANUAL: '수동', ACCUMULATE_STEP: '적립 매도',
 };
 
 const RT_GRID = '110px 1.4fr 1.4fr 96px 120px 100px 92px';
