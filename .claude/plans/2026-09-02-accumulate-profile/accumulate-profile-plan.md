@@ -17,9 +17,19 @@ updated: 2026-09-02
 - 2026-09-02: 사용자 요청("9시 청산 이상, 종목 확대, 메이저는 떨어질수록 사고 오를수록 팔기") → 코드·wiki·오늘 오전 실측(SELL 42건, `trade-performance-analysis` plan) 대조 후 4개 결정 수령(범위=메이저 적립+알트 스윙 병존 / 코인당 예산 10만 / 손절 없음·예산 상한만 / 알트는 거래대금 상위 자동). worktree `accumulate-profile` 생성. Explore(subagent) 완료.
 - 2026-09-02: architecture-reviewer(planning) REQUEST CHANGES 12건 → 전부 수용(`[arch-N]`). plan-reviewer(+codex medium, 완주) CONDITIONAL — 필수 6·권장 14·누락 시나리오 6 → 전부 수용(`[pr-N]`). 아래 Decisions 가 개정본.
 
+- 2026-09-02: 사용자 plan 승인(A~E 진행). **Phase A 완료**(`ebf87b3`, 17 테스트) · **Phase B 완료**(백테 + 격자, 7 테스트). 격자 결과(fixture 7 = bear BTC·ETH·XRP·SOL + bull BTC·XRP·SOL, 예산 10만, 수수료 편도 0.05%):
+
+  | 후보 5/3/3 | bear 중앙값 | bear B&H | bull 중앙값 | bull B&H | worst MDD | 평균 노출 | 판정 |
+  |---|---|---|---|---|---|---|---|
+  | 봉당 1액션 | −19.9% | −29.0% | +27.3% | +96.1% | 37.0% | 0.76 | 통과 |
+  | 봉당 다단(10) | −22.7% | −29.0% | +33.2% | +96.1% | 37.7% | 0.76 | 통과 |
+
+  per-fixture(봉당 1): bear XRP −33.0(B&H −42.9) · BTC −14.5(−22.8) · ETH −12.6(−26.6) · SOL −25.3(−31.5) / bull XRP −12.7(−15.7) · BTC +27.3(+96.1) · SOL +50.5(+200.9). 전체 격자 표는 `AccumulateBacktestTest` 출력(JUnit XML system-out).
+  **해석**: (1) 사전 등록 규칙은 형식상 통과했으나 **비판별적**이었다 — 봉당 1액션에서 27/27 통과. 하락장 비교 대상이 전액 B&H 라 부분 노출 전략은 거의 자동으로 "덜 잃는다". (2) 하락장에서 노출이 0.88~0.99 로 예산이 초반에 소진되고 반등 없이 끝나 −13~−33% 를 그대로 맞는다(손절 없음의 대가). (3) 상승장에선 "오를수록 판다"가 상승분을 반납해 B&H 의 1/3~1/4 만 먹는다(노출 0.34~0.45). (4) 격자 간 차이는 대부분 노출 차이로 설명된다 — stepDown 5·rungs 8 이 하락 손실을 가장 줄이지만 상승도 가장 덜 먹는다. **결론: 후보 5/3/3 유지(규칙대로), 단 이 백테는 "하락에서 B&H 보다 덜 잃고 상승에서 덜 번다"는 프로파일 확인이지 수익성 우월 근거가 아니다.** 사용자에게 이 트레이드오프를 Report 에서 명시한다.
+
 # Next
 
-사용자 plan 승인 → Phase A(TDD Red: `AccumulateLadderTest`).
+Phase C(라이브 통합) TDD — `LadderStateMapperTest` → `PositionManagerExtendedTest`(buyRung/sellVolume/sellTransition) → `TradingEngineTest`(dispatch) → V23.
 
 # Decisions
 
