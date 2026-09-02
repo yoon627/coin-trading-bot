@@ -35,6 +35,7 @@ updated: 2026-09-02
 - 2026-09-02: **최종 검증(격리 runner) 통과** — `./gradlew test --rerun-tasks` 851 실행 / 0 실패 / skip 9(기존 조건부 6 스위트), `scripts/run-db-tests.sh` 3건/skip 0, wiki 3종 clean(35 페이지, smoke 10/10), 배포 키 3계층 등록·`deploy.sh` 문법 OK, working tree clean. Acceptance 전 항목 증거 대조 완료(아래 표 체크).
 
 - 2026-09-02: `/e merge` 첫 push 가 pre-push codex 에 BLOCK(P1 2·P2 2) — 유니버스 잔류 티커 재진입 차단(`swingUniverse`), 추가 단 잔고 복원 오판(`pending_buy_prior_volume`), 매수 90% 규칙↔정합 모순 해소(매수는 체결 시 한 단), 백테 노출을 보유 원가로. 전부 fix.
+- 2026-09-03: 2차 push 도 codex BLOCK(P1 3·P2 3): auto 재시작 시 durable 행 미시딩으로 자동 선정 티커의 보유·pending 유실 / 수동 청산 판정 시 flatPeak 미재앵커(같은 tick 재매수) / 기동 시 refreshUniverse 가 루프 복구 경계 밖 / 복원 상태에 resetDaily 미적용 / DailyCandleCache 가 짧은 이력 응답을 miss 로 처리 / 90% 미만 부분 매도 누적 시 rung 미차감. 전부 fix(원가 기반 rung 상한을 매 tick 정합에 추가, 테스트 6건).
 - 2026-09-02: 사용자가 마무리(push·PR·머지) 선택 → `/e merge`. 브랜치 push → PR → 머지 → worktree·브랜치 정리. 머지가 거부되면 `in_progress` 로 복구.
 
 # Next

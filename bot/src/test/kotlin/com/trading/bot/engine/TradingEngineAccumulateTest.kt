@@ -124,10 +124,10 @@ class TradingEngineAccumulateTest {
         assertEquals(3, state.rungsFilled)
         assertEquals(90.0, state.lastActionPrice)
 
-        // 이후 tick 은 장부를 신뢰한다 — 수동으로 바꾼 값이 다시 덮이지 않는다.
-        state.rungsFilled = 4
+        // 원가가 감당하는 범위(45,000 → 최대 3단) 안의 값은 이후 tick 이 덮지 않는다.
+        state.rungsFilled = 2
         engine.processTicker("KRW-BTC", state, strategy)
-        assertEquals(4, state.rungsFilled)
+        assertEquals(2, state.rungsFilled)
     }
 
     @Test

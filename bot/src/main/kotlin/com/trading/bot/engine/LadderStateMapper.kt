@@ -40,8 +40,16 @@ object LadderStateMapper {
                 val had = state.rungsFilled
                 state.rungsFilled = 0
                 state.lastActionPrice = 0.0
-                if (state.flatPeak <= 0.0) state.flatPeak = price
+                // 옛 고점을 남기면 수동 청산 직후 같은 tick 에 첫 단이 들어가 청산을 되돌린다 — 여기서부터의 눌림을 기다린다.
+                state.flatPeak = price
                 "장부 ${had}단인데 거래소 잔고 없음 — 수동 청산으로 보고 사다리를 비운다"
+            }
+            holding && state.rungsFilled > rungCapByCost(state, params) -> {
+                // 90% 미만 부분 매도가 반복되면 잔고는 줄어도 rung 이 안 줄어 단당 매도 대금이 최소주문 아래로 내려간다 —
+                // 남은 원가가 감당하는 단수로 내린다.
+                val had = state.rungsFilled
+                state.rungsFilled = rungCapByCost(state, params)
+                "장부 ${had}단이 남은 원가(%.0f원)보다 많음 — ${state.rungsFilled}단으로 하향".format(state.avgBuyPrice * state.holdVolume)
             }
             else -> {
                 if (!holding && state.flatPeak <= 0.0) state.flatPeak = price
@@ -49,4 +57,10 @@ object LadderStateMapper {
             }
         }
     }
+
+    // 원가 / 단당 금액의 올림. 정상 분할 매도는 원가를 정확히 1/n 씩 줄이므로 부동소수 오차만큼 여유를 둔다.
+    private fun rungCapByCost(state: TradingState, params: LadderParams): Int =
+        ceil(state.avgBuyPrice * state.holdVolume / params.rungAmountKrw - COST_TOLERANCE_RUNGS).toInt().coerceIn(1, params.maxRungs)
+
+    private const val COST_TOLERANCE_RUNGS = 0.05
 }
