@@ -5,6 +5,27 @@ name: CI/CD (test + GHCR + Vultr)
 on:
   push:
     branches: [main]
+    # 문서·지식베이스·plan 만 바뀐 push 는 배포하지 않는다. main push 가 곧 운영 배포라
+    # 컨테이너 재생성 = 트레이딩 엔진 재시작인데, 아래 경로는 실행 이미지에 들어가지 않는다
+    # (Dockerfile 이 COPY 하는 것은 `*.gradle.kts`·`gradle/` 래퍼·`common/`·`bot/` 뿐이고
+    # 앱 리소스에 .md 가 없다).
+    #
+    # ⚠️ 배포에 영향을 주는 것은 넣지 말 것 — 특히 `deploy/**`(compose·배포 스크립트)와
+    # `Dockerfile`·`.dockerignore`·`gradle/**`·`*.gradle.kts`. paths-ignore 는 **push 로 들어온
+    # 변경이 전부** 매칭될 때만 워크플로를 건너뛰므로, 코드와 문서가 섞이면 정상 배포된다.
+    #
+    # ⚠️ `bot/`·`common/` 의 실행 리소스에 `.md` 를 두지 말 것 — 두면 그 파일만 바꾼 push 가
+    # 조용히 스킵된다. 두어야 한다면 이 목록을 그만큼 좁혀야 한다.
+    #
+    # ⚠️ 이 목록은 deploy-vultr 의 `Check deployment commit is current main` 안의 제외 목록과
+    # **쌍으로 유지**한다. 그쪽이 "main 이 앞서지만 문서뿐이면 배포 진행" 판정에 같은 목록을 쓴다.
+    #
+    # 문서만 바꾼 뒤 그래도 배포해야 하면 Actions 에서 workflow_dispatch 로 수동 실행한다.
+    paths-ignore:
+      - '**.md'
+      - '.claude/**'
+      - 'wiki/**'
+      - 'docs/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,6 +37,22 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # DB 매핑 통합테스트(#53)가 붙을 Postgres. 운영과 같은 이미지를 쓴다.
+    # 테스트가 컨테이너를 직접 띄우지 않는 이유는 scripts/run-db-tests.sh 주석 참조.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: trading
+          POSTGRES_USER: trading
+          POSTGRES_PASSWORD: trading
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading -d trading"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -24,7 +61,34 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Test
+        env:
+          TEST_DB_HOST: localhost
+          TEST_DB_PORT: '5432'
+          TEST_DB_NAME: trading
+          TEST_DB_USER: trading
+          TEST_DB_PASSWORD: trading
+          # DB 통합테스트가 조용히 skip 되면 매핑 회귀를 못 잡는다 — CI 에서는 skip 을 실패로 바꾼다.
+          DB_TESTS_REQUIRED: 'true'
         run: ./gradlew test --parallel
+
+      # gradle 은 성공하면 테스트별 결과를 남기지 않는다 — 그래서 DB 통합테스트가 조용히 건너뛰어져도
+      # 초록불로 보인다. 실제로 실행됐는지를 결과 XML 로 확인해 로그에 남긴다.
+      - name: DB 통합테스트가 실제로 실행됐는지 확인
+        run: |
+          set -euo pipefail
+          XML=bot/build/test-results/test/TEST-com.trading.bot.persistence.TradingStateRoundTripTest.xml
+          if [ ! -f "$XML" ]; then
+            echo "::error::DB 통합테스트 결과가 없다 — 실행되지 않았다 ($XML)"
+            exit 1
+          fi
+          attrs="$(head -3 "$XML")"
+          ran="$(printf '%s' "$attrs" | grep -o 'tests="[0-9]*"' | head -1 | tr -dc '0-9')"
+          skipped="$(printf '%s' "$attrs" | grep -o 'skipped="[0-9]*"' | head -1 | tr -dc '0-9')"
+          echo "DB 통합테스트: 실행 ${ran:-?}건 / skip ${skipped:-?}건"
+          if [ "${ran:-0}" = "0" ] || [ "${skipped:-1}" != "0" ]; then
+            echo "::error::DB 통합테스트가 건너뛰어졌다 — services: postgres 와 TEST_DB_* 를 확인하라"
+            exit 1
+          fi
 
   build-and-push:
     needs: test
@@ -81,9 +145,30 @@ jobs:
           current_main="$(git rev-parse origin/main)"
           if [[ "$current_main" == "$GITHUB_SHA" ]]; then
             echo 'current=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # main 이 앞서 있어도 그 차이가 전부 배포 무관 경로면 배포를 진행한다.
+          #
+          # 이 분기가 없으면 조용한 미배포가 생긴다: 코드 push 의 빌드가 도는 ~20분 사이에
+          # 문서 전용 push 가 들어오면, 그 push 는 on.push.paths-ignore 때문에 **자기 실행을
+          # 만들지 않는다**. 그러면 여기서 stale 로 스킵된 코드를 배포해 줄 후속 실행이 없어
+          # 결론만 success 인 채 옛 이미지가 계속 돈다.
+          # (필터 도입 전에는 뒤따르는 문서 push 의 실행이 그 코드를 함께 올려 자가치유됐다.)
+          #
+          # ⚠️ 아래 제외 목록은 파일 상단 on.push.paths-ignore 와 **반드시 같이** 유지한다.
+          #    한쪽만 넓히면 그 경로가 다시 조용한 미배포 구간이 된다.
+          code_changes="$(git diff --name-only "$GITHUB_SHA" "$current_main" -- . \
+            ':(exclude)**.md' ':(exclude).claude/**' ':(exclude)wiki/**' ':(exclude)docs/**')"
+
+          if [[ -z "$code_changes" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+            echo "origin/main($current_main) is ahead of $GITHUB_SHA but differs only in non-deploy paths — deploying anyway"
           else
             echo 'current=false' >> "$GITHUB_OUTPUT"
             echo "Skipping stale deployment for $GITHUB_SHA; origin/main is $current_main"
+            echo "code changes since this commit:"
+            echo "$code_changes"
           fi
 
       - name: Prepare Vultr deploy files
