@@ -75,16 +75,32 @@ object AccumulateLadder {
         }
     }
 
+    /**
+     * 이 가격 이하에서 매수가 트리거된다(예산·단 수 게이트는 [decide] 가 본다). null = 매수 기준 없음.
+     * 백테가 봉의 low 와 비교해 "봉 안에서 닿았는가"를 판정하는 데 쓴다 — 임계식을 밖에서 다시 적지 않기 위해 노출.
+     */
+    fun buyTriggerPrice(input: LadderInput, params: LadderParams): Double? {
+        val reference = if (input.rungsFilled > 0) input.lastActionPrice else input.flatPeak
+        if (reference <= 0.0) return null
+        return reference * (1 - params.stepDownPct / 100.0)
+    }
+
+    /** 이 가격 이상에서 매도가 트리거된다. null = 보유 없음. */
+    fun sellTriggerPrice(input: LadderInput, params: LadderParams): Double? {
+        if (input.rungsFilled <= 0) return null
+        val reference = max(input.avgBuyPrice, input.lastActionPrice)
+        if (reference <= 0.0) return null
+        return reference * (1 + params.stepUpPct / 100.0)
+    }
+
     private fun decideEntry(input: LadderInput, params: LadderParams): LadderAction {
-        if (input.flatPeak <= 0.0) return LadderAction.Hold
-        val entryPrice = input.flatPeak * (1 - params.stepDownPct / 100.0)
-        return if (input.price <= entryPrice) LadderAction.Buy(params.rungAmountKrw, input.price) else LadderAction.Hold
+        val trigger = buyTriggerPrice(input, params) ?: return LadderAction.Hold
+        return if (input.price <= trigger) LadderAction.Buy(params.rungAmountKrw, input.price) else LadderAction.Hold
     }
 
     private fun decideSell(input: LadderInput, params: LadderParams): LadderAction? {
-        val reference = max(input.avgBuyPrice, input.lastActionPrice)
-        if (reference <= 0.0) return null
-        if (input.price < reference * (1 + params.stepUpPct / 100.0)) return null
+        val trigger = sellTriggerPrice(input, params) ?: return null
+        if (input.price < trigger) return null
         val isFinal = input.rungsFilled == 1
         val volume = if (isFinal) input.holdVolume else input.holdVolume / input.rungsFilled
         // 최소주문 미만은 거래소가 거부한다 — rung 을 소모하지 않고 다음 기회를 기다린다.
@@ -94,8 +110,8 @@ object AccumulateLadder {
 
     private fun decideAddRung(input: LadderInput, params: LadderParams): LadderAction? {
         if (input.rungsFilled >= params.maxRungs) return null
-        if (input.lastActionPrice <= 0.0) return null
-        if (input.price > input.lastActionPrice * (1 - params.stepDownPct / 100.0)) return null
+        val trigger = buyTriggerPrice(input, params) ?: return null
+        if (input.price > trigger) return null
         val investedKrw = input.avgBuyPrice * input.holdVolume
         if (investedKrw + params.rungAmountKrw > params.budgetKrw + BUDGET_TOLERANCE_KRW) return null
         return LadderAction.Buy(params.rungAmountKrw, input.price)
