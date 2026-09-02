@@ -2,7 +2,7 @@
 title: fixture-universe-bias — 백테 유니버스 look-ahead 편향의 크기를 먼저 잰다 (#112)
 status: in_progress
 started: 2026-08-26
-updated: 2026-08-26
+updated: 2026-09-02
 ---
 
 # Goal
@@ -31,13 +31,28 @@ updated: 2026-08-26
   → `bull/` 한정 재수집을 후속 이슈로 제안한다. **BULL 4마켓은 데이터 부족이 아니라 선정 방식 탓**이었다.
 - 2026-08-26 문서 동기화 + 최종 검증 — wiki 3종(32 pages, pass=10 fail=0),
   `:bot:test :common:test compileKotlin --rerun-tasks` BUILD SUCCESSFUL.
+- 2026-08-31 pre-push codex 게이트 findings 대응 1~7라운드 — provenance 에 working tree 오염 기록(`b27055f`),
+  provenance 를 재현 가능한 커밋으로 교정(`6101fc2`), P2 3건 = 구간 커버 판정·스냅샷 보존·창 날짜 완전성(`86293c2`),
+  재실행 후 수치 불변 확인(`b22d7ae`), 불완전 입력 흡수 금지 마감(`6fd1377`), 4회 재현 이력 기록(`e3ca00e`),
+  날짜 파싱 실패에 감사가 죽지 않게(`bf48d4c`).
+- 2026-09-01 8~9라운드 — 창의 모든 봉 날짜 검증(`00ecd61`), `fills200` 도 200봉 전체 날짜 검증(`0b690bd`),
+  t0 미상장을 이력 부족과 구분(`46a8641`). **`46a8641` 에서 코드를 확정**하고 그 커밋에서 감사를 재실행 —
+  5회째도 3단 감쇠·overlap·placebo·top-8 이 전부 동일. 이어서 **문서만** 갱신해 provenance 를 `46a8641` 로
+  맞추고(`811b7d7`) push. 코드 확정 → 재실행 → 문서 순서로, 고칠 때마다 provenance 가 뒤처져 그게 다시
+  finding 이 되던 **순환을 끊었다**(그 전까지는 고칠 때마다 새 finding 이 생겼다).
+- 2026-09-02 9라운드 차단에서 예고대로 **ACK** — findings 최종 처분을 `# Deferred` 에 기록(`651eac9`).
+  6건 fix / 3건 명시적 risk accept. 브랜치는 `origin/fixture-universe-bias` 와 동기(0/0), working tree clean.
 
 # Next
 
-1. **후속 이슈 제안** — D7 트리거 발동(BULL ③=8 ≥ 6) → `bull/` 한정 재수집을 이슈로 올린다.
-2. push → PR.
+1. **PR 생성 → 머지.** push 는 끝났고 PR 은 **아직 없다**(`gh pr list --head fixture-universe-bias` 빈 결과,
+   2026-09-02 확인). 이게 유일한 남은 절차다.
+2. **후속 이슈 제안** — D7 트리거 발동(BULL ③=8 ≥ 6) → `bull/` 한정 재수집을 이슈로 올린다.
+   비용 견적은 D2(8마켓 수집 + legacy 골든 재생성 + #128 측정 재실행 + `reset-churn-measurement` 갱신).
+3. **`backtest-universe-bias` 해금** — 그쪽 plan 의 `# Blockers` 가 **"이 브랜치가 머지되면"** 을 풀 조건으로
+   걸고 대기 중이다(fixture 실제 교체 + 다운스트림 재생성, rebase·검증 완료 상태). 이 PR 머지 후 그 위로 재-rebase.
 
-진단(A1~A9)은 끝났다.
+진단(A1~A9)은 끝났고 pre-push 게이트 findings 처분도 닫혔다(`# Deferred` 의 "fix loop 상한 초과"). 남은 건 머지 절차뿐.
 
 # Decisions
 
@@ -169,7 +184,7 @@ BULL 4마켓은 #128 표본력의 binding constraint 였으므로, 이 한 줄�
 
 # Blockers
 
-없음.
+없음. (`backtest-universe-bias` 가 이 브랜치 머지를 기다리지만, 의존 방향이 밖으로 나가는 것이라 이쪽의 막힘은 아니다.)
 
 # Acceptance
 
