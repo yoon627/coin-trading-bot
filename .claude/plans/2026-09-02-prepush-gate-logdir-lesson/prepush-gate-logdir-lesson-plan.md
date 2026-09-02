@@ -1,6 +1,6 @@
 ---
 title: prepush-gate-logdir-lesson — "pre-push codex 게이트가 조용히 skip 됐다" 는 오진이었다 (원인·교훈 적립)
-status: in_progress
+status: done
 started: 2026-09-02
 updated: 2026-09-02
 ---
@@ -19,22 +19,15 @@ updated: 2026-09-02
 
 # Next
 
-**후속 3건의 적용 여부를 사용자가 판단해야 한다** — 셋 다 운영 자산/wiki 변경이라 승인 후 착수(§1).
+**후속 판단 완료 — 남은 액션 없음.** 이 plan 은 기록으로 닫힌 상태이고, 반복되면 여기부터 읽는다.
 
-1. **`engine-buy-fee-basis` plan 의 `# Workflow Findings` 정정.**
-   그 plan 은 PR #155 로 열려 있고 **머지되면 틀린 기록이 main 에 남는다.** 정정은 그 브랜치에서 해야
-   하며(별도 브랜치로 하면 충돌), 머지 전에 하는 편이 낫다. 파일:
-   `.claude/plans/2026-08-31-engine-buy-fee-basis/engine-buy-fee-basis-plan.md`
-   — `# Workflow Findings` 첫 항목 + `## codex 최종 diff 재검토 (2026-09-01)` 도입부 2곳.
-
-2. **wiki 교훈 페이지** `wiki/pages/decision/lesson-worktree-gitdir-logs.md` 신규 여부.
-   내용: linked worktree 에서 `git rev-parse --git-dir` 는 `.git/worktrees/<name>` 이다 → **`.git/` 하위
-   산출물(로그·캐시)은 worktree 마다 갈린다.** "로그가 없다 = 안 돌았다" 추론은 **디렉토리를 먼저
-   확정한 뒤에만** 성립한다. `wiki/index.md` 등재 동기화 필요.
-
-3. **memory `project_prepush_codex_slow` 정정은 불필요**하다는 판정을 확정.
-   "`git push` 는 run_in_background 로" 조언은 **게이트를 무력화하지 않는다**(이번 근거로 반증됨).
-   다만 백그라운드 실행은 훅 출력을 세션에서 안 보이게 만들어 *오진을 유발*했다 — 한 줄 덧붙일지는 판단 대상.
+1. ~~`engine-buy-fee-basis` plan 정정~~ — **완료**(2026-09-02, `5d8f904` push, PR #155 반영).
+   Workflow Findings·codex 최종 diff 도입부·`# Next` 3항 세 곳을 오진 정정으로 교체했다.
+2. ~~wiki 교훈 페이지 신규~~ — **적립 안 함**(사용자 판단 2026-09-02). 1회 오판이라 아직 패턴이 아니고,
+   이 plan 이 근거를 들고 있다. **반복되면 그때 `wiki/pages/decision/` 으로 승격한다.**
+3. ~~memory `project_prepush_codex_slow` 정정~~ — **불필요로 확정**. "`git push` 는 run_in_background 로"
+   조언은 게이트를 무력화하지 않는다(§Decisions 1 로 반증). 백그라운드가 훅 출력을 감추는 것은
+   `# Deferred` 로 남긴다.
 
 # Decisions
 
@@ -98,25 +91,25 @@ worktree 안에서는 `git rev-parse --git-dir` ≠ `git rev-parse --git-common-
 
 #133 의 리뷰 커버리지 자체는 무관하게 충분했다 — code-reviewer + codex 가 돌았고, 반영 후 최종 diff 로
 codex 를 한 번 더 돌렸다(Critical 0 · Major 0). 오진의 비용은 **잘못된 기록이 plan 에 남은 것**뿐이며
-`# Next` 1 이 그걸 걷어낸다.
+`5d8f904`(PR #155)가 그걸 걷어냈다.
 
 # Key Files
 
 - `scripts/git-hooks/pre-push` — `LOG_DIR="$(git rev-parse --git-dir)/codex-pre-push"` (`:20`).
   stdin 무읽음 시 조용한 `exit 0` 은 `:46-48` (이번 건과 무관하나 별개 UX 이슈 후보).
-- `.claude/plans/2026-08-31-engine-buy-fee-basis/engine-buy-fee-basis-plan.md` — **정정 대상**
-  (브랜치 `engine-buy-fee-basis`, PR #155 오픈 중. main 에는 아직 없다).
+- `.claude/plans/2026-08-31-engine-buy-fee-basis/engine-buy-fee-basis-plan.md` — **정정 완료**(`5d8f904`).
+  브랜치 `engine-buy-fee-basis`, PR #155 오픈 중이라 main 에는 머지 후 반영된다.
 - `.claude/plans/2026-07-18-prepush-codex-hardening/prepush-codex-hardening-plan.md` — 훅 구조·
   `core.hooksPath` 공유 사실의 출처.
 
 # Blockers
 
-없음. 후속 3건은 막힌 게 아니라 **승인 대기**다(`# Next`).
+없음. 후속 3건 모두 판단·처리가 끝났다(`# Next`).
 
 # Acceptance
 
-- [ ] `engine-buy-fee-basis` plan 의 Workflow Finding 2곳이 오진 정정으로 교체됐다 (승인 시).
-- [ ] wiki 교훈 페이지 신규 여부가 판정됐고, 만들었다면 `wiki/index.md` 등재 + 검증 3종 통과 (승인 시).
+- [x] `engine-buy-fee-basis` plan 의 Workflow Finding 이 오진 정정으로 교체됐다 — 3곳, `5d8f904` push.
+- [x] wiki 교훈 페이지 신규 여부가 판정됐다 — **적립 안 함**(1회 오판, 반복 시 승격).
 - [x] 오진의 반증 근거가 실측으로 확정됐다 — git-dir 실측 · 로그 2건 · 커밋↔로그 시각 대조.
 
 # Deferred
