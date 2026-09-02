@@ -1,6 +1,6 @@
 ---
 title: engine-buy-fee-basis — 엔진 매수 수수료를 추정 대신 거래소 실측값으로 (#133)
-status: in_progress
+status: done
 started: 2026-08-31
 updated: 2026-09-02
 ---
@@ -67,6 +67,8 @@ val totalAmount = fillPrice * volume                                            
 **그 전제가 엔진 경로에서 거짓이다.** 결정을 뒤집는 게 아니라, `paid_fee` 를 파싱하면 fee 가 파생값이
 아니라 **실측값**이 되어 전제 자체가 바뀐다. 같은 KDoc 이 이미 손익 두 필드에 같은 성격의 예외를
 두고 있다(*"매도 시점의 평단은 청산과 함께 사라져서 sink 가 되짚을 수 없다"*).
+
+- 2026-09-02 PR #155 머지(main `a4af95b`) → worktree·로컬·원격 브랜치 정리. status: done.
 
 # Next
 
