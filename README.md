@@ -64,6 +64,15 @@ $env:DB_PORT = "5432"
 
 Windows에서는 `./gradlew` 대신 `.\gradlew.bat`을 사용합니다.
 
+DB 매핑·제약을 실제 PostgreSQL로 검증하는 통합테스트는 접속 정보가 있을 때만 실행되고, 없으면 건너뜁니다. 임시 컨테이너를 띄워 함께 돌리려면:
+
+```bash
+./scripts/run-db-tests.sh          # DB 통합테스트만
+./scripts/run-db-tests.sh --all    # 전체 테스트
+```
+
+CI는 `services: postgres`로 DB를 제공하고 `DB_TESTS_REQUIRED=true`를 켜 두므로, 이 테스트가 조용히 건너뛰어지면 빌드가 실패합니다.
+
 ## 아키텍처
 
 ```text
@@ -293,6 +302,11 @@ Pull request ──> ./gradlew test --parallel
 main push    ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
 main manual  ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
 ```
+
+**문서 전용 push 는 배포하지 않는다.** `on.push.paths-ignore` 가 `**.md`·`.claude/**`·`wiki/**`·`docs/**`
+만 바뀐 push 에서 워크플로를 건너뛴다 — main push 가 곧 컨테이너 재생성(=트레이딩 엔진 재시작)이라
+문서 커밋으로 봇을 재시작시키지 않기 위해서다. 코드와 문서가 섞인 push 는 정상 배포된다.
+문서만 바꾼 뒤 그래도 배포해야 하면 Actions 에서 `workflow_dispatch` 로 수동 실행한다.
 
 Vultr 자동 배포는 `test`와 GHCR push가 모두 성공한 뒤에만 실행된다. Actions repository secrets에
 `VULTR_DEPLOY_ENV`(운영 배포용 `.env`), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`,

@@ -2,9 +2,9 @@
 title: 배포 스택 — Vultr 서울 + Caddy TLS + GHCR
 category: entity
 created: 2026-07-28
-updated: 2026-08-24
+updated: 2026-09-01
 claim_state: current
-verified: 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지
+verified: 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
 sources:
   - PROJECT_ANALYSIS.md
   - deploy/vultr/
@@ -40,17 +40,30 @@ sources:
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.
   최초 실행은 healthy 컨테이너에서만 rollback 기준을 bootstrap한다(stale SHA 취급은 아래 두 항목).
-- **`main` 머지가 곧 배포 시작이다.** `deploy-vultr` job 은 `if: github.event_name == 'push'`(`deploy.yml:61`)라
-  PR 을 머지하는 순간 파이프라인이 돈다. 따라서 **"배포 직전에 무엇을 하겠다"는 절차에는 창이 없다** — 백업·스냅샷은
+- **`main` 머지가 곧 배포 시작이다 — 단 코드가 바뀌었을 때만.** `deploy-vultr` job 은
+  `if: github.event_name == 'push'` 라 PR 을 머지하는 순간 파이프라인이 돈다. 다만 2026-08-26 부터
+  `on.push.paths-ignore`(`**.md`·`.claude/**`·`wiki/**`·`docs/**`)가 붙어 **문서·plan 만 바뀐 push 는
+  워크플로 자체가 생성되지 않는다**. 도입 계기는 plan 커밋 `bcef6ec` 이 배포를 트리거해 실거래 봇을
+  재시작시킨 일이다. 문서만 바꾼 뒤 그래도 배포해야 하면 `workflow_dispatch` 로 수동 실행한다. 따라서 **"배포 직전에 무엇을 하겠다"는 절차에는 창이 없다** — 백업·스냅샷은
   머지 전에 끝내야 한다. 머지 후에 확보하려면 `test`·`build-and-push` 가 도는 몇 분이 사실상 마지막 기회다
   (2026-08-23 V21 배포에서 실제로 그 창에서 백업을 확보했다. `deploy/vultr/backup.sh` 는 `BACKUP_S3_BUCKET`
   미설정이면 쓸 수 없어 대상 테이블만 `pg_dump` 했다).
-- **머지가 몰리면 그 PR 의 배포 스텝은 skipped 된다.** `Check deployment commit is current main`(`deploy.yml:75-87`)이
+- **머지가 몰리면 그 PR 의 배포 스텝은 skipped 된다.** `Check deployment commit is current main` 이
   `origin/main` 과 `GITHUB_SHA` 를 대조해 다르면 이후 스텝을 전부 건너뛴다. `concurrency: vultr-production` 이
   `cancel-in-progress: false` 라 앞 배포를 기다리는 동안 main 이 앞서가면 이 조건에 걸린다. 2026-08-23 PR #117 이
   그랬고, 그 커밋은 이미 main 에 있었으므로 뒤이어 머지된 #116 의 배포에 함께 실려 적용됐다 — **변경이 누락된 게
   아니라 배포 시점이 뒤 PR 로 밀린 것**이다. 내 PR 의 Actions 가 skipped 라고 배포 실패로 읽지 말고, 후속 배포
   로그에서 반영을 확인한다.
+
+  ⚠️ **이 자가치유는 "뒤이어 도는 실행이 있다"에 기대고 있다.** 그래서 `paths-ignore` 도입(2026-08-26)이
+  이 전제를 깰 뻔했다 — 앞선 커밋이 문서 push 에 밀려 skipped 됐는데 그 문서 push 는 실행을 만들지
+  않으므로, 구제해 줄 후속 배포가 없어진다(결론만 success 인 채 옛 이미지가 계속 돈다).
+  그래서 같은 변경에서 가드를 **SHA 비교가 아니라 코드 diff 비교**로 바꿨다: main 이 앞서 있어도
+  그 차이가 전부 배포 무관 경로면 배포를 진행한다. 가드의 제외 목록은 `on.push.paths-ignore` 와
+  **쌍으로 유지**해야 하며, 한쪽만 넓히면 그 경로가 다시 조용한 미배포 구간이 된다.
+  이 쌍은 주석이 아니라 **테스트가 강제한다**(#151) — `DeployWorkflowPathListTest` 가 두 목록이
+  정확히 같은지, 그리고 배포 산출물 경로(`deploy/`·`Dockerfile`·`gradle/`·`bot/` 등)가 제외 목록에
+  섞이지 않았는지 확인한다. `./gradlew test` 가 CI 게이트이므로 어긋난 채로는 머지되지 않는다.
 - GitHub-hosted runner의 동적 출발 IP 때문에 Vultr cloud firewall의 `ctb-ssh-github-actions` 22/tcp
   `0.0.0.0/0` 규칙이 필요하며, 운영 SSH는 password 금지·root key-only로 hardening되어 있다.
 - 수동 SSH는 `SSH_ALLOW_CIDR`로 제한하고, `setup_firewall`은 전용 규칙이 잘못되거나 중복되면

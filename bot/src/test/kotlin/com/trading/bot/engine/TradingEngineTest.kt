@@ -255,6 +255,7 @@ class TradingEngineTest {
         TradeRecord(
             ticker = "KRW-BTC", side = side, price = 100.0, volume = 1.0, totalAmount = 100.0,
             pnlPercent = null, pnlAmount = null, strategy = "combined",
+            fee = FeeBasis.Estimate,
         )
 
     @Test

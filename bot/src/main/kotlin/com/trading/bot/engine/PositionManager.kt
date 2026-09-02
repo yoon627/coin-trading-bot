@@ -3,6 +3,7 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.ExitParamsSnapshot
+import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
@@ -252,10 +253,12 @@ class PositionManager(
     ): TradeRecord? {
         val executed = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
         return when {
-            executed > 0.0 -> {
+            // filled != null 은 executed > 0.0 이 이미 함의하지만, 명시하면 smart-cast 가 걸려
+            // 아래에서 도달 불가 분기 없이 filled 를 그대로 쓸 수 있다.
+            filled != null && executed > 0.0 -> {
                 // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
                 val account = findAccount(ticker.substringAfter("-"))
-                completeBuy(ticker, state, currentPrice, executed, account)
+                completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis())
             }
             filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
             else -> {
@@ -289,7 +292,11 @@ class PositionManager(
             val account = findAccount(ticker.substringAfter("-"))
             val balance = account?.balanceDouble() ?: 0.0
             if (balance > 0.0) {
-                BalanceRecovery.Filled(completeBuy(ticker, state, currentPrice, balance, account))
+                // 주문 응답이 없어 실제 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거이지
+                // 수수료 복원의 근거가 아니므로, 틀린 추정 대신 미기록으로 남긴다(#133).
+                BalanceRecovery.Filled(
+                    completeBuy(ticker, state, currentPrice, balance, account, FeeBasis.Unrecorded)
+                )
             } else {
                 log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
                 BalanceRecovery.NoBalance
@@ -302,13 +309,19 @@ class PositionManager(
         }
     }
 
-    /** 실잔고/평단으로 markBought + TradeRecord. account==null/잔고0 이면 executedVolume·currentPrice fallback. */
+    /**
+     * 실잔고/평단으로 markBought + TradeRecord. account==null/잔고0 이면 executedVolume·currentPrice fallback.
+     *
+     * @param feeBasis 수수료 출처. 이 함수가 만드는 `totalAmount` 는 **포지션 전체 원가**라 추정 기준으로
+     *   쓸 수 없으므로(#133) 호출자가 정한다 — 주문 응답이 있으면 실측, 없으면 미기록.
+     */
     private suspend fun completeBuy(
         ticker: String,
         state: TradingState,
         currentPrice: Double,
         executedVolume: Double,
         account: Account?,
+        feeBasis: FeeBasis,
     ): TradeRecord {
         // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
         // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
@@ -328,6 +341,8 @@ class PositionManager(
             pnlPercent = null, // 진입 — 실현 손익 없음
             pnlAmount = null,
             strategy = strategy,
+            // totalAmount 가 포지션 전체 원가라 추정 기준으로 쓸 수 없다(#133). 호출자가 실측/미기록을 정한다.
+            fee = feeBasis,
             exchangeOrderId = orderUuid,
         )
         // #52: 전이를 한 곳에 모아 사본과 원본에 각각 적용한다. `now` 를 고정해 두 적용이 동일한 결과를 낸다.
@@ -744,6 +759,8 @@ class PositionManager(
             // 청산은 진입 전략의 성과로 귀속한다. 매도 시점의 활성 전략을 쓰면 설정을 바꾼 뒤의 청산이
             // 엉뚱한 전략 몫으로 잡힌다. markSold 가 clearEntryMeta 로 지우기 전이라 값이 살아 있다.
             strategy = state.entryStrategy,
+            // 매도의 totalAmount 는 이 매도의 대금(가격×수량)이라 추정 기준이 맞다 — 매수와 달리 스냅샷이 아니다.
+            fee = FeeBasis.Estimate,
             reason = reason?.name,
             // markSold 이전 호출이라 pendingSellUuid 가 살아있음 — 재시작 reconcile 중복 기록을 막는 dedup 키.
             exchangeOrderId = state.pendingSellUuid,

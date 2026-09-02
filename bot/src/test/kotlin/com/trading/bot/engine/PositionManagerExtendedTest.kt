@@ -567,6 +567,9 @@ class PositionManagerExtendedTest {
         assertTrue(state.position)
         assertNull(state.pendingBuyUuid)
         assertEquals(0.0003, state.holdVolume)
+        // 주문 응답이 없으니 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거일 뿐이라
+        // 추정으로 채우면 포지션 전체 원가 기준이 되어 #133 이 재발한다.
+        assertEquals(FeeBasis.Unrecorded, result!!.fee)
     }
 
     @Test
@@ -1697,5 +1700,90 @@ class PositionManagerExtendedTest {
         assertEquals("combined", result!!.strategy)
         // 잔여 포지션은 markSold 를 타지 않으므로 다음 매도도 같은 전략으로 귀속돼야 한다.
         assertEquals("combined", state.entryStrategy)
+    }
+
+    // --- 매수 수수료의 출처 (#133) ---
+    // 엔진 매수의 totalAmount 는 "포지션 전체 원가"(거래소평단 × 실잔고)라 수수료 추정 기준으로 쓸 수 없다.
+    // 기존 보유분이 있으면 그만큼 부풀려진다. 주문 응답의 paid_fee 가 있으면 그것이 정답이다.
+
+    @Test
+    fun `engine buy carries the exchange-charged fee, not an estimate from the position snapshot`() = runTest {
+        // 실잔고 0.02 @ 52,000,000 = 1,040,000원 = 포지션 전체 원가. 이번 주문 체결분은 그 일부일 뿐이다.
+        // 추정식을 쓰면 1,040,000 × 0.0005 = 520원이 되어 실제 청구액 12.3원과 크게 어긋난다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.02", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-fee")
+        coEvery { upbitClient.getOrder("buy-fee") } returns
+            Order(uuid = "buy-fee", state = "done", executedVolume = "0.0003", paidFee = "12.3")
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
+
+        assertEquals(FeeBasis.Measured(12.3), result!!.fee)
+    }
+
+    @Test
+    fun `partially filled buy that ends as cancel still carries the charged fee`() = runTest {
+        // 시장가 매수는 소액잔량 환불 시 state=cancel + executed_volume>0 으로 끝난다. 체결분에 대한
+        // 수수료는 청구됐으므로 paid_fee 가 유효하다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-cancel-fee")
+        coEvery { upbitClient.getOrder("buy-cancel-fee") } returns
+            Order(uuid = "buy-cancel-fee", state = "cancel", executedVolume = "0.0003", paidFee = "12.3")
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
+
+        assertEquals(FeeBasis.Measured(12.3), result!!.fee)
+    }
+
+    @Test
+    fun `buy without a usable paid_fee records it as unrecorded rather than estimating`() = runTest {
+        // 추정으로 떨어지면 고치려던 과대계상이 그대로 재발한다 — 모를 때는 모른다고 남긴다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.02", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-nofee")
+        coEvery { upbitClient.getOrder("buy-nofee") } returns
+            Order(uuid = "buy-nofee", state = "done", executedVolume = "0.0003", paidFee = null)
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
+
+        assertEquals(FeeBasis.Unrecorded, result!!.fee)
+    }
+
+    @Test
+    fun `buy with a non-numeric paid_fee does not throw and records unrecorded`() = runTest {
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-badfee")
+        coEvery { upbitClient.getOrder("buy-badfee") } returns
+            Order(uuid = "buy-badfee", state = "done", executedVolume = "0.0003", paidFee = "not-a-number")
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
+
+        assertEquals(FeeBasis.Unrecorded, result!!.fee)
+    }
+
+    @Test
+    fun `engine sell estimates the fee because its amount is the sale proceeds`() = runTest {
+        // 매도의 totalAmount 는 가격×수량 = 이 매도의 대금이라 추정 기준이 맞다. 매수와 대칭이 아니다.
+        coEvery { upbitClient.getAccounts() } returns
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-fee")
+        coEvery { upbitClient.getOrder("sell-fee") } returns Order(uuid = "sell-fee", state = "done")
+
+        val state = TradingState("KRW-BTC").apply {
+            markBought(50000000.0, 0.001, "combined", replace = true, now = LocalDateTime.now())
+        }
+        val result = manager.sell("KRW-BTC", state, 55000000.0, SellReason.TAKE_PROFIT)
+
+        assertEquals(FeeBasis.Estimate, result!!.fee)
     }
 }

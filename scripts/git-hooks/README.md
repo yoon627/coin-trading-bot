@@ -35,6 +35,13 @@ git config core.hooksPath scripts/git-hooks
 | `codex` finds nothing | Allow silently |
 | `codex` exits non-zero, missing, or output unparseable | BLOCK (fail-closed) |
 | Diff touches only docs (`*.md`, `docs/`, `.claude/tasks|memory/`, etc.) | Bypass codex |
+| `deploy.yml` 의 `paths-ignore` 가 워크플로 자신을 제외 (`**`·`.github/**`·`**.yml` 등) | BLOCK — codex 와 무관하게 항상 차단 |
+
+`paths-ignore` 자기제외를 여기서 막는 이유: 그 패턴이 들어가면 `deploy.yml` 을 바꾸는 push 가
+워크플로 실행을 만들지 않아, 경로 목록을 강제하는 `DeployWorkflowPathListTest` 가 영영 돌지
+않는다(#151). 검사가 자기 자신을 끄는 변경만 hook 이 막고, 목록 동기·배포 입력 같은 나머지
+불변식은 그 테스트가 본다 — hook 에서 gradle 을 돌리지 않는 것은 JDK 환경에 따라 `./gradlew`
+가 실패해 모든 push 를 막을 수 있기 때문이다.
 
 ### Acknowledging P2/P3 findings
 
