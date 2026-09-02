@@ -2,7 +2,6 @@ package com.trading.bot.config
 
 import com.trading.common.config.AccumulateProperties
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -10,17 +9,14 @@ import org.junit.jupiter.api.Test
 class AccumulatePropertiesTest {
 
     @Test
-    fun `disabled by default`() {
-        val props = AccumulateProperties()
-        assertFalse(props.enabled)
-        assertTrue(props.tickerList().isEmpty())
+    fun `no tickers by default so the profile is off`() {
+        assertTrue(AccumulateProperties().tickerList().isEmpty())
     }
 
     @Test
     fun `tickerList normalizes and dedups`() {
         val props = AccumulateProperties(tickers = " krw-btc , KRW-ETH, krw-btc ,")
         assertEquals(listOf("KRW-BTC", "KRW-ETH"), props.tickerList())
-        assertTrue(props.enabled)
     }
 
     @Test
