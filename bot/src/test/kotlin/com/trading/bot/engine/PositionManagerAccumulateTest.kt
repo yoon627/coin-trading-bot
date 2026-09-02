@@ -180,6 +180,20 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `sellVolume does not lose a decimal place to binary rounding`() = runTest {
+        // BigDecimal(0.0003) 은 0.000299999… 라 8자리 내림이 0.00029999 가 된다 — 한 자리 모자란 주문이 나가고 잔량 1e-8 이 남는다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.001", "50000000"))
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "bin")
+        coEvery { upbitClient.getOrder("bin") } returns Order(uuid = "bin", state = "done", executedVolume = "0.0003")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, rungsFilled = 4, lastActionPrice = 40_000_000.0)
+        manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.0003, 52_000_000.0, isFinal = false))
+
+        assertEquals("0.0003", orderSlot.captured.volume)
+    }
+
+    @Test
     fun `final rung sells the exchange balance string and resets the ladder`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(btc("0.00025", "50000000"))
         val orderSlot = slot<OrderRequest>()
@@ -194,6 +208,46 @@ class PositionManagerAccumulateTest {
         assertFalse(state.position)
         assertEquals(0, state.rungsFilled)
         assertEquals(53_000_000.0, state.flatPeak)
+    }
+
+    @Test
+    fun `final rung partially filled via reconcile keeps one rung for the remainder`() = runTest {
+        // rungs=1 전량 매도가 95% 만 체결되면 잔량이 남는다. rung 이 0 이 되면 decide 가 장부·잔고 불일치로
+        // 영구 Hold 에 빠지고 적립엔 다른 청산 게이트가 없다 — 잔량은 1단으로 남아 다음 상승에 팔려야 한다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.001", "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "final-wait")
+        coEvery { upbitClient.getOrder("final-wait") } returns Order(uuid = "final-wait", state = "wait", executedVolume = "0")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, rungsFilled = 1, lastActionPrice = 45_000_000.0)
+        assertNull(manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.001, 52_000_000.0, isFinal = true)))
+
+        coEvery { upbitClient.getOrder("final-wait") } returns Order(uuid = "final-wait", state = "cancel", executedVolume = "0.00095")
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.00005", "50000000"))
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertTrue(state.position)
+        assertEquals(0.00005, state.holdVolume)
+        assertEquals(1, state.rungsFilled)
+        assertEquals(52_000_000.0, state.lastActionPrice)
+    }
+
+    @Test
+    fun `sellVolume caps a rung at the free balance and closes the ledger when nothing free remains`() = runTest {
+        // 장부 0.001 중 0.0007 이 봇 밖에서 잠겨 free 가 0.0003 뿐. 잠긴 몫은 우리 포지션이 아니므로(heldVolume 규약)
+        // free 를 다 팔면 장부는 청산이고, 사다리는 여기서부터의 눌림을 기다린다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.0003", "50000000"))
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "cap")
+        coEvery { upbitClient.getOrder("cap") } returns Order(uuid = "cap", state = "done", executedVolume = "0.0003")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, rungsFilled = 2, lastActionPrice = 40_000_000.0)
+        val record = manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.0005, 52_000_000.0, isFinal = false))
+
+        assertEquals("0.0003", orderSlot.captured.volume)
+        assertEquals(0.0003, record!!.volume)
+        assertFalse(state.position)
+        assertEquals(0, state.rungsFilled)
+        assertEquals(52_000_000.0, state.flatPeak)
     }
 
     @Test
