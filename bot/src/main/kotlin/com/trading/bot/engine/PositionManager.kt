@@ -346,6 +346,7 @@ class PositionManager(
                 log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
                 state.pendingBuyUuid = null
                 state.pendingBuyStrategy = null
+                state.pendingBuyTriggerPrice = null
                 persist(state)
                 null
             }
@@ -536,6 +537,9 @@ class PositionManager(
     /** 메타 변경 후 durable 반영(best-effort) — 실패해도 다음 전이에서 재기록된다. */
     internal suspend fun persistState(state: TradingState) = persist(state)
 
+    /** durable 복원본. 런타임에 새로 활성화되는 티커가 빈 상태로 시딩돼 pending uuid·halt 를 덮어쓰지 않게 한다. */
+    internal suspend fun loadState(ticker: String): TradingState? = tradingStateService.loadState(userId, ticker)
+
     /**
      * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다음 tick 이 재시도하게 한다 —
      * flush 가 갱신 tick 에만 걸리므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다(#54).
@@ -620,7 +624,10 @@ class PositionManager(
             SellQuantity(account.balance, account.balanceDouble())
         }
 
-    /** 적립 단 매도. 마지막 단(또는 잔고 이상 요청)은 거래소 잔고 원문으로 전량, 아니면 8자리 내림 수량. */
+    /**
+     * 적립 단 매도. 마지막 단은 거래소 잔고 원문으로 전량, 아니면 8자리 내림 수량. 요청이 free 잔고를 넘어도
+     * 전량으로 승격하지 않는다 — 나머지가 locked(수동 지정가·출금 대기)일 수 있어 전량 청산으로 확정하면 장부가 틀린다.
+     */
     suspend fun sellVolume(
         ticker: String,
         state: TradingState,
@@ -629,16 +636,21 @@ class PositionManager(
     ): TradeRecord? =
         placeSell(ticker, state, currentPrice, SellReason.ACCUMULATE_STEP, action.triggerPrice) { account ->
             val sellable = account.balanceDouble()
-            if (action.isFinal || action.volume >= sellable) SellQuantity(account.balance, sellable)
-            else SellQuantity(formatVolume(action.volume), action.volume)
+            if (action.isFinal) {
+                SellQuantity(account.balance, sellable)
+            } else {
+                val volume = minOf(action.volume, sellable)
+                SellQuantity(formatVolume(volume), volume)
+            }
         }
 
     /** 주문에 실을 수량 문자열(거래소 원문 또는 plain decimal)과 그 수치. */
     private class SellQuantity(val orderVolume: String, val volume: Double)
 
-    // Double.toString() 은 소액에서 지수표기("5.0E-5")를 내고 거래소가 거부한다.
+    // Double.toString() 은 소액에서 지수표기("5.0E-5")를 내고 거래소가 거부한다. BigDecimal(double) 생성자는 이진
+    // 근사값(0.0003 → 0.000299999…)을 그대로 써서 내림이 한 자리 깎이므로 valueOf(십진 표기)로 만든다.
     private fun formatVolume(volume: Double): String =
-        BigDecimal(volume).setScale(VOLUME_SCALE, RoundingMode.DOWN).stripTrailingZeros().toPlainString()
+        BigDecimal.valueOf(volume).setScale(VOLUME_SCALE, RoundingMode.DOWN).stripTrailingZeros().toPlainString()
 
     private suspend fun placeSell(
         ticker: String,
@@ -677,6 +689,8 @@ class PositionManager(
             }
             log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
             state.markSold()
+            // 사다리는 여기서부터의 눌림을 기다린다 — 옛 고점이 남으면 수동 청산 직후 곧바로 첫 단이 들어간다.
+            if (reason == SellReason.ACCUMULATE_STEP) state.flatPeak = currentPrice
             persist(state)
             return null
         }
@@ -904,7 +918,9 @@ class PositionManager(
                 s.holdVolume = remaining
                 if (s.avgBuyPrice <= 0.0) s.avgBuyPrice = recoveredAvg
                 s.clearPendingSell()
-                if (rungConsumed) s.rungsFilled = (s.rungsFilled - 1).coerceAtLeast(0)
+                // 잔량이 있으면 사다리는 최소 1단이어야 한다 — 마지막 단이 90~99% 체결되면 rung 0·잔고>0 이 되어
+                // decide 가 영구 Hold 에 빠진다(적립엔 다른 청산 게이트가 없다). 잔량은 다음 상승에 isFinal 로 팔린다.
+                if (rungConsumed) s.rungsFilled = (s.rungsFilled - 1).coerceAtLeast(if (isLadder) 1 else 0)
             } else {
                 s.markSold(now)
                 // 전량 청산 후 첫 단은 여기서부터의 눌림을 기다린다.

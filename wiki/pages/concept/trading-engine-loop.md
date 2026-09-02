@@ -35,7 +35,7 @@ sources:
 
 1~5 는 두 프로파일 공용 preamble 이고, 그 뒤 `profileOf(ticker)` 가 `runSwing`(6~8 그대로) 과 `runAccumulate` 를 가른다. `trading.accumulate.tickers` 에 든 티커만 ACCUMULATE 이며 기본은 비어 있다. 적립 경로는 손절·트레일링·익절·차트·일일리셋을 **하나도 호출하지 않고** `AccumulateLadder` 판정만 따른다 — 상세는 [[accumulate-ladder]]. 트레일링 고점 flush(preamble 의 `updatePeakPrice`)도 SWING 만 탄다.
 
-활성 티커 집합은 `start()` 가 `적립 티커 ∪ 요청 목록` 으로 만들고, `trading.universe.auto` 가 켜져 있으면 기동 시·09:00 경계에 `refreshUniverse()` → `applyTickers()` 가 알트 목록을 거래대금 상위로 교체한다(보유·pending 티커 잔류, 총수 20 상한). 사용자 목록 `bot_state.tickers` 에는 파생 집합을 되쓰지 않는다.
+활성 티커 집합은 `start()` 가 `적립 티커 ∪ 요청 목록` 으로 만들고, `trading.universe.auto` 가 켜져 있으면 기동 시·09:00 경계에 `refreshUniverse()` → `applyTickers()` 가 알트 목록을 거래대금 상위로 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 에는 파생 집합을 되쓰지 않는다.
 
 스윙 `buy()` 는 적립이 아직 투입하지 않은 예산(`reservedKrw`)을 뺀 잔고로 사이징한다 — 알트가 적립 현금을 선점하지 못하게.
 
