@@ -57,9 +57,10 @@ class TradingEngine(
     private val accumulateTickers: Set<String> = accumulateProperties.tickerList().toSet()
 
     // 자동 선정이 마지막으로 고른 알트 집합. 보유 때문에 잔류한 티커는 여기 없으므로 청산 뒤 재진입하지 못한다 —
-    // 잔류의 의미는 "청산될 때까지"이지 "다음 갱신까지 새로 사도 된다"가 아니다. null = 자동 선정 미적용.
+    // 잔류의 의미는 "청산될 때까지"이지 "다음 갱신까지 새로 사도 된다"가 아니다. auto 면 첫 선정이 성공하기 전까지
+    // 빈 집합(신규 진입 없음, 청산만) — null(제한 없음)로 두면 선정 API 장애 중 durable 잔재 전부가 진입 대상이 된다.
     @Volatile
-    private var swingUniverse: Set<String>? = null
+    private var swingUniverse: Set<String>? = if (universeProperties.auto) emptySet() else null
 
     internal fun profileOf(ticker: String): TickerProfile =
         if (ticker in accumulateTickers) TickerProfile.ACCUMULATE else TickerProfile.SWING
@@ -280,7 +281,8 @@ class TradingEngine(
      * 다음 upsert 에서 지워진다(자동 선정이 재시작 후 같은 티커를 다시 고르는 경우가 그렇다).
      */
     internal suspend fun applyTickers(next: List<String>) {
-        val protectedSet = states.filterValues { it.position || it.pendingBuyUuid != null || it.pendingSellUuid != null }.keys
+        // unsynced 는 "보유 여부를 아직 모른다" — 실제 포지션일 수 있으니 확인될 때까지 목록에서 빼지 않는다.
+        val protectedSet = states.filterValues { it.position || it.unsynced || it.pendingBuyUuid != null || it.pendingSellUuid != null }.keys
         // 현재 순서를 보존한다 — ConcurrentHashMap 키 순서는 삽입 순서가 아니다.
         val protected = activeTickers.filter { it in protectedSet } + protectedSet.filter { it !in activeTickers }
         val pinned = (accumulateTickers + protected).distinct()

@@ -158,6 +158,36 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `before the first successful selection no swing ticker enters, exits still run`() = runBlocking {
+        // 선정 API 가 죽은 채 재시작하면 durable 잔재 전부가 활성인데, 유니버스가 "제한 없음"이면 그들이 전부 진입 대상이 된다.
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns null
+        val engine = createEngine(universe = UniverseProperties(auto = true), source = source)
+        engine.start(listOf("KRW-ETH"))
+        engine.stop()
+
+        coEvery { upbitClient.getTicker("KRW-ETH") } returns listOf(com.trading.bot.domain.Ticker(tradePrice = 100.0))
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        engine.processTicker("KRW-ETH", TradingState("KRW-ETH"), strategy)
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any(), any()) }
+
+        val holding = held("KRW-ETH")
+        engine.processTicker("KRW-ETH", holding, strategy)
+        coVerify(exactly = 1) { positionManager.checkStopLoss(holding, 100.0) }
+    }
+
+    @Test
+    fun `applyTickers keeps a ticker whose balance could not be synced`() = runBlocking {
+        val engine = createEngine()
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-ETH" to TradingState("KRW-ETH", unsynced = true)))
+        engine.stop()
+
+        engine.applyTickers(listOf("KRW-A"))
+
+        assertTrue("KRW-ETH" in engine.getActiveTickers())
+    }
+
+    @Test
     fun `refreshUniverse keeps the previous list when the source fails`() = runBlocking {
         val source = mockk<UniverseSource>()
         coEvery { source.select(any(), any()) } returns null

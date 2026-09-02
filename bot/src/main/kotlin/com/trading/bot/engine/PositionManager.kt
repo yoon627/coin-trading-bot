@@ -213,7 +213,9 @@ class PositionManager(
         val krw = accounts.find { it.currency == "KRW" }?.balanceDouble() ?: 0.0
         val coin = accounts.find { it.currency == ticker.substringAfter("-") }
         val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-        val investedKrw = (coin?.avgBuyPriceDouble() ?: 0.0) * priorVolume
+        // 예산은 매도 가능 수량이 아니라 계좌 총보유(locked 포함)로 잰다 — 수동 지정가·출금 대기로 잠긴 코인도
+        // 이 예산으로 산 돈이고, 빼고 재면 손절 없는 프로파일의 유일한 상한이 뚫린다.
+        val investedKrw = (coin?.avgBuyPriceDouble() ?: 0.0) * (coin?.totalBalance() ?: 0.0)
         val skip = when {
             investedKrw + action.amountKrw > params.budgetKrw + BUDGET_TOLERANCE_KRW ->
                 "budget: invested %.0f + rung %.0f > %.0f".format(investedKrw, action.amountKrw, params.budgetKrw)
@@ -264,9 +266,11 @@ class PositionManager(
         state.pendingBuyStrategy = strategyName
         state.pendingBuyTriggerPrice = triggerPrice
         state.pendingBuyPriorVolume = priorVolume
-        // 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에
+        // 신규 진입이면 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에
         // 재시작해도(syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
-        state.clearEntryMeta()
+        // 적립 추가 단은 기존 포지션 위에 얹는다 — 지우면 미체결(cancel+0)로 끝났을 때 buyDate·entryStrategy 가 영구 유실돼
+        // 프로파일을 끈 뒤 보유상한 청산이 동작하지 않는다.
+        if (!state.position) state.clearEntryMeta()
         return try {
             // 주문은 이미 나갔다 — 체결확인·상태반영은 취소돼도 원자적으로 완주해야 한다. reload/stop 이 tick 코루틴을
             // 취소하면 이 후처리가 중단돼 pending 이 폐기될 states 에만 남고(H8 방어망 무력화), 새 엔진이 같은 tick 을
