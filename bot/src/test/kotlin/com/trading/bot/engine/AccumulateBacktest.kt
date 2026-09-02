@@ -93,7 +93,8 @@ class AccumulateBacktest {
             val equity = state.cash + state.holdVolume * bar.close
             peakEquity = max(peakEquity, equity)
             maxDrawdownKrw = max(maxDrawdownKrw, peakEquity - equity)
-            investedSum += params.budgetKrw - state.cash
+            // 노출은 현재 보유 원가로 잰다 — `budget − cash` 는 실현 이익이 쌓이면 음수가 돼 평균을 왜곡한다.
+            investedSum += state.avgBuyPrice * state.holdVolume
         }
 
         val lastClose = chronological.last().close
@@ -134,7 +135,7 @@ class AccumulateBacktest {
         state.rungsFilled++
         state.lastActionPrice = action.triggerPrice
         state.buys++
-        state.maxInvestedKrw = max(state.maxInvestedKrw, params.budgetKrw - state.cash)
+        state.maxInvestedKrw = max(state.maxInvestedKrw, state.avgBuyPrice * state.holdVolume)
         return true
     }
 

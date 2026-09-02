@@ -44,14 +44,15 @@ sources:
 
 - **dispatch**: `processTicker` 는 공용 preamble(가격·unsynced·pendingPersist·pendingBuy/Sell reconcile) 뒤 `profileOf(ticker)` 로 `runSwing`/`runAccumulate` 를 가른다. 트레일링 고점 flush 는 SWING 만, 무포지션 고점(`flatPeak`) flush 는 ACCUMULATE 만 — 둘 다 "갱신 tick 만 + 실패 시 `peakPersistFailed` 재시도" 규약.
 - **사다리 장부는 체결 커밋 트랜잭션 안에서만 바뀐다.** `rungsFilled`·`lastActionPrice` 는 `commitFillAndApply` 의 전이 람다에서만 갱신된다. 밖에서 올리면 "매수 기록됐는데 rung 그대로" 크래시 창에서 같은 단을 다시 산다.
-- **rung 증감은 체결 비율 ≥ 90% 일 때만.** 매수는 `Order.price`(ord_type=price 의 요청 KRW) 대비 `executedVolume × currentPrice`, 매도는 `pendingSellVolume` 대비 체결량. 10% 체결로 한 단을 소모하면 사다리가 어긋난다. 미달이면 rung·기준가 유지, 잔량은 다음 tick 재평가.
+- **매수는 체결이 조금이라도 있으면 한 단, 매도는 요청 대비 ≥ 90% 체결일 때만 한 단 소모.** 매수를 비율로 걸지 않는 이유: 시장가 매수(ord_type=price)는 잔량 환불로 종결돼 미달이 드물고, "미달이면 안 센다"는 다음 tick 의 장부 정합(원가 기반 rung 추정)이 어차피 한 단으로 복원해 규칙이 서로 모순됐다 — 총 투입은 실측 원가 예산 게이트가 막는다. 매도는 `pendingSellVolume` 대비 체결량으로 판정하며 미달이면 rung·기준가 유지, 잔량은 다음 tick 재평가(10% 체결로 한 단을 지우면 사다리가 어긋난다).
+- **getOrder 장애 시 잔고 복원은 주문 전 보유량(`pending_buy_prior_volume`)을 넘는 증분만 이 주문의 체결로 본다.** 추가 단은 주문 전부터 코인이 있으므로 잔고 존재만으로 "체결"로 확정하면 미체결 주문이 사라지고 rung 이 헛되이 오른다.
 - **매도 전이는 `sellTransition()` 하나** — 즉시 done·reconcile 부분·reconcile 전량·잔고 복원 4경로가 공유한다. 사유·요청수량·트리거가가 durable pending(`pending_sell_reason`·`pending_sell_volume`·`pending_sell_trigger_price`)에 있어 재시작 뒤 reconcile 도 같은 판정이 난다. 이전엔 부분체결 분기가 rung 을 몰라 같은 단을 반복 매도할 수 있었다(플랜 리뷰 blocker).
 - **진입점 분리**: `buy()` 는 기존 5중 가드(`entryBlocked`) + `investRatio` 사이징, `buyRung()` 은 `position` 가드만 제외한 같은 가드 + 단당 금액. 플래그로 가드를 우회하지 않는다. 주문 이후 공용부는 `placeBuy`.
 - **정합(`LadderStateMapper.reconcile`)은 매 tick 돈다 — 정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다.** `hold>0 && rungs==0` → 실측 원가로 rung 추정(`ceil(원가/단당)`, 상한 max) + `lastActionPrice = avg` + WARN("편입"). 운영 `.env` 가 BTC·ETH 를 스윙으로 들고 있어 **적립을 켜는 순간 이 경로가 실제로 발동**한다 — 의도된 컷오버. `hold<=0 && rungs>0` → 비움 + WARN(수동 청산 추정). 런타임에 장부와 잔고가 갈라져도(부분체결·수동 매매) 다음 tick 에 스스로 맞춘다 — 적립엔 다른 청산 게이트가 없어 여기 말고는 풀 곳이 없다. 마지막 단이 90~99% 체결돼 잔량이 남으면 `sellTransition` 이 rung 을 1 로 유지한다.
 - **현금 경쟁**: 적립이 아직 투입하지 않은 예산 `Σ max(0, budget − avg×hold)` 를 스윙 `buy()` 사이징에서 뺀다(`reservedKrw`). 단이 예산·KRW 부족으로 건너뛰어지면 사유가 바뀔 때만 WARN 하고 `/api/bot/status.positions[].accumulate_skip` 에 노출한다.
 - **역방향 컷오버**: 적립 티커를 끄면 남은 포지션이 즉시 스윙 게이트(손절 −5%·09:00 청산)를 받는다. `buyDate` 는 마지막 단 매수일이다.
 - **기록**: 단 매수는 기존 BUY 스냅샷 규약([[trade-record-volume-semantics]]), 단 매도는 `reason=ACCUMULATE_STEP`·`strategy=accumulate`·`volume=판 수량`. 편입된 스윙 포지션이어도 적립 규칙으로 팔았으면 `accumulate` 몫이다. 리더보드 `aggregateSellStatsByUser` 는 accumulate 행을 제외한다 — `/api/strategies/performance` 는 SELL 행 `pnl_percent` 단순 합산이라 부분 매도가 잦은 이 프로파일에서 과대계상된다.
-- **durable(V23)**: `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_sell_trigger_price`([[persistence-schema]]). 잔고·평단은 종전대로 거래소 복원.
+- **durable(V23)**: `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`([[persistence-schema]]). 잔고·평단은 종전대로 거래소 복원.
 
 ## 알트 유니버스 자동 선정 (`trading.universe.auto`, 기본 off)
 
@@ -64,7 +65,7 @@ sources:
 
 [[backtest-engine]] 은 단일 포지션 구조라 별도 D1 시뮬레이터를 두되 판정은 `AccumulateLadder` 를 호출한다(규칙 이중구현 금지 — `ExitGates` 공유 규약과 동형). 봉당 1액션이 기본이고 **한 봉 안에서는 한 방향만** 진행한다 — low 에서 사고 high 에서 파는 왕복은 순서를 알 수 없는 look-ahead 다. 매수 트리거는 low, 매도는 high, 체결가는 트리거가(시가가 이미 넘었으면 시가), 편도 수수료 0.05%. 지표는 예산 대비 순수익률·현금 포함 equity 의 MDD·평균 노출.
 
-**2026-09-02 결과**(bear BTC·ETH·XRP·SOL + bull BTC·XRP·SOL, 후보 5/3/3): 하락장 중앙값 −19.9%(B&H −29.0%), 상승장 +27.3%(B&H +96.1%), worst MDD 37%, 평균 노출 0.76. 사전 등록 규칙(상승장 > 0, 하락장 > B&H, MDD ≤ 40%)은 통과했으나 **비판별적**이었다(27/27 격자 통과 — 부분 노출 전략은 전액 B&H 보다 거의 항상 덜 잃는다). 읽을 것은 프로파일이다: 하락장에서 예산이 초반에 소진돼 손실을 그대로 맞고, 상승장에서 오를수록 팔아 B&H 의 1/3~1/4 만 먹는다. **수익성 우월의 근거가 아니다.** 격자 최적값을 기본값으로 올리지 않았다(과적합).
+**2026-09-02 결과**(bear BTC·ETH·XRP·SOL + bull BTC·XRP·SOL, 후보 5/3/3): 하락장 중앙값 −19.9%(B&H −29.0%), 상승장 +27.3%(B&H +96.1%), worst MDD 37%, 평균 노출 0.86(보유 원가/예산). 사전 등록 규칙(상승장 > 0, 하락장 > B&H, MDD ≤ 40%)은 통과했으나 **비판별적**이었다(27/27 격자 통과 — 부분 노출 전략은 전액 B&H 보다 거의 항상 덜 잃는다). 읽을 것은 프로파일이다: 하락장에서 예산이 초반에 소진돼 손실을 그대로 맞고, 상승장에서 오를수록 팔아 B&H 의 1/3~1/4 만 먹는다. **수익성 우월의 근거가 아니다.** 격자 최적값을 기본값으로 올리지 않았다(과적합).
 
 ## 롤백
 

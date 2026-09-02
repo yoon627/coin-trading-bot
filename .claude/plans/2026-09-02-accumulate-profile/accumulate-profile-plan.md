@@ -21,11 +21,11 @@ updated: 2026-09-02
 
   | 후보 5/3/3 | bear 중앙값 | bear B&H | bull 중앙값 | bull B&H | worst MDD | 평균 노출 | 판정 |
   |---|---|---|---|---|---|---|---|
-  | 봉당 1액션 | −19.9% | −29.0% | +27.3% | +96.1% | 37.0% | 0.76 | 통과 |
-  | 봉당 다단(10) | −22.7% | −29.0% | +33.2% | +96.1% | 37.7% | 0.76 | 통과 |
+  | 봉당 1액션 | −19.9% | −29.0% | +27.3% | +96.1% | 37.0% | 0.86 | 통과 |
+  | 봉당 다단(10) | −22.7% | −29.0% | +33.2% | +96.1% | 37.7% | 0.88 | 통과 |
 
   per-fixture(봉당 1): bear XRP −33.0(B&H −42.9) · BTC −14.5(−22.8) · ETH −12.6(−26.6) · SOL −25.3(−31.5) / bull XRP −12.7(−15.7) · BTC +27.3(+96.1) · SOL +50.5(+200.9). 전체 격자 표는 `AccumulateBacktestTest` 출력(JUnit XML system-out).
-  **해석**: (1) 사전 등록 규칙은 형식상 통과했으나 **비판별적**이었다 — 봉당 1액션에서 27/27 통과. 하락장 비교 대상이 전액 B&H 라 부분 노출 전략은 거의 자동으로 "덜 잃는다". (2) 하락장에서 노출이 0.88~0.99 로 예산이 초반에 소진되고 반등 없이 끝나 −13~−33% 를 그대로 맞는다(손절 없음의 대가). (3) 상승장에선 "오를수록 판다"가 상승분을 반납해 B&H 의 1/3~1/4 만 먹는다(노출 0.34~0.45). (4) 격자 간 차이는 대부분 노출 차이로 설명된다 — stepDown 5·rungs 8 이 하락 손실을 가장 줄이지만 상승도 가장 덜 먹는다. **결론: 후보 5/3/3 유지(규칙대로), 단 이 백테는 "하락에서 B&H 보다 덜 잃고 상승에서 덜 번다"는 프로파일 확인이지 수익성 우월 근거가 아니다.** 사용자에게 이 트레이드오프를 Report 에서 명시한다.
+  **해석**: (1) 사전 등록 규칙은 형식상 통과했으나 **비판별적**이었다 — 봉당 1액션에서 27/27 통과. 하락장 비교 대상이 전액 B&H 라 부분 노출 전략은 거의 자동으로 "덜 잃는다". (2) 하락장에서 노출(보유 원가/예산)이 0.91~0.99 로 예산이 초반에 소진되고 반등 없이 끝나 −13~−33% 를 그대로 맞는다(손절 없음의 대가). (3) 상승장에선 "오를수록 판다"가 상승분을 반납해 B&H 의 1/3~1/4 만 먹는다(노출 0.60~0.75 — codex 지적으로 노출을 `budget−cash` 에서 보유 원가로 바꾼 뒤 값, 실현이익이 노출을 음수로 깎던 왜곡 제거). (4) 격자 간 차이는 대부분 노출 차이로 설명된다 — stepDown 5·rungs 8 이 하락 손실을 가장 줄이지만 상승도 가장 덜 먹는다. **결론: 후보 5/3/3 유지(규칙대로), 단 이 백테는 "하락에서 B&H 보다 덜 잃고 상승에서 덜 번다"는 프로파일 확인이지 수익성 우월 근거가 아니다.** 사용자에게 이 트레이드오프를 Report 에서 명시한다.
 
 - 2026-09-02: **Phase C 완료**(`4a952fe`) — `buy()/buyRung()` 진입점 분리, `sellVolume()`, 4경로 공용 `sellTransition()`, rung 체결비율 조건부, `LadderStateMapper`, dispatch, `reservedKrw`, D1 REST 60초 캐시, V23. 신규 25 테스트 + 회귀 191 통과, `scripts/run-db-tests.sh` 3건/skip 0. **Phase D 완료**(`61e7a20`) — `UniverseSelector`(싱글톤, `publicUpbitClient`, `getMarkets` 추가), `applyTickers`/`refreshUniverse`, `bot_state.tickers` 불변 테스트. 신규 10 테스트. **Phase E 완료** — 배포 3계층 7키, README·PROJECT_ANALYSIS(V22·V23 행 추가, 리스크 기본값 오기재 +2%→+5% 교정)·spec·wiki(신규 `accumulate-ladder` + 3페이지) — wiki 3종 검증 통과. wiki 페이지·spec 파일명은 브랜치명 `accumulate-profile` 과 겹쳐 smoke 음성검사에 걸려 `accumulate-ladder` 로 바꿨다.
 - 2026-09-02: 전체 스위트 `./gradlew test` 통과 — 846 실행 / skip 9(전부 기존 조건부: DB·네트워크·플래그 게이트 6 스위트, DB 분은 run-db-tests.sh 로 별도 실행).
@@ -34,6 +34,7 @@ updated: 2026-09-02
 
 - 2026-09-02: **최종 검증(격리 runner) 통과** — `./gradlew test --rerun-tasks` 851 실행 / 0 실패 / skip 9(기존 조건부 6 스위트), `scripts/run-db-tests.sh` 3건/skip 0, wiki 3종 clean(35 페이지, smoke 10/10), 배포 키 3계층 등록·`deploy.sh` 문법 OK, working tree clean. Acceptance 전 항목 증거 대조 완료(아래 표 체크).
 
+- 2026-09-02: `/e merge` 첫 push 가 pre-push codex 에 BLOCK(P1 2·P2 2) — 유니버스 잔류 티커 재진입 차단(`swingUniverse`), 추가 단 잔고 복원 오판(`pending_buy_prior_volume`), 매수 90% 규칙↔정합 모순 해소(매수는 체결 시 한 단), 백테 노출을 보유 원가로. 전부 fix.
 - 2026-09-02: 사용자가 마무리(push·PR·머지) 선택 → `/e merge`. 브랜치 push → PR → 머지 → worktree·브랜치 정리. 머지가 거부되면 `in_progress` 로 복구.
 
 # Next
@@ -82,7 +83,7 @@ fun decide(input, params): LadderAction
 - `AccumulateProperties`(`trading.accumulate.*`, `common/config`): `tickers`(기본 빈 값 = off), `budgetKrw=100000`, `maxRungs=5`, `stepDownPct=3.0`, `stepUpPct=3.0`. `init` 에서 단당 금액 ≥ 5,000. **전역 env 라 모든 사용자 엔진에 같은 예산으로 적용된다**(`createEngine` 이 per-user) `[pr-18]` — README 에 명시.
 - **dispatch `[arch-9]`**: `processTicker` = 공용 preamble(가격·unsynced·pendingPersist·pendingBuy/Sell reconcile) → `when (profileOf(ticker)) { SWING -> runSwing(); ACCUMULATE -> runAccumulate() }`. 기존 peak 갱신·flush 는 `SWING && position` 조건으로 preamble 의 현재 위치에 남긴다. **`flatPeak` flush 는 `runAccumulate` 안**(무포지션 구간에 갱신되므로 `if (position)` 블록을 재사용할 수 없다 `[pr-17]`): `updateFlatPeak()` 이 true 이거나 `peakPersistFailed` 면 `persistPeak`(전체 스냅샷 upsert, 같은 재시도 플래그). `profileOf` 는 `applyTickers` 가 만든 Set — 적립 티커가 사용자 목록에도 있으면 **ACCUMULATE 우선 + distinct**, 그 결과 스윙 대상이 0 이면 WARN `[pr-누락2]`.
 - **사다리 durable 필드(`rungsFilled`·`lastActionPrice`)는 `commitFillAndApply` 의 `applyTransition` 안에서만 바뀐다** `[arch-2]`.
-- **rung 증감은 체결 비율 조건부** `[pr-4]`: 매수 = `executedVolume × currentPrice / 요청금액(Order.price) >= 0.9` 일 때만 `rungs++`, 매도 = `executed / pendingSellVolume >= 0.9` 일 때만 `rungs--`. 미달이면 rung·`lastActionPrice` 유지(잔량은 다음 tick 재평가, 예산 게이트가 과투입을 막는다). `Order.price`(ord_type=price 의 요청 KRW)와 `pendingSellVolume` 이 이미 있어 새 durable 컬럼은 불필요.
+- **rung 증감** `[pr-4]` → **변경(codex pre-push P2, 2026-09-02)**: 매수는 체결이 있으면 `rungs++`(시장가 매수는 잔량 환불로 종결, 미달을 안 세면 매 tick 정합이 원가 기반으로 한 단 복원해 모순), 매도만 `executed / pendingSellVolume >= 0.9` 일 때 `rungs--`. 미달 매도는 rung·`lastActionPrice` 유지. **잔고 복원은 주문 전 보유량(`pending_buy_prior_volume`, V23)을 넘는 증분만 체결로 인정**(codex P1 — 추가 단은 주문 전부터 코인이 있어 잔고 존재만으로 확정하면 미체결 주문이 지워진다).
 - **매도 전이는 즉시·reconcile 공용 함수 하나** `[arch-3]`: `sellTransition(executed, requested, remaining, reason)`. `reason == ACCUMULATE_STEP` 이면 위 비율 판정으로 rung 차감 + `lastActionPrice = pendingSellTriggerPrice` + 잔량 유지, 아니면 기존 `markSold`/부분유지. `completeSellAtomically`·`applySellFillOutcome`(부분·전량) 3곳이 모두 이 함수를 쓴다. 트리거가는 `pendingSellTriggerPrice`(V23) 로 durable.
 - **매수 진입점 분리 `[arch-8]`**: 주문 이후 공용부를 `placeBuy(ticker, state, amountKrw, strategyName, triggerPrice)` 로 추출. `buy()` = 기존 5중 가드 + `calculateInvestAmount`, `buyRung(amount)` = `position` 가드만 제외한 동일 가드(`entryBlocked(state, allowExisting)`). **`buyRung` 은 주문 직전 거래소 계좌를 다시 읽어 예산 게이트를 실측으로 재판정**한다(런타임 수동매매로 state 가 낡아도 상한이 뚫리지 않게 `[pr-누락6]`). 적립 경로는 `buyDate·peakPrice·exitParams·boughtToday` 를 읽지 않는다 — `clearEntryMeta`/`markBought` 가 이 값을 바꾸는 부작용은 프로파일 전환 시에만 드러난다(아래 컷오버).
 - **재시작·컷오버 정합 `[arch-4][pr-2]`**: `TradingState → LadderInput` 매퍼가 **프로세스당 티커별 1회**(복원·`applyTickers` 시딩 직후) 적용. `holdVolume > 0 && rungs == 0` → `rungs = ceil(avg×hold / 단당).coerceIn(1, maxRungs)`, **`lastActionPrice = avgBuyPrice`**, WARN("기존 보유를 사다리로 편입"). `holdVolume <= 0 && rungs > 0` → `rungs = 0, lastActionPrice = 0`, WARN("장부와 잔고 불일치 — 수동 청산 추정"). `flatPeak` 는 0 일 때만 초기화. 운영 `.env` 가 BTC·ETH 를 스윙으로 들고 있으므로 **적립을 켜는 순간 이 편입 경로가 실제로 발동**한다 — 의도된 컷오버.

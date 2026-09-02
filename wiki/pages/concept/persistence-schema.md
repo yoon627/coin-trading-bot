@@ -31,7 +31,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V20 | `trading_states.pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림의 판정 기준을 카운터에서 경과시간으로 |
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구(아래) |
 | V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130). 값을 주문 시점 WAL 에 실어 reconcile 경합을 피한다([[kis-order-lifecycle]]) |
-| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_sell_trigger_price`([[accumulate-ladder]]). 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
+| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`([[accumulate-ladder]]). 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
 
 > ⚠️ `trade_records.volume` 은 기록 경로에 따라 **총 보유량 스냅샷**(엔진)과 **증분**(수동)이 섞인다.
 > 합산하면 조회·집계가 조용히 틀린다 — [[trade-record-volume-semantics]] 참조.
