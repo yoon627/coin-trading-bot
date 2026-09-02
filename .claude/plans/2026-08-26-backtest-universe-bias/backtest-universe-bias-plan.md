@@ -1,6 +1,6 @@
 ---
 title: backtest-universe-bias — #112 백테 fixture 유니버스의 look-ahead/생존편향 제거
-status: in_progress
+status: done
 started: 2026-08-26
 updated: 2026-09-02
 ---
@@ -34,6 +34,7 @@ updated: 2026-09-02
 - 2026-09-02 **#112 가 두 브랜치로 갈린 것을 발견** — 아래 Blockers.
 - 2026-09-02 **해금** — `fixture-universe-bias` 가 PR #160 으로 먼저 머지됐다(main `8f36928`). 그 위로 rebase(9커밋, 충돌은 `backtest/README.md` 한계 절 1곳 — 그쪽 "look-ahead 크기를 쟀다" 항목을 "실측한 뒤 제거했다" 로 고쳐 이쪽 생존편향 항목과 나란히 둠). 검증: `:bot:test :common:test` 787 tests / 0 failures / skip 9(전부 env 게이트: `RUN_UNIVERSE_AUDIT`·`RUN_COUNTERFACTUAL`·sweep·M1·`TEST_DB_HOST`·KIS smoke), wiki 3종 clean(34페이지). `# Next` 2항(정정문 효과 크기 재검토) 결론: **수정 불필요** — 정정문의 근거는 overlap 이 아니라 재측정 수치라 placebo 바닥(5/8·3/4)과 무관하다. push → PR 진행.
 - 2026-09-02 codex 게이트 findings 6건 fix(`15ba380`) → 재push 에서 codex 크레딧 소진(`# Workflow Findings`). fix 커밋은 Claude code-reviewer(sonnet)로 대체 검토 — Critical/Major 확정 0, 순수 로직 테스트 부재 지적 → `scripts/test_collect_backtest_fixtures.py`(unittest 6건) 추가. `CODEX_SKIP=1` push → PR.
+- 2026-09-02 PR #161 머지(main `dc94451`), #112 closed → worktree·로컬·원격 브랜치 정리. status: done.
 
 **#128 결론 변화 (편향 제거의 실익)**
 
@@ -52,8 +53,7 @@ updated: 2026-09-02
 
 # Next
 
-1. push → PR 생성 → CI → 머지(`Closes #112`). 머지되면 worktree·브랜치 정리 + `status: done`.
-2. 머지 후 이슈 판단: fixture 쪽 D7 트리거(`bull/` 한정 재수집 제안)는 이 브랜치가 **두 국면 전부 재수집**으로 흡수했으므로 별도 이슈 불필요. `# Deferred` 의 무릎 plan 3개 수치 재해석은 필요 시 이슈로.
+없음 — 완료. 무릎 plan 3개 수치 재해석은 `# Deferred` 참조(필요 시 이슈).
 
 # Decisions
 
