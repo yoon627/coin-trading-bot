@@ -14,6 +14,7 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
+import com.trading.common.config.UniverseProperties
 import com.trading.common.strategy.TradingStrategy
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -56,6 +57,8 @@ class UserTradingManager(
     private val marketDataStore: MarketDataStore,
     private val tradingStateService: TradingStateService,
     private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
+    private val universeProperties: UniverseProperties = UniverseProperties(),
+    private val universeSource: UniverseSource = UniverseSource.NONE,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -387,6 +390,8 @@ class UserTradingManager(
             discordWebhookUrl = user.discordWebhookUrl,
             marketDataStore = marketDataStore,
             accumulateProperties = accumulateProperties,
+            universeProperties = universeProperties,
+            universeSource = universeSource,
         )
     }
 
