@@ -142,6 +142,22 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `start with auto universe seeds every durable ticker so held or pending ones survive a restart`() = runBlocking {
+        // 자동 선정 티커는 bot_state.tickers 에 없다. 재시작 때 durable 행을 버리면 그 보유·pending 은 아무도 reconcile 하지 않는다.
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-A")
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-Z" to TradingState("KRW-Z", pendingBuyUuid = "orphan"), "KRW-OLD" to TradingState("KRW-OLD")))
+        engine.stop()
+
+        // 갱신 뒤: pending 인 Z 는 남고, 무포지션 잔재 OLD 는 빠진다.
+        engine.refreshUniverse()
+        assertTrue("KRW-Z" in engine.getActiveTickers())
+        assertFalse("KRW-OLD" in engine.getActiveTickers())
+    }
+
+    @Test
     fun `refreshUniverse keeps the previous list when the source fails`() = runBlocking {
         val source = mockk<UniverseSource>()
         coEvery { source.select(any(), any()) } returns null

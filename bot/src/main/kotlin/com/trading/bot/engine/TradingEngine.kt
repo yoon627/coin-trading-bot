@@ -111,7 +111,10 @@ class TradingEngine(
         if (running.compareAndSet(false, true)) {
             // 적립 티커는 설정이 정하고 사용자 목록과 합친다. 사용자 목록(bot_state.tickers)은 건드리지 않는다 —
             // 파생 집합을 거기 되쓰면 프로파일을 꺼도 그날의 목록이 남아 되돌릴 수 없다.
-            val active = (accumulateTickers + tickers).distinct()
+            // 자동 유니버스가 고른 티커는 bot_state.tickers 에 없으므로, 재시작 때 durable 행을 전부 실어야 보유·pending 이
+            // applyTickers 의 보호 집합에 들어간다. 무포지션 잔재는 첫 갱신에서 바로 빠진다.
+            val restored = if (universeProperties.auto) initialStates.keys.toList() else emptyList()
+            val active = (accumulateTickers + tickers + restored).distinct()
             if (accumulateTickers.isNotEmpty() && active.size == accumulateTickers.size) {
                 log.warn("User {} has no swing tickers — every active ticker is on the accumulate profile", userId)
             }
@@ -218,7 +221,14 @@ class TradingEngine(
             positionManager.syncPosition(ticker, states[ticker]!!)
         }
         // 기동 시 1회 + 매 09:00 경계. 재시작 첫 tick 도 경계로 잡히는데 그것 역시 "기동 시 갱신"이다.
-        refreshUniverse()
+        // while 의 복구 경계 밖이라 여기서 던지면 running=true 인 채 루프가 죽는다 — 실패는 직전 목록 유지로 흡수.
+        try {
+            refreshUniverse()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("Initial universe refresh failed for user {} — keeping {}: {}", userId, activeTickers, e.message, e)
+        }
 
         while (running.get() && scope.isActive) {
             try {
@@ -280,6 +290,8 @@ class TradingEngine(
         for (ticker in active) {
             if (states.containsKey(ticker)) continue
             val restored = positionManager.loadState(ticker) ?: TradingState(ticker)
+            // 09:00 갱신은 checkAndReset 뒤에 돈다 — 옛 boughtDate 를 그대로 두면 하루 종일 진입이 막힌다.
+            restored.resetDaily(dailyResetManager.getTradingDate())
             val state = states.computeIfAbsent(ticker) { restored }
             positionManager.syncPosition(ticker, state)
         }
