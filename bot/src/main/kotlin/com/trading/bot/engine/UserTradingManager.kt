@@ -58,7 +58,8 @@ class UserTradingManager(
     private val tradingStateService: TradingStateService,
     private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
     private val universeProperties: UniverseProperties = UniverseProperties(),
-    private val universeSource: UniverseSource = UniverseSource.NONE,
+    private val universeSource: UniverseSource? = null,
+    private val dailyCandleCache: DailyCandleCache? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -261,7 +262,7 @@ class UserTradingManager(
                     "halted" to state.halted,
                     // 보유 여부 미확정으로 매수가 막힌 상태 — 로그를 안 보고도 원인을 알 수 있게 노출한다.
                     "unsynced" to state.unsynced,
-                    "profile" to engine.profileOf(ticker).name,
+                    "profile" to engine.profileNameOf(ticker),
                     "rungs" to state.rungsFilled,
                     // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 하락장에서 단이 안 채워지는 이유를 여기서 본다.
                     "accumulate_skip" to (state.accumulateSkipReason ?: ""),
@@ -392,6 +393,7 @@ class UserTradingManager(
             accumulateProperties = accumulateProperties,
             universeProperties = universeProperties,
             universeSource = universeSource,
+            dailyCandleCache = dailyCandleCache,
         )
     }
 

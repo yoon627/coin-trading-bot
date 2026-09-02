@@ -197,7 +197,7 @@ coin-trading-bot/
 
 ### 알트 유니버스 자동 선정 (기본 off)
 
-`TRADING_UNIVERSE_AUTO=true` 면 스윙 대상은 `TRADING_TICKERS` 대신 Upbit 24h 거래대금 상위 `TRADING_UNIVERSE_ALT_COUNT`(기본 8, 최대 16)개로 정해지고, 기동 시와 매 09:00 KST 에 다시 고릅니다. 투자유의 종목·페그 자산(스테이블·금 토큰)·적립 티커는 제외됩니다. 보유 중이거나 미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남고, 활성 티커 총수는 20 을 넘지 않습니다. 사용자가 UI 에서 고른 목록(`bot_state.tickers`)은 그대로 보존되므로 끄면 예전과 같이 돌아갑니다. 선정 API 가 실패하면 직전 목록을 유지합니다. 자동 선정 티커는 관심목록(`WATCHLIST_TICKERS`) 밖이면 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
+`TRADING_UNIVERSE_AUTO=true` 면 스윙 대상은 `TRADING_TICKERS` 대신 Upbit 24h 거래대금 상위 `TRADING_UNIVERSE_ALT_COUNT`(기본 8, 최대 16)개로 정해지고, 기동 시와 매 09:00 KST 에 다시 고릅니다. 투자유의 종목·페그 자산(스테이블·금 토큰)·적립 티커는 제외됩니다. 보유 중이거나 미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남고, 자동 선정 알트는 적립·보유 티커와 합쳐 20 까지만 채웁니다(적립·보유 티커 자체는 자르지 않습니다). 사용자가 UI 에서 고른 목록(`bot_state.tickers`)은 그대로 보존되므로 끄면 예전과 같이 돌아갑니다. 선정 API 가 실패하면 직전 목록을 유지합니다. 자동 선정 티커는 관심목록(`WATCHLIST_TICKERS`) 밖이면 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
 
 ## 웹 UI
 

@@ -152,17 +152,29 @@ fun decide(input, params): LadderAction
 | D1 | 선정이 warning·스테이블·적립 제외 상위 N, 실패 시 직전 유지 | `UniverseSelectorTest` | 통과 |
 | D2 | `applyTickers` 가 보유·pending 유지, 20 상한, 신규 시딩+매퍼, 제거분 정리 | `TradingEngineTest` | 통과 |
 | D3 | `bot_state.tickers` 에 자동 선정 결과가 쓰이지 않음 | `UserTradingManagerTest` | 통과 |
-| E1 | 기본값 off 동작 불변: `getMarkets` 0회·`applyTickers`=입력·주문 시퀀스 동일 + `./gradlew test` 전체 + `legacy-golden` | 명시 단언 + 전체 스위트 | 통과 |
+| E1 | 기본값 off 동작 불변: `getMarkets` 0회·`applyTickers`=입력·주문 시퀀스 동일 + `./gradlew test` 전체 + `legacy-golden`. **예외 1건(의도)**: watchlist 밖 티커의 D1 REST 폴백에 60초 캐시(`DailyCandleCache`)가 붙는다 — 신선도는 store 경로와 같고 레이트리밋 보호 목적 | 명시 단언 + 전체 스위트 | 통과 |
 | E2 | 배포 3계층 7키 등록 | grep | 7키 × 3곳 |
 | E3 | 문서 동기화 + wiki 검증 3종 + plan 커밋(tracked) | 실행 | 통과 |
 
 # Review Disposition
 
 - architecture-reviewer(planning) 12건: 전부 **fix**(`[arch-N]`).
+- **구현 리뷰(2026-09-02)** — architecture-reviewer(정밀, Blocker 1·Major 1·Minor 7) + code-reviewer(Claude 단독 — codex 는 repo PreToolUse hook 이 `codex exec` 를 스테이징 diff 6패턴 점검 전용으로 게이트해 브랜치 리뷰 프롬프트를 거부, Major 2·Minor 5·Nit 5). 처분:
+  - **fix** 마지막 단 90~99% 부분체결 → rung 0·잔고>0 영구 Hold(양쪽 Blocker/Major): `sellTransition` 잔량 분기에서 ladder 는 rung ≥ 1 + `LadderStateMapper.reconcile` 을 1회가 아니라 매 tick(정합 상태 no-op) 호출. 회귀 테스트 추가.
+  - **fix** `applyTickers` 빈 상태 시딩(Major): `TradingStateService.loadState` → `PositionManager.loadState` 로 durable 복원본 시딩. 테스트 추가.
+  - **fix** D1 REST 캐시 엔진별(Major): 싱글톤 `DailyCandleCache`(`publicUpbitClient`) 로 이동, 엔진엔 nullable 주입(null 이면 종전대로 직접 호출 — 기존 엔진 테스트 불변).
+  - **fix** flatPeak 초기화 미영속 / phantom 경로 flatPeak 미재앵커 / 미체결 매수 분기 trigger 미정리 / `'accumulate'` SQL 리터럴 → `const` 보간 / `UniverseSource.NONE` 이중 스위치 → nullable / `internal enum` 이름이 API 값 → `profileNameOf` / `UniverseSelector` 미사용 `properties` 제거 / `MAX_ACTIVE_TICKERS` → `SWING_UNIVERSE_CAP`(하드 상한 아님을 이름·문서에) / `AccumulateBacktest` → `src/test` / 라이브·백테 전이 차이 KDoc / `AccumulateProperties`·`PeggedAssets` Upbit 전용 KDoc / `getMarkets` MockWebServer 역직렬화 테스트.
+  - **false-positive** `action.volume >= sellable` 전량 승격(cr-P2.5): 잠긴 몫은 `heldVolume` 규약상 우리 포지션이 아니라 free 를 다 팔면 장부 청산이 맞다(스윙과 동일 의미). 코드는 `min(volume, sellable)` 로 단순화하고 테스트로 의미를 고정.
+  - **wontfix** 백테 평단 수수료 포함(cr-P3.11): 모델링 선택, KDoc 에 차이 명시.
+  - **wontfix** `PROJECT_ANALYSIS.md` 리스크 기본값 +2%→+5% 교정이 범위 밖(cr-P3.12): 사실 교정이라 유지, Report 에 명시.
+  - **defer** `getTicker` 콤마 인코딩·100종 배치 상한(open question): 2026-09-02 세션에서 같은 엔드포인트를 100종 배치 3회로 실호출해 287 마켓 전부 응답받았다(✅ 실측) — Spring `QUERY_PARAM` 인코딩은 `,` 를 허용한다. 자동화 테스트는 없음 → `# Deferred`.
+  - **defer** 제거된 티커의 `trading_states` 행 무정리, 런타임 수동매매 주기 reconcile → `# Deferred`.
 - plan-reviewer(+codex) 필수 6·권장 14·누락 6: 전부 **fix**(`[pr-N]`). codex 의 "불일치 시 자동 추정 대신 halt" 는 **wontfix** — 컷오버(스윙 보유 → 사다리 편입)가 의도된 동작이라 halt 면 첫 배포에서 4종 전부 멈춘다. 대신 WARN + 예산 실측 게이트로 상한을 지킨다. `assembleRoundTrips` 는 Deferred 유지하되 서술을 codex 지적대로 정정.
 
 # Deferred
 
+- `UniverseSelector` 의 `/v1/ticker` 100종 배치 호출은 실호출로만 확인(2026-09-02, 287 마켓 3배치) — MockWebServer 로 콤마 인코딩·배치 분할을 고정하는 테스트 없음(낮음, `UniverseSelector.kt`).
+- `applyTickers` 로 제거된 티커의 `trading_states` 행이 남는다 — 정리 경로 없음(낮음, 운영 데이터로 판단).
 - `assembleRoundTrips`(`api/TradeRoundTrip.kt:163-167`): "SELL 뒤 BUY = 새 그룹" 규칙에서 엔진 BUY 가 전체 잔고 스냅샷이라 **앞 그룹 잔량이 다음 그룹에 이중 표시될 수 있다**(표시 계층, 중). 사다리 도입 후 실데이터로 확인해 별도 작업.
 - 자동 유니버스 티커의 시세를 store(WS)가 아니라 REST 폴백으로 받는다 — ingestion 동적 구독은 별도 작업(중, `MarketDataIngestionService.kt`).
 - 런타임 수동매매는 `syncPosition` 이 탐지하지 못한다(기동·unsynced 때만). 적립은 주문 직전 실측으로 상한을 지키지만 rung 카운트는 어긋날 수 있다 — 주기적 reconcile 은 별도 작업(중).
