@@ -20,8 +20,6 @@ data class AccumulateProperties(
     // LadderParams 의 init 이 단당 금액·부호를 검증한다 — 꺼져 있어도 기동 시 잘못된 값을 드러낸다.
     private val params = LadderParams(budgetKrw, maxRungs, stepDownPct, stepUpPct)
 
-    val enabled: Boolean get() = tickerList().isNotEmpty()
-
     fun tickerList(): List<String> = tickers.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct()
 
     fun ladderParams(): LadderParams = params
