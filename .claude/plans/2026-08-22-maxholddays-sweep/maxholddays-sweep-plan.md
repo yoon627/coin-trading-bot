@@ -1,8 +1,8 @@
 ---
 title: maxholddays-sweep — 청산 보유상한(maxHoldDays)이 손익을 지배하는지 실거래 반사실로 검증
-status: in_progress
+status: done
 started: 2026-08-22
-updated: 2026-08-22
+updated: 2026-09-02
 ---
 
 # Goal
@@ -17,6 +17,7 @@ updated: 2026-08-22
 - 2026-08-22: **plan-reviewer(+codex medium) CONDITIONAL**, 강한 우려 7건. 메인이 원문 직접 검증해 **전부 사실 확인** — `backtest/README.md` "상관 평균 0.49(BTC/ETH 0.90) → 실효 독립 표본 2개 남짓" / `BacktestFixtures.kt` 8마켓 fixture + `inSample()`·`outOfSample()` 실재 / `knee-backtest-calibration-plan.md:92` `N_eff≈1.8`, `:201` "B4 표본 검정력 없음 → **fix** — Goal 을 '관찰 기록'으로" (PR #98 머지) / `StrategyController.kt:90` `coerceIn(1,365)` 로 999 도달 불가.
 - 2026-08-22: 검증 중 reviewer 지적보다 근본적인 문제 확인 — **가용 백테 표본이 전부 하락장 한 국면**이라 "보유 늘리면 나빠진다"가 데이터가 아니라 산술로 결정된다. 사용자 결정으로 **실거래 반사실로 전환**.
 - 2026-08-22: 반사실 실행 완료. DAILY_RESET 17건 + 대응 BUY 를 DB 에서 추출, Upbit 일봉으로 "안 팔았다면"을 계산. **sanity check 16/17 통과**(매도일 일봉 시가 ≈ 실제 매도가, 오차 <0.5%; DOGE 1건만 −0.96% — 원 단위 호가 104→103). balanced panel + 게이트 적용 2종 보정 후 결론 도출(아래 Findings).
+- 2026-09-02: 브랜치에만 남아 있던 이 plan 을 main 에 보존하며 종결. Findings 는 2026-09-02 세션에서 사용자에게 보고했고, 후속(표본 축적 후 재판정)은 `2026-09-02-trade-performance-analysis` plan 이 승계한다 — 그쪽 실측(SELL 42건)에서 DAILY_RESET 은 25건·평균 −0.731% 로, 여기서의 "손익 중립(−0.047%)" 이 8/22 이후 8건에서 음수로 기울었다.
 
 # Findings
 
@@ -46,7 +47,7 @@ balanced panel(같은 표본만 비교) × 게이트 적용(실제 봇은 TP/SL/
 
 # Next
 
-Findings 를 사용자에게 보고하고 후속 결정을 받는다. 코드 산출물은 없다(분석 스크립트는 scratchpad).
+없음 — 종결. 후속은 `2026-09-02-trade-performance-analysis` plan(`# Next` 재조회 트리거) 참조. `# Deferred` 의 항목 중 "매도 기록에 전략이 안 남는다" 는 V21 backfill(그쪽 plan Key Files)로 해결됐고, "7월 3건 보유상한 초과" 는 그쪽 `# Deferred` 로 이관.
 
 # Decisions
 
