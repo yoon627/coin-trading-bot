@@ -6,6 +6,7 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
+import com.trading.common.config.UniverseProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
@@ -42,6 +43,8 @@ class TradingEngine(
     private val marketDataStore: MarketDataStore? = null,
     private val exchange: Exchange = Exchange.UPBIT,
     private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
+    private val universeProperties: UniverseProperties = UniverseProperties(),
+    private val universeSource: UniverseSource = UniverseSource.NONE,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -71,6 +74,8 @@ class TradingEngine(
         private const val MIN_DAILY_CANDLES = 21
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
         private const val REST_CANDLE_TTL_MS = 60_000L
+        // API 입력 검증(RequestValidators)과 같은 상한 — 자동 유니버스·보유 잔류분이 합쳐져도 넘지 않게 여기서 직접 건다.
+        internal const val MAX_ACTIVE_TICKERS = 20
     }
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
@@ -205,12 +210,15 @@ class TradingEngine(
         activeTickers.forEach { ticker ->
             positionManager.syncPosition(ticker, states[ticker]!!)
         }
+        // 기동 시 1회 + 매 09:00 경계. 재시작 첫 tick 도 경계로 잡히는데 그것 역시 "기동 시 갱신"이다.
+        refreshUniverse()
 
         while (running.get() && scope.isActive) {
             try {
                 if (dailyResetManager.checkAndReset(states)) {
                     // 9AM 리셋(boughtToday=false)을 durable 로 flush — 리셋 직후 재시작 시 boughtToday=true 복원으로 당일 재진입이 재차단되는 것 방지.
                     states.values.forEach { positionManager.persistState(it) }
+                    refreshUniverse()
                 }
 
                 for (ticker in activeTickers) {
@@ -226,6 +234,46 @@ class TradingEngine(
                 delay(ERROR_RETRY_DELAY_MS)
             }
         }
+    }
+
+    /**
+     * 자동 유니버스가 켜져 있으면 알트 스윙 목록을 새로 골라 활성 집합을 교체한다.
+     * @return 교체했으면 true. 꺼져 있거나 조회가 실패하면 false — 실패 시 직전 목록을 유지한다.
+     */
+    internal suspend fun refreshUniverse(): Boolean {
+        if (!universeProperties.auto) return false
+        val selected = universeSource.select(exclude = accumulateTickers, count = universeProperties.altCount)
+        if (selected == null) {
+            log.warn("Universe refresh failed for user {} — keeping {}", userId, activeTickers)
+            return false
+        }
+        applyTickers(selected)
+        log.info("Universe refreshed for user {}: active={}", userId, activeTickers)
+        return true
+    }
+
+    /**
+     * 활성 티커 집합 교체의 유일한 경로. 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고,
+     * 빠진 티커의 상태는 리셋·status 에 계속 섞인다 — 시딩·동기화·정리를 여기서 한꺼번에 한다.
+     *
+     * 보유 중·미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남긴다(신규 진입은 스윙 규칙이 막지 않으나
+     * 다음 갱신에서 다시 빠진다). 총수는 [MAX_ACTIVE_TICKERS] 로 자르되 적립·보유 티커는 자르지 않는다.
+     */
+    internal suspend fun applyTickers(next: List<String>) {
+        val protectedSet = states.filterValues { it.position || it.pendingBuyUuid != null || it.pendingSellUuid != null }.keys
+        // 현재 순서를 보존한다 — ConcurrentHashMap 키 순서는 삽입 순서가 아니다.
+        val protected = activeTickers.filter { it in protectedSet } + protectedSet.filter { it !in activeTickers }
+        val pinned = (accumulateTickers + protected).distinct()
+        val room = (MAX_ACTIVE_TICKERS - pinned.size).coerceAtLeast(0)
+        val active = pinned + next.filter { it !in pinned }.distinct().take(room)
+
+        for (ticker in active) {
+            if (states.containsKey(ticker)) continue
+            val state = states.computeIfAbsent(ticker) { TradingState(it) }
+            positionManager.syncPosition(ticker, state)
+        }
+        states.keys.filter { it !in active }.forEach { states.remove(it) }
+        activeTickers = active
     }
 
     internal fun getRealtimePrice(ticker: String): Double? {
