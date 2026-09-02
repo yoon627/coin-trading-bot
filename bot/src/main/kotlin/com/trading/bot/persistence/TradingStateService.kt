@@ -72,6 +72,7 @@ class TradingStateService(
             lastActionPrice = lastActionPrice,
             flatPeak = flatPeak,
             pendingBuyTriggerPrice = pendingBuyTriggerPrice,
+            pendingBuyPriorVolume = pendingBuyPriorVolume,
             pendingSellTriggerPrice = pendingSellTriggerPrice,
             updatedAt = Instant.now(),
         )
@@ -101,6 +102,7 @@ class TradingStateService(
             lastActionPrice = lastActionPrice,
             flatPeak = flatPeak,
             pendingBuyTriggerPrice = pendingBuyTriggerPrice,
+            pendingBuyPriorVolume = pendingBuyPriorVolume,
             pendingSellTriggerPrice = pendingSellTriggerPrice,
         )
 
