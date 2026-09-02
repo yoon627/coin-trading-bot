@@ -43,6 +43,8 @@ updated: 2026-09-02
 - 2026-09-02 9라운드 차단에서 예고대로 **ACK** — findings 최종 처분을 `# Deferred` 에 기록(`651eac9`).
   6건 fix / 3건 명시적 risk accept. 브랜치는 `origin/fixture-universe-bias` 와 동기(0/0), working tree clean.
 
+- 2026-09-02 `origin/main` 머지(`963a51d`, `wiki/verify.sh` 충돌은 main 의 tripwire 33±2 채택 — 머지 후 34페이지). 검증: 대상 테스트 15 통과·skip 1(감사 하네스, 의도)·wiki 3종 통과. push 1회차는 pre-push codex 가 480s 타임아웃 — base 가 원격 sha(`651eac9`)라 머지로 들어온 main 19커밋(이미 리뷰·머지됨)이 재리뷰 범위에 잡힌 탓. 이 push 의 신규 코드는 0 이라 `CODEX_SKIP=1` 로 통과시켰고 PR #160 생성.
+
 # Next
 
 1. **PR 생성 → 머지.** push 는 끝났고 PR 은 **아직 없다**(`gh pr list --head fixture-universe-bias` 빈 결과,
