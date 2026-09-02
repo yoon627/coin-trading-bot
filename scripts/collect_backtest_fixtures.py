@@ -88,6 +88,11 @@ def candle_date(candle: dict) -> date:
         sys.exit(f"{candle.get('market')}: 봉 날짜를 읽을 수 없다({candle.get('candle_date_time_kst')!r}) — 중단한다.")
 
 
+def window_span_days(candles: list[dict], start: date) -> int:
+    """가장 오래된 봉부터 start 까지의 달력 일수 — PointInTimeUniverse.windowSpanDays 와 같은 정의."""
+    return (start - min(candle_date(c) for c in candles)).days
+
+
 def select_universe(markets: list[str], start: date) -> tuple[list[tuple[str, float]], int, int, int]:
     """구간 시작 **이전** RANK_WINDOW 봉의 평균 거래대금으로 순위.
     반환 (상위 N, 미상장 수, 이력부족 수, 창 늘어짐 수)."""
@@ -106,8 +111,7 @@ def select_universe(markets: list[str], start: date) -> tuple[list[tuple[str, fl
         if len(candles) < RANK_WINDOW:
             too_new += 1  # 상장 직후라 순위 근거가 얇다
             continue
-        span = (start - min(candle_date(c) for c in candles)).days
-        if span > MAX_WINDOW_SPAN_DAYS:
+        if window_span_days(candles, start) > MAX_WINDOW_SPAN_DAYS:
             gapped += 1  # 30봉이 30일을 훌쩍 넘는 마켓 — 같은 잣대의 평균이 아니다
             continue
         ranked.append((market, sum(c["candle_acc_trade_price"] for c in candles) / len(candles)))
@@ -139,11 +143,11 @@ def window_gap(candles: list[dict], start: date) -> str | None:
     actual = [candle_date(c) for c in candles]
     missing = sorted(expected - set(actual))
     extra = sorted(set(actual) - expected)
-    if len(actual) != len(set(actual)):
-        return "중복 날짜"
-    if missing or extra:
-        return f"구간 밖/누락 날짜 — 누락 {len(missing)}({missing[:3]}…) 잉여 {len(extra)}({extra[:3]}…)"
-    return None
+    duplicated = len(actual) - len(set(actual))
+    if not (missing or extra or duplicated):
+        return None
+    return (f"날짜 불일치 — 누락 {len(missing)}{[d.isoformat() for d in missing[:3]]} "
+            f"잉여 {len(extra)}{[d.isoformat() for d in extra[:3]]} 중복 {duplicated}")
 
 
 def fetch_window(market: str, start: date) -> tuple[list[dict] | None, str]:
@@ -207,6 +211,7 @@ def main() -> None:
         for market, candles in fetched:
             (out_dir / f"{market}.json").write_text(json.dumps(candles, separators=(",", ":")) + "\n")
             print(f"   wrote {regime}/{market}.json")
+        print()
 
 
 if __name__ == "__main__":
