@@ -2,9 +2,9 @@
 title: Upbit API — 이 봇이 의존하는 동작
 category: entity
 created: 2026-07-28
-updated: 2026-08-22
+updated: 2026-08-31
 claim_state: current
-verified: 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로
+verified: 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
 sources:
   - bot/src/main/kotlin/com/trading/bot/client/UpbitClient.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
@@ -48,6 +48,25 @@ sources:
 
 - **시장가 매수(`price`)** 는 즉시 체결 후 소액 잔량을 환불하며 종료되므로 `wait` 로 장기 잔존하지 않는다. 지정가를 도입한다면 부분체결·잔여주문 취소 로직이 따로 필요하다.
 - **`wait` + `executedVolume>0`** 일 때 미체결 잔량은 `locked` 로 묶인다. 이때 free balance 만 보면 "청산 완료"로 오판한다 — 우리 주문의 미체결 잔량만큼은 `locked` 도 보유로 세야 한다(위 계좌 절의 상한 규칙).
+
+## 수수료 — `paid_fee`
+
+개별 주문 조회는 수수료를 세 필드로 준다: `reserved_fee`(예약) · `remaining_fee`(잔여) · **`paid_fee`(사용된 수수료)**.
+
+⚠️ 부분 체결 후 `cancel` 로 끝났을 때도 `paid_fee` 가 체결분의 최종 청구액인지는 **필드 정의상 그렇게
+읽힐 뿐 실제 응답 fixture 로 확인하지 못했다.** 공식 문서 샘플은 `done` 케이스뿐이다. 코드는 그 전제로
+동작하므로(`cancel` + `executed_volume>0` 도 매수 확정 경로) 반례가 나오면 여기부터 고쳐야 한다.
+
+**이 값이 있으면 추정하지 않는다.** 엔진 매수는 `getOrder` 응답의 `paid_fee` 를 그대로 기록한다 —
+`trade_records.totalAmount` 가 엔진 경로에서는 그 주문의 체결 대금이 아니라 포지션 전체 원가라,
+요율로 추정하면 기존 보유분만큼 부풀려지기 때문이다(#133, [[trade-record-volume-semantics]]).
+
+⚠️ **얻는 시점이 중요하다.** `placeOrder` 의 즉시 응답에는 아직 체결이 안 잡혀 `paid_fee` 를 믿을 수 없다.
+`getOrder` 로 **체결 후 조회한** 응답에서만 실측으로 쓴다. 그래서 수동 주문 경로(재조회 없음)와
+`getOrder` 장애 복구 경로는 실측을 얻지 못한다.
+
+응답의 수량·금액 필드는 전부 문자열이라 숫자 변환이 필요하고, 변환 실패는 "미기록"으로 다뤄야 한다 —
+추정으로 떨어뜨리면 고치려던 과대계상이 그대로 재발한다.
 
 ## 시세
 
