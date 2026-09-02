@@ -2,7 +2,7 @@
 title: engine-buy-fee-basis — 엔진 매수 수수료를 추정 대신 거래소 실측값으로 (#133)
 status: in_progress
 started: 2026-08-31
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 # Goal
@@ -21,6 +21,7 @@ Upbit 주문 응답의 `paid_fee` 를 파싱해 **추정을 실측으로 대체*
   가드 3종을 mutation 으로 재검증(전부 CAUGHT). simplify 로 도달 불가 분기·정책 중복 제거.
 - 2026-09-01 codex 최종 diff 재검토 → Critical 0·Major 0·Minor 2(1건 반영). 커밋 `04dfd60`·`7728cf8`.
 - 2026-09-01 **PR #155 오픈, CI `test` 통과**(1m58s). 771 테스트·실패 0.
+- 2026-09-02 유보했던 pre-push 게이트 Finding 을 **오진으로 정정**(로그 디렉토리 오독). 코드 변경 없음.
 
 ## 결함 (재확인)
 
@@ -79,7 +80,7 @@ worktree `engine-buy-fee-basis` clean·전부 push 완료·**미머지**라 유�
 1. **PR #155 머지 판단.** 머지 = 운영 배포(컨테이너 재생성 = 트레이딩 엔진 재시작)다. 머지 후
    `App healthy!` 로그로 배포 확인 — **job 결론이 success 라도 stale 가드로 스킵됐을 수 있다.**
 2. 머지되면 worktree·로컬·원격 브랜치 정리 + 이 plan `status: done`.
-3. 아래 `# Workflow Findings` 의 pre-push 게이트 건을 이슈로 올릴지 판단(사용자 미결).
+3. ~~pre-push 게이트 건 이슈화 판단~~ — **오진으로 종결**(2026-09-02). `# Workflow Findings` 참조.
 
 # Decisions
 
@@ -219,10 +220,11 @@ codex M3 의 fixture 케이스를 그대로 채택한다.
 
 ## codex 최종 diff 재검토 (2026-09-01) — Critical 0 · Major 0 · Minor 2
 
-**pre-push codex 게이트가 이 push 에서 실행되지 않았다**(로그 없음·출력 없음). 훅 `:46-48` 이 stdin 에서
-ref 를 못 읽으면 조용히 `exit 0` 하는데, 같은 백그라운드 방식으로 돌린 이전 push 는 정상 동작해
-원인은 ⚠️미확정이다. 실질 공백은 따로 있었다 — code-review 의 codex 는 **반영 이전 diff** 를 봤고
-그 뒤 추가한 NaN 가드·fixture·simplify 는 검토를 안 거쳤다. 그래서 최종 diff 로 직접 돌렸다.
+code-review 의 codex 는 **반영 이전 diff** 를 봤고 그 뒤 추가한 NaN 가드·fixture·simplify 는 검토를
+안 거쳤다. 그래서 최종 diff 로 직접 돌렸다.
+
+> 2026-09-02 정정: 여기 있던 *"pre-push codex 게이트가 이 push 에서 실행되지 않았다"* 는 서술은
+> **오진이라 삭제했다.** 게이트는 두 push 모두 정상 실행됐다 — 근거는 `# Workflow Findings`.
 
 | # | 지적 | 처분 |
 |---|---|---|
@@ -267,24 +269,25 @@ revert 하면 엔진 매수 fee 가 다시 스냅샷 기준 추정이 된다 —
 
 # Workflow Findings
 
-- **pre-push codex 게이트가 조용히 건너뛰어졌다** (2026-09-01, ⚠️원인 미확정 — 사용자 판단 대기).
+- **~~pre-push codex 게이트가 조용히 건너뛰어졌다~~ → 오진** (제기 2026-09-01, 반증 2026-09-02, ✅확실).
 
-  브랜치 첫 push(`04dfd60`)에서 리뷰가 실행되지 않았다. **증거**: 훅 출력 0줄이고
-  `.git/codex-pre-push/` 의 최신 로그가 `20260831-230325.jsonl`(그 push 이전)이다.
-  두 번째 push(`7728cf8`)를 **foreground** 로 돌리니 정상 실행돼 통과했다
-  (`OK: codex found no blocking issues`).
+  당시 나는 브랜치 첫 push(`04dfd60`)에서 리뷰가 안 돌았다고 적었다. 근거는 (a) 훅 출력 0줄,
+  (b) `.git/codex-pre-push/` 에 그 push 이후 로그가 없음.
 
-  훅 `:46-48` 이 stdin 에서 ref 를 못 읽으면 **아무 출력 없이 `exit 0`** 한다. 그러나 같은
-  백그라운드 방식으로 돌린 이전 push(`trade-snapshot-semantics`)는 정상 동작했으므로
-  stdin 가설이 깔끔히 맞지 않는다(백그라운드 3건 중 2건 실패). **확정하지 않는다.**
+  **근거 (b) 를 잘못된 디렉토리에서 봤다.** 훅 `:20` 이 `LOG_DIR="$(git rev-parse --git-dir)/codex-pre-push"`
+  인데, linked worktree 에서 그 값은 공용 `.git` 이 아니라 `.git/worktrees/<name>` 이다(실측).
+  실제 로그는 `.git/worktrees/engine-buy-fee-basis/codex-pre-push/` 에 **두 개** 있고 커밋 시각과 맞는다:
+  `20260901-000526.jsonl`(461KB) ← `04dfd60`(00:05:18, push 8초 후) · `20260901-002534.jsonl`(235KB)
+  ← `7728cf8`(00:21:59). 첫 로그 본문도 리뷰 세션 그 자체다(`thread.started` → `git diff --stat 9376452…`).
+  **두 push 모두 게이트가 정상 실행됐다.**
 
-  **왜 중요한가**: memory 의 *"`git push` 는 run_in_background 로"* 조언이 **안전 게이트를 무력화**할
-  수 있다. 성능 최적화가 게이트를 우회하는 형태이고, 실패가 조용해서(출력·로그 둘 다 없음) 알아채기
-  어렵다. 이번엔 code-reviewer 가 codex 를 돌렸고 최종 diff 로 한 번 더 돌려서 실질 피해는 없었다.
+  근거 (a) 는 `run_in_background` push 의 stderr 가 세션에 안 보인 것이다 — **출력 부재는 미실행의
+  증거가 아니다.** 훅 `:46-48` 의 stdin 가설도 기각(그 코드는 실재하나 이번 건의 원인이 아니다).
+  memory 의 *"`git push` 는 run_in_background 로"* 조언은 **게이트를 무력화하지 않는다** — 정정 불필요.
 
-  **후속 후보**: (a) 이슈로 올려 훅이 stdin 부재 시 경고하고 실패하도록 / (b) memory
-  `project_prepush_codex_slow` 를 "foreground 로 돌리되 오래 걸림을 감수" 로 정정.
-  둘 다 운영 자산 변경이라 승인 후 별도 작업(§1).
+  **교훈**: 가설이 관측과 안 맞을 때(당시에도 "백그라운드 3건 중 2건만 실패"라 안 맞았다) 가설을 유보하기
+  전에 **관측을 먼저 의심한다**. 재확인 비용은 `ls` 한 번이었다. 상세·3 Whys 는 별도 plan
+  `2026-09-02-prepush-gate-logdir-lesson`.
 
 - **Claude `plan-reviewer` subagent 가 10분간 진전 없이 중단(stalled)됐다** (2026-08-31).
   같은 방식으로 재시도하지 않고 codex 단독 + 메인 직접 확인으로 대체했다. 1회 관찰이라 아직 패턴 아님.
