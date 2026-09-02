@@ -1,6 +1,6 @@
 ---
 title: accumulate-profile — 메이저 4종 분할매수·분할매도 적립 프로파일 + 알트 스윙 병존 + 알트 유니버스 자동 선정
-status: in_progress
+status: done
 started: 2026-09-02
 updated: 2026-09-02
 ---
@@ -34,9 +34,11 @@ updated: 2026-09-02
 
 - 2026-09-02: **최종 검증(격리 runner) 통과** — `./gradlew test --rerun-tasks` 851 실행 / 0 실패 / skip 9(기존 조건부 6 스위트), `scripts/run-db-tests.sh` 3건/skip 0, wiki 3종 clean(35 페이지, smoke 10/10), 배포 키 3계층 등록·`deploy.sh` 문법 OK, working tree clean. Acceptance 전 항목 증거 대조 완료(아래 표 체크).
 
+- 2026-09-02: 사용자가 마무리(push·PR·머지) 선택 → `/e merge`. 브랜치 push → PR → 머지 → worktree·브랜치 정리. 머지가 거부되면 `in_progress` 로 복구.
+
 # Next
 
-Report → 사용자 선택. push·PR·머지·worktree 정리는 `/e`. 머지 후 켜는 절차는 README "적립 프로파일·자동 유니버스를 처음 켤 때"(pg_dump → `.env` 7키 → 재배포 → 로그에서 "Ladder reconciled"·"Universe refreshed" 확인).
+없음 — 머지로 종결. 켜는 절차는 README 참조. push·PR·머지·worktree 정리는 `/e`. 머지 후 켜는 절차는 README "적립 프로파일·자동 유니버스를 처음 켤 때"(pg_dump → `.env` 7키 → 재배포 → 로그에서 "Ladder reconciled"·"Universe refreshed" 확인).
 
 # Decisions
 
