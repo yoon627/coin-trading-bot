@@ -27,9 +27,12 @@ updated: 2026-09-02
   per-fixture(봉당 1): bear XRP −33.0(B&H −42.9) · BTC −14.5(−22.8) · ETH −12.6(−26.6) · SOL −25.3(−31.5) / bull XRP −12.7(−15.7) · BTC +27.3(+96.1) · SOL +50.5(+200.9). 전체 격자 표는 `AccumulateBacktestTest` 출력(JUnit XML system-out).
   **해석**: (1) 사전 등록 규칙은 형식상 통과했으나 **비판별적**이었다 — 봉당 1액션에서 27/27 통과. 하락장 비교 대상이 전액 B&H 라 부분 노출 전략은 거의 자동으로 "덜 잃는다". (2) 하락장에서 노출이 0.88~0.99 로 예산이 초반에 소진되고 반등 없이 끝나 −13~−33% 를 그대로 맞는다(손절 없음의 대가). (3) 상승장에선 "오를수록 판다"가 상승분을 반납해 B&H 의 1/3~1/4 만 먹는다(노출 0.34~0.45). (4) 격자 간 차이는 대부분 노출 차이로 설명된다 — stepDown 5·rungs 8 이 하락 손실을 가장 줄이지만 상승도 가장 덜 먹는다. **결론: 후보 5/3/3 유지(규칙대로), 단 이 백테는 "하락에서 B&H 보다 덜 잃고 상승에서 덜 번다"는 프로파일 확인이지 수익성 우월 근거가 아니다.** 사용자에게 이 트레이드오프를 Report 에서 명시한다.
 
+- 2026-09-02: **Phase C 완료**(`4a952fe`) — `buy()/buyRung()` 진입점 분리, `sellVolume()`, 4경로 공용 `sellTransition()`, rung 체결비율 조건부, `LadderStateMapper`, dispatch, `reservedKrw`, D1 REST 60초 캐시, V23. 신규 25 테스트 + 회귀 191 통과, `scripts/run-db-tests.sh` 3건/skip 0. **Phase D 완료**(`61e7a20`) — `UniverseSelector`(싱글톤, `publicUpbitClient`, `getMarkets` 추가), `applyTickers`/`refreshUniverse`, `bot_state.tickers` 불변 테스트. 신규 10 테스트. **Phase E 완료** — 배포 3계층 7키, README·PROJECT_ANALYSIS(V22·V23 행 추가, 리스크 기본값 오기재 +2%→+5% 교정)·spec·wiki(신규 `accumulate-ladder` + 3페이지) — wiki 3종 검증 통과. wiki 페이지·spec 파일명은 브랜치명 `accumulate-profile` 과 겹쳐 smoke 음성검사에 걸려 `accumulate-ladder` 로 바꿨다.
+- 2026-09-02: 전체 스위트 `./gradlew test` 통과 — 846 실행 / skip 9(전부 기존 조건부: DB·네트워크·플래그 게이트 6 스위트, DB 분은 run-db-tests.sh 로 별도 실행).
+
 # Next
 
-Phase C(라이브 통합) TDD — `LadderStateMapperTest` → `PositionManagerExtendedTest`(buyRung/sellVolume/sellTransition) → `TradingEngineTest`(dispatch) → V23.
+code-reviewer(+codex) → fix loop → simplify 체크 → 최종 검증 runner → Report.
 
 # Decisions
 
@@ -112,7 +115,7 @@ fun decide(input, params): LadderAction
 | B | 백테 + 격자 | `bot/.../engine/AccumulateBacktest.kt`, `AccumulateBacktestTest`(선택 규칙 인코딩·parity·결과표 출력) |
 | C | 라이브 통합 | `TradingState.kt`(+4 필드, `updateFlatPeak`), `bot/.../engine/LadderStateMapper.kt`, `V23__trading_states_accumulate.sql`, `TradingStateService`, `PositionManager.kt`(`placeBuy`·`buyRung`·`sellVolume`·`sellTransition`·`entryBlocked`·reservedKrw), `TradingEngine.kt`(preamble/`runSwing`/`runAccumulate`/`profileOf`/D1 캐시/reservedKrw), `TradeRecord.kt`(`ACCUMULATE_STEP`), `TradeRecordRepository`(리더보드 제외), `UserTradingManager`(설정 주입·status 노출), SPA 라벨, 테스트 `TradingEngineTest`·`PositionManagerExtendedTest`·`TradingStateRoundTripTest`(DB)·`LadderStateMapperTest` |
 | D | 알트 유니버스 | `UpbitClient.getMarkets`(+Impl·`MarketInfo`), `bot/.../engine/UniverseSelector.kt`, `common/.../config/UniverseProperties.kt`, `TradingEngine.applyTickers()`, `UserTradingManager`(selector 주입), `UniverseSelectorTest`·`TradingEngineTest`·`UserTradingManagerTest` |
-| E | 배포·문서 | `.env.example`·compose·`deploy.sh`, README(기능·환경변수·운영 절차·집계 한계), `PROJECT_ANALYSIS.md`, spec `docs/superpowers/specs/2026-09-02-accumulate-profile-design.md`, wiki(`trading-engine-loop`·`exit-gates` 갱신, 신규 `accumulate-profile`, `index.md`) |
+| E | 배포·문서 | `.env.example`·compose·`deploy.sh`, README(기능·환경변수·운영 절차·집계 한계), `PROJECT_ANALYSIS.md`, spec `docs/superpowers/specs/2026-09-02-accumulate-ladder-design.md`, wiki(`trading-engine-loop`·`exit-gates` 갱신, 신규 `accumulate-profile`, `index.md`) |
 
 # Key Files
 
