@@ -100,3 +100,13 @@ V21 백업 테이블을 DROP 하려다 pre-push codex P1 지적으로 폐기한 
 | [[lesson-skip-is-not-pass]] | 조건부 skip 이 초록불로 위장한 건. gradle 이 성공 시 조용해 CI 로그로 실행 여부를 관찰할 수 없었다 |
 
 진단의 핵심은 "docker 가 안 뜬다"가 아니라 **API 버전 프리픽스를 붙여 `/info` 를 직접 호출**해 400 나는 버전을 찾은 것이다.
+
+## [2026-09-02] ingest | #112 fixture 교체 반영 — 교체 전 측정치 historical 처리
+
+| 페이지 | 변경 |
+|---|---|
+| [[reset-churn-measurement]] | 시점 중립 fixture 로 #128 반사실 재측정 — "조건부 리셋만 부호 일관" 결론 철회 |
+| [[universe-look-ahead-audit]] | 대조표의 "현재 로스터"가 감사 시점(교체 전) 로스터임을 명시, 결론은 유지 |
+| [[swing-strategies]] | 무릎 백테 판정을 교체 전 fixture 기준 historical 로 표기 — 새 fixture 재실행은 미완 |
+
+fixture 를 `sources` 로 둔 페이지는 fixture 가 바뀌면 "현재 결과"로 읽히는 수치를 재측정하거나 historical 로 표기해야 한다 — 이번엔 #128 만 재측정했고 무릎 비교는 표기만 했다.

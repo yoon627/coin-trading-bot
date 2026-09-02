@@ -2,7 +2,7 @@
 title: 스윙 전략 9종과 TradingStrategy 인터페이스
 category: concept
 created: 2026-07-28
-updated: 2026-08-23
+updated: 2026-09-02
 claim_state: current
 verified: 2026-08-23 — TradingStrategy.minCandles 계약 도입(기본 21, macd 36, knee 41), StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
@@ -51,16 +51,18 @@ interface TradingStrategy {
 - **RSI 도 `take(40)` 으로 잘라서 넘긴다.** `calculateRsi` 는 리스트 전체로 Wilder smoothing 을 돌아 **window 길이가 값에 들어간다** — 자르지 않으면 같은 시점인데 백테(50봉)와 라이브(21~60봉)의 판정이 갈린다 — 실측(당시 8마켓 1128 케이스)에서 진입 3건·청산 2건이 어긋났고, RSI 자체는 50봉↔60봉이 최대 5.65, 라이브 window 가 21~60봉으로 가변인 것까지 보면 최대 21.43 벌어진다. 자른 뒤에는 `max|ΔRSI| = 0.0000` 으로 완전히 일치한다. 같은 이유로 `ShoulderExit` 은 최소 **41봉**을 요구한다 — `drop(1)` 로 직전 epoch 를 만들기 때문에 40봉이면 그쪽이 39봉이 되어 어긋난다. 기존 7개 전략은 같은 성질을 갖지만 동작 변경을 피하려고 손대지 않았다.
 - **`ma5` 상향 전환을 반등 확인으로 쓰지 않는다.** `calculateMa` 가 단순평균이라 `ma5(t) > ma5(t−1)` 는 `close[0] > close[5]` 와 **정확히 동치**이고, 눌림목 국면과는 교집합이 거의 없다. 그래서 `close[0] > close[1]`(+양봉)로 판정한다.
 - 두 전략은 `ShoulderExit` 로 `shouldSell` 을 override 한다 — 과열 RSI 하향 돌파(70) 또는 볼린저 상단 이탈 후 복귀. 기본 데드크로스를 **OR 로 병합하지 않는** 이유는 조기 이탈이 목적이라 늦은 신호가 섞이면 의도가 사라지기 때문이다.
-- **백테 판정: 승격 근거 없음.** 두 국면(하락장 2026-01~08 8마켓 / 상승장 2023-11~2024-06 4마켓)에서
+- **백테 판정: 승격 근거 없음** (⚠️ **#112 재수집 전 fixture 기준 — historical**). 두 국면(하락장 2026-01~08 8마켓 / 상승장 2023-11~2024-06 4마켓)에서
   out-of-sample per-trade net pnl% 를 비교했다. 전 마켓 기준으로 두 전략 모두 상위권에 들지 못하고
   (하락장 OUT 에서 `knee_reversal` 4위·`knee_pullback` 7위), 국면을 바꿔도 개선되지 않는다. 같은 4마켓으로
   국면만 바꾼 paired 비교에서 `knee_reversal` 은 하락장 +0.306 → 상승장 **−0.288** 로 오히려 나빠진다 —
   "하락장이라 나빴다"는 해석을 뒷받침하는 증거가 없다. 어깨 청산을 켜면 네 조합 모두 성과가 낮아졌다
   (예: `knee_pullback` 하락장 −0.084 → −2.527). ⚠️ 셀당 거래가 **4~18건**이고 조합끼리 독립이 아니라
   크기는 신뢰할 수 없다 — 방향만 참고할 관찰이다. 재현: `KneeStrategyComparisonTest`.
-  ⚠️ **상승장 4마켓은 데이터 부족이 아니라 유니버스 선정 방식 때문이다**(#112 실측) — 시점 중립으로 고르면
-  그 구간에도 8마켓이 있다. 위 paired 비교의 표본이 좁은 것은 fixture 를 오늘 기준 거래대금 상위로
-  고른 결과다. 상세는 [[universe-look-ahead-audit]].
+  ⚠️ **위 수치는 교체 전 fixture(오늘 기준 거래대금 상위 — 상승장 4마켓·paired 4)에서 나온 것이다.** 그 선정에
+  look-ahead 가 있음이 실측됐고([[universe-look-ahead-audit]]) fixture 는 시점 중립 유니버스(두 국면 8마켓·
+  paired 3 = XRP·BTC·SOL)로 교체됐다(#112, `scripts/collect_backtest_fixtures.py`). **이 무릎 비교는 새 fixture 로
+  아직 재실행하지 않았다** — 재실행 전까지 방향 관찰로만 남긴다. 같은 교체로 결론이 뒤집힌 전례는
+  [[reset-churn-measurement]] 참조.
 - ⚠️ 어깨 청산은 `chartExitEnabled` 가 꺼져 있으면 호출되지 않고, `maxHoldDays=1` 이면 백테에서도 `atHoldLimit` 게이트에 막혀 CHART_EXIT 대신 TIME_EXIT 이 난다([[exit-gates]]). 즉 **기본 설정에서는 dead path** 다.
 
 기본 전략은 **`combined`** (`TradingProperties.strategy` 기본값)이며 세 조건의 AND 다:
