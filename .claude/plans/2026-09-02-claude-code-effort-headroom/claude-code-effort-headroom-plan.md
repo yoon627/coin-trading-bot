@@ -22,6 +22,7 @@ Claude Code의 `CLAUDE_CODE_EFFORT_LEVEL=max` 강제를 제거해 `/effort`와 �
 - 2026-09-02: `rtk`를 PATH에서 제외한 격리 dry-run도 `rtk 미설치(선택)`으로 정상 종료해 standalone 부재 경로가 실패하지 않음을 확인했다.
 - 2026-09-02: wiki checker에서 이번 변경으로 생긴 `headroom` orphan과 `codegraph` outbound 부족을 historical 링크 복구로 해소했다. 남은 `lesson-fix-scoped-to-one-repo` orphan은 변경 전부터 index-only였던 기존 항목으로 분리했다.
 - 2026-09-02: `wiki/WIKI.md` 규약에 따라 lint 결과를 `wiki/log.md`에 append했다.
+- 2026-09-02: 사용자 요청에 따라 위 변경을 전역 `~/.claude` `main`의 커밋 `2d0a791`로 기록했다. 기존 `settings.json` 사용자 hunk와 `skills/orca-cli`는 staging/커밋에서 제외했다.
 
 # Next
 
