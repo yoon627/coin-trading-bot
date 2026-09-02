@@ -2,6 +2,7 @@ package com.trading.bot.notification
 
 import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
+import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import io.mockk.*
@@ -50,6 +51,7 @@ class DiscordNotifierTest {
             pnlAmount = null,
             strategy = "volatility_breakout",
             userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         notifier.sendTradeEmbed(record, krwBalance = 900000.0, username = "testuser")
@@ -75,6 +77,7 @@ class DiscordNotifierTest {
             reason = "TAKE_PROFIT",
             strategy = "rsi_bounce",
             userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         notifier.sendTradeEmbed(record, krwBalance = 1004000.0, username = "testuser")
@@ -94,6 +97,7 @@ class DiscordNotifierTest {
             pnlAmount = null,
             strategy = null, // 전략 미상 분기(수동 매수 포지션)도 embed 를 만들 수 있어야 한다
             userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         val customUrl = "https://discord.com/api/webhooks/456/def"
@@ -117,6 +121,7 @@ class DiscordNotifierTest {
             pnlAmount = null,
             strategy = "combined",
             userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         notifierNoUrl.sendTradeEmbed(record)
@@ -136,6 +141,7 @@ class DiscordNotifierTest {
             pnlAmount = null,
             strategy = "combined",
             userId = 1L,
+            fee = FeeBasis.Estimate,
         )
 
         notifier.sendTradeEmbed(record, webhookUrl = "http://evil.com/steal")
