@@ -30,7 +30,7 @@ updated: 2026-09-02
 
 재조회 트리거(먼저 오는 쪽): **매도 30건 추가**(현재 페이스 ≈3.8건/주 → 약 8주) 또는 **2026-11-01**.
 재조회 절차:
-1. main worktree 에서 `VULTR_DIR` 을 main `deploy/vultr` 로 둔 `analyze_trades.sh` 실행(세션이 직접 가능 — Blockers 참조).
+1. `analyze_trades.sh` 를 그대로 실행(이 worktree 에 `.state`·pem 있음, 세션이 직접 가능 — Blockers 참조).
 2. 사유별 EV 표를 Decisions 7) 과 나란히 놓고 비교 — 리셋 EV 가 여전히 음수이고 n 이 커져 1.7σ 를 넘으면
    그때 `TRADING_MAX_HOLD_DAYS` 소액 실험(기간·판정 기준 사전 고정)을 다시 올린다.
 3. `# Deferred` 의 78h/85h 보유시간 모순은 재조회 때 BUY 매칭을 수동 BUY 제외로 고쳐 함께 본다.
@@ -167,7 +167,7 @@ R:R 이 1:1 이라 승률이 동전던지기면 수수료만큼 확정 손실이
 # Blockers
 
 없음 (2026-09-02 해소). ~~운영 DB 조회를 세션이 직접 못 한다~~ → 할 수 있었다. main worktree 의 `deploy/vultr/.state`·pem 으로
-읽기전용 ssh+psql 이 그대로 통했다. 이 worktree 에는 `.state` 가 복사돼 있지 않았다(이전 기록의 "복사해 뒀다"는 부정확).
+읽기전용 ssh+psql 이 그대로 통했다. 이 worktree 에도 `.state`·pem 이 복사돼 있다(gitignored dotfile 이라 `ls` 에 안 보여 한때 "없다"고 오판 — `git status --ignored` 로 확인). 즉 worktree 안에서 원본 스크립트를 그대로 돌려도 된다.
 
 # Acceptance
 
