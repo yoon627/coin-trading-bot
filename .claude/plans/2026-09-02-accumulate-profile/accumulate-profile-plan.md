@@ -32,9 +32,11 @@ updated: 2026-09-02
 
 - 2026-09-02: 구현 리뷰 2건(architecture-reviewer 정밀 + code-reviewer) 처분·수정 완료(`af01873`, `# Review Disposition`). 수정 중 테스트가 추가 버그를 잡음 — `formatVolume` 의 `BigDecimal(double)` 이 0.0003 을 0.00029999 로 깎아 주문 수량이 한 자리 모자랐다(`valueOf` 로 교정, 회귀 테스트). simplify: 프로덕션 미사용 `AccumulateProperties.enabled` 제거(`112708d`). 최종 검증은 격리 runner 로 실행 중.
 
+- 2026-09-02: **최종 검증(격리 runner) 통과** — `./gradlew test --rerun-tasks` 851 실행 / 0 실패 / skip 9(기존 조건부 6 스위트), `scripts/run-db-tests.sh` 3건/skip 0, wiki 3종 clean(35 페이지, smoke 10/10), 배포 키 3계층 등록·`deploy.sh` 문법 OK, working tree clean. Acceptance 전 항목 증거 대조 완료(아래 표 체크).
+
 # Next
 
-최종 검증 runner 결과 확인 → Report → 사용자 선택(push·PR·머지는 `/e`).
+Report → 사용자 선택. push·PR·머지·worktree 정리는 `/e`. 머지 후 켜는 절차는 README "적립 프로파일·자동 유니버스를 처음 켤 때"(pg_dump → `.env` 7키 → 재배포 → 로그에서 "Ladder reconciled"·"Universe refreshed" 확인).
 
 # Decisions
 
@@ -142,21 +144,21 @@ fun decide(input, params): LadderAction
 
 | # | 충족 조건 | 검증 | 기준 |
 |---|---|---|---|
-| A1 | `decide` 가 Decision 1 표대로(첫 진입·flatPeak 직전값·추가매수·실측 예산 상한·부분매도·rungs=1 전량·5,000 게이트·재진입) | `AccumulateLadderTest`(mock 0, 경계값) | 통과 |
-| A2 | 단당 금액 < 5,000 이면 기동 거부 | `AccumulatePropertiesTest` | 예외 |
-| B1 | 백테가 fixture 를 시간순으로 돌고 7 fixture × 27 격자 × 봉당 1/다단 결과표 산출, **사전 등록 선택 규칙으로 채택/미채택 판정** | `AccumulateBacktestTest` | 판정 결과·근거를 `# Progress` 에 기록 |
-| B2 | 백테 기본 파라미터 = `AccumulateProperties` 기본값 | parity 테스트 | 통과 |
-| C1 | 적립 티커는 손절·익절·트레일링·09:00 청산·boughtToday 게이트 미호출 | `TradingEngineTest` `verify(exactly=0)` | 통과 |
-| C2 | rung 전이가 커밋 람다 안에서, 즉시 done / wait→reconcile / cancel+부분(≥90%·<90%) 경로가 같은 규칙 | `PositionManagerExtendedTest` | rung·lastActionPrice 기대값 일치 |
-| C3 | 실측 예산 상한·주문 직전 재판정·KRW 부족 시 WARN+status | `PositionManagerExtendedTest`·`UserTradingManagerTest` | 통과 |
-| C4 | 재시작·컷오버 정합(rung=0·잔고>0 편입 / rung>0·잔고=0 리셋 / flatPeak 0 초기화만) 1회 적용 | `LadderStateMapperTest` + `TradingStateRoundTripTest`(V23, DB) | 통과, `scripts/run-db-tests.sh` 실행 N건/skip 0 |
-| C5 | 스윙 `buy()` 가 reservedKrw 를 뺀 잔고로 사이징 | `PositionManagerExtendedTest` | 통과 |
-| D1 | 선정이 warning·스테이블·적립 제외 상위 N, 실패 시 직전 유지 | `UniverseSelectorTest` | 통과 |
-| D2 | `applyTickers` 가 보유·pending 유지, 20 상한, 신규 시딩+매퍼, 제거분 정리 | `TradingEngineTest` | 통과 |
-| D3 | `bot_state.tickers` 에 자동 선정 결과가 쓰이지 않음 | `UserTradingManagerTest` | 통과 |
-| E1 | 기본값 off 동작 불변: `getMarkets` 0회·`applyTickers`=입력·주문 시퀀스 동일 + `./gradlew test` 전체 + `legacy-golden`. **예외 1건(의도)**: watchlist 밖 티커의 D1 REST 폴백에 60초 캐시(`DailyCandleCache`)가 붙는다 — 신선도는 store 경로와 같고 레이트리밋 보호 목적 | 명시 단언 + 전체 스위트 | 통과 |
-| E2 | 배포 3계층 7키 등록 | grep | 7키 × 3곳 |
-| E3 | 문서 동기화 + wiki 검증 3종 + plan 커밋(tracked) | 실행 | 통과 |
+| ✅ A1 | `decide` 가 Decision 1 표대로(첫 진입·flatPeak 직전값·추가매수·실측 예산 상한·부분매도·rungs=1 전량·5,000 게이트·재진입) | `AccumulateLadderTest`(mock 0, 경계값) | 통과 |
+| ✅ A2 | 단당 금액 < 5,000 이면 기동 거부 | `AccumulatePropertiesTest` | 예외 |
+| ✅ B1 | 백테가 fixture 를 시간순으로 돌고 7 fixture × 27 격자 × 봉당 1/다단 결과표 산출, **사전 등록 선택 규칙으로 채택/미채택 판정** | `AccumulateBacktestTest` | 판정 결과·근거를 `# Progress` 에 기록 |
+| ✅ B2 | 백테 기본 파라미터 = `AccumulateProperties` 기본값 | parity 테스트 | 통과 |
+| ✅ C1 | 적립 티커는 손절·익절·트레일링·09:00 청산·boughtToday 게이트 미호출 | `TradingEngineTest` `verify(exactly=0)` | 통과 |
+| ✅ C2 | rung 전이가 커밋 람다 안에서, 즉시 done / wait→reconcile / cancel+부분(≥90%·<90%) 경로가 같은 규칙 | `PositionManagerExtendedTest` | rung·lastActionPrice 기대값 일치 |
+| ✅ C3 | 실측 예산 상한·주문 직전 재판정·KRW 부족 시 WARN+status | `PositionManagerExtendedTest`·`UserTradingManagerTest` | 통과 |
+| ✅ C4 | 재시작·컷오버 정합(rung=0·잔고>0 편입 / rung>0·잔고=0 리셋 / flatPeak 0 초기화만) 1회 적용 | `LadderStateMapperTest` + `TradingStateRoundTripTest`(V23, DB) | 통과, `scripts/run-db-tests.sh` 실행 N건/skip 0 |
+| ✅ C5 | 스윙 `buy()` 가 reservedKrw 를 뺀 잔고로 사이징 | `PositionManagerExtendedTest` | 통과 |
+| ✅ D1 | 선정이 warning·스테이블·적립 제외 상위 N, 실패 시 직전 유지 | `UniverseSelectorTest` | 통과 |
+| ✅ D2 | `applyTickers` 가 보유·pending 유지, 20 상한, 신규 시딩+매퍼, 제거분 정리 | `TradingEngineTest` | 통과 |
+| ✅ D3 | `bot_state.tickers` 에 자동 선정 결과가 쓰이지 않음 | `UserTradingManagerTest` | 통과 |
+| ✅ E1 | 기본값 off 동작 불변: `getMarkets` 0회·`applyTickers`=입력·주문 시퀀스 동일 + `./gradlew test` 전체 + `legacy-golden`. **예외 1건(의도)**: watchlist 밖 티커의 D1 REST 폴백에 60초 캐시(`DailyCandleCache`)가 붙는다 — 신선도는 store 경로와 같고 레이트리밋 보호 목적 | 명시 단언 + 전체 스위트 | 통과 |
+| ✅ E2 | 배포 3계층 7키 등록 | grep | 7키 × 3곳 |
+| ✅ E3 | 문서 동기화 + wiki 검증 3종 + plan 커밋(tracked) | 실행 | 통과 |
 
 # Review Disposition
 
@@ -184,4 +186,5 @@ fun decide(input, params): LadderAction
 
 # Workflow Findings
 
-(비어 있음)
+- wiki `smoke.sh` 음성검사는 **실재 브랜치명**을 페이지 본문에서 찾는다 — 작업 브랜치와 같은 stem 으로 wiki 페이지·spec 파일을 만들면 오탐(`accumulate-profile` → `accumulate-ladder` 로 개명해 해소). 새 페이지 stem 은 브랜치명과 다르게 짓는다.
+- repo PreToolUse hook 이 `codex exec` 를 스테이징 diff 6패턴 점검 전용으로 게이트해 code-reviewer 의 브랜치 diff codex 병행 리뷰가 막혔다(plan-reviewer 단계의 codex 는 통과). 규약(§9)과 hook 의 범위가 어긋난다 — `/improve` 판정 대상.
