@@ -30,9 +30,11 @@ updated: 2026-09-02
 - 2026-09-02: **Phase C 완료**(`4a952fe`) — `buy()/buyRung()` 진입점 분리, `sellVolume()`, 4경로 공용 `sellTransition()`, rung 체결비율 조건부, `LadderStateMapper`, dispatch, `reservedKrw`, D1 REST 60초 캐시, V23. 신규 25 테스트 + 회귀 191 통과, `scripts/run-db-tests.sh` 3건/skip 0. **Phase D 완료**(`61e7a20`) — `UniverseSelector`(싱글톤, `publicUpbitClient`, `getMarkets` 추가), `applyTickers`/`refreshUniverse`, `bot_state.tickers` 불변 테스트. 신규 10 테스트. **Phase E 완료** — 배포 3계층 7키, README·PROJECT_ANALYSIS(V22·V23 행 추가, 리스크 기본값 오기재 +2%→+5% 교정)·spec·wiki(신규 `accumulate-ladder` + 3페이지) — wiki 3종 검증 통과. wiki 페이지·spec 파일명은 브랜치명 `accumulate-profile` 과 겹쳐 smoke 음성검사에 걸려 `accumulate-ladder` 로 바꿨다.
 - 2026-09-02: 전체 스위트 `./gradlew test` 통과 — 846 실행 / skip 9(전부 기존 조건부: DB·네트워크·플래그 게이트 6 스위트, DB 분은 run-db-tests.sh 로 별도 실행).
 
+- 2026-09-02: 구현 리뷰 2건(architecture-reviewer 정밀 + code-reviewer) 처분·수정 완료(`af01873`, `# Review Disposition`). 수정 중 테스트가 추가 버그를 잡음 — `formatVolume` 의 `BigDecimal(double)` 이 0.0003 을 0.00029999 로 깎아 주문 수량이 한 자리 모자랐다(`valueOf` 로 교정, 회귀 테스트). simplify: 프로덕션 미사용 `AccumulateProperties.enabled` 제거(`112708d`). 최종 검증은 격리 runner 로 실행 중.
+
 # Next
 
-code-reviewer(+codex) → fix loop → simplify 체크 → 최종 검증 runner → Report.
+최종 검증 runner 결과 확인 → Report → 사용자 선택(push·PR·머지는 `/e`).
 
 # Decisions
 
