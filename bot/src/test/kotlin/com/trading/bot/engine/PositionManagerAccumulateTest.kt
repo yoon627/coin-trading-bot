@@ -98,6 +98,41 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `buyRung counts locked coins toward the budget`() = runTest {
+        // free 0.0004(20,000) 만 보면 여유가 있지만, 사용자가 지정가로 잠근 0.0016(80,000)도 이 예산으로 산 코인이다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            krw("500000"),
+            Account(currency = "BTC", balance = "0.0004", locked = "0.0016", avgBuyPrice = "50000000"),
+        )
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.0004, rungsFilled = 1, lastActionPrice = 50_000_000.0)
+        val record = manager.buyRung("KRW-BTC", state, 48_000_000.0, LadderAction.Buy(20_000.0, 48_000_000.0), params)
+
+        assertNull(record)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+        assertTrue(state.accumulateSkipReason!!.contains("budget"))
+    }
+
+    @Test
+    fun `an unfilled rung order keeps the entry metadata of the existing position`() = runTest {
+        // 추가 단이 cancel+0 으로 끝나도 buyDate·entryStrategy 는 살아야 한다 — 프로파일을 끄면 보유상한 청산이 그 날짜를 본다.
+        coEvery { upbitClient.getAccounts() } returns listOf(krw("200000"), btc("0.0004", "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "rung-x")
+        coEvery { upbitClient.getOrder("rung-x") } returns Order(uuid = "rung-x", state = "cancel", executedVolume = "0")
+
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.0004, rungsFilled = 1, lastActionPrice = 50_000_000.0,
+            buyDate = java.time.LocalDate.of(2026, 9, 1), entryStrategy = "combined",
+        )
+        assertNull(manager.buyRung("KRW-BTC", state, 48_500_000.0, LadderAction.Buy(20_000.0, 48_500_000.0), params))
+
+        assertEquals(java.time.LocalDate.of(2026, 9, 1), state.buyDate)
+        assertEquals("combined", state.entryStrategy)
+        assertEquals(1, state.rungsFilled)
+        assertNull(state.pendingBuyUuid)
+    }
+
+    @Test
     fun `buyRung skips when krw is short and says so`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(krw("10000"))
 
