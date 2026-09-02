@@ -13,28 +13,48 @@ import com.trading.common.domain.Candle
  *
  * 국면이 둘이다 — 하락장([Regime.BEAR]) 하나만 보면 "이 전략이 원래 나쁜지, 이 장에서만 나쁜지"를
  * 가를 수 없어서 상승장([Regime.BULL])을 함께 둔다.
+ *
+ * 마켓 선정은 **구간 시작 시점 기준**이다(#112). 예전처럼 수집 시점 상위를 과거에 소급하면
+ * 그 구간을 살아남아 커진 종목만 뽑혀 성과가 부풀려진다. 남은 한계는 **생존편향** —
+ * 그 사이 상장폐지된 종목은 Upbit API 가 404 라 표본에 넣을 수도, 크기를 잴 수도 없다.
  */
 internal object BacktestFixtures {
 
     enum class Regime(val dir: String, val label: String) {
-        /** 2026-01-31 ~ 2026-08-18. 8마켓 중 7개가 마이너스. */
+        /** 2026-01-31 ~ 2026-08-18. 8마켓 전부 마이너스(-27% ~ -91%). */
         BEAR("bear", "하락장 2026-01~08"),
 
-        /** 2023-11-23 ~ 2024-06-09. BTC +96%, ETH +89%, DOGE +102%, XRP -16%. */
+        /**
+         * 2023-11-23 ~ 2024-06-09. SOL +196%, POLYX +153%, BTC +96%, MINA +27% /
+         * XRP -14%, BLUR -23%, GAS -40%, ARK -43% — **상승장에서도 절반이 손실**이다.
+         *
+         * 옛 유니버스(오늘의 거래대금 상위를 2023년에 소급)에서는 이 국면이 BTC +96%·ETH +89%·
+         * DOGE +102%·XRP -16% 로 보였다. 균일하게 오르는 장처럼 보였던 것은 **오늘의 승자들로만
+         * 채워져 있었기 때문**이다(#112).
+         */
         BULL("bull", "상승장 2023-11~2024-06"),
     }
 
-    /** 두 국면 모두에 존재하는 마켓 — 마켓 효과를 통제한 paired 비교에 쓴다. */
-    val PAIRED_MARKETS = listOf("KRW-XRP", "KRW-BTC", "KRW-ETH", "KRW-DOGE")
+    /**
+     * 두 국면 모두의 상위 8에 든 마켓 — 마켓 효과를 통제한 paired 비교에 쓴다.
+     *
+     * 시점 중립 선정으로 바꾸면서 4개(XRP·BTC·ETH·DOGE)에서 3개로 줄었다. 유동 유니버스가 실제로
+     * 회전하기 때문이며, **겹침을 늘리려 선정 규칙을 손대면 그게 다시 선택 편향**이라 그대로 둔다.
+     * 대신 BULL 국면 내 표본이 4 → 8 로 늘었다.
+     */
+    val PAIRED_MARKETS = listOf("KRW-XRP", "KRW-BTC", "KRW-SOL")
 
+    // 각 구간 **시작 시점 이전** 30일 평균 거래대금 상위 8 (스테이블 제외).
+    // 선정 규칙과 재수집은 `scripts/collect_backtest_fixtures.py` 가 소유한다 — 여기 목록은 그 산출물이다.
     private val MARKETS_BY_REGIME = mapOf(
         Regime.BEAR to listOf(
-            "KRW-XRP", "KRW-BTC", "KRW-MMT", "KRW-ETH",
-            "KRW-WLD", "KRW-RVN", "KRW-ONDO", "KRW-DOGE",
+            "KRW-XRP", "KRW-BTC", "KRW-ETH", "KRW-AXS",
+            "KRW-DATA", "KRW-ENSO", "KRW-SOL", "KRW-BERA",
         ),
-        // MMT·WLD·RVN·ONDO 는 이 시기 미상장이라 4마켓뿐이다. 현재 거래대금 상위의 절반이 2년 전엔
-        // 없었다는 뜻이고, 이것 자체가 유니버스 선정에 생존편향이 있다는 증거다.
-        Regime.BULL to PAIRED_MARKETS,
+        Regime.BULL to listOf(
+            "KRW-GAS", "KRW-XRP", "KRW-BTC", "KRW-SOL",
+            "KRW-ARK", "KRW-MINA", "KRW-BLUR", "KRW-POLYX",
+        ),
     )
 
     private val mapper = jacksonObjectMapper()

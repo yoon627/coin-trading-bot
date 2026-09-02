@@ -2,7 +2,7 @@
 title: 백테 fixture 유니버스 look-ahead 편향 실측 — 상승장 4마켓은 고칠 수 있다
 category: query
 created: 2026-08-26
-updated: 2026-09-01
+updated: 2026-09-02
 claim_state: current
 verified: 2026-09-01 — `RUN_UNIVERSE_AUDIT=true ./gradlew :bot:test --tests "*PointInTimeUniverseAuditTest*"` (commit 46a8641, clean tree, 후보 288 KRW 마켓). 후보 287 로 돌린 첫 실행(2026-08-26)·판정 규칙을 조이기 전 실행과 모든 수치가 일치
 sources:
@@ -18,6 +18,10 @@ sources:
 고른 것이라 look-ahead 다([[backtest-engine]] 의 fixture 절, #112).
 
 이 페이지는 **t0(구간 시작) 이전 정보만** 써서 "그때라면 무엇을 골랐을 것인가"를 재구성한 결과다.
+
+> [!note] 2026-09-02 — 이 감사 뒤 fixture 는 **시점 중립 로스터로 교체됐다**(#112, `scripts/collect_backtest_fixtures.py`
+> 가 선정 규칙의 단일 소스, 현재 목록은 fixture README). 아래에서 "현재/커밋된 로스터"는 **감사 시점(commit 46a8641)의
+> 교체 전 로스터**를 뜻한다. 대조표는 그 로스터와의 비교이며, 결론(편향 실재·상승장 8마켓 가능)은 그대로 유효하다.
 
 ## 선정 규칙 (시점 중립)
 
@@ -45,7 +49,7 @@ sources:
 즉 **상승장이 4마켓뿐인 것은 데이터가 없어서가 아니라 유니버스를 오늘 기준으로 골랐기 때문이다.**
 (오늘 상위 8개 중 `MMT`·`WLD`·`RVN`·`ONDO` 가 그 시기 미상장 → 남은 4개만 쓰였다.)
 
-## 현재 로스터와의 대조
+## 교체 전(감사 시점) 로스터와의 대조
 
 | | 하락장 | 상승장 |
 |---|---|---|
