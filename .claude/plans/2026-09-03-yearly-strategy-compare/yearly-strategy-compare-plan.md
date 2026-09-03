@@ -1,6 +1,6 @@
 ---
 title: yearly-strategy-compare — 운영 티커 8종 1년 일봉으로 전략 9종·적립·단순보유 비교(8/4개월 분할)
-status: in_progress
+status: done
 started: 2026-09-03
 updated: 2026-09-03
 ---
@@ -19,9 +19,11 @@ updated: 2026-09-03
 - 2026-09-03: code-reviewer(Claude 단독) Major 1·Minor 6·Nit 9 → fix 14 / wontfix 2(아래 Disposition). 수정 후 게이트 재실행 6건/skip 0, 발표값 변동: MDD ±0.1(미실현에 수수료 선차감), 상위3 이 동점 포함 4 → 잔류 3/4, ρ 0.32 불변(재순위·평균순위 적용 후에도 동일).
 - 2026-09-03: 문서 — fixture README `yearly/` 절, wiki query 페이지 + index + log + inbound 링크 2곳(accumulate-ladder·backtest-engine), `wiki/verify.sh` 상한 33±2→34±2(조정 이력 기재). A5 `git diff --stat 304f0b0 -- bot/src/main common/src/main` = 0. code-reviewer 는 Claude 단독(codex 크레딧 소진 2026-09-02 확인 — push 시 `CODEX_SKIP=1`, 근거 = 이 대체 검토).
 
+- 2026-09-03: 커밋 `ddb9f5b`(코드·fixture·문서) + `ef177c5`(plan) push, PR #164 생성(`/e merge`). codex pre-push 는 크레딧 소진으로 `CODEX_SKIP=1`(근거: Claude code-reviewer 대체 검토, 위 Disposition).
+
 # Next
 
-code-reviewer 결과 처분(`# Review Disposition`) → 필요 시 수정·게이트 재실행 → 전체 테스트 재확인 → simplify 체크 → 커밋 → Report(마무리는 `/e merge`).
+(없음 — PR #164 머지로 완료)
 
 # Decisions
 
