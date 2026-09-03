@@ -44,6 +44,15 @@ class TradingEngineAccumulateTest {
         coEvery { positionManager.sellVolume(any(), any(), any(), any()) } returns null
     }
 
+    private class MutableClock(var nowMs: Long) : java.time.Clock() {
+        override fun millis(): Long = nowMs
+        override fun instant(): java.time.Instant = java.time.Instant.ofEpochMilli(nowMs)
+        override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+        override fun withZone(zone: java.time.ZoneId?): java.time.Clock = this
+    }
+
+    private val clock = MutableClock(1_000_000L)
+
     private fun createEngine(props: AccumulateProperties = accumulate) = TradingEngine(
         upbitClient = upbitClient,
         positionManager = positionManager,
@@ -54,6 +63,7 @@ class TradingEngineAccumulateTest {
         username = "testuser",
         marketDataStore = marketDataStore,
         accumulateProperties = props,
+        clock = clock,
     )
 
     private fun price(ticker: String, price: Double) {
@@ -83,10 +93,15 @@ class TradingEngineAccumulateTest {
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 200.0, rungsFilled = 1, lastActionPrice = 100.0)
 
         engine.processTicker("KRW-BTC", state, strategy)
+        clock.nowMs += 59_999L
         engine.processTicker("KRW-BTC", state, strategy)
 
         // 첫 tick 에 1회(확인된 무잔고는 포지션 해제로 반영), 그 뒤 60초 안에는 재조회하지 않는다.
         coVerify(exactly = 1) { positionManager.syncPosition("KRW-BTC", state, clearWhenEmpty = true) }
+
+        clock.nowMs += 1L
+        engine.processTicker("KRW-BTC", state, strategy)
+        coVerify(exactly = 2) { positionManager.syncPosition("KRW-BTC", state, clearWhenEmpty = true) }
     }
 
     @Test
