@@ -11,8 +11,6 @@ import com.trading.common.strategy.MeanReversion
 import com.trading.common.strategy.RsiBounce
 import com.trading.common.strategy.TradingStrategy
 import com.trading.common.strategy.VolatilityBreakout
-import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
@@ -64,19 +62,17 @@ internal class YearlyStrategyComparison(
             val warmup = window.tradeRange.first - window.inputRange.first
 
             for (strategy in strategies) for (mode in ReentryMode.entries) {
-                val result = engine.run(strategy.name, input.reversed(), market, BacktestConfig(reentryMode = mode))
-                    ?: error("${strategy.name}/$mode/$market: 결과 없음")
-                // 엔진의 거래 인덱스는 입력 기준 — 워밍업만큼 당겨 거래 구간 기준으로 맞춘다.
-                val trades = result.trades.map { it.copy(buyIndex = it.buyIndex - warmup, sellIndex = it.sellIndex - warmup) }
+                // 측정은 SwingMetrics 가 소유한다 — 파라미터 스윕(StrategySearch)과 같은 함수라야 두 리포트를 나란히 놓을 수 있다.
+                val measurement = SwingMetrics.measure(engine, strategy.name, market, input, warmup, BacktestConfig(reentryMode = mode))
                 rows += Row(
                     candidate = "${strategy.name}/${modeLabel(mode)}",
                     market = market,
                     window = window,
-                    netReturnPct = trades.sumOf { it.pnlPercent },
-                    mddPct = maxDrawdownPct(swingEquityCurve(closes, trades)),
-                    trades = trades.size,
-                    exposure = trades.sumOf { it.holdDays }.toDouble() / closes.size,
-                    compoundedPct = result.totalReturnPct,
+                    netReturnPct = measurement.netReturnPct,
+                    mddPct = measurement.mddPct,
+                    trades = measurement.trades.size,
+                    exposure = measurement.exposure,
+                    compoundedPct = measurement.compoundedPct,
                     swing = true,
                 )
             }
@@ -86,7 +82,7 @@ internal class YearlyStrategyComparison(
 
             val first = closes.first()
             val bhCurve = closes.map { it / first * EQUITY_BASE }
-            rows += Row("buy-and-hold", market, window, (closes.last() / first - 1.0) * 100.0 - ROUND_TRIP_FEE_PCT, maxDrawdownPct(bhCurve), 1, 1.0, null)
+            rows += Row("buy-and-hold", market, window, (closes.last() / first - 1.0) * 100.0 - ROUND_TRIP_FEE_PCT, SwingMetrics.maxDrawdownPct(bhCurve), 1, 1.0, null)
         }
         return rows
     }
@@ -184,10 +180,10 @@ internal class YearlyStrategyComparison(
     }
 
     companion object {
-        const val MIN_TRADES_FOR_RANK = 8
-        const val ROUND_TRIP_FEE_PCT = 0.1
-        /** equity 곡선의 예산 기준값 — 곡선 값이 곧 예산 대비 %. */
-        const val EQUITY_BASE = 100.0
+        /** 지표 정의는 [SwingMetrics] 가 단일 소스다 — 여기서는 이름만 빌려 쓴다. */
+        const val MIN_TRADES_FOR_RANK = SwingMetrics.MIN_TRADES_FOR_RANK
+        const val ROUND_TRIP_FEE_PCT = SwingMetrics.ROUND_TRIP_FEE_PCT
+        const val EQUITY_BASE = SwingMetrics.EQUITY_BASE
         /** 순위 안정성에서 "선택 창 상위 N" 의 N. */
         const val TOP_N_FOR_RETENTION = 3
 
@@ -199,47 +195,6 @@ internal class YearlyStrategyComparison(
         private fun modeLabel(mode: ReentryMode) = when (mode) {
             ReentryMode.LEGACY_NEXT_BAR -> "legacy"
             ReentryMode.LIVE_SAME_BAR -> "live"
-        }
-
-        /**
-         * 거래 구간 종가와 거래 목록(거래 구간 기준 인덱스)으로 예산=100 의 봉단위 equity. 보유 중엔 진입가 대비 미실현(왕복 수수료
-         * 선차감), 청산 봉부터는 net pnl 이 실현 누적에 들어간다. LIVE 재진입은 청산 봉에 곧바로 다음 거래가 열리므로 한 봉에서
-         * 거래를 계속 소진한다.
-         */
-        fun swingEquityCurve(closes: List<Double>, trades: List<BacktestTrade>): List<Double> {
-            val sorted = trades.sortedBy { it.buyIndex }
-            require(sorted.all { it.buyIndex in closes.indices && it.sellIndex in closes.indices }) { "거래 인덱스가 거래 구간 밖" }
-            val curve = ArrayList<Double>(closes.size)
-            var realized = 0.0
-            var open: BacktestTrade? = null
-            var next = 0
-            for (t in closes.indices) {
-                while (true) {
-                    if (open == null && next < sorted.size && sorted[next].buyIndex <= t) open = sorted[next++]
-                    val current = open ?: break
-                    if (t < current.sellIndex) break
-                    realized += current.pnlPercent
-                    open = null
-                }
-                val unrealized = open?.let { (closes[t] / it.buyPrice - 1.0) * 100.0 - ROUND_TRIP_FEE_PCT } ?: 0.0
-                curve += EQUITY_BASE + realized + unrealized
-            }
-            val expected = EQUITY_BASE + trades.sumOf { it.pnlPercent }
-            check(next == sorted.size && open == null && abs(curve.last() - expected) < 1e-6) {
-                "equity 종점 ${curve.last()} ≠ $EQUITY_BASE + Σ pnl $expected — 거래를 곡선에 다 싣지 못했다"
-            }
-            return curve
-        }
-
-        /** 예산=100 기준 곡선의 peak-to-trough 낙폭(%). */
-        fun maxDrawdownPct(curve: List<Double>): Double {
-            var peak = Double.NEGATIVE_INFINITY
-            var worst = 0.0
-            for (v in curve) {
-                peak = max(peak, v)
-                worst = max(worst, peak - v)
-            }
-            return worst
         }
 
         /** 값이 클수록 1위. 동점은 같은 순위(1,1,3,4). */
@@ -264,7 +219,4 @@ internal class YearlyStrategyComparison(
     }
 }
 
-private fun List<Double>.median(): Double {
-    val s = sorted()
-    return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
-}
+private fun List<Double>.median(): Double = SwingMetrics.median(this)

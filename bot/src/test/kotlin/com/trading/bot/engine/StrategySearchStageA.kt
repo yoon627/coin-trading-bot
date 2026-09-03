@@ -1,0 +1,217 @@
+package com.trading.bot.engine
+
+import com.trading.common.domain.Candle
+
+/**
+ * Stage A 오케스트레이션 — 사전고정 그리드를 yearly fixture 에 돌리고 게이트를 순서대로 적용한 뒤 리포트를 만든다.
+ *
+ * 게이트 순서는 **비용 순**이다: 값싼 판정(선택창 지표)으로 먼저 걸러야 검증창·국면·수수료 재실행이 소수 후보에만 든다.
+ * 순서는 판정 결과를 바꾸지 않는다(모든 게이트는 AND) — 바꾸는 것은 "어디서 죽었나" 집계뿐이다.
+ */
+internal class StrategySearchStageA(private val search: StrategySearch = StrategySearch()) {
+
+    data class Outcome(
+        val report: String,
+        val survivors: List<StrategySearchReport.Survivor>,
+        val nominalConfigs: Int,
+        val uniqueBehaviours: Int,
+        val eliminations: Map<String, Int>,
+    )
+
+    suspend fun run(
+        yearly: Map<String, List<Candle>>,
+        bull: Map<String, List<Candle>>,
+        bear: Map<String, List<Candle>>,
+        nullSummary: StrategySearchReport.NullSummary?,
+        metadata: Map<String, String>,
+        log: (String) -> Unit = {},
+    ): Outcome {
+        val grid = StrategySearchGrid.stageA()
+        val baseline = StrategySearchGrid.baselinePoint()
+        val points = grid.points
+        log("[stageA] 좌표 ${points.size} · 마켓 ${yearly.size}")
+
+        val select = search.measure(yearly, StrategySearch.SELECT, points)
+        val baseSelect = select.getValue(baseline)
+        log("[stageA] 선택창 측정 완료 — baseline 거래 ${baseSelect.trades}건")
+
+        // 서로 같은 거래를 내는 좌표는 하나로 접는다 — 이게 다중비교의 진짜 분모다.
+        val representatives = LinkedHashMap<Long, SweepPoint>()
+        for (p in points) representatives.putIfAbsent(select.getValue(p).fingerprint, p)
+        val unique = representatives.values.toList()
+        log("[stageA] 고유 행동 ${unique.size} / 명목 ${points.size}")
+
+        // plateau 는 **모든** 좌표의 G1 통과 여부를 봐야 한다(이웃이 대표 좌표가 아닐 수 있다).
+        val g1Pass = points.filter { StrategySearchGates.g1(returnDeltas(select, it, baseline)) }.toHashSet()
+
+        val eliminations = LinkedHashMap<String, Int>()
+        var alive = unique
+        fun stage(name: String, keep: (SweepPoint) -> Boolean) {
+            val kept = alive.filter(keep)
+            eliminations[name] = alive.size - kept.size
+            alive = kept
+            log("[stageA] $name 통과 ${kept.size}")
+        }
+
+        stage("G5") { select.getValue(it).let { m -> StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) } }
+        stage("G1") { it in g1Pass }
+        stage("G3") { StrategySearchGates.plateau(grid.neighbours(it), g1Pass) }
+        stage("G6") {
+            val m = select.getValue(it)
+            StrategySearchGates.g6(mddDeltas(select, it, baseline), m.worstMdd, baseSelect.worstMdd)
+        }
+
+        val validate = measureIfAny(yearly, StrategySearch.VALIDATE, alive, baseline)
+        stage("G2") { p -> validate?.let { StrategySearchGates.g2(returnDeltas(it, p, baseline)) } ?: false }
+
+        val bullMetrics = measureIfAny(bull, StrategySearch.REGIME, alive, baseline)
+        stage("G4a") { p ->
+            bullMetrics?.let {
+                StrategySearchGates.g4(returnDeltas(it, p, baseline)) &&
+                    StrategySearchGates.g4(returnDeltas(it, p, baseline, BacktestFixtures.PAIRED_MARKETS))
+            } ?: false
+        }
+
+        val bearMetrics = measureIfAny(bear, StrategySearch.REGIME, alive, baseline)
+        stage("G4b") { p -> bearMetrics?.let { StrategySearchGates.g4(returnDeltas(it, p, baseline)) } ?: false }
+
+        val feeRuns = FEE_LEVELS.associateWith { fee ->
+            measureIfAny(yearly, StrategySearch.SELECT, alive, baseline, StrategySearch.Options(feeRate = fee))
+        }
+        stage("G7") { p ->
+            feeRuns.values.all { run -> run?.let { StrategySearchGates.g1(returnDeltas(it, p, baseline)) } ?: false }
+        }
+
+        val survivors = alive.map { p ->
+            val s = select.getValue(p)
+            StrategySearchReport.Survivor(
+                point = p,
+                selectMedian = SwingMetrics.median(returnDeltas(select, p, baseline)),
+                selectPositive = returnDeltas(select, p, baseline).count { it > 0 },
+                validateMedian = SwingMetrics.median(returnDeltas(validate!!, p, baseline)),
+                validatePositive = returnDeltas(validate, p, baseline).count { it > 0 },
+                bullMedian = SwingMetrics.median(returnDeltas(bullMetrics!!, p, baseline)),
+                bearMedian = SwingMetrics.median(returnDeltas(bearMetrics!!, p, baseline)),
+                mddMedianDelta = SwingMetrics.median(mddDeltas(select, p, baseline)),
+                worstMdd = s.worstMdd,
+                trades = s.trades,
+                exposure = s.exposure,
+                winRate = s.winRate,
+                breakEvenWinRate = s.breakEvenWinRate,
+                priceGateShare = s.priceGateShare,
+                feeSensitivity = FEE_LEVELS.joinToString(" / ") { fee ->
+                    "%.2f".format(SwingMetrics.median(returnDeltas(feeRuns.getValue(fee)!!, p, baseline)))
+                },
+                plateauRatio = grid.neighbours(p).let { n -> if (n.isEmpty()) 0.0 else n.count { it in g1Pass }.toDouble() / n.size },
+            )
+        }
+
+        val report = StrategySearchReport.render(
+            title = "Stage A — 진입·청산 파라미터 스윕 (yearly fixture, 2025-09-03~2026-09-02)",
+            nominalConfigs = points.size,
+            uniqueBehaviours = unique.size,
+            eliminations = eliminations,
+            survivors = survivors,
+            nullSummary = nullSummary,
+            metadata = metadata,
+        )
+        return Outcome(report, survivors, points.size, unique.size, eliminations)
+    }
+
+    /**
+     * null 대조군 — 진입 신호를 무작위로 바꾼 뒤 **같은 exit 그리드**를 뒤진다. 각 seed 가 곧 한 번의 탐색이고,
+     * seed 별 최고 선택창 delta(max-statistic)의 분포가 "잡음만 있을 때 이 정도는 나온다"의 기준선이다.
+     *
+     * 실제 탐색은 전략×kValue 13조합 × exit 3,960 = 51,480 좌표이고 seed 하나는 3,960 좌표뿐이다. 즉 seed 단위
+     * max-statistic 은 실제 탐색보다 **좁은** 탐색의 값이므로, 13배 넓은 탐색의 95% 분위는
+     * `q(0.95^(1/13)) ≈ q(0.9961)` 로 환산해 함께 보고한다(경험 분포의 사실상 최댓값).
+     */
+    suspend fun runNull(
+        yearly: Map<String, List<Candle>>,
+        seeds: List<Int>,
+        entryRate: Double,
+        log: (String) -> Unit = {},
+    ): StrategySearchReport.NullSummary {
+        val exitGrid = SweepGrid(
+            StrategySearchGrid.stageA().points
+                .filter { it.strategy == StrategySearchGrid.BASELINE_STRATEGY && it.kValue == 0.5 }
+                .map { it.copy(strategy = RandomEntryStrategy.NAME) },
+        )
+        val baseline = StrategySearchGrid.baselinePoint().copy(strategy = RandomEntryStrategy.NAME)
+        val maxStats = ArrayList<Double>(seeds.size)
+        var anyPass = 0
+        var passTotal = 0
+
+        for (seed in seeds) {
+            val options = StrategySearch.Options(strategyFor = { market -> RandomEntryStrategy(seed, market, entryRate) })
+            val select = search.measure(yearly, StrategySearch.SELECT, exitGrid.points, options)
+            val g1Pass = exitGrid.points.filter { StrategySearchGates.g1(returnDeltas(select, it, baseline)) }.toHashSet()
+            val alive = exitGrid.points.filter { p ->
+                val m = select.getValue(p)
+                StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) &&
+                    p in g1Pass &&
+                    StrategySearchGates.plateau(exitGrid.neighbours(p), g1Pass) &&
+                    StrategySearchGates.g6(mddDeltas(select, p, baseline), m.worstMdd, select.getValue(baseline).worstMdd)
+            }
+            val validate = measureIfAny(yearly, StrategySearch.VALIDATE, alive, baseline, options)
+            val passed = alive.count { p -> validate?.let { StrategySearchGates.g2(returnDeltas(it, p, baseline)) } ?: false }
+            maxStats += exitGrid.points.maxOf { SwingMetrics.median(returnDeltas(select, it, baseline)) }
+            if (passed > 0) anyPass++
+            passTotal += passed
+            log("[null] seed=$seed 통과 $passed · max-stat %.2f".format(maxStats.last()))
+        }
+
+        val sorted = maxStats.sorted()
+        return StrategySearchReport.NullSummary(
+            seeds = seeds.size,
+            gridSize = exitGrid.points.size,
+            anyPassRate = anyPass.toDouble() / seeds.size,
+            meanPassCount = passTotal.toDouble() / seeds.size,
+            maxStatQ95 = quantile(sorted, 0.95),
+            maxStatQ99 = quantile(sorted, Math.pow(0.95, 1.0 / 13.0)),
+            entryRate = entryRate,
+        )
+    }
+
+    private suspend fun measureIfAny(
+        fixtures: Map<String, List<Candle>>,
+        segment: StrategySearch.Segment,
+        alive: List<SweepPoint>,
+        baseline: SweepPoint,
+        options: StrategySearch.Options = StrategySearch.Options(),
+    ): Map<SweepPoint, StrategySearch.Metrics>? {
+        if (alive.isEmpty()) return null
+        return search.measure(fixtures, segment, (alive + baseline).distinct(), options)
+    }
+
+    private fun returnDeltas(
+        metrics: Map<SweepPoint, StrategySearch.Metrics>,
+        point: SweepPoint,
+        baseline: SweepPoint,
+        markets: List<String>? = null,
+    ): List<Double> {
+        val candidate = metrics.getValue(point).returnByMarket.filterKeys { markets == null || it in markets }
+        val base = metrics.getValue(baseline).returnByMarket.filterKeys { markets == null || it in markets }
+        return StrategySearchGates.pairedDeltas(candidate, base)
+    }
+
+    private fun mddDeltas(
+        metrics: Map<SweepPoint, StrategySearch.Metrics>,
+        point: SweepPoint,
+        baseline: SweepPoint,
+    ): List<Double> = StrategySearchGates.pairedDeltas(
+        metrics.getValue(point).mddByMarket,
+        metrics.getValue(baseline).mddByMarket,
+    )
+
+    private fun quantile(sorted: List<Double>, q: Double): Double {
+        if (sorted.isEmpty()) return Double.NaN
+        val idx = ((sorted.size - 1) * q).toInt().coerceIn(0, sorted.size - 1)
+        return sorted[idx]
+    }
+
+    companion object {
+        /** G7 비용 민감도 — 왕복 0.2% / 0.4%. 거래가 잦은 후보의 우위가 비용에서 오는지 본다. */
+        val FEE_LEVELS = listOf(0.001, 0.002)
+    }
+}

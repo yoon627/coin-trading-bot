@@ -42,9 +42,9 @@ class YearlyStrategyComparisonTest {
         // 100 → 보유 중 80 까지 눌렸다 105 에 청산: 청산 시점만 보는 엔진 MDD 는 0, 봉단위 equity 는 −20.
         val closes = listOf(100.0, 100.0, 80.0, 105.0)
         val trades = listOf(BacktestTrade(buyIndex = 1, sellIndex = 3, buyPrice = 100.0, sellPrice = 105.0, pnlPercent = 4.9, holdDays = 2, reason = "TAKE_PROFIT"))
-        val curve = YearlyStrategyComparison.swingEquityCurve(closes, trades)
+        val curve = SwingMetrics.swingEquityCurve(closes, trades)
         assertEquals(listOf(100.0, 99.9, 79.9, 104.9), curve.map { Math.round(it * 10) / 10.0 })
-        assertEquals(20.1, YearlyStrategyComparison.maxDrawdownPct(curve), 1e-9)
+        assertEquals(20.1, SwingMetrics.maxDrawdownPct(curve), 1e-9)
     }
 
     @Test
@@ -54,9 +54,9 @@ class YearlyStrategyComparisonTest {
             BacktestTrade(buyIndex = 1, sellIndex = 3, buyPrice = 100.0, sellPrice = 105.0, pnlPercent = 4.9, holdDays = 2, reason = "TAKE_PROFIT"),
             BacktestTrade(buyIndex = 3, sellIndex = 4, buyPrice = 105.0, sellPrice = 110.0, pnlPercent = 4.66, holdDays = 1, reason = "END"),
         )
-        val curve = YearlyStrategyComparison.swingEquityCurve(closes, trades)
+        val curve = SwingMetrics.swingEquityCurve(closes, trades)
         assertEquals(104.8, curve[3], 1e-9, "청산 봉에 다음 거래의 미실현(0 − 수수료)이 실린다")
-        assertEquals(YearlyStrategyComparison.EQUITY_BASE + 4.9 + 4.66, curve.last(), 1e-9)
+        assertEquals(SwingMetrics.EQUITY_BASE + 4.9 + 4.66, curve.last(), 1e-9)
     }
 
     @Test
