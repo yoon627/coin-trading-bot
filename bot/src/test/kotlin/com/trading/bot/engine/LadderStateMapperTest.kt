@@ -78,11 +78,23 @@ class LadderStateMapperTest {
 
     @Test
     fun `consistent state is left alone`() {
-        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 90.0, holdVolume = 500.0, rungsFilled = 2, lastActionPrice = 85.0)
+        // 원가 45,000 = 3단(20,000 단위 올림). 기준가는 건드리지 않는다.
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 90.0, holdVolume = 500.0, rungsFilled = 3, lastActionPrice = 85.0)
 
         assertNull(LadderStateMapper.reconcile(state, params, price = 88.0))
-        assertEquals(2, state.rungsFilled)
+        assertEquals(3, state.rungsFilled)
         assertEquals(85.0, state.lastActionPrice)
+    }
+
+    @Test
+    fun `a manual add-on buy raises the rung count so the next sell is not a final sell`() {
+        // 1단(20,000) 위에 40,000 을 수동 매수 — 1단으로 두면 다음 상승에 60,000 전량이 isFinal 로 나간다.
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 600.0, rungsFilled = 1, lastActionPrice = 100.0)
+
+        val note = LadderStateMapper.reconcile(state, params, price = 100.0)
+
+        assertNotNull(note)
+        assertEquals(3, state.rungsFilled)
     }
 
     @Test

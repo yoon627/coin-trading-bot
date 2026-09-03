@@ -93,14 +93,21 @@ class PositionManager(
     private fun ourSellLockCeiling(state: TradingState): Double =
         if (state.pendingSellUuid == null) 0.0 else state.pendingSellVolume ?: Double.POSITIVE_INFINITY
 
-    suspend fun syncPosition(ticker: String, state: TradingState) {
+    /**
+     * @param clearWhenEmpty 확인된 무잔고를 포지션 해제로 반영한다. 기본 false — 스윙은 감사 기록 없는 청산을 막기 위해
+     *   phantom 정리를 `sell()` 에 맡기지만, 적립의 주기 동기화는 수동 전량 매도 뒤에도 장부가 "보유"로 남아
+     *   다음 하락에 추가 단을 사 버리므로 여기서 내려야 한다(사다리 장부는 매퍼가 이어서 비운다).
+     */
+    suspend fun syncPosition(ticker: String, state: TradingState, clearWhenEmpty: Boolean = false) {
         try {
             val account = findAccount(ticker.substringAfter("-"))
+            var heldNow = 0.0
             if (account != null) {
                 // free 만 보면 안 된다 — 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 가 0 이다.
                 // 그걸 "보유 없음" 으로 동기화하면 손절·익절이 한 번도 평가되지 않는 무방비 보유가 되고,
                 // boughtToday 가 풀리는 순간 그 위에 추가 매수까지 들어간다.
                 val held = heldVolume(account, ourSellLockCeiling(state))
+                heldNow = held
                 if (held > 0.0) {
                     state.position = true
                     state.avgBuyPrice = account.avgBuyPriceDouble()
@@ -121,6 +128,12 @@ class PositionManager(
                     state.unsynced = true
                     return
                 }
+            }
+            if (clearWhenEmpty && heldNow <= 0.0 && state.position) {
+                log.warn("Position for {} is gone on the exchange (manual sell?) — clearing holdings", ticker)
+                state.position = false
+                state.holdVolume = 0.0
+                state.avgBuyPrice = 0.0
             }
             // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
             state.unsynced = false

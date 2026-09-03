@@ -31,7 +31,7 @@
 - **dispatch**: `TradingEngine.processTicker` 는 공용 preamble(가격·unsynced·pendingPersist·pendingBuy/Sell reconcile) 뒤 `profileOf(ticker)` 로 `runSwing`/`runAccumulate` 를 가른다. 트레일링 고점 flush 는 SWING 만, 무포지션 고점 flush 는 ACCUMULATE 만.
 - **원자성**: 사다리 장부(`rungsFilled`·`lastActionPrice`)는 `commitFillAndApply` 의 전이 람다 안에서만 바뀐다. 커밋 밖에서 바꾸면 크래시 창에서 같은 단을 다시 산다.
 - **체결 비율**: 매수는 체결이 있으면 한 단(시장가 매수는 잔량 환불로 종결되고, 미달을 안 세면 다음 tick 의 원가 기반 정합이 다시 한 단으로 복원해 모순), 매도는 `pendingSellVolume` 대비 90% 이상 체결일 때만 한 단 소모. 미달이면 rung 유지, 잔량은 다음 tick 재평가 — 예산 실측 게이트가 과투입을 막는다.
-- **주기 재동기화**: 적립 티커는 60초마다 `syncPosition` 으로 잔고·평단을 다시 읽는다(수동 매매 반영). 추가 단 체결 뒤 계좌를 못 읽으면 체결분 + 주문 전 보유량으로 반영.
+- **주기 재동기화**: 적립 티커는 60초마다 `syncPosition(clearWhenEmpty=true)` 으로 잔고·평단을 다시 읽고 확인된 무잔고는 포지션 해제로 반영한다(수동 매매 반영). dormant 행 계좌 조회 실패는 09:00 갱신 때 재시도. 추가 단 체결 뒤 계좌를 못 읽으면 체결분 + 주문 전 보유량으로 반영.
 - **잔고 복원**: getOrder 장애 시 주문 전 보유량(`pending_buy_prior_volume`)을 넘는 증분만 체결로 인정 — 추가 단은 주문 전부터 코인이 있어 잔고 존재만으로는 판정할 수 없다.
 - **재시작·기동 갱신**: auto 면 `start()` 가 durable 행 중 보유·pending 흔적이 있는 것을 활성에 싣고, 흔적 없는 행은 `runLoop` 초입에서 계좌 1회 조회로 실잔고가 있는 것만 되살려 자동 선정 티커의 보유·pending 이 보호 집합에 들어가게 한다(무포지션 잔재는 첫 갱신에서 제거). 기동 시 갱신 실패는 `runLoop` 복구 경계 안에서 흡수, 복원된 상태에는 `resetDaily` 적용.
 - **첫 선정 전 진입 없음**: auto 면 `swingUniverse` 는 빈 집합으로 시작 — 선정 실패 중 durable 잔재가 진입하지 못하게. 보호 집합에 `unsynced` 포함(보유 여부 미확인).
@@ -39,7 +39,7 @@
 - **유니버스 잔류 티커**: 보유 때문에 목록에 남은 티커는 청산 뒤 새로 사지 않는다(`swingUniverse` 밖이면 진입 차단) — 잔류의 의미는 "청산될 때까지"다.
 - **매도 전이 단일화**: 즉시 done·reconcile 부분·reconcile 전량·잔고 복원 4경로가 `sellTransition()` 하나를 쓴다. 갈라지면 어느 한 경로에서 rung 이 안 줄어 같은 단을 반복 매도한다.
 - **진입점 분리**: `buy()`(5중 가드 + investRatio 사이징 − reservedKrw) / `buyRung()`(`position` 가드만 제외, 주문 직전 거래소 재측정으로 예산 판정). 플래그로 가드를 우회하지 않는다.
-- **정합**: `LadderStateMapper.reconcile` 를 매 tick(정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다) — `hold>0 && rungs==0` → 실측 원가로 rung 추정 + `lastActionPrice=avg`(컷오버 편입), `hold<=0 && rungs>0` → 비움 + `flatPeak` 현재가 재앵커(수동 청산 추정), `rungs > ceil(원가/단당)` → 원가가 감당하는 단수로 하향(부분 매도 누적), `flatPeak==0` → 현재가. 런타임에 장부와 잔고가 갈라져도(부분체결·수동 매매) 다음 tick 에 스스로 맞춘다.
+- **정합**: `LadderStateMapper.reconcile` 를 매 tick(정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다) — `hold>0 && rungs==0` → 실측 원가로 rung 추정 + `lastActionPrice=avg`(컷오버 편입), `hold<=0 && rungs>0` → 비움 + `flatPeak` 현재가 재앵커(수동 청산 추정), `rungs != ceil(원가/단당)` → 원가가 말하는 단수로 조정(부분 매도 누적·수동 추가 매수), `flatPeak==0` → 현재가. 런타임에 장부와 잔고가 갈라져도(부분체결·수동 매매) 다음 tick 에 스스로 맞춘다.
 - **현금 경쟁**: `reservedKrw = Σ max(0, budget − avg×hold)` 를 스윙 사이징에서 뺀다. 단 skip 사유는 `TradingState.accumulateSkipReason` → `/api/bot/status.positions[].accumulate_skip`.
 - **기록**: BUY 는 기존 스냅샷 규약, SELL 은 `reason=ACCUMULATE_STEP`·`strategy=accumulate`·`volume=판 수량`. 리더보드 집계는 accumulate 행 제외.
 - **durable(V23)**: `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`. 잔고·평단은 종전대로 거래소 복원.

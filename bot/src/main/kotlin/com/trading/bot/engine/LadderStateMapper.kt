@@ -44,12 +44,12 @@ object LadderStateMapper {
                 state.flatPeak = price
                 "장부 ${had}단인데 거래소 잔고 없음 — 수동 청산으로 보고 사다리를 비운다"
             }
-            holding && state.rungsFilled > rungCapByCost(state, params) -> {
-                // 90% 미만 부분 매도가 반복되면 잔고는 줄어도 rung 이 안 줄어 단당 매도 대금이 최소주문 아래로 내려간다 —
-                // 남은 원가가 감당하는 단수로 내린다.
+            holding && state.rungsFilled != rungsByCost(state, params) -> {
+                // 장부는 원가의 함수여야 한다. 90% 미만 부분 매도가 반복되면 잔고는 줄어도 rung 이 안 줄어 단당 매도 대금이
+                // 최소주문 아래로 내려가고, 수동 추가 매수로 원가가 늘면 rung 이 모자라 다음 상승에 전량(isFinal)이 나간다.
                 val had = state.rungsFilled
-                state.rungsFilled = rungCapByCost(state, params)
-                "장부 ${had}단이 남은 원가(%.0f원)보다 많음 — ${state.rungsFilled}단으로 하향".format(state.avgBuyPrice * state.holdVolume)
+                state.rungsFilled = rungsByCost(state, params)
+                "장부 ${had}단이 원가(%.0f원)와 맞지 않음 — ${state.rungsFilled}단으로 조정".format(state.avgBuyPrice * state.holdVolume)
             }
             else -> {
                 if (!holding && state.flatPeak <= 0.0) state.flatPeak = price
@@ -58,8 +58,9 @@ object LadderStateMapper {
         }
     }
 
-    // 원가 / 단당 금액의 올림. 정상 분할 매도는 원가를 정확히 1/n 씩 줄이므로 부동소수 오차만큼 여유를 둔다.
-    private fun rungCapByCost(state: TradingState, params: LadderParams): Int =
+    // 원가 / 단당 금액의 올림. 단 매수는 매번 단당 KRW 를 쓰고 분할 매도는 원가를 정확히 1/n 씩 줄이므로 정상 경로에서는
+    // 항상 장부와 같다 — 수수료·부동소수 오차만큼 여유를 둔다.
+    private fun rungsByCost(state: TradingState, params: LadderParams): Int =
         ceil(state.avgBuyPrice * state.holdVolume / params.rungAmountKrw - COST_TOLERANCE_RUNGS).toInt().coerceIn(1, params.maxRungs)
 
     private const val COST_TOLERANCE_RUNGS = 0.05

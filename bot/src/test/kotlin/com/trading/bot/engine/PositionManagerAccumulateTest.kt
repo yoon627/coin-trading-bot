@@ -214,6 +214,20 @@ class PositionManagerAccumulateTest {
         assertNull(state.pendingBuyUuid)
     }
 
+    @Test
+    fun `syncPosition with clearWhenEmpty drops a position the exchange no longer holds`() = runTest {
+        // 수동 전량 매도 뒤 — 장부가 "보유"로 남으면 다음 하락에 추가 단을 사 청산을 되돌린다. 스윙 기본 경로는 그대로.
+        coEvery { upbitClient.getAccounts() } returns listOf(krw("300000"))
+        val ladder = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, rungsFilled = 3)
+        manager.syncPosition("KRW-BTC", ladder, clearWhenEmpty = true)
+        assertFalse(ladder.position)
+        assertEquals(0.0, ladder.holdVolume)
+
+        val swing = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001)
+        manager.syncPosition("KRW-BTC", swing)
+        assertTrue(swing.position)
+    }
+
     // --- sellVolume ---
 
     private fun holding4() = TradingState(

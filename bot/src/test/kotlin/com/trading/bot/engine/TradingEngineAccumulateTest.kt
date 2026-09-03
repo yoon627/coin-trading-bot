@@ -85,8 +85,8 @@ class TradingEngineAccumulateTest {
         engine.processTicker("KRW-BTC", state, strategy)
         engine.processTicker("KRW-BTC", state, strategy)
 
-        // 첫 tick 에 1회, 그 뒤 60초 안에는 재조회하지 않는다.
-        coVerify(exactly = 1) { positionManager.syncPosition("KRW-BTC", state) }
+        // 첫 tick 에 1회(확인된 무잔고는 포지션 해제로 반영), 그 뒤 60초 안에는 재조회하지 않는다.
+        coVerify(exactly = 1) { positionManager.syncPosition("KRW-BTC", state, clearWhenEmpty = true) }
     }
 
     @Test
@@ -137,10 +137,9 @@ class TradingEngineAccumulateTest {
         assertEquals(3, state.rungsFilled)
         assertEquals(90.0, state.lastActionPrice)
 
-        // 원가가 감당하는 범위(45,000 → 최대 3단) 안의 값은 이후 tick 이 덮지 않는다.
-        state.rungsFilled = 2
+        // 원가(45,000 → 3단)와 맞는 장부는 이후 tick 이 건드리지 않는다.
         engine.processTicker("KRW-BTC", state, strategy)
-        assertEquals(2, state.rungsFilled)
+        assertEquals(3, state.rungsFilled)
     }
 
     @Test
