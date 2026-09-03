@@ -18,7 +18,7 @@ updated: 2026-09-03
 
 # Next
 
-- PR 머지로 종료(머지 거부 시 in_progress 복구).
+- PR #165 머지로 종료(머지 거부 시 in_progress 복구).
 
 # Decisions
 
