@@ -31,5 +31,12 @@ data class TradingStateEntity(
     val reconcileFailureCount: Int = 0,
     val pendingSellSince: java.time.Instant? = null,
     val pendingSellAlerted: Boolean = false,
+    val rungsFilled: Int = 0,
+    val lastActionPrice: Double = 0.0,
+    val flatPeak: Double = 0.0,
+    val pendingBuyTriggerPrice: Double? = null,
+    val pendingBuyPriorVolume: Double? = null,
+    val pendingSellTriggerPrice: Double? = null,
+    val pendingSellPriorVolume: Double? = null,
     val updatedAt: Instant = Instant.now(),
 )

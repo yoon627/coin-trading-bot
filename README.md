@@ -11,6 +11,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 - 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
 - 7개 스윙 전략 기반 자동매매 및 수동 주문
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
+- 메이저 코인용 적립 프로파일(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만) 및 알트 유니버스 자동 선정 — 둘 다 기본 off
 - 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
 - 같은 전략 구현을 재사용하는 백테스트
 - JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting
@@ -177,6 +178,27 @@ coin-trading-bot/
 > (앱이 부팅 시 경고를 남깁니다). 지금은 익절 5% / 트레일링 폭 2% / 활성 3%로, 고점이 +3%를 넘긴 뒤
 > 고점 대비 2% 밀리면 트레일링이 청산합니다. 값을 바꿀 때 이 대소 관계를 깨지 않도록 주의하세요.
 
+### 적립 프로파일 (메이저 코인용, 기본 off)
+
+`TRADING_ACCUMULATE_TICKERS` 에 적은 티커는 위 스윙 규칙 대신 **사다리**로 매매합니다. 손절·익절·트레일링·최대 보유 기간이 전부 적용되지 않고, 리스크 상한은 코인당 예산 하나입니다. 상장폐지 위험이 낮은 메이저(BTC·ETH·XRP·SOL)를 전제로 설계했으며 알트에는 권하지 않습니다.
+
+| 규칙 | 동작 | 환경변수(기본값) |
+|---|---|---|
+| 단당 금액 | 예산 ÷ 단수. 5,000원 미만이면 기동 거부 | `TRADING_ACCUMULATE_BUDGET_KRW`(100000), `TRADING_ACCUMULATE_MAX_RUNGS`(5) |
+| 첫 진입 | 무포지션 구간 고점 대비 `STEP_DOWN` % 눌림 | `TRADING_ACCUMULATE_STEP_DOWN_PCT`(3.0) |
+| 추가 매수 | 마지막 체결 기준가 대비 `STEP_DOWN` % 하락마다 한 단, 예산(거래소 실측 원가)까지 | 위와 동일 |
+| 부분 매도 | 평단 또는 직전 매도가 대비 `STEP_UP` % 상승마다 보유의 1/단수 매도 | `TRADING_ACCUMULATE_STEP_UP_PCT`(3.0) |
+
+- **켜는 순간 편입**: 같은 티커를 이미 스윙으로 보유 중이면 그 보유가 실측 원가 기준 N단으로 사다리에 편입됩니다(로그 WARN).
+- **끄기**: 값을 비우고 재기동합니다. 남은 포지션은 즉시 스윙 규칙(손절 −5%·09:00 청산)을 받으므로, 끄기 전에 수동 정리하거나 그 결과를 감수해야 합니다.
+- **현금 경쟁**: 적립이 아직 투입하지 않은 예산은 스윙 매수 사이징에서 미리 빠집니다. 적립 단이 예산·KRW 부족으로 건너뛰어지면 `/api/bot/status` 의 `accumulate_skip` 에 사유가 보입니다.
+- **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다(리더보드 집계에서는 제외). 손익은 `pnl_amount`(원)로 읽으세요.
+- **백테 근거**: 2026-09 fixture(하락장 4·상승장 3)에서 후보 기본값은 "하락장에서 단순 보유보다 덜 잃고(−20% vs −29%), 상승장에서 훨씬 덜 번다(+27% vs +96%)"는 프로파일을 보였습니다. 수익성 우월의 근거가 아니라 성격 확인입니다(`AccumulateBacktestTest`).
+
+### 알트 유니버스 자동 선정 (기본 off)
+
+`TRADING_UNIVERSE_AUTO=true` 면 스윙 대상은 `TRADING_TICKERS` 대신 Upbit 24h 거래대금 상위 `TRADING_UNIVERSE_ALT_COUNT`(기본 8, 최대 16)개로 정해지고, 기동 시와 매 09:00 KST 에 다시 고릅니다. 투자유의 종목·페그 자산(스테이블·금 토큰)·적립 티커는 제외됩니다. 보유 중이거나 미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남고, 자동 선정 알트는 적립·보유 티커와 합쳐 20 까지만 채웁니다(적립·보유 티커 자체는 자르지 않습니다). 사용자가 UI 에서 고른 목록(`bot_state.tickers`)은 그대로 보존되므로 끄면 예전과 같이 돌아갑니다. 선정 API 가 실패하면 직전 목록을 유지합니다. 자동 선정 티커는 관심목록(`WATCHLIST_TICKERS`) 밖이면 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
+
 ## 웹 UI
 
 정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
@@ -227,6 +249,9 @@ coin-trading-bot/
 | `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
+| `TRADING_ACCUMULATE_TICKERS` | 없음(off) | 적립 프로파일로 매매할 티커. 예산·단수·간격은 [적립 프로파일](#적립-프로파일-메이저-코인용-기본-off) 참고 |
+| `TRADING_UNIVERSE_AUTO` | `false` | 알트 스윙 유니버스를 거래대금 상위로 자동 선정 |
+| `TRADING_UNIVERSE_ALT_COUNT` | `8` | 자동 선정 종목 수(1~16) |
 | `WATCHLIST_TICKERS` | 주요 KRW 종목 | 관심 목록 종목 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화 |
@@ -236,6 +261,8 @@ coin-trading-bot/
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
 
+> **적립 프로파일·자동 유니버스를 처음 켤 때** — 두 기능은 마이그레이션(V23)을 동반하며, `deploy.sh` 는 마이그레이션이 포함된 배포를 자동 롤백하지 않습니다. 켜기 전에 DB 를 수동 백업(`deploy/vultr/backup.sh` 와 별개로 `pg_dump`)하고, 문제가 생기면 이미지를 되돌리지 말고 `TRADING_ACCUMULATE_TICKERS` 를 비우고 `TRADING_UNIVERSE_AUTO=false` 로 재기동하세요(forward-off). 구버전 이미지는 V23 컬럼과 `ACCUMULATE_STEP` 사유를 모릅니다.
+>
 > **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_STRATEGY`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지).
 
 ## AWS 배포 (historical)
