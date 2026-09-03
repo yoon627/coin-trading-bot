@@ -37,5 +37,6 @@ data class TradingStateEntity(
     val pendingBuyTriggerPrice: Double? = null,
     val pendingBuyPriorVolume: Double? = null,
     val pendingSellTriggerPrice: Double? = null,
+    val pendingSellPriorVolume: Double? = null,
     val updatedAt: Instant = Instant.now(),
 )

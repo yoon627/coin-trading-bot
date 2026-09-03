@@ -179,6 +179,22 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `dormant revival is retried on the next loop when the first account lookup fails`() = runBlocking {
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-A")
+        val secondAttempt = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { positionManager.heldCurrencies() } throws RuntimeException("429") andThenAnswer { secondAttempt.complete(Unit); setOf("M") }
+        coEvery { positionManager.syncPosition("KRW-M", any()) } coAnswers { secondArg<TradingState>().position = true }
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-M" to TradingState("KRW-M")))
+        secondAttempt.await()
+        engine.stop()
+
+        assertTrue("KRW-M" in engine.getActiveTickers())
+    }
+
+    @Test
     fun `before the first successful selection no swing ticker enters, exits still run`() = runBlocking {
         // 선정 API 가 죽은 채 재시작하면 durable 잔재 전부가 활성인데, 유니버스가 "제한 없음"이면 그들이 전부 진입 대상이 된다.
         val source = mockk<UniverseSource>()

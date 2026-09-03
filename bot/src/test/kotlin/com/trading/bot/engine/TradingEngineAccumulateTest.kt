@@ -90,6 +90,21 @@ class TradingEngineAccumulateTest {
     }
 
     @Test
+    fun `a failed ladder sync is retried in the same mode instead of being marked done`() = runTest {
+        val engine = createEngine()
+        price("KRW-BTC", 100.0)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 200.0, rungsFilled = 1, lastActionPrice = 100.0)
+        // 1회차 실패(unsynced), preamble 의 일반 재동기화가 차단만 풀고, 2회차 clearWhenEmpty 동기화가 다시 돌아야 한다.
+        coEvery { positionManager.syncPosition("KRW-BTC", state, clearWhenEmpty = true) } coAnswers { state.unsynced = true } andThenAnswer { state.unsynced = false }
+        coEvery { positionManager.syncPosition("KRW-BTC", state) } coAnswers { state.unsynced = false }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 2) { positionManager.syncPosition("KRW-BTC", state, clearWhenEmpty = true) }
+    }
+
+    @Test
     fun `accumulate ticker sells a rung on a rise`() = runTest {
         val engine = createEngine()
         price("KRW-BTC", 104.0)

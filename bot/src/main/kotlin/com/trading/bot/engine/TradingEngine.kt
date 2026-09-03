@@ -250,6 +250,9 @@ class TradingEngine(
 
         while (running.get() && scope.isActive) {
             try {
+                // 기동 시 계좌 조회가 실패해 남은 dormant 행은 매 루프(tick 간격) 재시도한다 — 장애 중에만 도는 조회 1회라
+                // 부하는 무시할 수준이고, 09:00 까지 방치하면 실보유가 그동안 청산 평가를 못 받는다.
+                if (dormantStates.isNotEmpty()) reviveHeldDormantStates()
                 if (dailyResetManager.checkAndReset(states)) {
                     // 9AM 리셋(boughtToday=false)을 durable 로 flush — 리셋 직후 재시작 시 boughtToday=true 복원으로 당일 재진입이 재차단되는 것 방지.
                     states.values.forEach { positionManager.persistState(it) }
@@ -291,7 +294,12 @@ class TradingEngine(
         dormantStates = emptyMap()
         val revived = dormant.filterKeys { it.substringAfter("-") in held }
         if (revived.isEmpty()) return
-        revived.forEach { (ticker, state) -> states[ticker] = state }
+        revived.forEach { (ticker, state) ->
+            states[ticker] = state
+            // 잔고를 바로 채워야 뒤따르는 유니버스 갱신의 보호 집합(position)에 든다 — 시딩 루프는 이미 지났을 수 있다.
+            positionManager.syncPosition(ticker, state)
+            if (state.position || state.unsynced) positionManager.persistState(state)
+        }
         activeTickers = (activeTickers + revived.keys).distinct()
         log.info("Revived held tickers without entry metadata for user {}: {}", userId, revived.keys)
     }
@@ -475,9 +483,11 @@ class TradingEngine(
         // 수동 매매(/api/trade)는 TradingState 를 갱신하지 않으므로 주기적으로 계좌를 다시 읽어 장부 정합의 입력을 최신화한다.
         val now = System.currentTimeMillis()
         if (now - (ladderSyncedAtMs[ticker] ?: 0L) >= LADDER_SYNC_INTERVAL_MS) {
-            ladderSyncedAtMs[ticker] = now
             positionManager.syncPosition(ticker, state, clearWhenEmpty = true)
+            // 실패를 완료로 적으면 preamble 의 unsynced 재시도(clearWhenEmpty=false)가 차단만 풀고 옛 보유가 남아,
+            // 수동 전량 매도 직후 하락에 추가 단이 나간다 — 성공했을 때만 시각을 기록해 다음 tick 에 이 모드로 다시 읽는다.
             if (state.unsynced) return
+            ladderSyncedAtMs[ticker] = now
         }
         val params = accumulateProperties.ladderParams()
         // 매 tick 돌려도 정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다. 런타임에 장부와 잔고가 갈라지면

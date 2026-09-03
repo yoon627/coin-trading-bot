@@ -397,6 +397,39 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `the pre-sell holding floor survives a restart`() = runTest {
+        // 재시작 후 holdVolume 은 이미 과소(0.75) 동기화돼 있다 — 하한은 durable 인 주문 전 보유량(1.0)에서 와야 한다.
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.75, rungsFilled = 4, lastActionPrice = 40_000_000.0,
+            pendingSellUuid = "lag-restart", pendingSellReason = SellReason.ACCUMULATE_STEP, pendingSellVolume = 0.25,
+            pendingSellAvgPrice = 50_000_000.0, pendingSellTriggerPrice = 52_000_000.0, pendingSellPriorVolume = 1.0,
+        )
+        coEvery { upbitClient.getOrder("lag-restart") } returns Order(uuid = "lag-restart", state = "cancel", executedVolume = "0.1")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.75", locked = "0.15", avgBuyPrice = "50000000"))
+
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertEquals(0.9, state.holdVolume, 1e-12)
+        assertNull(state.pendingSellPriorVolume)
+    }
+
+    @Test
+    fun `sellVolume transitions with the truncated quantity it actually sent`() = runTest {
+        // 0.001 / 3 = 0.000333… → 주문은 "0.00033333". 기록·잔량 전이도 그 수량이어야 한다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.001", "50000000"))
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "trunc")
+        coEvery { upbitClient.getOrder("trunc") } returns Order(uuid = "trunc", state = "done", executedVolume = "0.00033333")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, rungsFilled = 3, lastActionPrice = 40_000_000.0)
+        val record = manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.001 / 3, 52_000_000.0, isFinal = false))
+
+        assertEquals("0.00033333", orderSlot.captured.volume)
+        assertEquals(0.00033333, record!!.volume)
+        assertEquals(0.001 - 0.00033333, state.holdVolume, 1e-12)
+    }
+
+    @Test
     fun `reconciled fill below ninety percent keeps the rung for the next tick`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(btc("0.001", "50000000"))
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "wait-2")

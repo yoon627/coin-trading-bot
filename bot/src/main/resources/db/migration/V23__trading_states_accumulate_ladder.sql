@@ -7,4 +7,5 @@ ALTER TABLE trading_states
     ADD COLUMN flat_peak DOUBLE PRECISION NOT NULL DEFAULT 0,
     ADD COLUMN pending_buy_trigger_price DOUBLE PRECISION,
     ADD COLUMN pending_buy_prior_volume DOUBLE PRECISION,
-    ADD COLUMN pending_sell_trigger_price DOUBLE PRECISION;
+    ADD COLUMN pending_sell_trigger_price DOUBLE PRECISION,
+    ADD COLUMN pending_sell_prior_volume DOUBLE PRECISION;

@@ -674,8 +674,9 @@ class PositionManager(
             if (action.isFinal) {
                 SellQuantity(account.balance, sellable)
             } else {
-                val volume = minOf(action.volume, sellable)
-                SellQuantity(formatVolume(volume), volume)
+                // 주문 문자열은 8자리로 절삭된다 — 장부·기록·최소주문 검사도 실제로 보낸 그 수량을 써야 맞는다.
+                val orderVolume = formatVolume(minOf(action.volume, sellable))
+                SellQuantity(orderVolume, orderVolume.toDouble())
             }
         }
 
@@ -764,6 +765,9 @@ class PositionManager(
         state.pendingSellVolume = qty.volume
         state.pendingSellAvgPrice = state.avgBuyPrice
         state.pendingSellTriggerPrice = triggerPrice
+        // 주문 전 free 보유량 — 부분 체결 뒤 unlock 지연으로 거래소 잔량이 과소일 때의 하한. 재시작하면 holdVolume 이
+        // 이미 과소 동기화되므로 durable 로 남긴다.
+        state.pendingSellPriorVolume = sellable
         return try {
             // 매수판과 동일 — 주문 접수 후 체결확인·상태반영은 취소돼도 원자 완주해야 청산 기록이 유실되지 않는다.
             withContext(NonCancellable) {
@@ -816,8 +820,9 @@ class PositionManager(
                 // 적립은 잔량이 곧 다음 단의 분모다. 취소된 미체결 잔량의 unlock 이 늦으면 거래소 기준이 과소(free 0.75 +
                 // locked 0.15 → 0.75)라 원가 정합이 rung 을 조기에 줄인다 — 주문 전 보유 − 체결량을 하한으로 둔다(60초 주기
                 // 동기화가 이후 실측으로 다시 맞춘다). 스윙은 종전 규칙 그대로.
-                val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && state.holdVolume > 0.0) {
-                    maxOf(exchangeRemaining, state.holdVolume - executed)
+                val priorVolume = state.pendingSellPriorVolume ?: state.holdVolume
+                val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && priorVolume > 0.0) {
+                    maxOf(exchangeRemaining, priorVolume - executed)
                 } else {
                     exchangeRemaining
                 }
