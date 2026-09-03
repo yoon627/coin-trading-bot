@@ -71,3 +71,16 @@ python3 scripts/collect_backtest_fixtures.py --write     # fixture 파일까지 
 (2026-08-18 09:00~2026-08-19 09:00)이 형성 중인 미완성 봉이었다. 구간 끝 다음날 09:00 KST 이후에 받는다.
 
 구간이 달라지면 `KneeStrategyComparisonTest` 의 수치도 달라진다 — 결과를 인용할 때는 수집일을 함께 적는다.
+
+## `yearly/` — 운영 티커 8종의 최근 1년 (국면 fixture 와 별개)
+
+| 항목 | 값 |
+|---|---|
+| 마켓 | `KRW-BTC` `KRW-ETH` `KRW-XRP` `KRW-SOL` `KRW-DOGE` `KRW-ADA` `KRW-AVAX` `KRW-LINK` — 수집일의 `deploy/vultr/.env` `TRADING_TICKERS`(사용자 지정, 시점 중립 선정 아님) |
+| 구간 | 2025-09-03 ~ 2026-09-02, 365봉(최신순), 결측 0 |
+| 수집 | 2026-09-03, `python3 scripts/collect_yearly_fixtures.py --write` — 요청당 200봉 상한이라 `to` 로 2회 페이징, 종료일은 스크립트 상수 `END_DATE`(재현성) |
+| 용량 | ≈540KB(8파일) |
+| 로더 | `YearlyFixtures`(테스트 소스). `BacktestFixtures.Regime` 에 얹지 않는다 — 그 enum 을 순회하는 기존 측정의 모집단이 바뀐다 |
+| 소비자 | `YearlyStrategyComparisonTest` — `RUN_YEARLY_COMPARE=true` 로 전체 비교, 결과는 `bot/build/reports/yearly-strategy-comparison.md`. wiki `query/yearly-strategy-comparison` |
+
+한계: 이 8종은 지난 1년을 **살아남아 운용 중인** 종목이라 생존편향이 있고(그해 상장폐지·이탈 종목은 표본 밖), 상관이 높아 실효 독립 표본은 2~3 이다. 이 구간은 8종 전부 −36~−72% 인 단일 하락 국면이다.

@@ -123,3 +123,7 @@ fixture 를 `sources` 로 둔 페이지는 fixture 가 바뀌면 "현재 결과"
 | [[persistence-schema]] | V23 행, 최신 V23 |
 
 출처: 코드 실측(AccumulateLadder·AccumulateBacktest·TradingEngine·PositionManager·LadderStateMapper·UniverseSelector), V23 을 실제 Postgres 에 적용(`scripts/run-db-tests.sh` 3건/skip 0), `AccumulateBacktestTest` 격자 출력, spec `docs/superpowers/specs/2026-09-02-accumulate-ladder-design.md`. 진행 상태는 plan `2026-09-02-accumulate-profile` 소유.
+
+## [2026-09-03] query | yearly-strategy-comparison — 운영 8종 1년 전략 비교 1페이지 추가
+
+fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(재진입 2모드)·적립 사다리·단순보유를 고정 노셔널 예산 대비 순수익률·봉단위 equity MDD·노출로 비교. 출처: `YearlyStrategyComparisonTest`(`RUN_YEARLY_COMPARE=true`) 산출물, plan `2026-09-03-yearly-strategy-compare`. 진행 상태는 plan 소유.
