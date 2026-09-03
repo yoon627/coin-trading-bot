@@ -27,14 +27,22 @@ internal object StrategySearchReport {
         val plateauRatio: Double,
     )
 
-    data class NullSummary(
-        val seeds: Int,
-        val gridSize: Int,
+    data class NullVariant(
         val anyPassRate: Double,
         val meanPassCount: Double,
         val maxStatQ95: Double,
-        val maxStatQ99: Double,
+        /** 실제 탐색은 전략×kValue 13조합만큼 넓다 — 그 폭으로 환산한 95% 분위. */
+        val maxStatQ95Scaled: Double,
+    )
+
+    data class NullSummary(
+        val seeds: Int,
+        val gridSize: Int,
         val entryRate: Double,
+        /** 주 판정 — 후보만 무작위, 기준은 실제 라이브 baseline. */
+        val vsLive: NullVariant,
+        /** 진단용 — 후보·기준 둘 다 무작위. 임계로 쓰지 않는다. */
+        val vsNoise: NullVariant,
     )
 
     fun render(
@@ -88,10 +96,15 @@ internal object StrategySearchReport {
         if (nullSummary != null) {
             appendLine("## null 대조군 (무작위 진입)")
             appendLine()
-            appendLine("- seed ${nullSummary.seeds}개 × coarse grid ${nullSummary.gridSize} 좌표, 진입 확률 %.3f(= baseline 원시 신호 발생률, 근사).".format(nullSummary.entryRate))
-            appendLine("- seed 별 \"1건 이상 통과\" 비율 = %.1f%% (≈FWER), 평균 통과 수 = %.2f.".format(nullSummary.anyPassRate * 100, nullSummary.meanPassCount))
-            appendLine("- max-statistic(seed 별 최고 선택창 중앙 delta) 95%% 분위 = %.2f%%p, 99%% 분위 = %.2f%%p.".format(nullSummary.maxStatQ95, nullSummary.maxStatQ99))
-            appendLine("- **판정 규칙**: 실제 통과 후보의 선택창 중앙 delta 가 위 95%% 분위를 넘지 못하면 발견으로 보고하지 않는다.")
+            appendLine("seed ${nullSummary.seeds}개 × exit 그리드 ${nullSummary.gridSize} 좌표, 진입 확률 %.3f(= baseline 원시 신호 발생률, 근사). 진입은 `(seed, market, 봉)` 의 순수 해시라 exit config 를 바꿔도 진입 시점이 고정된다.".format(nullSummary.entryRate))
+            appendLine()
+            appendLine("| 변종 | 기준(baseline) | 1건 이상 통과한 seed | 평균 통과 수 | max-stat 95% | 13배 폭 환산 95% |")
+            appendLine("|---|---|---|---|---|---|")
+            appendLine("| **A (주 판정)** | 실제 라이브 `combined` | %.1f%% | %.2f | %.2f%%p | %.2f%%p |".format(nullSummary.vsLive.anyPassRate * 100, nullSummary.vsLive.meanPassCount, nullSummary.vsLive.maxStatQ95, nullSummary.vsLive.maxStatQ95Scaled))
+            appendLine("| B (진단용) | 같은 무작위 진입 | %.1f%% | %.2f | %.2f%%p | %.2f%%p |".format(nullSummary.vsNoise.anyPassRate * 100, nullSummary.vsNoise.meanPassCount, nullSummary.vsNoise.maxStatQ95, nullSummary.vsNoise.maxStatQ95Scaled))
+            appendLine()
+            appendLine("- **판정에 쓰는 것은 A 뿐이다.** 통과 후보의 선택창 중앙 delta 가 A 의 13배 폭 환산 95% 분위를 넘지 못하면 발견으로 보고하지 않는다.")
+            appendLine("- B 는 후보·기준이 모두 무작위라 기준 자체가 형편없고 변동이 커서 delta 분포가 부푼다 — 그 분위수를 실제 탐색의 임계로 쓰면 사과-오렌지 비교다. 게이트 스택이 순수 잡음 환경에서 어떻게 움직이는지 보여주는 진단으로만 읽는다.")
             appendLine()
         }
 

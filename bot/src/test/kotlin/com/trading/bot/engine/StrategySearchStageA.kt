@@ -137,40 +137,94 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
                 .filter { it.strategy == StrategySearchGrid.BASELINE_STRATEGY && it.kValue == 0.5 }
                 .map { it.copy(strategy = RandomEntryStrategy.NAME) },
         )
-        val baseline = StrategySearchGrid.baselinePoint().copy(strategy = RandomEntryStrategy.NAME)
-        val maxStats = ArrayList<Double>(seeds.size)
-        var anyPass = 0
-        var passTotal = 0
+        val noiseBaseline = StrategySearchGrid.baselinePoint().copy(strategy = RandomEntryStrategy.NAME)
+        val liveBaseline = StrategySearchGrid.baselinePoint()
+
+        // 라이브 baseline 은 실제 전략으로 한 번만 잰다 — null 후보를 **실제 기준**과 겨루게 하려면 이게 있어야 한다.
+        val liveSelect = search.measure(yearly, StrategySearch.SELECT, listOf(liveBaseline)).getValue(liveBaseline)
+        val liveValidate = search.measure(yearly, StrategySearch.VALIDATE, listOf(liveBaseline)).getValue(liveBaseline)
+
+        val vsLive = VariantAccumulator()
+        val vsNoise = VariantAccumulator()
 
         for (seed in seeds) {
             val options = StrategySearch.Options(strategyFor = { market -> RandomEntryStrategy(seed, market, entryRate) })
             val select = search.measure(yearly, StrategySearch.SELECT, exitGrid.points, options)
-            val g1Pass = exitGrid.points.filter { StrategySearchGates.g1(returnDeltas(select, it, baseline)) }.toHashSet()
-            val alive = exitGrid.points.filter { p ->
+
+            // 변종 A(주 판정) — 후보만 무작위, 기준은 실제 라이브 baseline. 실제 탐색이 던지는 질문과 같은 질문이다.
+            val liveDeltas = exitGrid.points.associateWith { StrategySearchGates.pairedDeltas(select.getValue(it).returnByMarket, liveSelect.returnByMarket) }
+            val liveG1 = exitGrid.points.filter { StrategySearchGates.g1(liveDeltas.getValue(it)) }.toHashSet()
+            val liveAlive = exitGrid.points.filter { p ->
                 val m = select.getValue(p)
                 StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) &&
-                    p in g1Pass &&
-                    StrategySearchGates.plateau(exitGrid.neighbours(p), g1Pass) &&
-                    StrategySearchGates.g6(mddDeltas(select, p, baseline), m.worstMdd, select.getValue(baseline).worstMdd)
+                    p in liveG1 &&
+                    StrategySearchGates.plateau(exitGrid.neighbours(p), liveG1) &&
+                    StrategySearchGates.g6(
+                        StrategySearchGates.pairedDeltas(m.mddByMarket, liveSelect.mddByMarket),
+                        m.worstMdd,
+                        liveSelect.worstMdd,
+                    )
             }
-            val validate = measureIfAny(yearly, StrategySearch.VALIDATE, alive, baseline, options)
-            val passed = alive.count { p -> validate?.let { StrategySearchGates.g2(returnDeltas(it, p, baseline)) } ?: false }
-            maxStats += exitGrid.points.maxOf { SwingMetrics.median(returnDeltas(select, it, baseline)) }
-            if (passed > 0) anyPass++
-            passTotal += passed
-            log("[null] seed=$seed 통과 $passed · max-stat %.2f".format(maxStats.last()))
+            val liveValidateRun = if (liveAlive.isEmpty()) null else search.measure(yearly, StrategySearch.VALIDATE, liveAlive, options)
+            val livePassed = liveAlive.count { p ->
+                liveValidateRun?.let {
+                    StrategySearchGates.g2(StrategySearchGates.pairedDeltas(it.getValue(p).returnByMarket, liveValidate.returnByMarket))
+                } ?: false
+            }
+            vsLive.add(livePassed, exitGrid.points.maxOf { SwingMetrics.median(liveDeltas.getValue(it)) })
+
+            // 변종 B(진단용) — 후보·기준 둘 다 무작위. 게이트 스택이 순수 잡음 환경에서 어떻게 움직이는지 보여줄 뿐,
+            // 실제 탐색의 임계로 쓰면 사과-오렌지 비교다(기준이 형편없고 변동이 커서 delta 분포가 부푼다).
+            val noiseG1 = exitGrid.points.filter { StrategySearchGates.g1(returnDeltas(select, it, noiseBaseline)) }.toHashSet()
+            val noiseAlive = exitGrid.points.filter { p ->
+                val m = select.getValue(p)
+                StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) &&
+                    p in noiseG1 &&
+                    StrategySearchGates.plateau(exitGrid.neighbours(p), noiseG1) &&
+                    StrategySearchGates.g6(mddDeltas(select, p, noiseBaseline), m.worstMdd, select.getValue(noiseBaseline).worstMdd)
+            }
+            val noiseValidate = measureIfAny(yearly, StrategySearch.VALIDATE, noiseAlive, noiseBaseline, options)
+            val noisePassed = noiseAlive.count { p -> noiseValidate?.let { StrategySearchGates.g2(returnDeltas(it, p, noiseBaseline)) } ?: false }
+            vsNoise.add(noisePassed, exitGrid.points.maxOf { SwingMetrics.median(returnDeltas(select, it, noiseBaseline)) })
+
+            log("[null] seed=$seed vsLive 통과 $livePassed(max %.2f) · vsNoise 통과 $noisePassed(max %.2f)"
+                .format(vsLive.lastMax, vsNoise.lastMax))
         }
 
-        val sorted = maxStats.sorted()
         return StrategySearchReport.NullSummary(
             seeds = seeds.size,
             gridSize = exitGrid.points.size,
-            anyPassRate = anyPass.toDouble() / seeds.size,
-            meanPassCount = passTotal.toDouble() / seeds.size,
-            maxStatQ95 = quantile(sorted, 0.95),
-            maxStatQ99 = quantile(sorted, Math.pow(0.95, 1.0 / 13.0)),
             entryRate = entryRate,
+            vsLive = vsLive.build(),
+            vsNoise = vsNoise.build(),
         )
+    }
+
+    private class VariantAccumulator {
+        private val maxStats = ArrayList<Double>()
+        private var anyPass = 0
+        private var passTotal = 0
+        var lastMax = 0.0
+            private set
+
+        fun add(passed: Int, maxStat: Double) {
+            maxStats += maxStat
+            lastMax = maxStat
+            if (passed > 0) anyPass++
+            passTotal += passed
+        }
+
+        fun build(): StrategySearchReport.NullVariant {
+            val sorted = maxStats.sorted()
+            fun q(p: Double) = if (sorted.isEmpty()) Double.NaN else sorted[((sorted.size - 1) * p).toInt().coerceIn(0, sorted.size - 1)]
+            return StrategySearchReport.NullVariant(
+                anyPassRate = anyPass.toDouble() / maxStats.size,
+                meanPassCount = passTotal.toDouble() / maxStats.size,
+                maxStatQ95 = q(0.95),
+                // 실제 탐색은 전략×kValue 13조합만큼 넓다 — 13배 넓은 탐색의 95% 분위 = q(0.95^(1/13)).
+                maxStatQ95Scaled = q(Math.pow(0.95, 1.0 / 13.0)),
+            )
+        }
     }
 
     private suspend fun measureIfAny(
