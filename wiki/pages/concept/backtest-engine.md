@@ -51,11 +51,25 @@ sources:
 - **재진입 신호 window 는 봉 `i` 를 제외**한다(`subList(max(0, i-MIN_CANDLES), i)`). 공용 `window` 는 봉 `i` 를 포함하므로 그대로 재사용하면 봉 D 종가를 보고 봉 D 시가에 사는 셈이 된다.
 - **재진입 포지션도 그 봉의 intrabar 게이트를 받는다.** 안 그러면 churn 포지션만 손절·익절 보호가 사라져 편향된다. Upbit 일봉 경계가 `T09:00:00` KST 라 봉 D 는 09:00→09:00 구간이고, 시가 재진입 포지션은 봉 D 전 구간을 실제로 겪으므로 이 평가가 옳다([[upbit-api]]).
 - **봉당 재진입 1회** (라이브 `boughtToday` 등가).
-- **기본값을 바꾸면 안 된다** — `M1ReplayBiasTest`·`ParameterSweepTest`·`/backtest` 호출자가 `BacktestConfig()` 를 쓰므로 모집단이 조용히 달라진다. `BacktestLegacyGoldenTest` 가 trade 단위로 이를 가둔다.
+- **기본값을 바꾸면 안 된다** — `M1ReplayBiasTest`·`KneeStrategyComparisonTest`·`StrategySearch`·`/backtest` 호출자가 `BacktestConfig()` 를 쓰므로 모집단이 조용히 달라진다. `BacktestLegacyGoldenTest` 가 trade 단위로 이를 가둔다.
 
 `holdLimitOnlyWhenProfitable` 은 보유상한 청산을 수익 중일 때만 내는 정책 노브다(#128 2안 측정용, 기본 off).
 
 측정 결과와 그 한계는 [[reset-churn-measurement]].
+
+## 리서치 전용 노브 (2026-09-04, 기본 off)
+
+파라미터 탐색([[parameter-search-2026-09]])을 위해 추가한 것들이다. **전부 기본값에서 기존 동작과 완전히 같고**, 라이브·`/backtest` 에는 노출하지 않는다(`StrategyController` 가 `BacktestRequest` DTO 로 필드 단위 조립).
+
+| 노브 | 의미 | 가드 |
+|---|---|---|
+| `marketFilterMaPeriod`(기본 50) | `useMarketFilter` 가 보는 MA 기간 | 엔진 window 가 50봉 고정이라 51 이상은 `init` 에서 거부 — 조용히 절삭되면 "기간을 바꿔도 같다"는 거짓 결론이 나온다 |
+| `atrStopMultiplier` / `atrTakeProfitR` | 손절선 = 진입가 − k×ATR(14), 익절선 = 진입가 + R×손절폭 | ATR 은 **진입 시점에 고정**(추적형 아님). ATR 0 이면 진입 자체를 건너뛴다(손절선이 진입가와 겹쳐 즉시 청산되는 사고 방지) |
+| `partialTakeProfitPct` / `partialTakeProfitFraction` | 1차 익절선에서 비중 f 청산, 잔여는 기존 게이트로 | 한 `BacktestTrade` 에 가중 합성해 담고 `partialFraction` 으로 표시 — 그 레코드는 `pnl ↔ 가격` 불변식을 만족하지 않는다 |
+
+임계가 산출은 `IntrabarExitModel.exitLevels()` **한 곳**에서만 한다. 부르는 쪽마다 계산하면 D1 백테와 M1 replay 가 다른 정책으로 갈라지면서 컴파일도 테스트도 통과하기 때문이다 — 그래서 `M1ReplayEngine.replayExit` 는 ATR·부분익절 config 를 `require` 로 **거부**한다(`holdLimitOnlyWhenProfitable` 과 같은 이유·같은 방식).
+
+동일봉 충돌 순서는 `트레일링 → 전량 손절 → 부분 익절 → 전량 익절 → CHART → TIME` 이다. 부분 익절을 손절보다 먼저 인정하면 high 가 익절선을·low 가 손절선을 함께 친 봉에서 pnl 이 직접 부풀려진다.
 
 스윙·적립·단순보유를 한 표에 세우려면 이 엔진의 `totalReturnPct`(all-in 복리)·MDD(청산 시점만) 대신 고정 노셔널 Σ pnl%·봉단위 equity MDD 로 재계산해야 한다 — 그 하네스와 운영 8종 1년 결과는 [[yearly-strategy-comparison]].
 

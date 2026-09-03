@@ -107,7 +107,8 @@ internal object SwingMetrics {
 /**
  * 보유 구간의 평균 투입 비중. 전량 진입·전량 청산이면 1.0 이다.
  *
- * 부분 익절(Stage B)이 들어오면 잔여 비중을 여기서 반영한다 — 안 하면 "낙폭이 작은 게 실력인지 노출이 작아서인지" 를
- * 가르는 노출 열이 부분익절 후보에서만 무의미해진다.
+ * 부분 익절이 있으면 그 시점 이후 비중이 `1−f` 이므로 평균은 그 사이 어딘가다. 거래 레코드가 **부분 체결 시점을 남기지
+ * 않으므로** 보유 구간 중간에 체결됐다고 보고 `1 − f/2` 로 근사한다. 이 근사가 없으면 부분익절 후보만 전량 보유로
+ * 계산돼 "낙폭이 작은 게 실력인지 노출이 작아서인지" 를 가르는 노출 열이 무의미해진다.
  */
-internal fun BacktestTrade.averageWeight(): Double = 1.0
+internal fun BacktestTrade.averageWeight(): Double = partialFraction?.let { 1.0 - it / 2.0 } ?: 1.0
