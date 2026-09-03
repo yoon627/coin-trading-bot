@@ -57,6 +57,8 @@ sources:
 
 측정 결과와 그 한계는 [[reset-churn-measurement]].
 
+스윙·적립·단순보유를 한 표에 세우려면 이 엔진의 `totalReturnPct`(all-in 복리)·MDD(청산 시점만) 대신 고정 노셔널 Σ pnl%·봉단위 equity MDD 로 재계산해야 한다 — 그 하네스와 운영 8종 1년 결과는 [[yearly-strategy-comparison]].
+
 ## 라이브와 다른 점 — 결과 해석 시 주의
 
 - **`useMarketFilter`(50일 MA 아래 매수 차단)는 백테 전용 opt-in** 이며 기본 off 다. 라이브 매수 경로에는 이 필터가 **없다**. 백테에서 켠 채 좋은 결과를 얻고 라이브가 같을 거라 기대하면 안 된다.

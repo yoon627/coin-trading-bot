@@ -70,6 +70,8 @@ sources:
 
 **2026-09-02 결과**(bear BTC·ETH·XRP·SOL + bull BTC·XRP·SOL, 후보 5/3/3): 하락장 중앙값 −19.9%(B&H −29.0%), 상승장 +27.3%(B&H +96.1%), worst MDD 37%, 평균 노출 0.86(보유 원가/예산). 사전 등록 규칙(상승장 > 0, 하락장 > B&H, MDD ≤ 40%)은 통과했으나 **비판별적**이었다(27/27 격자 통과 — 부분 노출 전략은 전액 B&H 보다 거의 항상 덜 잃는다). 읽을 것은 프로파일이다: 하락장에서 예산이 초반에 소진돼 손실을 그대로 맞고, 상승장에서 오를수록 팔아 B&H 의 1/3~1/4 만 먹는다. **수익성 우월의 근거가 아니다.** 격자 최적값을 기본값으로 올리지 않았다(과적합).
 
+운영 8종의 최근 1년(2025-09~2026-09, 8종 전부 −36~−72%) 실측은 [[yearly-strategy-comparison]] — 5/3/3 중앙값 −48%, 단순보유 −50%. 반등 없는 긴 하락에서는 "덜 잃는다"가 2%p 다.
+
 ## 롤백
 
 1차 경로는 **forward-off** — `TRADING_ACCUMULATE_TICKERS` 를 비우고 `TRADING_UNIVERSE_AUTO=false` 로 재기동. 이미지를 되돌리지 않는다: `deploy.sh` 는 마이그레이션 포함 배포의 자동 롤백을 막고(`MIGRATION_GATE=blocked`), 구버전은 V23 을 모르며 `pending_sell_reason=ACCUMULATE_STEP` 을 `MANUAL` 로 읽어 전량 청산으로 확정한다([[deployment-stack]]). 켜기 전 수동 `pg_dump`.
