@@ -7,8 +7,7 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "$s = git diff --cached --name-only 2>$null; if ($s -match '\\.env|\\.pem|credentials|secret') { '{\"decision\":\"block\",\"reason\":\"Sensitive file(s) (.env, .pem, credentials) detected in staged commit.\"}' }",
-            "shell": "powershell",
+            "command": "git -c \"alias.hookchk=!git diff --cached --quiet -- ':(glob,icase)**/.env*' ':(glob,icase)**/*.env' ':(glob,icase)**/*.pem' ':(glob,icase)**/*credentials*' ':(glob,icase)**/*credentials*/**' ':(glob,icase)**/*secret*' ':(glob,icase)**/*secret*/**' || { echo 'Sensitive file(s) (.env, .pem, credentials, secret) detected in staged commit.' >&2; exit 2; }\" hookchk",
             "statusMessage": "Checking for sensitive files..."
           },
           {
