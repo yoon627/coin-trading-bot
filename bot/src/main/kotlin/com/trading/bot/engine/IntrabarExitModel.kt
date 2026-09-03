@@ -7,6 +7,20 @@ import kotlin.math.max
 data class ExitDecision(val reason: String, val sellPrice: Double)
 
 /**
+ * 이 포지션의 청산 임계가. **한 곳에서만 만든다** — 임계를 부르는 쪽마다 계산하면 D1 백테와 M1 replay 가
+ * 서로 다른 정책으로 갈라지면서 컴파일도 테스트도 통과한다(이 object 가 존재하는 이유).
+ *
+ * `atrStop`/`atrTakeProfit` 이 null 이면 기존 퍼센트 게이트를 그대로 쓴다 — 퍼센트 경로의 부동소수 비교를
+ * 가격 비교로 바꾸지 않는 이유는 경계에서 결과가 달라져 기존 골든(BacktestLegacyGoldenTest)이 흔들리기 때문이다.
+ */
+data class ExitLevels(
+    val atrStopPrice: Double? = null,
+    val atrTakeProfitPrice: Double? = null,
+    val partialTakeProfitPrice: Double? = null,
+    val partialFraction: Double? = null,
+)
+
+/**
  * 백테/replay 공용 intrabar 청산 판정(#33). D1 백테(봉당 1회)와 M1 replay(보유구간 봉마다 순차)가
  * 동일 게이트식을 쓰게 해 편향 측정의 정합성을 코드 레벨에서 보장한다.
  * 라이브는 intrabar 근사를 쓰지 않으므로(10초 tick) 이 자산은 백테/replay 도메인 전용.
@@ -24,6 +38,37 @@ object IntrabarExitModel {
      *   high=low=open 으로 눌러 한도봉 open-only 특례를 재현(라이브 09:00 리셋 시 intraday 미노출).
      * @param chartExitSignal caller 가 suspend shouldSell 을 미리 평가해 주입(이 함수의 순수성 유지).
      */
+    /**
+     * 진입가와 config(+진입 시점 ATR)로 이 포지션의 임계가를 만든다.
+     *
+     * ATR 모드는 `atrStopMultiplier` 가 있을 때만이고, 그때 [entryAtr] 은 **양수여야 한다** —
+     * ATR 이 0(무변동 구간)이면 손절선이 진입가와 같아져 진입 즉시 청산되는 사고가 난다. 호출부가 그런 봉에서는
+     * 아예 진입하지 않도록 막고, 여기서는 계약으로 확인한다.
+     */
+    fun exitLevels(buyPrice: Double, config: BacktestConfig, entryAtr: Double? = null): ExitLevels {
+        val stopDistance = config.atrStopMultiplier?.let { multiplier ->
+            require(entryAtr != null && entryAtr > 0) { "ATR exit levels need a positive entry ATR, was $entryAtr" }
+            multiplier * entryAtr
+        }
+        return ExitLevels(
+            atrStopPrice = stopDistance?.let { buyPrice - it },
+            atrTakeProfitPrice = stopDistance?.let { d -> config.atrTakeProfitR?.let { buyPrice + it * d } },
+            partialTakeProfitPrice = config.partialTakeProfitPct?.let { buyPrice * (1 + it / 100.0) },
+            partialFraction = config.partialTakeProfitFraction,
+        )
+    }
+
+    /**
+     * 부분 익절이 이 봉에서 체결되는가. **전량 청산(트레일링·손절)이 먼저 판정된 뒤에만** 물어야 한다 —
+     * 같은 봉에서 high 가 부분 익절선을, low 가 손절선을 함께 건드렸을 때 부분 익절을 먼저 인정하면 pnl 이
+     * 직접 부풀려진다(기존 계약이 순서 불명 시 손절 우선인 것과 같은 이유로 보수 쪽을 택한다).
+     */
+    fun partialTakeProfitFires(bar: Ohlc, atHoldLimit: Boolean, levels: ExitLevels): Boolean {
+        val target = levels.partialTakeProfitPrice ?: return false
+        val high = if (atHoldLimit) bar.open else bar.high
+        return high >= target
+    }
+
     fun evaluate(
         bar: Ohlc,
         buyPrice: Double,
@@ -31,6 +76,7 @@ object IntrabarExitModel {
         atHoldLimit: Boolean,
         config: BacktestConfig,
         chartExitSignal: Boolean,
+        levels: ExitLevels = ExitLevels(),
     ): ExitDecision? {
         val high = if (atHoldLimit) bar.open else bar.high
         val low = if (atHoldLimit) bar.open else bar.low
@@ -45,13 +91,19 @@ object IntrabarExitModel {
 
         // 하강 경로에서 라이브가 먼저 닿는 순서: 트레일링선(>진입가>SL선) → SL. SL↔TP 는 봉 내 순서 불명이라 SL 우선.
         // CHART_EXIT 는 종가 신호(한도봉 제외 — 09:00 리셋 시점엔 그 봉 종가 미형성). TIME_EXIT 은 한도봉 open.
+        // ATR 모드면 임계가로, 아니면 기존 퍼센트 비교 그대로(부동소수 경계가 달라져 골든이 흔들리지 않게).
+        val stopHit = levels.atrStopPrice?.let { low <= it } ?: (pnlAtLow <= -config.maxLossPct)
+        val stopPrice = levels.atrStopPrice ?: buyPrice * (1 - config.maxLossPct / 100.0)
+        val takeProfitHit = levels.atrTakeProfitPrice?.let { high >= it } ?: (pnlAtHigh >= config.takeProfitPct)
+        val takeProfitPrice = levels.atrTakeProfitPrice ?: buyPrice * (1 + config.takeProfitPct / 100.0)
+
         return when {
             ExitGates.isTrailingStopTriggered(pnlAtTrailStop, armPeakPnl, dropFromArmPeakAtLow, config.trailingStopPct, config.trailingArmPct) ->
                 ExitDecision("TRAILING_STOP", trailStopPrice)
-            pnlAtLow <= -config.maxLossPct ->
-                ExitDecision("STOP_LOSS", buyPrice * (1 - config.maxLossPct / 100.0))
-            pnlAtHigh >= config.takeProfitPct ->
-                ExitDecision("TAKE_PROFIT", buyPrice * (1 + config.takeProfitPct / 100.0))
+            stopHit ->
+                ExitDecision("STOP_LOSS", stopPrice)
+            takeProfitHit ->
+                ExitDecision("TAKE_PROFIT", takeProfitPrice)
             config.chartExitEnabled && !atHoldLimit && chartExitSignal ->
                 ExitDecision("CHART_EXIT", bar.close)
             atHoldLimit ->

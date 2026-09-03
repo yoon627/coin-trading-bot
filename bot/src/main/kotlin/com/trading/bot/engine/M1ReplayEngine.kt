@@ -38,6 +38,15 @@ object M1ReplayEngine {
         require(!config.holdLimitOnlyWhenProfitable) {
             "M1 replay cannot model conditional hold limits — it only knows one boundary instant"
         }
+        // ATR 손절·부분 익절은 진입 시점 상태(진입 ATR, 부분 체결 여부)를 알아야 하는데 이 함수는 진입가만 받는다.
+        // 인자를 안 넘기면 D1 은 ATR/부분익절, M1 은 퍼센트 전량으로 **서로 다른 정책을 돌면서** 컴파일도 테스트도
+        // 통과한다 — IntrabarExitModel 이 존재하는 이유가 그것이라 조용히 갈라지느니 막는다.
+        require(config.atrStopMultiplier == null) {
+            "M1 replay cannot model ATR exits — it does not carry the entry-time ATR"
+        }
+        require(config.partialTakeProfitPct == null) {
+            "M1 replay cannot model partial take-profits — it has no partial fill state"
+        }
         var peak = entryPrice
         var seen = 0
         for (b in m1BarsAsc) {

@@ -195,6 +195,8 @@ class BacktestEngineTest {
         assertEquals(live.chartExitEnabled, bt.chartExitEnabled)
         assertEquals(live.roundTripFeeRate, bt.feeRate * 2, 1e-12) // 편도 vs 왕복 표현 차이
         assertFalse(bt.useMarketFilter) // 라이브 매수 경로에 MA50 필터 없음
+        // 이 목록은 필드 나열식이라 exhaustive 하지 않다 — 라이브 대응이 없는 리서치 노브(ATR·부분익절·필터 기간)의
+        // 기본값 off 는 BacktestResearchKnobTest 가 따로 가둔다.
         // 라이브와 **다르게** 두는 유일한 항목 — 라이브는 09:00 리셋 매도 직후 재매수가 가능한데(0공백),
         // 기본값을 그리로 바꾸면 M1ReplayBiasTest·ParameterSweepTest·/backtest 호출자의 모집단이 조용히
         // 달라진다. 전환은 라이브 변경을 결정할 때 함께 판단한다(#128). 그때까지 이 불일치를 CI 가 들고 있는다.
