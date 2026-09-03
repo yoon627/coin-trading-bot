@@ -2,9 +2,9 @@
 
 ## pre-push
 
-Gates `git push` via `codex exec review --base <base> --json` at high reasoning.
-Parses the JSONL agent_message for `- [P0]`/`- [P1]` markers. Fail-closed on
-codex errors or unparseable output. Docs-only pushes bypass.
+`deploy.yml` 의 `paths-ignore` 가 워크플로 자신을 제외하는 변경만 막는다(#151). 그 외에는 아무것도
+하지 않는다 — **codex 리뷰 게이트는 2026-09-03 에 제거**했다(경위는 wiki `prepush-codex-review`).
+코드 리뷰는 구현 직후 리뷰 단계(code-reviewer + codex 병행, 크레딧 가용 시)가 담당한다.
 
 ### Setup
 
@@ -13,29 +13,24 @@ cp scripts/git-hooks/pre-push .git/hooks/pre-push
 chmod +x .git/hooks/pre-push
 ```
 
-Or set `core.hooksPath` to point here (applies to all hooks in this dir):
-
-```bash
-git config core.hooksPath scripts/git-hooks
-```
+실행본은 untracked `.git/hooks/pre-push`(설치본), 소스는 tracked `scripts/git-hooks/pre-push`.
+**정본을 고치면 반드시 재설치한다** — 2026-07-28~09-03 사이 설치본이 정본보다 뒤처져 아래 가드가
+로컬에서 한 번도 돌지 않은 채 5주가 지났다. `.git/hooks` 는 이 clone 의 모든 worktree 가 공유하므로
+재설치는 전 worktree 에 즉시 적용된다.
 
 ### Requirements
 
-- `codex` CLI on PATH (tested against 0.116.0)
-- `python3` on PATH (JSONL parsing)
-- `perl` on PATH (codex 호출 timeout wrapper — macOS 에 `gtimeout` 부재)
-- `~/.codex/config.toml` configured (model + trust_level for this repo)
+`bash`, `git`, `awk`, `sed`, `grep` 뿐. codex·python3·perl 은 더 이상 필요 없다.
 
 ### Policy
 
 | Event | Action |
 |-------|--------|
-| `codex` finds any `- [P0]` or `- [P1]` | BLOCK push — must fix before pushing |
-| `codex` finds only `- [P2]`/`- [P3]` | BLOCK push until user re-runs with `CODEX_ACK=1 git push` (explicit review + accept) |
-| `codex` finds nothing | Allow silently |
-| `codex` exits non-zero, missing, or output unparseable | BLOCK (fail-closed) |
-| Diff touches only docs (`*.md`, `docs/`, `.claude/tasks|memory/`, etc.) | Bypass codex |
-| `deploy.yml` 의 `paths-ignore` 가 워크플로 자신을 제외 (`**`·`.github/**`·`**.yml` 등) | BLOCK — codex 와 무관하게 항상 차단 |
+| `deploy.yml` 의 `paths-ignore` 가 워크플로 자신을 제외 (`**`·`.github/**`·`**.yml` 등) | BLOCK |
+| `paths-ignore` 가 inline 형식(`paths-ignore: [ ... ]`) | BLOCK (fail-closed 는 이 한 형태만 — 아래 한계 참조) |
+| `deploy.yml` 없음 / `paths-ignore` 키 없음 | Allow |
+| ref 삭제, 새 커밋 없는 재-push | Skip |
+| 그 외 모든 push | Allow silently |
 
 `paths-ignore` 자기제외를 여기서 막는 이유: 그 패턴이 들어가면 `deploy.yml` 을 바꾸는 push 가
 워크플로 실행을 만들지 않아, 경로 목록을 강제하는 `DeployWorkflowPathListTest` 가 영영 돌지
@@ -43,79 +38,32 @@ git config core.hooksPath scripts/git-hooks
 불변식은 그 테스트가 본다 — hook 에서 gradle 을 돌리지 않는 것은 JDK 환경에 따라 `./gradlew`
 가 실패해 모든 push 를 막을 수 있기 때문이다.
 
-### Acknowledging P2/P3 findings
+**한계(pre-existing, 파서가 단순하다)**: 블록 파서는 `paths-ignore:` 바로 다음 줄부터 `- ` 항목만 읽고
+첫 비-항목 줄에서 멈춘다 — 사이에 주석·빈 줄이 있으면 뒤 항목을 못 보고 **조용히 통과**한다.
+표지 regex(`.github`·`.yml`/`.yaml`·선두 `**`)는 리터럴 매칭이라 `.git*/**` 같은 글로브는 놓치고,
+반대로 `.github/ISSUE_TEMPLATE/**` 처럼 무해한 항목도 `.github` 가 보이면 막는다(의도된 과차단).
+최종 불변식은 hook 이 아니라 `DeployWorkflowPathListTest`(PR 경로에선 항상 실행)가 지킨다.
 
-```bash
-git push                    # shows P2/P3 findings, blocks
-# review the findings, decide they're acceptable
-CODEX_ACK=1 git push        # passes P2/P3 gate; still blocks on P0/P1 and on codex errors
-```
-
-`CODEX_ACK=1` only relaxes the P2/P3 gate. P0/P1 findings and codex infrastructure failures still block unconditionally.
-
-### Emergency bypass
-
-```bash
-CODEX_SKIP=1 git push
-```
-
-Leaves an audit line in `.git/codex-pre-push/bypass.log`. Avoid in normal flow.
-The policy explicitly forbids `--no-verify` — use `CODEX_SKIP` instead so the
-bypass is visible.
-
-### codegraph MCP 비활성화 (#60)
-
-codex 호출에 `-c mcp_servers.codegraph.enabled=false` 를 준다. 이유:
-
-codex 는 리뷰마다 `codegraph serve --mcp` 를 새로 띄우는데, **Claude Code 세션도 각자 하나씩 띄운다**.
-인스턴스가 여러 개면 `codegraph_explore` 가 응답하지 않아 리뷰가 통째로 타임아웃한다(#45 에서 실측한
-근본원인이 "다중 세션 경합"이다). 아래 lock 은 **hook 끼리만** 직렬화하므로, 세션이 상시 띄워둔 서버와의
-경합은 막지 못한다 — 세션을 2개 이상 열어두면 재현된다.
-
-- codegraph 없이도 리뷰는 P0/P1 을 잡는다(실측: 같은 커밋 범위에서 P1 2건 포함 8건 검출).
-- **전역 `~/.codex/config.toml` 은 건드리지 않는다** — 다른 프로젝트·대화형 codex 의 codegraph 는 유지된다.
-- 근본 원인인 codegraph 다중 인스턴스 경합은 upstream 문제다. 거기서 고쳐지면 이 플래그를 되돌린다.
-
-### Serialization & timeout
-
-codex 동시 실행의 자원 경합을 막기 위해(원래는 codegraph 경합 방지 목적으로 도입 — #45):
-
-- **직렬화**: codex review 를 머신 단위 lock(`$TMPDIR/codex-pre-push.lock`)으로 순차 실행 —
-  다른 세션 review 중이면 대기(최대 `CODEX_LOCK_WAIT`). docs-only·`CODEX_SKIP` 은 lock 전 bypass(불필요 대기 없음).
-- **timeout**: codex 호출에 escalation timeout(`TERM`→grace→`KILL`, process group). 초과 시 exit 124
-  → BLOCK + `CODEX_SKIP` 안내. 무한 hang 을 유한화(자식이 `TERM` 을 무시해도 `KILL` 로 유한 리턴).
-
-환경변수(기본값):
-
-| var | default | 설명 |
-|-----|---------|------|
-| `CODEX_TIMEOUT` | 480 | codex 호출 상한(초) |
-| `CODEX_KILL_GRACE` | 10 | `TERM` 후 `KILL` 까지(초) |
-| `CODEX_LOCK_WAIT` | 600 | lock 획득 대기 상한(초) |
-| `CODEX_STALE_AGE` | 600 | pid 없는 lock 을 stale 로 볼 age(초) |
+새 브랜치 첫 push 는 tip 커밋의 `deploy.yml` 을 검사한다(이전 codex 게이트는 base 대비 새 커밋이
+없으면 건너뛰었는데, 이제는 `remote_sha == local_sha` 일 때만 건너뛴다).
 
 ### Rollback (hook 오동작 시)
-
-실행본은 untracked `.git/hooks/pre-push`(설치본), 소스는 tracked `scripts/git-hooks/pre-push`.
 
 ```bash
 git show <good-rev>:scripts/git-hooks/pre-push > .git/hooks/pre-push   # 이전 정상본 복구
 chmod +x .git/hooks/pre-push
-rm -rf "${TMPDIR:-/tmp}/codex-pre-push.lock"                            # 잔존 lock 정리
 ```
 
-### Known limitations (open work)
+가드 자체가 오탐이면(정당한 `.github/...` 항목) 롤백해도 같은 가드가 돌아온다 — 그때는 hook 의
+regex 를 고치고 재설치한다.
 
-| Area | Limitation | Workaround |
-|------|------------|------------|
-| Non-`origin` remotes | New-branch base resolution reads `refs/remotes/origin/HEAD` only. Pushes to other remotes may review a wider range than intended. | Push via `origin`; or set `CODEX_SKIP=1` for that push. |
-| New branch cut from non-default branch | Base may fall back to `local_sha^`, reviewing only the tip commit. | Manually run `/codex-review` before pushing branches cut from long-lived non-`main` branches. |
-| Multiple refs per push (`--all`, multiple `refspec`s) | Each ref reviewed sequentially at high reasoning — slow (1-2 min per ref). | Push refs individually. |
-| Architectural/policy rules | Codex diff review catches in-code smells but cannot enforce policy not visible in a diff (e.g., "JWT secrets must be 256-bit", "auth endpoints must have Rate Limiting"). | Document those as code comments / tests; add dedicated lints if critical. |
-| Log directory growth | `.git/codex-pre-push/*.jsonl` accumulates indefinitely. | Periodic `find .git/codex-pre-push -type f -mtime +30 -delete`. |
+codex 게이트가 있던 마지막 정본은 `ffd6ec9:scripts/git-hooks/pre-push`(2026-09-03 이전 main).
+되돌리면 `codex`·`python3`·`perl` 요구와 `CODEX_SKIP`/`CODEX_ACK` 우회, `.git/codex-pre-push/` 로그가
+함께 돌아온다.
 
-### Debugging a BLOCK
+### 제거된 codex 게이트의 잔존물 정리 (로컬, 선택)
 
-1. Find the log: `ls -lt .git/codex-pre-push/*.jsonl | head -1`
-2. Inspect the findings printed to stderr, or re-extract: `python3 -c '...'` (see extract_agent_message in the hook).
-3. If you disagree with codex's verdict, address the finding or use `CODEX_SKIP=1` and note the justification in the commit message / PR.
+```bash
+rm -rf .git/codex-pre-push                    # 리뷰 로그(*.jsonl)·bypass.log
+rm -rf "${TMPDIR:-/tmp}/codex-pre-push.lock"  # 직렬화 lock
+```

@@ -1,189 +1,19 @@
-#!/bin/bash
-# pre-push gate: runs `codex exec review --json` at high reasoning on the commits
-# being pushed. Parses the JSONL agent_message for P0/P1/P2/P3 issue markers.
+#!/usr/bin/env bash
+# pre-push: deploy.yml 의 paths-ignore 가 워크플로 자신을 제외하는 변경만 막는다(#151).
 #
-# Policy:
-#   - BLOCK if codex emits any `- [P0]` or `- [P1]` finding. Must fix before push.
-#   - BLOCK P2/P3 findings UNTIL the user explicitly acknowledges by re-running
-#     with `CODEX_ACK=1 git push`. The acknowledgement means "I reviewed the
-#     findings and accept the push as-is."
-#   - Fail-closed on codex errors or unparseable output.
-#   - Docs-only pushes bypass (strict filter: only true documentation paths).
-#   - Emergency total bypass via `CODEX_SKIP=1 git push` (audit logged, discouraged).
+# codex 리뷰 게이트는 2026-09-03 에 제거했다 — 코드 리뷰는 구현 직후 리뷰 단계
+# (code-reviewer + codex 병행)가 담당한다. 경위는 wiki `prepush-codex-review`.
 #
+# 설치: cp scripts/git-hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 # Stdin from git: <local_ref> <local_sha> <remote_ref> <remote_sha>  per ref being pushed.
 
 set -uo pipefail
 
 ZERO_SHA="0000000000000000000000000000000000000000"
-LOG_DIR="$(git rev-parse --git-dir)/codex-pre-push"
-mkdir -p "$LOG_DIR"
 
-# Emergency bypass (discouraged; leaves a log trail).
-if [ "${CODEX_SKIP:-0}" = "1" ]; then
-  ts="$(date +%Y%m%d-%H%M%S)"
-  echo "[codex-pre-push] BYPASS at $ts (CODEX_SKIP=1 set)" | tee -a "$LOG_DIR/bypass.log" >&2
-  exit 0
-fi
-
-if ! command -v codex >/dev/null 2>&1; then
-  echo "[codex-pre-push] FAIL: codex CLI not found on PATH. Fail-closed: push blocked." >&2
-  exit 1
-fi
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[codex-pre-push] FAIL: python3 not found on PATH (needed to parse JSONL)." >&2
-  exit 1
-fi
-
-# Read ref updates from stdin.
-ref_updates=""
-while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
-  [ -z "${local_ref:-}" ] && continue
-  ref_updates+="$local_ref $local_sha $remote_ref $remote_sha"$'\n'
-done
-
-if [ -z "${ref_updates// /}" ]; then
-  exit 0
-fi
-
-# Docs-only filter. INTENTIONALLY STRICT: only pure documentation extensions /
-# paths bypass the gate. CI configs (.github/workflows), shell hooks, and
-# .claude/settings.json always go through review.
-is_docs_only() {
-  local base="$1" head="$2"
-  local files
-  files="$(git diff --name-only "$base..$head")" || return 1
-  [ -z "$files" ] && return 1
-  if echo "$files" | grep -qvE '\.(md|txt|rst|adoc)$|^docs/|^\.claude/(tasks|memory)/|^CHANGELOG|^LICENSE'; then
-    return 1
-  fi
-  return 0
-}
-
-# Base-ref resolution for first push of a branch. Uses origin/HEAD (typically
-# main or master) via symbolic-ref, not a hardcoded branch name.
-resolve_new_branch_base() {
-  local local_sha="$1"
-  local default_remote_branch base
-  default_remote_branch="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
-  if [ -n "$default_remote_branch" ] && git show-ref --verify --quiet "refs/remotes/$default_remote_branch"; then
-    base="$(git merge-base "$default_remote_branch" "$local_sha" 2>/dev/null)"
-  fi
-  if [ -z "${base:-}" ]; then
-    base="$(git rev-parse "${local_sha}^" 2>/dev/null || echo "$local_sha")"
-  fi
-  echo "$base"
-}
-
-# Extract the final agent_message.text from a JSONL log file.
-# Returns empty on no message.
-extract_agent_message() {
-  local log_file="$1"
-  python3 - "$log_file" <<'PY'
-import json, sys
-path = sys.argv[1]
-last = ""
-try:
-    with open(path) as fh:
-        for line in fh:
-            try:
-                d = json.loads(line)
-            except Exception:
-                continue
-            if d.get("type") != "item.completed":
-                continue
-            item = d.get("item", {}) or {}
-            if item.get("type") == "agent_message":
-                text = item.get("text") or ""
-                if text:
-                    last = text
-except FileNotFoundError:
-    pass
-sys.stdout.write(last)
-PY
-}
-
-# --- codex review 직렬화 + timeout (codegraph MCP hang 재발방지) ---
-# 여러 worktree 세션이 동시에 push 하면 codex review 가 codegraph MCP(codegraph_explore)에서
-# 경합해 무한 hang 한다. 머신 단위 lock 으로 codex review 를 순차화(codegraph 는 유지) + 호출에
-# escalation timeout(TERM→grace→KILL) 을 씌워 hang 을 유한화한다.
-CODEX_LOCK_DIR="${TMPDIR:-/tmp}/codex-pre-push.lock"
-CODEX_TIMEOUT="${CODEX_TIMEOUT:-480}"        # codex 호출 상한(초)
-CODEX_KILL_GRACE="${CODEX_KILL_GRACE:-10}"   # TERM 후 KILL 까지 grace(초)
-CODEX_LOCK_WAIT="${CODEX_LOCK_WAIT:-600}"    # lock 획득 대기 상한(초)
-CODEX_STALE_AGE="${CODEX_STALE_AGE:-600}"    # pid 없는 lock 을 stale 로 볼 age(초)
-
-release_codex_lock() {
-  # 소유(pid) 검증 후에만 제거 — trap EXIT 가 남의 lock 을 stomp 하지 않도록.
-  if [ -f "$CODEX_LOCK_DIR/pid" ] && [ "$(cat "$CODEX_LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
-    rm -rf "$CODEX_LOCK_DIR"
-  fi
-}
-trap release_codex_lock EXIT
-
-_lock_dir_age() {
-  local mtime now
-  mtime="$(stat -f %m "$CODEX_LOCK_DIR" 2>/dev/null || stat -c %Y "$CODEX_LOCK_DIR" 2>/dev/null || echo 0)"
-  now="$(date +%s)"
-  echo $(( now - mtime ))
-}
-
-acquire_codex_lock() {
-  local waited=0 opid stale
-  while ! mkdir "$CODEX_LOCK_DIR" 2>/dev/null; do
-    # stale 판정: pid 살아있으면 유지, 죽었으면 제거. pid 없으면 age 초과 시에만 제거
-    # (갓 mkdir 된 pid-미기록 live lock 을 evict 하지 않도록 bounded grace).
-    opid="$(cat "$CODEX_LOCK_DIR/pid" 2>/dev/null || echo "")"
-    stale=0
-    if [ -n "$opid" ]; then
-      kill -0 "$opid" 2>/dev/null || stale=1
-    elif [ "$(_lock_dir_age)" -gt "$CODEX_STALE_AGE" ]; then
-      stale=1
-    fi
-    if [ "$stale" -eq 1 ]; then
-      rm -rf "$CODEX_LOCK_DIR"
-      continue   # 제거는 획득이 아니다 — mkdir 재시도 루프로 복귀
-    fi
-    if [ "$waited" -ge "$CODEX_LOCK_WAIT" ]; then
-      echo "[codex-pre-push] FAIL: could not acquire review lock within ${CODEX_LOCK_WAIT}s (held by pid ${opid:-?})." >&2
-      echo "[codex-pre-push] Another codex review is running. Retry later, or CODEX_SKIP=1 git push to bypass." >&2
-      return 1
-    fi
-    [ $(( waited % 30 )) -eq 0 ] && echo "[codex-pre-push] waiting for review lock (held by pid ${opid:-?}, ${waited}s)..." >&2
-    sleep 3
-    waited=$(( waited + 3 ))
-  done
-  echo "$$" > "$CODEX_LOCK_DIR/pid"
-  return 0
-}
-
-# codex 를 자기 process group 에서 실행하고 escalation timeout 을 건다.
-# 초과 시 TERM(-pgid) → grace → KILL(-pgid). codex 는 KILL 을 무시 못 하므로 waitpid 가
-# 유한 시간에 리턴한다(wrapper 자체가 hang 하지 않는 것이 핵심). exit 124 = timeout.
-run_codex_timeout() {
-  perl -e '
-    my ($timeout, $grace) = (shift @ARGV, shift @ARGV);
-    my $pid = fork();
-    die "fork failed: $!\n" unless defined $pid;
-    if ($pid == 0) { setpgrp(0,0); exec @ARGV; exit 127; }
-    my $timed_out = 0;
-    local $SIG{ALRM} = sub {
-      if (!$timed_out) { $timed_out = 1; kill("TERM", -$pid); alarm($grace); }
-      else { kill("KILL", -$pid); }
-    };
-    alarm($timeout);
-    waitpid($pid, 0);
-    my $rc = $? >> 8;
-    alarm(0);
-    exit(124) if $timed_out;
-    exit($rc);
-  ' "$CODEX_TIMEOUT" "$CODEX_KILL_GRACE" "$@"
-}
-
-# deploy.yml 의 paths-ignore 가 이 워크플로 파일 자신을 삼키면, 그 파일을 바꾸는 push 는
-# 워크플로 실행을 만들지 않는다 — 경로 목록을 강제하는 DeployWorkflowPathListTest 가 영영
-# 돌지 않게 되고, 검사가 자기 자신을 끈 상태가 된다(#151, codex 지적).
+# deploy.yml 의 paths-ignore 에 워크플로 파일 자신을 매칭하는 패턴이 있으면 deploy.yml 을 바꾸는
+# push 가 워크플로 실행을 만들지 않는다 — 경로 목록을 강제하는 DeployWorkflowPathListTest 가 영영
+# 돌지 않게 되고, 검사가 자기 자신을 끈 상태가 된다(#151).
 #
 # 여기서는 그 자기무력화 패턴만 본다. 목록 동기·배포 입력 같은 나머지 불변식은 그 테스트가
 # 담당한다 — hook 에서 gradle 을 돌리지 않는 이유는 JDK 환경에 따라 ./gradlew 가 실패해
@@ -194,9 +24,11 @@ guard_workflow_self_exclusion() {
 
   # inline 형식(`paths-ignore: [ ... ]`)은 아래 블록 파서가 못 읽는다. 읽을 수 없는 형식이면
   # 통과시키지 않고 막는다(fail-closed) — 파싱 실패가 곧 우회가 되면 가드가 무의미하다.
-  if printf '%s\n' "$content" | grep -qE '^ *paths-ignore: *\['; then
-    echo "[codex-pre-push] FAIL: deploy.yml 의 paths-ignore 가 inline 형식이다 — 이 가드는 블록 형식만" >&2
-    echo "[codex-pre-push]   읽는다. 블록 형식으로 두거나 scripts/git-hooks/pre-push 의 파서를 함께 고쳐라." >&2
+  # 파이프 대신 herestring: `grep -q` 가 매치 즉시 닫으면 printf 가 EPIPE(141)로 죽고 pipefail 이
+  # 조건을 거짓으로 만들어 64KB 초과 파일에서 검사가 통과돼 버린다.
+  if grep -qE '^ *paths-ignore: *\[' <<<"$content"; then
+    echo "[pre-push] FAIL: deploy.yml 의 paths-ignore 가 inline 형식이다 — 이 가드는 블록 형식만" >&2
+    echo "[pre-push]   읽는다. 블록 형식으로 두거나 scripts/git-hooks/pre-push 의 파서를 함께 고쳐라." >&2
     return 1
   fi
 
@@ -212,170 +44,31 @@ guard_workflow_self_exclusion() {
     | grep -E "(\.github|\.ya?ml|^\*\*$|^\*\*/)" || true)"
 
   if [ -n "$bad" ]; then
-    echo "[codex-pre-push] FAIL: deploy.yml 의 paths-ignore 가 워크플로 자신을 제외한다 — $bad" >&2
-    echo "[codex-pre-push]   그 패턴이 있으면 deploy.yml 을 바꾸는 push 가 CI 를 만들지 않아," >&2
-    echo "[codex-pre-push]   경로 목록 검사(DeployWorkflowPathListTest)가 영영 돌지 않는다." >&2
+    echo "[pre-push] FAIL: deploy.yml 의 paths-ignore 가 워크플로 자신을 제외한다 — $bad" >&2
+    echo "[pre-push]   그 패턴이 있으면 deploy.yml 을 바꾸는 push 가 CI 를 만들지 않아," >&2
+    echo "[pre-push]   경로 목록 검사(DeployWorkflowPathListTest)가 영영 돌지 않는다." >&2
     return 1
   fi
   return 0
 }
 
-review_ref() {
-  local local_ref="$1" local_sha="$2" remote_ref="$3" remote_sha="$4"
+check_ref() {
+  local local_ref="$1" local_sha="$2" remote_sha="$3"
 
   if [ "$local_sha" = "$ZERO_SHA" ]; then
-    echo "[codex-pre-push] $local_ref: deletion, skipping review."
+    echo "[pre-push] $local_ref: deletion, skipping."
     return 0
   fi
-
-  local base
-  if [ "$remote_sha" = "$ZERO_SHA" ]; then
-    base="$(resolve_new_branch_base "$local_sha")"
-    echo "[codex-pre-push] $local_ref: new branch, reviewing $base..$local_sha"
-  else
-    base="$remote_sha"
-    echo "[codex-pre-push] $local_ref: reviewing $base..$local_sha"
-  fi
-
-  if [ "$base" = "$local_sha" ]; then
-    echo "[codex-pre-push] $local_ref: no new commits."
+  if [ "$local_sha" = "$remote_sha" ]; then
+    echo "[pre-push] $local_ref: no new commits."
     return 0
   fi
-
-  if ! guard_workflow_self_exclusion "$local_sha"; then
-    return 1
-  fi
-
-  if is_docs_only "$base" "$local_sha"; then
-    echo "[codex-pre-push] $local_ref: docs-only push, bypassing codex review."
-    return 0
-  fi
-
-  local ts log_file
-  ts="$(date +%Y%m%d-%H%M%S)"
-  log_file="$LOG_DIR/${ts}.jsonl"
-
-  # `codex exec review --base X` diffs X against the CWD's HEAD, not against
-  # $local_sha. When the pushed ref's tip does not match the current HEAD
-  # (other-branch push, detached HEAD, worktree mismatch), the review would
-  # silently target the wrong commits. Use a throwaway detached worktree at
-  # $local_sha so codex always reviews exactly the commits being pushed.
-  local current_head review_rc worktree_dir sandbox_flag working_tree_dirty
-  current_head="$(git rev-parse HEAD 2>/dev/null || echo "")"
-  # Any uncommitted change (including untracked files) means the current worktree does NOT
-  # represent the commit being pushed. Running the review there would let codex see files
-  # that aren't part of the push — either hiding bugs behind local fixes or flagging
-  # problems that don't exist in the pushed ref. Fall through to the detached-worktree
-  # path in that case.
-  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-    working_tree_dirty=1
-  else
-    working_tree_dirty=0
-  fi
-  review_rc=0
-  # Codex sandbox bypass is opt-in only. `codex exec review` runs an LLM-driven agent that
-  # can execute commands in the workspace while analyzing the diff; bypassing the sandbox
-  # on every push means a contributor branch you fetched locally could trigger arbitrary
-  # filesystem/network activity on the reviewer's machine. Keep sandbox-on by default; the
-  # user can set CODEX_ALLOW_SANDBOX_BYPASS=1 to restore the old behavior when they trust
-  # the diff (e.g. solo developer on their own branches).
-  sandbox_flag=""
-  if [ "${CODEX_ALLOW_SANDBOX_BYPASS:-0}" = "1" ]; then
-    sandbox_flag="--dangerously-bypass-approvals-and-sandbox"
-  fi
-  # 두 호출 경로(HEAD 일치 / 임시 worktree)가 같은 설정을 쓰도록 한 곳에 모은다 — 한쪽만 고치는 드리프트 방지.
-  # codegraph MCP 비활성화(#60): codex 는 리뷰마다 `codegraph serve --mcp` 를 새로 띄우는데, Claude Code
-  # 세션도 각자 하나씩 띄운다. 인스턴스가 여럿이면 `codegraph_explore` 가 응답하지 않아(#45 에서 실측한
-  # 근본원인) 리뷰가 통째로 타임아웃한다. 아래 lock 은 hook 끼리만 직렬화하므로 세션이 띄운 서버와의
-  # 경합은 막지 못한다. codegraph 없이도 리뷰가 P0/P1 을 잡는 것은 확인됨. upstream(codegraph)이
-  # 다중 인스턴스 경합을 고치면 이 플래그를 되돌린다.
-  codex_cfg="-c model_reasoning_effort=high -c mcp_servers.codegraph.enabled=false"
-  echo "[codex-pre-push] running codex exec review --base $base --json (high reasoning, codegraph off)..."
-  # codex review 를 머신 단위 lock 으로 직렬화 — codex 동시 실행의 자원 경합 방어(#45). codex 실행 직전 획득.
-  if ! acquire_codex_lock; then return 1; fi
-  if [ "$current_head" = "$local_sha" ] && [ "$working_tree_dirty" -eq 0 ]; then
-    run_codex_timeout codex exec review \
-        --base "$base" \
-        --json \
-        $sandbox_flag \
-        $codex_cfg \
-        --title "pre-push gate ${local_ref}" </dev/null >"$log_file" 2>&1 || review_rc=$?
-    release_codex_lock
-  else
-    worktree_dir="$(mktemp -d)/codex-pre-push-wt"
-    if ! git worktree add --detach "$worktree_dir" "$local_sha" >/dev/null 2>&1; then
-      echo "[codex-pre-push] FAIL: could not create worktree at $local_sha." >&2
-      release_codex_lock
-      return 1
-    fi
-    (cd "$worktree_dir" && run_codex_timeout codex exec review \
-        --base "$base" \
-        --json \
-        $sandbox_flag \
-        $codex_cfg \
-        --title "pre-push gate ${local_ref}" </dev/null) >"$log_file" 2>&1 || review_rc=$?
-    release_codex_lock
-    git worktree remove --force "$worktree_dir" >/dev/null 2>&1 || true
-  fi
-  if [ "$review_rc" -ne 0 ]; then
-    if [ "$review_rc" -eq 124 ]; then
-      echo "[codex-pre-push] FAIL: codex review timed out (>${CODEX_TIMEOUT}s). codegraph MCP 는 비활성(#60) 이므로 다른 원인 — 로그의 마지막 item 을 확인하라." >&2
-      echo "[codex-pre-push] Retry, or CODEX_SKIP=1 git push to bypass." >&2
-    else
-      echo "[codex-pre-push] FAIL: codex exec review exited non-zero (code=$review_rc)." >&2
-    fi
-    echo "[codex-pre-push] Log: $log_file" >&2
-    tail -40 "$log_file" >&2
-    return 1
-  fi
-
-  local message
-  message="$(extract_agent_message "$log_file")"
-  if [ -z "$message" ]; then
-    echo "[codex-pre-push] FAIL: could not extract final agent_message from codex output. Fail-closed." >&2
-    echo "[codex-pre-push] Log: $log_file" >&2
-    return 1
-  fi
-
-  # Block on P0/P1, warn-and-allow on P2/P3.
-  if echo "$message" | grep -qE '(^|[^[:alnum:]])\[P[01]\]([^[:alnum:]]|$)'; then
-    echo "[codex-pre-push] BLOCK: codex found P0/P1 issues for $local_ref." >&2
-    echo "---" >&2
-    echo "$message" >&2
-    echo "---" >&2
-    echo "[codex-pre-push] Log: $log_file" >&2
-    return 1
-  fi
-
-  if echo "$message" | grep -qE '(^|[^[:alnum:]])\[P[23]\]([^[:alnum:]]|$)'; then
-    if [ "${CODEX_ACK:-0}" = "1" ]; then
-      echo "[codex-pre-push] ACK: user acknowledged P2/P3 findings for $local_ref (CODEX_ACK=1)." >&2
-      echo "---" >&2
-      echo "$message" >&2
-      echo "---" >&2
-      echo "[codex-pre-push] Log: $log_file" >&2
-      return 0
-    fi
-    echo "[codex-pre-push] BLOCK: codex found P2/P3 findings for $local_ref that require explicit user review." >&2
-    echo "---" >&2
-    echo "$message" >&2
-    echo "---" >&2
-    echo "[codex-pre-push] Review the findings above, then re-run:  CODEX_ACK=1 git push" >&2
-    echo "[codex-pre-push] Log: $log_file" >&2
-    return 1
-  fi
-  echo "[codex-pre-push] OK: codex found no blocking issues for $local_ref."
-  return 0
+  guard_workflow_self_exclusion "$local_sha"
 }
 
-status=0
-while IFS= read -r line; do
-  [ -z "$line" ] && continue
-  # shellcheck disable=SC2086
-  set -- $line
-  if ! review_ref "$1" "$2" "$3" "$4"; then
-    status=1
-  fi
-done <<< "$ref_updates"
-
-exit "$status"
+rc=0
+while IFS=' ' read -r local_ref local_sha _remote_ref remote_sha || [ -n "${local_ref:-}" ]; do
+  [ -z "${local_ref:-}" ] && continue
+  check_ref "$local_ref" "$local_sha" "$remote_sha" || rc=1
+done
+exit "$rc"

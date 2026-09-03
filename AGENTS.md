@@ -1,7 +1,7 @@
 # coin-trading-bot — Environment
 
 이 파일은 **환경/빌드 정보**만 담는다. 개발 워크플로우 규칙은 `~/.Codex/AGENTS.md` 참고.
-코드 스타일·보안·클린코드·테스트 체크는 `.git/hooks/pre-push`의 codex review가 게이트한다.
+코드 리뷰(버그·보안·클린코드·테스트)는 구현 직후 리뷰 단계(Claude 와 Codex 가 각자 독립 리뷰, 통합은 메인 에이전트)가 담당한다. `.git/hooks/pre-push` 는 `deploy.yml` paths-ignore 자기제외 가드만 남았다(codex 게이트는 2026-09-03 제거, `scripts/git-hooks/README.md`).
 
 ## Build & Test
 
