@@ -112,9 +112,14 @@ class TradingEngine(
         if (running.compareAndSet(false, true)) {
             // 적립 티커는 설정이 정하고 사용자 목록과 합친다. 사용자 목록(bot_state.tickers)은 건드리지 않는다 —
             // 파생 집합을 거기 되쓰면 프로파일을 꺼도 그날의 목록이 남아 되돌릴 수 없다.
-            // 자동 유니버스가 고른 티커는 bot_state.tickers 에 없으므로, 재시작 때 durable 행을 전부 실어야 보유·pending 이
-            // applyTickers 의 보호 집합에 들어간다. 무포지션 잔재는 첫 갱신에서 바로 빠진다.
-            val restored = if (universeProperties.auto) initialStates.keys.toList() else emptyList()
+            // 자동 유니버스가 고른 티커는 bot_state.tickers 에 없으므로, 재시작 때 durable 행 중 보유·pending 흔적이 있는 것을
+            // 실어야 applyTickers 의 보호 집합에 들어간다. 진입 메타가 없는 행(청산 완료 잔재)은 싣지 않는다 — 유니버스가
+            // 여러 날 회전하면 행이 쌓이고, 전부 syncPosition 하면 기동 시 계좌 조회가 그만큼 반복된다.
+            val restored = if (universeProperties.auto) {
+                initialStates.filterValues { it.pendingBuyUuid != null || it.pendingSellUuid != null || it.entryStrategy != null || it.buyDate != null }.keys.toList()
+            } else {
+                emptyList()
+            }
             val active = (accumulateTickers + tickers + restored).distinct()
             if (accumulateTickers.isNotEmpty() && active.size == accumulateTickers.size) {
                 log.warn("User {} has no swing tickers — every active ticker is on the accumulate profile", userId)

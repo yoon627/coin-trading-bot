@@ -32,7 +32,7 @@
 - **원자성**: 사다리 장부(`rungsFilled`·`lastActionPrice`)는 `commitFillAndApply` 의 전이 람다 안에서만 바뀐다. 커밋 밖에서 바꾸면 크래시 창에서 같은 단을 다시 산다.
 - **체결 비율**: 매수는 체결이 있으면 한 단(시장가 매수는 잔량 환불로 종결되고, 미달을 안 세면 다음 tick 의 원가 기반 정합이 다시 한 단으로 복원해 모순), 매도는 `pendingSellVolume` 대비 90% 이상 체결일 때만 한 단 소모. 미달이면 rung 유지, 잔량은 다음 tick 재평가 — 예산 실측 게이트가 과투입을 막는다.
 - **잔고 복원**: getOrder 장애 시 주문 전 보유량(`pending_buy_prior_volume`)을 넘는 증분만 체결로 인정 — 추가 단은 주문 전부터 코인이 있어 잔고 존재만으로는 판정할 수 없다.
-- **재시작·기동 갱신**: auto 면 `start()` 가 durable 행 전부를 활성에 실어 자동 선정 티커의 보유·pending 이 보호 집합에 들어가게 한다(무포지션 잔재는 첫 갱신에서 제거). 기동 시 갱신 실패는 `runLoop` 복구 경계 안에서 흡수, 복원된 상태에는 `resetDaily` 적용.
+- **재시작·기동 갱신**: auto 면 `start()` 가 durable 행 중 보유·pending 흔적이 있는 것을 활성에 실어 자동 선정 티커의 보유·pending 이 보호 집합에 들어가게 한다(무포지션 잔재는 첫 갱신에서 제거). 기동 시 갱신 실패는 `runLoop` 복구 경계 안에서 흡수, 복원된 상태에는 `resetDaily` 적용.
 - **첫 선정 전 진입 없음**: auto 면 `swingUniverse` 는 빈 집합으로 시작 — 선정 실패 중 durable 잔재가 진입하지 못하게. 보호 집합에 `unsynced` 포함(보유 여부 미확인).
 - **추가 단 미체결**: `placeBuy` 는 신규 진입일 때만 `clearEntryMeta` — 추가 단이 cancel+0 이어도 `buyDate`·`entryStrategy` 보존.
 - **유니버스 잔류 티커**: 보유 때문에 목록에 남은 티커는 청산 뒤 새로 사지 않는다(`swingUniverse` 밖이면 진입 차단) — 잔류의 의미는 "청산될 때까지"다.
