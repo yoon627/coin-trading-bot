@@ -60,6 +60,20 @@ data class TradingState(
     // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서 재기록한다(비영속).
     // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
     var peakPersistFailed: Boolean = false,
+    // 적립 프로파일 사다리 장부(durable). 잔고·평단은 거래소가 진실이고 이 둘은 분할 단위·기준가만 담당한다.
+    var rungsFilled: Int = 0,
+    var lastActionPrice: Double = 0.0,
+    // 무포지션 구간의 최고가 — 첫 단 진입 기준. 0 = 미관측.
+    var flatPeak: Double = 0.0,
+    // 주문 시점 트리거가. 체결 확정(즉시·reconcile 어느 경로든)에서 lastActionPrice 로 옮긴다.
+    var pendingBuyTriggerPrice: Double? = null,
+    // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 "주문 전부터 있던 코인"을 체결로 오판하지 않게 한다.
+    var pendingBuyPriorVolume: Double? = null,
+    var pendingSellTriggerPrice: Double? = null,
+    // 매도 주문 직전 free 보유량. 부분 체결 뒤 unlock 지연으로 거래소 잔량이 과소일 때 잔량의 하한.
+    var pendingSellPriorVolume: Double? = null,
+    // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 상태 API 노출용, 비영속.
+    var accumulateSkipReason: String? = null,
 ) {
     fun pnlPercent(currentPrice: Double): Double {
         if (avgBuyPrice <= 0) return 0.0
@@ -75,6 +89,13 @@ data class TradingState(
     fun updatePeakPrice(currentPrice: Double): Boolean {
         if (currentPrice <= peakPrice) return false
         peakPrice = currentPrice
+        return true
+    }
+
+    /** @return 무포지션 고점 갱신 여부 — [updatePeakPrice] 와 같은 이유로 갱신 tick 에만 flush 한다. */
+    fun updateFlatPeak(currentPrice: Double): Boolean {
+        if (currentPrice <= flatPeak) return false
+        flatPeak = currentPrice
         return true
     }
 
@@ -124,6 +145,7 @@ data class TradingState(
         position = false
         avgBuyPrice = 0.0
         holdVolume = 0.0
+        rungsFilled = 0
         clearEntryMeta()
         lastTradeTime = now
         // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
@@ -152,6 +174,8 @@ data class TradingState(
         pendingSellAvgPrice = null
         pendingSellSince = null
         pendingSellAlerted = false
+        pendingSellTriggerPrice = null
+        pendingSellPriorVolume = null
     }
 
     /** #19: 수동 해제 — halt 플래그·사유·실패 카운터를 초기화해 다음 tick 부터 reconcile/매매를 재개한다. */
