@@ -84,6 +84,23 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `buyRung fill without a post-fill account read keeps the prior holding`() = runTest {
+        // 체결 조회는 됐는데 계좌 조회가 코인을 안 돌려주면, 체결분만으로 replace 하면 기존 1단이 장부에서 사라진다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(krw("200000"), btc("0.0004", "50000000")),
+            listOf(krw("180000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "rung-nf")
+        coEvery { upbitClient.getOrder("rung-nf") } returns Order(uuid = "rung-nf", state = "done", executedVolume = "0.0004", price = "20000")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.0004, rungsFilled = 1, lastActionPrice = 50_000_000.0)
+        manager.buyRung("KRW-BTC", state, 48_500_000.0, LadderAction.Buy(20_000.0, 48_500_000.0), params)
+
+        assertEquals(0.0008, state.holdVolume, 1e-12)
+        assertEquals(2, state.rungsFilled)
+    }
+
+    @Test
     fun `buyRung re-measures the budget on the exchange before ordering`() = runTest {
         // 장부는 1단이지만 거래소엔 90,000 원어치가 있다(수동 매수) — 다음 단 20,000 은 예산을 넘는다.
         coEvery { upbitClient.getAccounts() } returns listOf(krw("500000"), btc("0.002", "45000000"))
