@@ -15,6 +15,7 @@ import com.trading.common.domain.NormalizedCandle
 import com.trading.common.strategy.AccumulateLadder
 import com.trading.common.strategy.LadderAction
 import com.trading.common.strategy.TradingStrategy
+import java.time.Clock
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -48,6 +49,7 @@ class TradingEngine(
     private val universeSource: UniverseSource? = null,
     // null = 엔진의 인증 클라이언트로 직접 조회(단위 테스트·레거시 경로). 운영은 싱글톤 캐시를 주입한다.
     private val dailyCandleCache: DailyCandleCache? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -323,7 +325,7 @@ class TradingEngine(
     }
 
     /**
-     * 활성 티커 집합 교체의 유일한 경로. 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고,
+     * 유니버스 선정 결과를 활성 집합에 반영하는 유일한 경로(`start()` 의 초기 합집합·dormant 되살리기는 여기를 거치지 않는다). 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고,
      * 빠진 티커의 상태는 리셋·status 에 계속 섞인다 — 시딩·동기화·정리를 여기서 한꺼번에 한다.
      *
      * 보유 중·미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남긴다(신규 진입은 스윙 규칙이 막지 않으나
@@ -481,7 +483,7 @@ class TradingEngine(
     private suspend fun runAccumulate(ticker: String, state: TradingState, currentPrice: Double) {
         if (state.unsynced) return
         // 수동 매매(/api/trade)는 TradingState 를 갱신하지 않으므로 주기적으로 계좌를 다시 읽어 장부 정합의 입력을 최신화한다.
-        val now = System.currentTimeMillis()
+        val now = clock.millis()
         if (now - (ladderSyncedAtMs[ticker] ?: 0L) >= LADDER_SYNC_INTERVAL_MS) {
             positionManager.syncPosition(ticker, state, clearWhenEmpty = true)
             // 실패를 완료로 적으면 preamble 의 unsynced 재시도(clearWhenEmpty=false)가 차단만 풀고 옛 보유가 남아,
