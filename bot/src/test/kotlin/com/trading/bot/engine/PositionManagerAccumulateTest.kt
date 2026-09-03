@@ -98,6 +98,25 @@ class PositionManagerAccumulateTest {
 
         assertEquals(0.0008, state.holdVolume, 1e-12)
         assertEquals(2, state.rungsFilled)
+        // 평단도 가중평균 — 이번 단 가격(48.5M)으로 덮으면 전체 원가가 실제보다 낮게 계상된다.
+        assertEquals((50_000_000.0 * 0.0004 + 48_500_000.0 * 0.0004) / 0.0008, state.avgBuyPrice, 1.0)
+    }
+
+    @Test
+    fun `reconciled partial sell with a confirmed empty account does not resurrect the position`() = runTest {
+        // 부분 매도 취소 직전 사용자가 나머지를 전량 수동 매도 → 계좌 행 없음(확인된 0). 하한을 쓰면 유령 포지션이 된다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("1.0", "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "gone")
+        coEvery { upbitClient.getOrder("gone") } returns Order(uuid = "gone", state = "wait", executedVolume = "0")
+        val state = holding4().apply { holdVolume = 1.0 }
+        manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.25, 52_000_000.0, isFinal = false))
+
+        coEvery { upbitClient.getOrder("gone") } returns Order(uuid = "gone", state = "cancel", executedVolume = "0.1")
+        coEvery { upbitClient.getAccounts() } returns listOf(krw("300000"))
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertFalse(state.position)
+        assertEquals(0, state.rungsFilled)
     }
 
     @Test

@@ -70,6 +70,15 @@ class LadderStateMapperTest {
     }
 
     @Test
+    fun `an over-budget holding is never raised back to maxRungs after a sell`() {
+        // 원가 150,000(예산 초과 편입) 에서 한 단 팔아 4단 — 원가 기준은 늘 5단이라 되돌리면 매도할 때마다 rung 이 복원된다.
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 1_500.0, rungsFilled = 4, lastActionPrice = 100.0)
+
+        assertNull(LadderStateMapper.reconcile(state, params, price = 100.0))
+        assertEquals(4, state.rungsFilled)
+    }
+
+    @Test
     fun `a normal partial sell does not trip the cost cap`() {
         // 5단(원가 100,000) 에서 1/5 을 팔면 원가 80,000·4단 — 부동소수 오차로 5단 요구가 나오면 안 된다.
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 20_000.0, holdVolume = 4.0, rungsFilled = 4, lastActionPrice = 20_000.0)

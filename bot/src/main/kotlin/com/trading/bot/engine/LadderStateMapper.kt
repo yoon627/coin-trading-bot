@@ -22,8 +22,8 @@ object LadderStateMapper {
     )
 
     /**
-     * 복원·시딩 직후 **1회** 적용한다(호출부가 보장). 이후 tick 은 장부를 신뢰한다 — 매 tick 돌리면
-     * 사람이 고친 값이 다시 덮인다.
+     * 매 tick 호출된다 — 정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다. 런타임에 장부와 잔고가
+     * 갈라지면(부분체결·수동 매매) decide 가 Hold 로 멈추는데, 적립엔 다른 청산 게이트가 없어 여기 말고는 풀 곳이 없다.
      *
      * @return 장부를 고쳤으면 그 설명(WARN 용), 아니면 null. flatPeak 초기화는 정상 경로라 null.
      */
@@ -45,7 +45,9 @@ object LadderStateMapper {
                 state.flatPeak = price
                 "장부 ${had}단인데 거래소 잔고 없음 — 수동 청산으로 보고 사다리를 비운다"
             }
-            holding && state.rungsFilled != rungsByCost(state, params) -> {
+            // 원가가 예산을 넘는 편입 포지션은 rungsByCost 가 항상 maxRungs 라 매도로 줄인 rung 을 매번 되돌린다 — 그 구간은 하향만.
+            holding && state.rungsFilled != rungsByCost(state, params) &&
+                !(state.avgBuyPrice * state.holdVolume > params.budgetKrw && state.rungsFilled < rungsByCost(state, params)) -> {
                 // 장부는 원가의 함수여야 한다. 90% 미만 부분 매도가 반복되면 잔고는 줄어도 rung 이 안 줄어 단당 매도 대금이
                 // 최소주문 아래로 내려가고, 수동 추가 매수로 원가가 늘면 rung 이 모자라 다음 상승에 전량(isFinal)이 나간다.
                 val had = state.rungsFilled

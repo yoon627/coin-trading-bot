@@ -360,7 +360,6 @@ class PositionManager(
             filled != null && executed > 0.0 -> {
                 // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
                 val account = findAccount(ticker.substringAfter("-"))
-                // ord_type=price 의 `price` 는 요청 KRW — 적립 단의 체결 비율 판정 근거.
                 completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis())
             }
             filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
@@ -378,9 +377,9 @@ class PositionManager(
     }
 
     /**
-     * getOrder 장애 시 거래소 실잔고로 체결 여부 추정 복원. 잔고 있으면 확정, 없으면 pending 유지(다음 tick).
-     * 전제: 1 ticker = 1 position, pending 생존 중 position=false(이전 봇 보유분 없음)이므로 해당 통화 잔고는
-     * 이 주문 체결분이다. dust/수동매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
+     * getOrder 장애 시 거래소 실잔고로 체결 여부 추정 복원. 주문 전 보유량(`pendingBuyPriorVolume`)을 넘는 증분이 있으면
+     * 그만큼을 이 주문의 체결로 확정, 없으면 pending 유지(다음 tick). 스윙은 position=false 에서만 주문하므로 증분 = 잔고
+     * 전체이고, 적립 추가 단은 주문 전부터 코인이 있어 증분만 센다. dust/수동매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
      */
     private sealed interface BalanceRecovery {
         data class Filled(val record: TradeRecord) : BalanceRecovery
@@ -445,7 +444,14 @@ class PositionManager(
         // 계좌를 못 읽었으면 체결분에 주문 전 보유량을 더한다 — 추가 단에서 체결분만 쓰면 replace=true 가 기존 보유를 지운다.
         val volume = account?.let { heldVolume(it, 0.0) }?.takeIf { it > 0.0 }
             ?: (executedVolume + (state.pendingBuyPriorVolume ?: 0.0))
-        val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
+        // 평단도 계좌를 못 읽었으면 가중평균 — 추가 단에서 현재가로 replace 하면 포지션 전체 평단이 이번 단 가격이 된다.
+        val priorVolume = state.pendingBuyPriorVolume ?: 0.0
+        val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 }
+            ?: if (priorVolume > 0.0 && state.avgBuyPrice > 0.0 && volume > 0.0) {
+                (state.avgBuyPrice * priorVolume + currentPrice * executedVolume) / volume
+            } else {
+                currentPrice
+            }
         val totalAmount = fillPrice * volume
         val record = TradeRecord(
             userId = userId,
@@ -735,7 +741,10 @@ class PositionManager(
         val qty = quantity(account!!)
         // 사다리 판정은 장부 수량으로 최소주문을 봤다 — free 로 축소된 실제 주문이 5,000원 아래면 거래소가 매 tick 거부한다.
         if (reason == SellReason.ACCUMULATE_STEP && qty.volume * currentPrice < MIN_ORDER_AMOUNT_KRW) {
-            log.debug("Skip ladder sell for {}: {} × {} < min order", ticker, qty.volume, currentPrice)
+            // 매수 skip 과 같은 창구로 드러낸다 — 조용히 멈추면 운영자가 사다리가 왜 안 파는지 모른다.
+            val skip = "sell: %s × %.0f < min order".format(qty.orderVolume, currentPrice)
+            if (state.accumulateSkipReason != skip) log.warn("Accumulate sell skipped for {}: {}", ticker, skip)
+            state.accumulateSkipReason = skip
             return null
         }
         val order = try {
@@ -821,7 +830,8 @@ class PositionManager(
                 // locked 0.15 → 0.75)라 원가 정합이 rung 을 조기에 줄인다 — 주문 전 보유 − 체결량을 하한으로 둔다(60초 주기
                 // 동기화가 이후 실측으로 다시 맞춘다). 스윙은 종전 규칙 그대로.
                 val priorVolume = state.pendingSellPriorVolume ?: state.holdVolume
-                val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && priorVolume > 0.0) {
+                // 계좌 행이 없으면(null = 조회 성공 + 잔고 0 — 실패는 예외로 recoverSellFromBalance 로 간다) 확인된 0 이라 하한을 쓰지 않는다.
+                val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && account != null && priorVolume > 0.0) {
                     maxOf(exchangeRemaining, priorVolume - executed)
                 } else {
                     exchangeRemaining

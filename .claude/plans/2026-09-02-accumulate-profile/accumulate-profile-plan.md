@@ -42,6 +42,8 @@ updated: 2026-09-02
 - 2026-09-03: 6차 push codex BLOCK(P1 2·P2 1): 수동 전량 매도 후 주기 동기화가 포지션을 못 내림(→ `syncPosition(clearWhenEmpty=true)`) / dormant 계좌 조회 실패 시 재시도 없음(→ 09:00 갱신 때 재시도) / 수동 추가 매수 시 rung 미상향(→ 원가 기반 rung 을 양방향 조정). 전부 fix(테스트 3건).
 - 2026-09-03: 7차 push codex BLOCK(P1 1·P2 2): 부분 매도 reconcile 에서 unlock 지연 시 보유량 과소(→ 주문 전 보유 − 체결량 하한) / 90% 규칙과 원가 정합 허용치 불일치(→ `SELL_FILL_RATIO` 공유, 허용치 0.1+ε) / 자동 티커 발견 보유 즉시 영속. 전부 fix(테스트 3건).
 - 2026-09-03: 8차 push codex BLOCK(P1 2·P2 2): 사다리 동기화 실패를 완료로 표시(→ 성공 시에만 시각 기록) / dormant 복원 재시도가 09:00 뿐(→ 매 루프 재시도 + 즉시 sync) / 절삭 전 수량으로 전이(→ 절삭 수량) / 재시작 후 매도 전 보유량 하한 소실(→ `pending_sell_prior_volume` V23 영속). 전부 fix(테스트 4건).
+- 2026-09-03: 9차 push — codex pre-push 가 리뷰 도중 `Your workspace is out of credits` 로 중단(fail-closed, 로그 `.git/worktrees/accumulate-profile/codex-pre-push/`). memory 규약(`project_prepush_codex_slow`)대로 Claude code-reviewer 가 8라운드 수정분(`57f7632..HEAD`)을 대체 검토한 뒤 `CODEX_SKIP=1` 로 push 한다.
+- 2026-09-03: 대체 code-reviewer(Claude) 결과 REQUEST CHANGES(경미) — SWING 기본 경로 회귀 없음 확인(refuted 7건). P1 1(`DailyCandleCacheTest` TTL 테스트 vacuous → 가변 clock 으로 재작성)·P2 7(stale KDoc 3 / 계좌 미조회 fallback 평단 가중평균 / 잔량 하한을 계좌 행 있을 때만 / 예산 초과 편입 포지션은 rung 상향 안 함 / `TradingEngine` Clock 주입 + 60초 재조회 테스트)·Nit(매도 stall 도 `accumulate_skip` 노출, KDoc 문구) 전부 fix. Open: 60초 동기화 주기는 제품 결정(수동 청산 직후 최대 60초 낡은 장부 허용 — 예산은 실측이라 상한 안전)으로 `# Decisions` 3 에 기록.
 - 2026-09-02: 사용자가 마무리(push·PR·머지) 선택 → `/e merge`. 브랜치 push → PR → 머지 → worktree·브랜치 정리. 머지가 거부되면 `in_progress` 로 복구.
 
 # Next
@@ -96,6 +98,7 @@ fun decide(input, params): LadderAction
 - **재시작·컷오버 정합 `[arch-4][pr-2]`**: `TradingState → LadderInput` 매퍼가 **프로세스당 티커별 1회**(복원·`applyTickers` 시딩 직후) 적용. `holdVolume > 0 && rungs == 0` → `rungs = ceil(avg×hold / 단당).coerceIn(1, maxRungs)`, **`lastActionPrice = avgBuyPrice`**, WARN("기존 보유를 사다리로 편입"). `holdVolume <= 0 && rungs > 0` → `rungs = 0, lastActionPrice = 0`, WARN("장부와 잔고 불일치 — 수동 청산 추정"). `flatPeak` 는 0 일 때만 초기화. 운영 `.env` 가 BTC·ETH 를 스윙으로 들고 있으므로 **적립을 켜는 순간 이 편입 경로가 실제로 발동**한다 — 의도된 컷오버.
 - **역방향 컷오버**(적립 티커를 끄면): rung 상태를 가진 포지션이 즉시 스윙 게이트(손절 −5%·09:00 청산)를 받고 `buyDate` 는 마지막 단 매수일이다. README 운영 절차에 "끄기 전 수동 정리 또는 감수" 명시 `[pr-누락1]`.
 - **KRW 경쟁 `[pr-6]`**: 엔진이 `reservedKrw = Σ(적립 티커별 max(0, budget − avg×hold))` 를 계산해 스윙 `buy()` 에 넘기고, `calculateInvestAmount(krw − reservedKrw)` 로 사이징한다(알트가 적립 예산을 침범하지 못한다). 적립 rung 이 KRW 부족으로 skip 되면 **WARN**(기존 `debug` 아님) + `/api/bot/status` 에 `accumulate_skipped` 노출.
+- **런타임 수동 매매 반영 주기 = 60초**(`LADDER_SYNC_INTERVAL_MS`): 수동 전량 매도 직후 최대 60초 동안 낡은 장부로 판정할 수 있다. 예산 게이트는 주문 직전 실측이라 상한은 안전하고, 이 창은 4종 × 1/60s 계좌 조회 부하와의 트레이드오프다.
 - **부분 매도 수량 경로**: `sellVolume(ticker, state, volume, reason, triggerPrice)` 추가. 주문 수량 = `min(volume, sellable)` 을 `BigDecimal(8, DOWN).toPlainString()`, `isFinal` 이면 기존 `sell()` 처럼 거래소 원문 문자열 전량.
 - durable(V23, 컬럼 추가만): `rungs_filled INT NOT NULL DEFAULT 0`, `last_action_price DOUBLE PRECISION NOT NULL DEFAULT 0`, `flat_peak DOUBLE PRECISION NOT NULL DEFAULT 0`, `pending_sell_trigger_price DOUBLE PRECISION`. `position/avg/holdVolume` 은 종전대로 거래소 복원.
 - 기록: 단 매수 = BUY(엔진 스냅샷 규약 유지), 단 매도 = SELL(`volume` = 판 수량, `reason = ACCUMULATE_STEP`, `pnlPercent` 평단 대비 net, `strategy = "accumulate"`).
