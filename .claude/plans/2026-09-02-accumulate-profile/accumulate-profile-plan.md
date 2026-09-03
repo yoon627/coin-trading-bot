@@ -40,6 +40,7 @@ updated: 2026-09-02
 - 2026-09-03: 4차 push 는 P0/P1 없이 P2 4건(ack 가능) — 축소 수량 최소주문 재검사·재시작 시 durable 행 선별 시딩·캐시 동시 miss 합치기·사다리 파라미터 유한성/100% 미만 검증. 전부 fix(테스트 3건).
 - 2026-09-03: 5차 push codex BLOCK(P1 1·P2 2): 메타 없는 실보유 durable 행이 재시작 때 탈락(→ 계좌 1회 조회로 되살림) / 수동 매매 후 사다리 입력 미갱신(→ 60초 주기 syncPosition) / 추가 단 체결 fallback 이 기존 보유를 덮음(→ 체결분+주문 전 보유량). 전부 fix(테스트 3건).
 - 2026-09-03: 6차 push codex BLOCK(P1 2·P2 1): 수동 전량 매도 후 주기 동기화가 포지션을 못 내림(→ `syncPosition(clearWhenEmpty=true)`) / dormant 계좌 조회 실패 시 재시도 없음(→ 09:00 갱신 때 재시도) / 수동 추가 매수 시 rung 미상향(→ 원가 기반 rung 을 양방향 조정). 전부 fix(테스트 3건).
+- 2026-09-03: 7차 push codex BLOCK(P1 1·P2 2): 부분 매도 reconcile 에서 unlock 지연 시 보유량 과소(→ 주문 전 보유 − 체결량 하한) / 90% 규칙과 원가 정합 허용치 불일치(→ `SELL_FILL_RATIO` 공유, 허용치 0.1+ε) / 자동 티커 발견 보유 즉시 영속. 전부 fix(테스트 3건).
 - 2026-09-02: 사용자가 마무리(push·PR·머지) 선택 → `/e merge`. 브랜치 push → PR → 머지 → worktree·브랜치 정리. 머지가 거부되면 `in_progress` 로 복구.
 
 # Next

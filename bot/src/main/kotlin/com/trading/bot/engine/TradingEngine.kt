@@ -340,6 +340,9 @@ class TradingEngine(
             restored.resetDaily(dailyResetManager.getTradingDate())
             val state = states.computeIfAbsent(ticker) { restored }
             positionManager.syncPosition(ticker, state)
+            // durable 행이 없던 자동 티커에서 수동 보유를 발견하면 바로 남긴다 — 첫 저장 전에 죽고 다음 선정에서 빠지면
+            // initialStates 에도 dormant 에도 없어 그 포지션은 청산 평가를 영영 못 받는다.
+            if (state.position || state.unsynced) positionManager.persistState(state)
         }
         states.keys.filter { it !in active }.forEach { states.remove(it) }
         activeTickers = active

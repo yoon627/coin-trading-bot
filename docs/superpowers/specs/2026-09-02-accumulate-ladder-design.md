@@ -47,7 +47,7 @@
 ### 2.3 알트 유니버스 자동 선정
 
 - `UniverseSelector`(싱글톤 `@Service`, `publicUpbitClient`): `/v1/market/all?is_details=true` 의 `market_event.warning` 제외, `PeggedAssets` 제외, `/v1/ticker` 배치의 `acc_trade_price_24h` 내림차순. 1분 TTL 스냅샷을 유저 엔진들이 공유. 실패 시 null(불완전 순위로 판정하지 않음).
-- `TradingEngine.applyTickers(next)` 가 활성 집합 교체의 유일한 경로 — 적립 티커 + 보유/pending 티커 고정, 알트 몫은 20 까지(적립·보유는 예외), 신규 시딩+`syncPosition`, 제거분 `states` 정리. 기동 시와 09:00 경계에 `refreshUniverse()`.
+- `TradingEngine.applyTickers(next)` 가 활성 집합 교체의 유일한 경로 — 적립 티커 + 보유/pending 티커 고정, 알트 몫은 20 까지(적립·보유는 예외), 신규 시딩+`syncPosition`(수동 보유·unsynced 발견 시 즉시 영속), 제거분 `states` 정리. 기동 시와 09:00 경계에 `refreshUniverse()`.
 - `bot_state.tickers` 는 사용자 의도만 저장한다(파생 집합을 되쓰면 끄고도 되돌릴 수 없다).
 - watchlist 밖 티커는 REST 폴백. D1 캔들은 60초 TTL 캐시(ingestion 주기와 동일).
 

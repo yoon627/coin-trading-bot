@@ -198,6 +198,20 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `applyTickers persists a newly selected ticker that turns out to be held`() = runBlocking {
+        // durable 행 없이 수동 보유가 발견되면 바로 남겨야 재시작 후에도 청산 평가를 받는다.
+        val engine = createEngine()
+        engine.start(listOf("KRW-ETH"))
+        engine.stop()
+        coEvery { positionManager.loadState("KRW-A") } returns null // durable 행 없음(relaxed 기본값은 mock 객체라 명시)
+        coEvery { positionManager.syncPosition("KRW-A", any()) } coAnswers { secondArg<TradingState>().position = true }
+
+        engine.applyTickers(listOf("KRW-A"))
+
+        coVerify(exactly = 1) { positionManager.persistState(match { it.ticker == "KRW-A" }) }
+    }
+
+    @Test
     fun `applyTickers keeps a ticker whose balance could not be synced`() = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-ETH"), mapOf("KRW-ETH" to TradingState("KRW-ETH", unsynced = true)))
