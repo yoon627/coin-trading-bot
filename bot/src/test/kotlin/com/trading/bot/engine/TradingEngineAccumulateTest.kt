@@ -77,6 +77,19 @@ class TradingEngineAccumulateTest {
     }
 
     @Test
+    fun `accumulate ticker re-reads the exchange balance periodically so manual trades reach the ledger`() = runTest {
+        val engine = createEngine()
+        price("KRW-BTC", 100.0)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 200.0, rungsFilled = 1, lastActionPrice = 100.0)
+
+        engine.processTicker("KRW-BTC", state, strategy)
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        // 첫 tick 에 1회, 그 뒤 60초 안에는 재조회하지 않는다.
+        coVerify(exactly = 1) { positionManager.syncPosition("KRW-BTC", state) }
+    }
+
+    @Test
     fun `accumulate ticker sells a rung on a rise`() = runTest {
         val engine = createEngine()
         price("KRW-BTC", 104.0)
