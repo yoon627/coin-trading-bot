@@ -1,6 +1,6 @@
 ---
 title: precommit-hook-scope — 커밋 전 6패턴 agent hook 이 커밋 아닌 Bash(codex 리뷰 포함)를 차단하는 문제 수정
-status: in_progress
+status: done
 started: 2026-09-03
 updated: 2026-09-03
 ---
@@ -18,7 +18,7 @@ updated: 2026-09-03
 
 # Next
 
-- code-reviewer 결과 처분 → push → PR → 머지(`/e merge`).
+- PR 머지로 종료(머지 거부 시 in_progress 복구).
 
 # Decisions
 
