@@ -2,7 +2,7 @@
 title: 청산 게이트 — 손절·트레일링·익절·차트·보유상한
 category: concept
 created: 2026-07-28
-updated: 2026-08-25
+updated: 2026-09-02
 claim_state: current
 verified: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
@@ -44,6 +44,7 @@ sources:
 
 ## 비자명한 지점
 
+- **적립 프로파일 티커에는 이 게이트가 하나도 적용되지 않는다.** `trading.accumulate.tickers` 에 든 티커는 `runAccumulate` 로 갈려 `decideSell` 자체를 타지 않는다 — 리스크 상한은 코인당 예산뿐이다([[accumulate-ladder]]). 적립을 끄면 남은 포지션이 즉시 이 게이트를 받는다.
 - **트레일링은 수익 구간에서만 작동한다.** 손실 구간은 손절이 담당한다.
 - **`trailingArmPct` 는 `trailingStopPct` 보다 클 때만 실효**하다. `pnl>0 ∧ drop≥trail` 이면 `peakPnl > trail/(1−trail/100)` 이 수학적으로 강제되므로, arm 이 trail 이하면 조건이 자동 충족돼 아무 효과가 없다. 엔진 기동 시 `warnIfExitConfigInert()` 가 이 무의미 조합과 "익절이 트레일링보다 낮아 트레일링이 dead 인" 조합을 WARN 으로 알린다.
 - **`maxHoldDays` 는 0·음수를 1로 보정**한다(`effectiveMaxHoldDays`). env 오설정으로 0 이 들어오면 "매수 당일 즉시 청산" 루프가 돌기 때문이다.

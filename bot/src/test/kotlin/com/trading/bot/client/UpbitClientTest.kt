@@ -108,6 +108,27 @@ class UpbitClientTest {
     }
 
     @Test
+    fun `getMarkets parses the investment warning flag from the real response shape`() = runTest {
+        // market_event.warning 이 매핑에서 빠지면 예외가 아니라 false 로 조용히 떨어져 투자유의 종목이 자동 유니버스에 편입된다.
+        mockServer.enqueue(
+            MockResponse()
+                .setBody(
+                    """[{"market":"KRW-BTC","korean_name":"비트코인","english_name":"Bitcoin","market_event":{"warning":false,"caution":{"PRICE_FLUCTUATIONS":false,"TRADING_VOLUME_SOARING":false,"DEPOSIT_AMOUNT_SOARING":false,"GLOBAL_PRICE_DIFFERENCES":false,"CONCENTRATION_OF_SMALL_ACCOUNTS":false}}},""" +
+                        """{"market":"KRW-RVN","korean_name":"레이븐코인","english_name":"Ravencoin","market_event":{"warning":true,"caution":{"PRICE_FLUCTUATIONS":true,"TRADING_VOLUME_SOARING":false,"DEPOSIT_AMOUNT_SOARING":false,"GLOBAL_PRICE_DIFFERENCES":false,"CONCENTRATION_OF_SMALL_ACCOUNTS":false}}},""" +
+                        """{"market":"BTC-ETH","korean_name":"이더리움","english_name":"Ethereum"}]""",
+                )
+                .addHeader("Content-Type", "application/json"),
+        )
+
+        val markets = client.getMarkets()
+
+        assertEquals(listOf("KRW-BTC", "KRW-RVN", "BTC-ETH"), markets.map { it.market })
+        assertEquals(listOf(false, true, false), markets.map { it.warning })
+        val request = mockServer.takeRequest()
+        assertEquals("/v1/market/all?is_details=true", request.path)
+    }
+
+    @Test
     fun `getTicker returns parsed ticker`() = runTest {
         mockServer.enqueue(
             MockResponse()
