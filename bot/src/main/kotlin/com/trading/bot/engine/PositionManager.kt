@@ -712,6 +712,11 @@ class PositionManager(
 
         // Upbit market sell: ord_type=market. 전량이면 거래소 원본 문자열, 부분이면 plain decimal.
         val qty = quantity(account!!)
+        // 사다리 판정은 장부 수량으로 최소주문을 봤다 — free 로 축소된 실제 주문이 5,000원 아래면 거래소가 매 tick 거부한다.
+        if (reason == SellReason.ACCUMULATE_STEP && qty.volume * currentPrice < MIN_ORDER_AMOUNT_KRW) {
+            log.debug("Skip ladder sell for {}: {} × {} < min order", ticker, qty.volume, currentPrice)
+            return null
+        }
         val order = try {
             upbitClient.placeOrder(
                 OrderRequest(
