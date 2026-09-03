@@ -38,6 +38,7 @@ updated: 2026-09-02
 - 2026-09-03: 2차 push 도 codex BLOCK(P1 3·P2 3): auto 재시작 시 durable 행 미시딩으로 자동 선정 티커의 보유·pending 유실 / 수동 청산 판정 시 flatPeak 미재앵커(같은 tick 재매수) / 기동 시 refreshUniverse 가 루프 복구 경계 밖 / 복원 상태에 resetDaily 미적용 / DailyCandleCache 가 짧은 이력 응답을 miss 로 처리 / 90% 미만 부분 매도 누적 시 rung 미차감. 전부 fix(원가 기반 rung 상한을 매 tick 정합에 추가, 테스트 6건).
 - 2026-09-03: 3차 push 도 codex BLOCK(P1 3·P2 1): 첫 선정 실패 시 swingUniverse=null 로 durable 잔재 전부 진입 가능 / 보호 집합에 unsynced 누락 / 예산 실측이 locked 제외 / 추가 단 placeBuy 가 clearEntryMeta 무조건 호출. 전부 fix(테스트 4건).
 - 2026-09-03: 4차 push 는 P0/P1 없이 P2 4건(ack 가능) — 축소 수량 최소주문 재검사·재시작 시 durable 행 선별 시딩·캐시 동시 miss 합치기·사다리 파라미터 유한성/100% 미만 검증. 전부 fix(테스트 3건).
+- 2026-09-03: 5차 push codex BLOCK(P1 1·P2 2): 메타 없는 실보유 durable 행이 재시작 때 탈락(→ 계좌 1회 조회로 되살림) / 수동 매매 후 사다리 입력 미갱신(→ 60초 주기 syncPosition) / 추가 단 체결 fallback 이 기존 보유를 덮음(→ 체결분+주문 전 보유량). 전부 fix(테스트 3건).
 - 2026-09-02: 사용자가 마무리(push·PR·머지) 선택 → `/e merge`. 브랜치 push → PR → 머지 → worktree·브랜치 정리. 머지가 거부되면 `in_progress` 로 복구.
 
 # Next

@@ -160,6 +160,25 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `a durable row without entry metadata is revived on restart when the exchange still holds the coin`() = runBlocking {
+        // 외부·수동 보유를 syncPosition 으로 편입한 포지션은 entryStrategy·buyDate 가 없다 — 잔고가 있으면 살려야 청산 평가를 받는다.
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-A")
+        val checked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { positionManager.heldCurrencies() } coAnswers { checked.complete(Unit); setOf("M") }
+        // 되살린 뒤 syncPosition 이 실잔고로 position 을 세운다 — 그래야 첫 유니버스 갱신의 보호 집합에 든다.
+        coEvery { positionManager.syncPosition("KRW-M", any()) } coAnswers { secondArg<TradingState>().position = true }
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-M" to TradingState("KRW-M"), "KRW-OLD" to TradingState("KRW-OLD")))
+        checked.await()
+        engine.stop()
+
+        assertTrue("KRW-M" in engine.getActiveTickers())
+        assertFalse("KRW-OLD" in engine.getActiveTickers())
+    }
+
+    @Test
     fun `before the first successful selection no swing ticker enters, exits still run`() = runBlocking {
         // 선정 API 가 죽은 채 재시작하면 durable 잔재 전부가 활성인데, 유니버스가 "제한 없음"이면 그들이 전부 진입 대상이 된다.
         val source = mockk<UniverseSource>()

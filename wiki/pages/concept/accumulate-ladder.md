@@ -38,7 +38,8 @@ sources:
 - **`lastActionPrice` 는 체결가가 아니라 트리거가**(판정 tick 의 현재가)다. 거래소는 누적 평단만 주고 `Order` DTO 에 VWAP 이 없다. 평단을 기준으로 쓰면 단이 쌓일수록 간격이 압축돼 백테(트리거가)와 다른 사다리가 된다.
 - **예산 상한은 rung 수가 아니라 실측 원가**(`avg × hold`)다. `buyRung` 은 주문 직전 거래소 계좌를 다시 읽어 판정한다 — 수동 매매로 장부가 낡아도 상한이 뚫리지 않는다. 이때 수량은 매도 가능분이 아니라 **계좌 총보유(locked 포함)** 다 — 수동 지정가·출금 대기로 잠긴 코인도 이 예산으로 산 것이고, 빼고 재면 손절 없는 프로파일의 유일한 상한이 뚫린다. rung 은 매도 분할 단위만 담당한다.
 - **`flatPeak`** 이 없으면 전량 매도 후 상승장에서 영영 재진입 못 한다(직전 매도가 대비 눌림이 안 온다). 0 일 때만 현재가로 초기화한다 — 재기동마다 깎이면 첫 진입이 계속 미뤄진다.
-- **장부와 잔고가 어긋나면 거래하지 않는다**(`hasBalance != hasRungs` → Hold). 정합은 아래 매퍼의 몫이다.
+- **장부와 잔고가 어긋나면 거래하지 않는다**(`hasBalance != hasRungs` → Hold). 정합은 아래 매퍼의 몫이다. 잔고 입력 자체는 **60초마다 `syncPosition` 으로 다시 읽는다** — 수동 매매(`/api/trade`)는 `TradingState` 를 건드리지 않아 그 사이 장부가 낡는다.
+- **추가 단 체결 뒤 계좌를 못 읽으면** 체결분에 주문 전 보유량(`pending_buy_prior_volume`)을 더해 반영한다 — 체결분만으로 `replace` 하면 기존 단이 장부에서 사라진다.
 
 ## 라이브 통합
 
@@ -59,7 +60,7 @@ sources:
 - `UniverseSelector` 는 싱글톤 `@Service` 로 인증 없는 `publicUpbitClient` 를 쓴다 — 유저 엔진 수만큼 같은 공개 조회를 반복하지 않게 1분 TTL 스냅샷을 공유하고, 사용자 키 장애와 결합되지 않는다. `getMarkets()`(`/v1/market/all?is_details=true`)의 `market_event.warning`(투자유의) 과 `PeggedAssets`(스테이블·EURC·XAUT), 적립 티커를 제외하고 `acc_trade_price_24h` 내림차순. **조회 실패는 null** — 불완전한 순위로 판정하지 않는다(`PointInTimeUniverse` 와 같은 원칙).
 - `TradingEngine.applyTickers(next)` 가 활성 집합 교체의 유일한 경로다. 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고 빠진 티커의 상태는 리셋·status 에 계속 섞인다. 적립 티커 + 보유/pending/`unsynced`(보유 여부 미확인 — 실제 포지션일 수 있다) 티커를 고정하고 알트 몫을 20(`RequestValidators` 의 API 상한과 동일)까지만 채운다 — 적립·보유 티커는 자르지 않으므로 활성 총수는 이를 넘을 수 있다. 기동 시와 09:00 경계(`checkAndReset` true tick — 재시작 첫 tick 도 포함)에 `refreshUniverse()`.
 - **첫 선정 전에는 진입 없음**: auto 면 `swingUniverse` 를 빈 집합으로 시작한다. 선정 API 가 죽은 채 재시작하면 durable 잔재 전부가 활성인데 "제한 없음"으로 두면 그들이 전부 신호에 따라 진입한다 — 청산·reconcile 만 돌고 첫 선정이 성공해야 진입이 열린다.
-- **재시작**: 자동 선정 티커는 `bot_state.tickers` 에 없으므로 `start()` 는 auto 일 때 durable 행 중 보유·pending 흔적(pending uuid·`entryStrategy`·`buyDate`)이 있는 것을 활성에 싣는다 — 안 그러면 그 보유·pending 은 `applyTickers` 의 보호 집합에 들어갈 기회가 없어 아무도 reconcile 하지 않는다. 흔적 없는 잔재는 싣지 않는다(회전할수록 쌓이는 행마다 계좌를 조회하지 않게). 기동 시 갱신은 `runLoop` 의 복구 경계 안에서 실패를 흡수한다(직전 목록 유지). 갱신으로 복원된 durable 상태에는 현재 거래일 기준 `resetDaily` 를 적용한다(옛 `boughtDate` 로 하루 종일 진입이 막히지 않게).
+- **재시작**: 자동 선정 티커는 `bot_state.tickers` 에 없으므로 `start()` 는 auto 일 때 durable 행 중 보유·pending 흔적(pending uuid·`entryStrategy`·`buyDate`)이 있는 것을 활성에 싣는다 — 안 그러면 그 보유·pending 은 `applyTickers` 의 보호 집합에 들어갈 기회가 없어 아무도 reconcile 하지 않는다. 흔적 없는 행은 `runLoop` 초입에서 계좌를 1회 조회해 **실제 잔고가 있는 것만** 되살린다 — 외부·수동 보유를 `syncPosition` 으로 편입한 포지션은 메타가 없는데 빠뜨리면 청산 평가를 영영 못 받는다. 잔고 없는 잔재는 싣지 않는다(회전할수록 쌓이는 행마다 계좌를 조회하지 않게). 기동 시 갱신은 `runLoop` 의 복구 경계 안에서 실패를 흡수한다(직전 목록 유지). 갱신으로 복원된 durable 상태에는 현재 거래일 기준 `resetDaily` 를 적용한다(옛 `boughtDate` 로 하루 종일 진입이 막히지 않게).
 - **`bot_state.tickers` 는 사용자 의도만 저장한다.** 파생 집합을 되쓰면 auto 를 꺼도 그날의 알트가 남아 되돌릴 수 없다. `startBot` 은 받은 목록을 그대로 저장한다.
 - watchlist 밖 티커의 시세는 REST 폴백이다([[marketdata-pipeline]] 은 부팅 시 `watchlist.tickers` 를 한 번 잡는다). D1 캔들 폴백은 싱글톤 `DailyCandleCache`(60초 TTL, 티커별 Mutex 로 동시 miss 를 한 요청으로) — ingestion 의 캔들 주기와 같아 신선도는 store 경로와 동일하다. 거래소가 요청보다 적게 준 응답(상장 60일 미만)도 TTL 동안 재사용한다 — miss 로 보면 신규 상장 종목이 매 tick REST 를 다시 친다.
 

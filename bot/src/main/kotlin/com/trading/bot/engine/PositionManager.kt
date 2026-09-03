@@ -428,7 +428,9 @@ class PositionManager(
         val triggerPrice = state.pendingBuyTriggerPrice
         val rungFilled = triggerPrice != null
         // 매수 직후라 우리 매도 주문은 없다 → 상한 0 = free 만 센다(holdVolume 정의를 매수 경로도 공유).
-        val volume = account?.let { heldVolume(it, 0.0) }?.takeIf { it > 0.0 } ?: executedVolume
+        // 계좌를 못 읽었으면 체결분에 주문 전 보유량을 더한다 — 추가 단에서 체결분만 쓰면 replace=true 가 기존 보유를 지운다.
+        val volume = account?.let { heldVolume(it, 0.0) }?.takeIf { it > 0.0 }
+            ?: (executedVolume + (state.pendingBuyPriorVolume ?: 0.0))
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 } ?: currentPrice
         val totalAmount = fillPrice * volume
         val record = TradeRecord(
@@ -554,6 +556,10 @@ class PositionManager(
 
     /** durable 복원본. 런타임에 새로 활성화되는 티커가 빈 상태로 시딩돼 pending uuid·halt 를 덮어쓰지 않게 한다. */
     internal suspend fun loadState(ticker: String): TradingState? = tradingStateService.loadState(userId, ticker)
+
+    /** 잔고(free+locked)가 있는 코인 통화 — 재시작 시 메타 없는 durable 행을 살릴지 계좌 조회 1회로 판정한다. */
+    internal suspend fun heldCurrencies(): Set<String> =
+        upbitClient.getAccounts().filter { it.currency != "KRW" && it.totalBalance() > 0.0 }.map { it.currency }.toSet()
 
     /**
      * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다음 tick 이 재시도하게 한다 —

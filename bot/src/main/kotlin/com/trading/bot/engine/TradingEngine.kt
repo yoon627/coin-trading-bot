@@ -62,6 +62,13 @@ class TradingEngine(
     @Volatile
     private var swingUniverse: Set<String>? = if (universeProperties.auto) emptySet() else null
 
+    // auto 재시작에서 진입 흔적이 없어 활성에 싣지 않은 durable 행. 실제 잔고가 있으면 runLoop 초입에서 되살린다.
+    @Volatile
+    private var dormantStates: Map<String, TradingState> = emptyMap()
+
+    // 적립 티커의 주기 재동기화 시각. 수동 매매(/api/trade)는 TradingState 를 건드리지 않아 장부가 낡는다.
+    private val ladderSyncedAtMs = ConcurrentHashMap<String, Long>()
+
     internal fun profileOf(ticker: String): TickerProfile =
         if (ticker in accumulateTickers) TickerProfile.ACCUMULATE else TickerProfile.SWING
 
@@ -84,6 +91,8 @@ class TradingEngine(
         // 자동 선정 알트가 채울 수 있는 활성 티커 수의 목표치(API 입력 상한 20 과 동일). 적립·보유·pending 티커는
         // 자르지 않으므로 실제 활성 총수는 이를 넘을 수 있다 — 하드 상한이 아니라 알트 몫의 cap 이다.
         internal const val SWING_UNIVERSE_CAP = 20
+        // 적립 티커 계좌 재조회 주기 — 수동 매매를 이 시간 안에 장부에 반영한다(4종 × 1/60s 라 부하는 무시할 수준).
+        private const val LADDER_SYNC_INTERVAL_MS = 60_000L
     }
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
@@ -128,6 +137,8 @@ class TradingEngine(
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
             // 이번 실행의 활성 ticker 만 — 과거 ticker 까지 실으면 tick 이 안 도는 상태가 getStates·일일 리셋에 섞인다.
             initialStates.filterKeys { it in active }.forEach { (ticker, state) -> states[ticker] = state }
+            // 메타 없는 행(외부·수동 보유를 syncPosition 으로 편입한 것)은 잔고가 있을 때만 살린다 — runLoop 가 계좌를 1회 조회해 판정.
+            dormantStates = if (universeProperties.auto) initialStates.filterKeys { it !in active } else emptyMap()
             // 드롭한 ticker 에 미해소 주문이 남아 있으면 아무도 reconcile 하지 않는다 — 사람이 알아야 한다.
             initialStates.filterKeys { it !in active }
                 .filterValues { it.pendingBuyUuid != null || it.pendingSellUuid != null }
@@ -219,6 +230,7 @@ class TradingEngine(
     }
 
     private suspend fun runLoop() {
+        reviveHeldDormantStates()
         activeTickers.forEach { ticker ->
             states.computeIfAbsent(ticker) { TradingState(it) }
         }
@@ -257,6 +269,29 @@ class TradingEngine(
                 delay(ERROR_RETRY_DELAY_MS)
             }
         }
+    }
+
+    /**
+     * auto 재시작에서 진입 흔적이 없어 싣지 않은 durable 행 중 거래소에 실제 잔고가 있는 것을 활성에 되살린다.
+     * 외부·수동 보유를 syncPosition 으로 편입한 포지션은 entryStrategy·buyDate 가 없어 흔적 필터에 걸리지 않는데,
+     * 빠뜨리면 청산 평가를 영영 못 받는다. 계좌 조회 1회로 판정하며, 실패하면 살리지 않고 다음 기동에 맡긴다.
+     */
+    private suspend fun reviveHeldDormantStates() {
+        val dormant = dormantStates
+        if (dormant.isEmpty()) return
+        val held = try {
+            positionManager.heldCurrencies()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Could not check exchange holdings for dormant tickers of user {} — leaving {} dormant: {}", userId, dormant.keys, e.message)
+            return
+        }
+        val revived = dormant.filterKeys { it.substringAfter("-") in held }
+        if (revived.isEmpty()) return
+        revived.forEach { (ticker, state) -> states[ticker] = state }
+        activeTickers = (activeTickers + revived.keys).distinct()
+        log.info("Revived held tickers without entry metadata for user {}: {}", userId, revived.keys)
     }
 
     /**
@@ -430,6 +465,13 @@ class TradingEngine(
      */
     private suspend fun runAccumulate(ticker: String, state: TradingState, currentPrice: Double) {
         if (state.unsynced) return
+        // 수동 매매(/api/trade)는 TradingState 를 갱신하지 않으므로 주기적으로 계좌를 다시 읽어 장부 정합의 입력을 최신화한다.
+        val now = System.currentTimeMillis()
+        if (now - (ladderSyncedAtMs[ticker] ?: 0L) >= LADDER_SYNC_INTERVAL_MS) {
+            ladderSyncedAtMs[ticker] = now
+            positionManager.syncPosition(ticker, state)
+            if (state.unsynced) return
+        }
         val params = accumulateProperties.ladderParams()
         // 매 tick 돌려도 정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다. 런타임에 장부와 잔고가 갈라지면
         // (부분체결·수동 매매) decide 가 Hold 로 멈추는데, 적립엔 다른 청산 게이트가 없어 여기 말고는 풀 곳이 없다.
