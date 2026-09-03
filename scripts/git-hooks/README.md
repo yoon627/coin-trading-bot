@@ -27,7 +27,7 @@ chmod +x .git/hooks/pre-push
 | Event | Action |
 |-------|--------|
 | `deploy.yml` 의 `paths-ignore` 가 워크플로 자신을 제외 (`**`·`.github/**`·`**.yml` 등) | BLOCK |
-| `paths-ignore` 가 inline 형식(`paths-ignore: [ ... ]`) | BLOCK (fail-closed — 파서가 못 읽는 형식을 통과시키지 않는다) |
+| `paths-ignore` 가 inline 형식(`paths-ignore: [ ... ]`) | BLOCK (fail-closed 는 이 한 형태만 — 아래 한계 참조) |
 | `deploy.yml` 없음 / `paths-ignore` 키 없음 | Allow |
 | ref 삭제, 새 커밋 없는 재-push | Skip |
 | 그 외 모든 push | Allow silently |
@@ -38,6 +38,12 @@ chmod +x .git/hooks/pre-push
 불변식은 그 테스트가 본다 — hook 에서 gradle 을 돌리지 않는 것은 JDK 환경에 따라 `./gradlew`
 가 실패해 모든 push 를 막을 수 있기 때문이다.
 
+**한계(pre-existing, 파서가 단순하다)**: 블록 파서는 `paths-ignore:` 바로 다음 줄부터 `- ` 항목만 읽고
+첫 비-항목 줄에서 멈춘다 — 사이에 주석·빈 줄이 있으면 뒤 항목을 못 보고 **조용히 통과**한다.
+표지 regex(`.github`·`.yml`/`.yaml`·선두 `**`)는 리터럴 매칭이라 `.git*/**` 같은 글로브는 놓치고,
+반대로 `.github/ISSUE_TEMPLATE/**` 처럼 무해한 항목도 `.github` 가 보이면 막는다(의도된 과차단).
+최종 불변식은 hook 이 아니라 `DeployWorkflowPathListTest`(PR 경로에선 항상 실행)가 지킨다.
+
 새 브랜치 첫 push 는 tip 커밋의 `deploy.yml` 을 검사한다(이전 codex 게이트는 base 대비 새 커밋이
 없으면 건너뛰었는데, 이제는 `remote_sha == local_sha` 일 때만 건너뛴다).
 
@@ -47,6 +53,9 @@ chmod +x .git/hooks/pre-push
 git show <good-rev>:scripts/git-hooks/pre-push > .git/hooks/pre-push   # 이전 정상본 복구
 chmod +x .git/hooks/pre-push
 ```
+
+가드 자체가 오탐이면(정당한 `.github/...` 항목) 롤백해도 같은 가드가 돌아온다 — 그때는 hook 의
+regex 를 고치고 재설치한다.
 
 codex 게이트가 있던 마지막 정본은 `ffd6ec9:scripts/git-hooks/pre-push`(2026-09-03 이전 main).
 되돌리면 `codex`·`python3`·`perl` 요구와 `CODEX_SKIP`/`CODEX_ACK` 우회, `.git/codex-pre-push/` 로그가

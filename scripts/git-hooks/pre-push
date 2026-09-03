@@ -24,7 +24,9 @@ guard_workflow_self_exclusion() {
 
   # inline 형식(`paths-ignore: [ ... ]`)은 아래 블록 파서가 못 읽는다. 읽을 수 없는 형식이면
   # 통과시키지 않고 막는다(fail-closed) — 파싱 실패가 곧 우회가 되면 가드가 무의미하다.
-  if printf '%s\n' "$content" | grep -qE '^ *paths-ignore: *\['; then
+  # 파이프 대신 herestring: `grep -q` 가 매치 즉시 닫으면 printf 가 EPIPE(141)로 죽고 pipefail 이
+  # 조건을 거짓으로 만들어 64KB 초과 파일에서 검사가 통과돼 버린다.
+  if grep -qE '^ *paths-ignore: *\[' <<<"$content"; then
     echo "[pre-push] FAIL: deploy.yml 의 paths-ignore 가 inline 형식이다 — 이 가드는 블록 형식만" >&2
     echo "[pre-push]   읽는다. 블록 형식으로 두거나 scripts/git-hooks/pre-push 의 파서를 함께 고쳐라." >&2
     return 1

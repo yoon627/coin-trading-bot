@@ -21,8 +21,6 @@ pre-push codex review 가 codegraph MCP(`codegraph_explore`)에서 다중 세션
 
 - (종료) lock 직렬화·escalation timeout 은 정본에 랜딩됐고 pre-push codex 게이트 자체가 2026-09-03 제거됐다 — 후속 없음.
 
-draft plan → plan-reviewer(Claude only — 이 작업 자체가 codex hang 수정이라 codex 병행 생략) → 구현 → hook 실행 검증 → PR + .git/hooks 재설치.
-
 # Decisions
 
 - **직렬화 = mkdir-lock**(shell 내장, macOS flock 명령 부재): `${TMPDIR:-/tmp}/codex-pre-push.lock` atomic mkdir → 성공 직후 pid 파일 기록(acquire=mkdir 성공으로만 정의). **stale 판정(plan-review ③)**: ⓐ pid 있고 `kill -0` 실패 → stale, ⓑ pid 없으면 dir age > `CODEX_STALE_AGE`(기본 600s=timeout+grace+margin, 갓 생성 live lock evict 방지) 일 때만 stale. stale 이면 `rm -rf` 후 **continue(mkdir 재시도 — 제거≠획득)**. 획득 대기 상한 `CODEX_LOCK_WAIT`(escalation 으로 최대 점유 상한되므로 **600s** 로 단축), 30s 마다 "held by pid X for Ns" 출력. 초과 시 fail(BLOCK, 재시도/CODEX_SKIP). **release 는 소유 검증(plan-review ②)**: lock pid == `$$` 일 때만 `rm -rf`. `trap release EXIT`.

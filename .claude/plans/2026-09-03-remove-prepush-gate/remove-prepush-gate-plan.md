@@ -13,11 +13,12 @@ push 마다 `codex exec review`(high) 를 돌려 P0~P3 로 차단하던 pre-push
 
 - 2026-09-03: 사용자 결정 — "pre-push 에서 codex 리뷰를 받는 게 아니라 reviewer 에서 크레딧 있으면 codex 리뷰도 추가로". 근거: code-reviewer 의 codex 병행을 막던 agent hook 오탐이 PR #165 에서 고쳐졌고, 크레딧 소진이면 fail-closed 게이트가 모든 push 를 막는다(#165 push 2회 `CODEX_SKIP=1` 우회).
 - 2026-09-03: plan-reviewer(Claude 단독) CONDITIONAL — 설치본 `.git/hooks/pre-push`(338줄, 07-28)에 `guard_workflow_self_exclusion` 이 정의·호출 모두 없음을 실측(정본 381줄과 2 hunk 차이) → 남기려는 가드가 5주간 로컬에서 미작동. PR #165 미머지. wiki orphan/outbound 제약. 전부 아래 Decisions 로 반영.
+- 2026-09-03: PR #166. code-reviewer APPROVE → herestring 수정·README 한계 서술·옛 plan Next 교체 반영.
 - 2026-09-03: 슬림 hook 12케이스 통과, README 재작성, CLAUDE/AGENTS 4행, wiki 5페이지+index+smoke+log, 옛 plan 2건(prepush-codex-hardening·prepush-codegraph-off) done 종료. 설치본 재설치 후 이 브랜치 push 가 codex 없이 통과.
 
 # Next
 
-- PR 머지 순서: **#165 먼저, 그 다음 이 PR**(아래 Decisions). 머지 후 종료.
+- PR #166 머지 순서: **#165 먼저, 그 다음 #166**(아래 Decisions). 머지 후 종료.
 
 # Decisions
 
@@ -49,9 +50,13 @@ push 마다 `codex exec review`(high) 를 돌려 P0~P3 로 차단하던 pre-push
 
 # Review Disposition
 
+- code-reviewer(Claude 단독, codex 크레딧 소진으로 미가용): APPROVE — Major 0, Minor 4, Nit 1. **fix** inline 검사의 `printf | grep -q` 를 herestring 으로(pipefail+SIGPIPE 로 64KB 초과 deploy.yml 에서 fail-open — 1.8MB 재현 후 수정, 재검증 rc=1). **fix(문서)** README 의 "fail-closed" 를 inline 한 형태로 한정하고 파서 한계(주석·빈 줄 뒤 항목 미인식, 리터럴 표지라 `.git*/**` 미탐지·`.github/ISSUE_TEMPLATE/**` 과차단)와 Rollback 의 "가드 오탐엔 롤백이 답 아님" 추가. **fix** 옛 plan 2건 `# Next` 옛 줄 삭제. **defer** 블록 파서가 주석·빈 줄을 건너뛰게 고치는 것(pre-existing, 동작 확장 — `# Deferred`).
+
 - plan-reviewer 강한 우려 4: 설치본 드리프트(**fix** — Progress 기록 + README 경고 + 재설치 전 A1), PR #165 미머지(**fix** — 머지 순서 결정), wiki 링크 제약(**fix** — 링크 재배치), historical vs 현재 가드 모순(**fix** — current 로 범위 재정의). 약한 우려: 브랜치명 음성검사(fix), 옛 plan 2건(fix), A3 토큰(fix), AGENTS.md 변형(fix), 잔존물(README 명령), plan-git-tracking 주장(fix — 철회), `updated:` 갱신(fix), 누락 시나리오(fix — A1 12케이스). rollback 절(fix).
 
 # Deferred
+
+- pre-push 가드 블록 파서: `paths-ignore:` 다음 줄이 주석·빈 줄이면 뒤 항목을 못 보고 통과(pre-existing, 낮음 — PR 경로에선 `DeployWorkflowPathListTest` 가 최종 불변식). 고치려면 awk 에 `f&&/^ *(#|$)/{next}`.
 
 - 설치본 드리프트 자동 방지 없음 — 정본 변경 시 재설치를 사람이 기억해야 한다(중). 후보: `core.hooksPath` 를 tracked 디렉토리로 두되 옛 브랜치 worktree 의 hook 이 도는 부작용을 받아들이거나, CI 에서 설치본 해시 비교는 불가(로컬 파일)하므로 세션 시작 hook 에서 비교.
 - 이 repo 의 `.git/hooks/pre-push` 가 `~/.claude` 의 `install-hooks` 래퍼(main 직접 push 차단 + settings.json secret 스캔)를 점유·대체하고 있어 그 가드가 이 repo 엔 없다(⚠️ 설치 이력 미확인, `.git/hooks` 에 pre-commit 부재로 추론 — 중).
