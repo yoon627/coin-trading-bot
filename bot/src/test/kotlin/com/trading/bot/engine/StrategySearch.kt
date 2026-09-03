@@ -71,6 +71,24 @@ internal class StrategySearch(
         segment: Segment,
         points: List<SweepPoint>,
         options: Options = Options(),
+    ): Map<SweepPoint, Metrics> = measureResolved(fixtures, segment, points, options) { it.toConfig(options.reentryMode, options.feeRate) }
+
+    /**
+     * 좌표계로 표현할 수 없는 config(Stage B 의 ATR·부분익절 등)를 직접 넘기는 경로. 좌표는 식별자로만 쓰인다.
+     */
+    suspend fun measureWithConfigs(
+        fixtures: Map<String, List<Candle>>,
+        segment: Segment,
+        configs: Map<SweepPoint, BacktestConfig>,
+        options: Options = Options(),
+    ): Map<SweepPoint, Metrics> = measureResolved(fixtures, segment, configs.keys.toList(), options) { configs.getValue(it) }
+
+    private suspend fun measureResolved(
+        fixtures: Map<String, List<Candle>>,
+        segment: Segment,
+        points: List<SweepPoint>,
+        options: Options,
+        configFor: (SweepPoint) -> BacktestConfig,
     ): Map<SweepPoint, Metrics> {
         val acc = points.associateWith { Accumulator() }
 
@@ -92,7 +110,7 @@ internal class StrategySearch(
                     market = market,
                     input = input,
                     warmup = BacktestEngine.MIN_CANDLES,
-                    config = point.toConfig(options.reentryMode, options.feeRate),
+                    config = configFor(point),
                 )
                 acc.getValue(point).add(market, measurement, options.keepTrades)
             }

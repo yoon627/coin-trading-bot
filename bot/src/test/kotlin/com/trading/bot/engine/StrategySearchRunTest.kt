@@ -127,9 +127,11 @@ class StrategySearchRunTest {
             log = ::println,
         )
 
-        val out = Path.of("build/reports/strategy-search-yearly.md")
+        val stageBRows = StrategySearchStageB().run(yearly, bull, ::println)
+        val out = Path.of("build/reports/parameter-search.md")
         Files.createDirectories(out.parent)
-        Files.writeString(out, outcome.report)
+        Files.writeString(out, outcome.report + "\n" + StrategySearchStageB.render(stageBRows))
+        assertTrue(stageBRows.map { it.group }.distinct().containsAll(listOf("레짐필터", "ATR", "부분익절")), "Stage B 세 축 모두 측정")
         println("[stageA] 리포트 기록: ${out.toAbsolutePath()}")
 
         assertTrue(outcome.report.contains("통과 ${outcome.survivors.size} / ${outcome.uniqueBehaviours}"), "분모와 함께 보고")
