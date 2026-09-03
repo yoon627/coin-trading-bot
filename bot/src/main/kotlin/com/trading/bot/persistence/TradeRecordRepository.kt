@@ -2,6 +2,7 @@ package com.trading.bot.persistence
 
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.persistence.entity.TradeRecordEntity
+import com.trading.common.strategy.AccumulateLadder
 import kotlinx.coroutines.reactor.awaitSingle
 import org.springframework.data.domain.Sort
 import org.springframework.data.r2dbc.repository.Query
@@ -43,6 +44,7 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
                COALESCE(SUM(pnl_percent), 0) AS total_pnl
         FROM trade_records
         WHERE side = 'SELL' AND pnl_percent IS NOT NULL
+          AND (strategy IS NULL OR strategy <> '${AccumulateLadder.STRATEGY_NAME}')
         GROUP BY user_id
         """
     )

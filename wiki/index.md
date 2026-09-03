@@ -13,7 +13,8 @@
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집, `MarketDataStore`, half-open 워치독
 - [[kis-stock-trading-flow]] — KIS 국내주식 봇의 시작·시세·신호·포지션 사이클
 - [[kis-order-lifecycle]] — KIS 수동·자동 주문의 검증·WAL·API 송신·체결 reconcile
-- [[persistence-schema]] — Flyway V1~V22, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속
+- [[accumulate-ladder]] — 메이저 코인 사다리 매매(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만)와 알트 유니버스 자동 선정 — 둘 다 기본 off, 롤백은 forward-off
+- [[persistence-schema]] — Flyway V1~V23, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속
 - [[trade-record-volume-semantics]] — `trade_records.volume` 이 엔진은 총보유량 스냅샷, 수동은 증분인 이유와 보유량 산출 규칙, 추정치가 섞인 그룹의 잔량 0 허용 오차
 - [[backtest-engine]] — 단일티커·all-in 구조와 라이브 정합의 한계
 

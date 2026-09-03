@@ -110,13 +110,17 @@ coin-trading-bot/
 기본 데드크로스 대신 "어깨"에서 조기 이탈하는 것이 목적이다. 단 차트 청산은 `chartExitEnabled` 가 켜져
 있을 때만 평가되고 `maxHoldDays=1`이면 보유가 1거래일로 잘리므로, 스윙 의도로 쓰려면 두 값을 함께 조정해야 한다.
 
-**리스크 관리:** 익절 +2% / 손절 -5% / 트레일링 스탑 고점 대비 -2% / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋. 50일 MA 아래 매수 차단은 **백테스트 전용**(`useMarketFilter` opt-in, 기본 off)이며 라이브 봇 매수 경로에는 적용되지 않는다.
+**리스크 관리:** 익절 +5% / 손절 -5% / 트레일링 스탑 고점 대비 -2%(고점 +3% 도달 후) / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋. 50일 MA 아래 매수 차단은 **백테스트 전용**(`useMarketFilter` opt-in, 기본 off)이며 라이브 봇 매수 경로에는 적용되지 않는다.
+
+**적립 프로파일 (`trading.accumulate.*`, 기본 off):** 티커별로 스윙 대신 사다리 매매를 택할 수 있다. `TradingEngine.processTicker` 는 공용 preamble(가격·동기화·pending reconcile) 뒤 `SWING`/`ACCUMULATE` 로 갈리고, 적립 경로는 `common` 의 `AccumulateLadder`(순수 판정: 눌림 진입·단계 매수·단계 매도·예산 상한)를 호출해 `PositionManager.buyRung`/`sellVolume` 로 체결한다. 손절·익절·트레일링·보유상한은 적용되지 않는다. 사다리 장부(`rungs_filled`·`last_action_price`·`flat_peak`)는 `trading_states`(V23)에 두고 잔고·평단은 종전대로 거래소에서 복원하며, 두 소스가 갈라지면(부분체결·수동 매매) `LadderStateMapper` 가 매 tick 정합을 맞춘다(정합 상태에서는 no-op). 같은 판정식을 `AccumulateBacktest`(별도 D1 시뮬레이터)가 공유한다.
+
+**알트 유니버스 자동 선정 (`trading.universe.*`, 기본 off):** `UniverseSelector`(싱글톤, 공개 REST) 가 24h 거래대금 상위를 고르고 `TradingEngine.applyTickers` 가 활성 집합을 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 는 파생값을 되쓰지 않는다.
 
 ---
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V21)
+### Flyway 마이그레이션 (V1~V23)
 
 | 버전 | 내용 |
 |------|------|
@@ -133,6 +137,8 @@ coin-trading-bot/
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다 |
 | V20 | `trading_states` 에 `pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림을 재시작 횟수와 무관한 경과시간으로 판정 |
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구. `buildSellRecord` 가 `strategy` 를 안 넘겨 그때까지의 매도가 전부 `strategy=NULL` 이었다(전략별 손익이 통째로 `unknown` 으로 집계). 귀속은 포지션 구간 내 첫 번째 non-manual BUY 기준 — 수동 매수는 `TradingState` 를 세우지 않아 런타임 `entryStrategy` 후보가 아니다 |
+| V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130) |
+| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`. 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
 
 ### 핵심 테이블
 

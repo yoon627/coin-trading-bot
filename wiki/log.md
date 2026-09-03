@@ -110,3 +110,16 @@ V21 백업 테이블을 DROP 하려다 pre-push codex P1 지적으로 폐기한 
 | [[swing-strategies]] | 무릎 백테 판정을 교체 전 fixture 기준 historical 로 표기 — 새 fixture 재실행은 미완 |
 
 fixture 를 `sources` 로 둔 페이지는 fixture 가 바뀌면 "현재 결과"로 읽히는 수치를 재측정하거나 historical 로 표기해야 한다 — 이번엔 #128 만 재측정했고 무릎 비교는 표기만 했다.
+
+## [2026-09-02] ingest | accumulate-ladder 1페이지 추가 + 3페이지 갱신
+
+메이저 코인 사다리 매매 프로파일과 알트 유니버스 자동 선정(기본 off) 구현을 적재.
+
+| 페이지 | 변경 |
+|---|---|
+| [[accumulate-ladder]] | 신규 — 사다리 규칙·원자 전이·체결 비율 조건부 rung·정합 매퍼·현금 경쟁·유니버스 교체·백테 프로파일·forward-off 롤백 |
+| [[trading-engine-loop]] | `processTicker` 프로파일 dispatch·`applyTickers`·`reservedKrw` 절 추가 |
+| [[exit-gates]] | 적립 티커는 게이트 미적용 명시 |
+| [[persistence-schema]] | V23 행, 최신 V23 |
+
+출처: 코드 실측(AccumulateLadder·AccumulateBacktest·TradingEngine·PositionManager·LadderStateMapper·UniverseSelector), V23 을 실제 Postgres 에 적용(`scripts/run-db-tests.sh` 3건/skip 0), `AccumulateBacktestTest` 격자 출력, spec `docs/superpowers/specs/2026-09-02-accumulate-ladder-design.md`. 진행 상태는 plan `2026-09-02-accumulate-profile` 소유.

@@ -2,9 +2,9 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-08-23
+updated: 2026-09-02
 claim_state: current
-verified: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
+verified: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
@@ -30,6 +30,14 @@ sources:
 6. **보유 중이면 청산 평가** — `updatePeakPrice`(오를 때만 durable flush) → `decideSell` → `sell`.
 7. **당일 1회 가드** — `position || boughtToday` 면 매수 평가 자체를 생략.
 8. **매수 평가** — D1 캔들이 store 에 전략이 요구하는 만큼(`max(MIN_DAILY_CANDLES, strategy.minCandles)`) store 에 있으면 store, 아니면 REST 60개로 폴백해 [[swing-strategies]] 의 `shouldBuy` 판정.
+
+## 프로파일 분기 (2026-09-02)
+
+1~5 는 두 프로파일 공용 preamble 이고, 그 뒤 `profileOf(ticker)` 가 `runSwing`(6~8 그대로) 과 `runAccumulate` 를 가른다. `trading.accumulate.tickers` 에 든 티커만 ACCUMULATE 이며 기본은 비어 있다. 적립 경로는 손절·트레일링·익절·차트·일일리셋을 **하나도 호출하지 않고** `AccumulateLadder` 판정만 따른다 — 상세는 [[accumulate-ladder]]. 트레일링 고점 flush(preamble 의 `updatePeakPrice`)도 SWING 만 탄다.
+
+활성 티커 집합은 `start()` 가 `적립 티커 ∪ 요청 목록` 으로 만들고, `trading.universe.auto` 가 켜져 있으면 기동 시·09:00 경계에 `refreshUniverse()` → `applyTickers()` 가 알트 목록을 거래대금 상위로 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 에는 파생 집합을 되쓰지 않는다.
+
+스윙 `buy()` 는 적립이 아직 투입하지 않은 예산(`reservedKrw`)을 뺀 잔고로 사이징한다 — 알트가 적립 현금을 선점하지 못하게.
 
 ## 청산 사유 우선순위 (decideSell, :322-334)
 

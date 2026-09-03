@@ -26,6 +26,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import io.mockk.spyk
 import io.mockk.verify
 import java.util.concurrent.atomic.AtomicBoolean
@@ -424,4 +425,19 @@ class UserTradingManagerTest {
         assertEquals("volatility_breakout", cache[7L], "캐시에 DB 의 죽은 전략명이 그대로 남았다")
     }
 
+    @Test
+    fun `startBot persists the requested tickers, not the engine's derived active set`() = runTest {
+        // 자동 유니버스·적립 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면, 기능을 꺼도 그날의 목록이
+        // 사용자 의도로 굳어 되돌릴 수 없다 — 저장은 사용자가 준 목록만.
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = slot<BotStateEntity>()
+        every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
+        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC", "KRW-ETH", "KRW-SOL")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+
+        manager.startBot(1L, listOf("KRW-ETH"), null)
+
+        assertEquals("KRW-ETH", saved.captured.tickers)
+    }
 }

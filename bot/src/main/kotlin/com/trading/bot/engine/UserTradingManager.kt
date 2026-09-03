@@ -12,7 +12,9 @@ import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
+import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
+import com.trading.common.config.UniverseProperties
 import com.trading.common.strategy.TradingStrategy
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -54,6 +56,10 @@ class UserTradingManager(
     private val userSecretsService: UserSecretsService,
     private val marketDataStore: MarketDataStore,
     private val tradingStateService: TradingStateService,
+    private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
+    private val universeProperties: UniverseProperties = UniverseProperties(),
+    private val universeSource: UniverseSource? = null,
+    private val dailyCandleCache: DailyCandleCache? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -256,6 +262,10 @@ class UserTradingManager(
                     "halted" to state.halted,
                     // 보유 여부 미확정으로 매수가 막힌 상태 — 로그를 안 보고도 원인을 알 수 있게 노출한다.
                     "unsynced" to state.unsynced,
+                    "profile" to engine.profileNameOf(ticker),
+                    "rungs" to state.rungsFilled,
+                    // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 하락장에서 단이 안 채워지는 이유를 여기서 본다.
+                    "accumulate_skip" to (state.accumulateSkipReason ?: ""),
                 )
             } ?: emptyList<Map<String, Any>>()),
             "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
@@ -380,6 +390,10 @@ class UserTradingManager(
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
             marketDataStore = marketDataStore,
+            accumulateProperties = accumulateProperties,
+            universeProperties = universeProperties,
+            universeSource = universeSource,
+            dailyCandleCache = dailyCandleCache,
         )
     }
 

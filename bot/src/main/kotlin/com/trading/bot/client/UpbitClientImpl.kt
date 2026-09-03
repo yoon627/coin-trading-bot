@@ -2,6 +2,7 @@ package com.trading.bot.client
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.bot.domain.Account
+import com.trading.bot.domain.MarketInfo
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.Ticker
@@ -52,6 +53,16 @@ class UpbitClientImpl(
             .retrieve()
             .onStatus(HttpStatusCode::isError) { handleError(it) }
             .bodyToMono<List<Candle>>()
+            .retryOnRateLimit()
+            .awaitSingle()
+    }
+
+    override suspend fun getMarkets(): List<MarketInfo> {
+        return upbitWebClient.get()
+            .uri("/v1/market/all?is_details=true")
+            .retrieve()
+            .onStatus(HttpStatusCode::isError) { handleError(it) }
+            .bodyToMono<List<MarketInfo>>()
             .retryOnRateLimit()
             .awaitSingle()
     }
