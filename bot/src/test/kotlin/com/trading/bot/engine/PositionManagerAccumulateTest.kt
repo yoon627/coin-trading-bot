@@ -242,6 +242,18 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `sellVolume skips an order that shrinks below the exchange minimum after capping to free balance`() = runTest {
+        // 장부 0.001 기준 1단(0.00025 × 52M = 13,000원)은 통과했지만 free 가 0.00005(2,600원)뿐 — 주문하면 매 tick 거부된다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.00005", "50000000"))
+
+        val state = holding4()
+        assertNull(manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.00025, 52_000_000.0, isFinal = false)))
+
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+        assertEquals(4, state.rungsFilled)
+    }
+
+    @Test
     fun `sellVolume does not lose a decimal place to binary rounding`() = runTest {
         // BigDecimal(0.0003) 은 0.000299999… 라 8자리 내림이 0.00029999 가 된다 — 한 자리 모자란 주문이 나가고 잔량 1e-8 이 남는다.
         coEvery { upbitClient.getAccounts() } returns listOf(btc("0.001", "50000000"))

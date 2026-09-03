@@ -107,5 +107,9 @@ class AccumulateLadderTest {
         assertTrue(runCatching { LadderParams(budgetKrw = 100_000.0, maxRungs = 0, stepDownPct = 3.0, stepUpPct = 3.0) }.isFailure)
         assertTrue(runCatching { LadderParams(budgetKrw = 100_000.0, maxRungs = 5, stepDownPct = 0.0, stepUpPct = 3.0) }.isFailure)
         assertTrue(runCatching { LadderParams(budgetKrw = 100_000.0, maxRungs = 5, stepDownPct = 3.0, stepUpPct = -1.0) }.isFailure)
+        // 100% 눌림은 기준가 0 — 영영 진입하지 않는 설정. Infinity 는 무한 주문액·트리거.
+        assertTrue(runCatching { LadderParams(budgetKrw = 100_000.0, maxRungs = 5, stepDownPct = 100.0, stepUpPct = 3.0) }.isFailure)
+        assertTrue(runCatching { LadderParams(budgetKrw = Double.POSITIVE_INFINITY, maxRungs = 5, stepDownPct = 3.0, stepUpPct = 3.0) }.isFailure)
+        assertTrue(runCatching { LadderParams(budgetKrw = 100_000.0, maxRungs = 5, stepDownPct = 3.0, stepUpPct = Double.POSITIVE_INFINITY) }.isFailure)
     }
 }

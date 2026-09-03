@@ -149,9 +149,11 @@ class TradingEngineUniverseTest {
         val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
 
         engine.start(listOf("KRW-ETH"), mapOf("KRW-Z" to TradingState("KRW-Z", pendingBuyUuid = "orphan"), "KRW-OLD" to TradingState("KRW-OLD")))
+        // 진입 흔적이 없는 잔재(OLD)는 애초에 싣지 않는다 — 유니버스가 회전할수록 쌓이는 행마다 계좌를 조회하지 않게.
+        assertFalse("KRW-OLD" in engine.getActiveTickers())
+        assertTrue("KRW-Z" in engine.getActiveTickers())
         engine.stop()
 
-        // 갱신 뒤: pending 인 Z 는 남고, 무포지션 잔재 OLD 는 빠진다.
         engine.refreshUniverse()
         assertTrue("KRW-Z" in engine.getActiveTickers())
         assertFalse("KRW-OLD" in engine.getActiveTickers())

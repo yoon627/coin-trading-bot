@@ -14,9 +14,10 @@ data class LadderParams(
 ) {
     init {
         require(maxRungs >= 1) { "maxRungs must be >= 1, got $maxRungs" }
-        require(budgetKrw > 0.0) { "budgetKrw must be > 0, got $budgetKrw" }
-        require(stepDownPct > 0.0) { "stepDownPct must be > 0, got $stepDownPct" }
-        require(stepUpPct > 0.0) { "stepUpPct must be > 0, got $stepUpPct" }
+        require(budgetKrw.isFinite() && budgetKrw > 0.0) { "budgetKrw must be a finite positive number, got $budgetKrw" }
+        // 100% 이상이면 매수 기준가가 0 이하가 되어 영영 진입하지 않는다 — 조용히 죽는 설정은 기동에서 막는다.
+        require(stepDownPct.isFinite() && stepDownPct > 0.0 && stepDownPct < 100.0) { "stepDownPct must be in (0, 100), got $stepDownPct" }
+        require(stepUpPct.isFinite() && stepUpPct > 0.0) { "stepUpPct must be a finite positive number, got $stepUpPct" }
         require(budgetKrw / maxRungs >= AccumulateLadder.MIN_ORDER_KRW) {
             "budgetKrw / maxRungs must be >= ${AccumulateLadder.MIN_ORDER_KRW} KRW (Upbit minimum order), got ${budgetKrw / maxRungs}"
         }
