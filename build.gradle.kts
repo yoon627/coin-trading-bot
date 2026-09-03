@@ -31,5 +31,7 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
+        // 기본 512m 로는 파라미터 스윕(좌표 5만 × 마켓 8의 지표 집계)이 힙을 넘긴다. 일반 테스트에는 영향 없다.
+        maxHeapSize = "2g"
     }
 }
