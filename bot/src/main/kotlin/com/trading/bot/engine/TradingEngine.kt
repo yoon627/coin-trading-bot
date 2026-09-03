@@ -287,6 +287,8 @@ class TradingEngine(
             log.warn("Could not check exchange holdings for dormant tickers of user {} — leaving {} dormant: {}", userId, dormant.keys, e.message)
             return
         }
+        // 조회가 성공했을 때만 판정을 끝낸다 — 실패는 위에서 return 해 dormant 를 남기고 다음 기회(루프·09:00 갱신)에 재시도.
+        dormantStates = emptyMap()
         val revived = dormant.filterKeys { it.substringAfter("-") in held }
         if (revived.isEmpty()) return
         revived.forEach { (ticker, state) -> states[ticker] = state }
@@ -300,6 +302,8 @@ class TradingEngine(
      */
     internal suspend fun refreshUniverse(): Boolean {
         val source = universeSource?.takeIf { universeProperties.auto } ?: return false
+        // 기동 시 계좌 조회가 실패해 남은 dormant 행이 있으면 여기서 다시 판정한다 — 새 목록에 없으면 이번이 살릴 기회다.
+        if (dormantStates.isNotEmpty()) reviveHeldDormantStates()
         val selected = source.select(exclude = accumulateTickers, count = universeProperties.altCount)
         if (selected == null) {
             log.warn("Universe refresh failed for user {} — keeping {}", userId, activeTickers)
@@ -469,7 +473,7 @@ class TradingEngine(
         val now = System.currentTimeMillis()
         if (now - (ladderSyncedAtMs[ticker] ?: 0L) >= LADDER_SYNC_INTERVAL_MS) {
             ladderSyncedAtMs[ticker] = now
-            positionManager.syncPosition(ticker, state)
+            positionManager.syncPosition(ticker, state, clearWhenEmpty = true)
             if (state.unsynced) return
         }
         val params = accumulateProperties.ladderParams()
