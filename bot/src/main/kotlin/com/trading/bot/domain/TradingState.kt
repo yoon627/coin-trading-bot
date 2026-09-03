@@ -70,6 +70,8 @@ data class TradingState(
     // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 "주문 전부터 있던 코인"을 체결로 오판하지 않게 한다.
     var pendingBuyPriorVolume: Double? = null,
     var pendingSellTriggerPrice: Double? = null,
+    // 매도 주문 직전 free 보유량. 부분 체결 뒤 unlock 지연으로 거래소 잔량이 과소일 때 잔량의 하한.
+    var pendingSellPriorVolume: Double? = null,
     // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 상태 API 노출용, 비영속.
     var accumulateSkipReason: String? = null,
 ) {
@@ -173,6 +175,7 @@ data class TradingState(
         pendingSellSince = null
         pendingSellAlerted = false
         pendingSellTriggerPrice = null
+        pendingSellPriorVolume = null
     }
 
     /** #19: 수동 해제 — halt 플래그·사유·실패 카운터를 초기화해 다음 tick 부터 reconcile/매매를 재개한다. */
