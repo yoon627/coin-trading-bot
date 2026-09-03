@@ -127,3 +127,7 @@ fixture 를 `sources` 로 둔 페이지는 fixture 가 바뀌면 "현재 결과"
 ## [2026-09-03] query | yearly-strategy-comparison — 운영 8종 1년 전략 비교 1페이지 추가
 
 fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(재진입 2모드)·적립 사다리·단순보유를 고정 노셔널 예산 대비 순수익률·봉단위 equity MDD·노출로 비교. 출처: `YearlyStrategyComparisonTest`(`RUN_YEARLY_COMPARE=true`) 산출물, plan `2026-09-03-yearly-strategy-compare`. 진행 상태는 plan 소유.
+
+## [2026-09-03] ingest | pre-push codex 게이트 제거
+- [[prepush-codex-review]] 재정의(current): deploy.yml 가드만 남김 + 제거 이유·롤백·설치본 5주 드리프트. [[jdk-gradle-toolchain]]·[[worktree-workflow]] 의 push 게이트 서술 정정, [[plan-git-tracking]] 의 "pre-commit 이 plans 를 스캔" 주장은 이 clone 에 pre-commit 이 없어 철회. index·smoke.sh 갱신.
+- 근거: scripts/git-hooks/pre-push 슬림본 12케이스 실행, `.git/hooks/pre-push` 338줄 vs 정본 381줄 diff, PR #165, ~/.claude PR #156.
