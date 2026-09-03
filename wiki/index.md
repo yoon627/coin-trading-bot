@@ -24,7 +24,7 @@
 - [[migration-numbering]] — 미머지 브랜치의 Flyway 번호 선점 문제
 - [[plan-git-tracking]] — `.claude/plans/` 를 git 추적하는 이유
 - [[worktree-workflow]] — 분기·병렬 제약·머지 후 자동 정리
-- [[prepush-codex-review]] — push 게이트: P0/P1 차단, fail-closed, 480초 timeout
+- [[prepush-codex-review]] — pre-push 는 `deploy.yml` paths-ignore 자기제외 가드만(fail-closed inline); codex 리뷰 게이트는 2026-09-03 제거 — 이유·되돌리는 법·설치본 드리프트
 - [[db-integration-test-harness]] — DB 통합테스트는 Testcontainers 가 아니라 외부 제공 Postgres 를 쓴다 (Docker 29 비호환)
 - [[docs-code-sync]] — 어떤 변경이 어떤 문서를 갱신시키는가
 - [[github-issues-backlog]] — 백로그는 이슈 단일 소스, wiki 는 백로그가 아니다

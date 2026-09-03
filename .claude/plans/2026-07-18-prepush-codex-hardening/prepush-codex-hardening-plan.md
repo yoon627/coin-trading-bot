@@ -1,8 +1,8 @@
 ---
 title: prepush-codex-hardening — pre-push codex hang 재발방지 (flock 직렬화 + timeout)
-status: in_progress
+status: done
 started: 2026-07-18
-updated: 2026-07-18
+updated: 2026-09-03
 ---
 
 # Goal
@@ -18,6 +18,8 @@ pre-push codex review 가 codegraph MCP(`codegraph_explore`)에서 다중 세션
 - 2026-07-18(구현·검증): hook 에 lock/timeout 함수 3개(acquire_codex_lock·release_codex_lock·run_codex_timeout) + codex 호출 2지점 대체(escalation·소유·age-stale 반영). bash -n OK, 함수 실측 9/0, 실제 codex escalation 유한 리턴 실증. README(환경변수·rollback) 갱신, .git/hooks 재설치(identical). code-review 메인 직접(plan-review 강검토+실측으로 subagent 생략). → 커밋·CODEX_SKIP push·PR.
 
 # Next
+
+- (종료) lock 직렬화·escalation timeout 은 정본에 랜딩됐고 pre-push codex 게이트 자체가 2026-09-03 제거됐다 — 후속 없음.
 
 draft plan → plan-reviewer(Claude only — 이 작업 자체가 codex hang 수정이라 codex 병행 생략) → 구현 → hook 실행 검증 → PR + .git/hooks 재설치.
 

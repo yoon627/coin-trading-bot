@@ -2,7 +2,7 @@
 title: worktree 작업 방식 — 분기·병렬 제약·머지 후 자동 정리
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-09-03
 claim_state: current
 verified: 2026-07-28 — git worktree list 실측(main + 3개), 이슈 #49 본문, 글로벌 CLAUDE.md §8
 sources:
@@ -24,7 +24,7 @@ sources:
 
 1. **마이그레이션 번호 충돌** — 각 브랜치가 자기 분기 시점의 최신 번호만 안다([[migration-numbering]]).
 2. **base 의존** — 한 작업이 다른 작업의 코드 위에 서면 동시 진행이 불가능하다(rebase 냐 stack 이냐를 먼저 정해야 한다).
-3. **push 직렬화** — pre-push codex 리뷰가 직렬화되어 동시 push 는 대기가 길어진다([[prepush-codex-review]]).
+3. **push 직렬화 없음** — pre-push 는 `deploy.yml` 가드만 남아(2026-09-03) 여러 worktree 의 동시 push 가 서로 대기하지 않는다([[prepush-codex-review]]).
 4. **worklog 정확성** — worktree 작업은 그 worktree 세션에서 시작·마무리한다. 한 세션에서 여러 worktree 를 오가면 작업시간이 한 프로젝트 로그에 뭉친다.
 
 착수 순서와 현재 병렬 제약은 **GitHub 이슈 #49 가 단일 소스**다 — worktree 를 매번 전수조사해 재판정하지 않는다.
