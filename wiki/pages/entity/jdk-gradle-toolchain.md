@@ -2,7 +2,7 @@
 title: 빌드 환경 — JDK 21 고정, Gradle 8.12, JDK 25 비호환
 category: entity
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-09-03
 claim_state: current
 verified: 2026-07-28 — gradle-wrapper.properties(gradle-8.12-bin.zip), build.gradle.kts:22 JavaLanguageVersion.of(21)
 sources:
@@ -47,4 +47,4 @@ JAVA_HOME=/path/to/jbr-21.0.9/Contents/Home ./gradlew test
 
 ## 왜 중요한가
 
-빌드가 안 도는 상태에서는 push 게이트를 통과할 수 없다 — pre-push hook 이 fail-closed 라 검증 실패가 곧 push 차단이다([[prepush-codex-review]]). 모듈 구조와 산출물은 [[architecture-overview]] 참조.
+빌드가 안 돌아도 push 는 막히지 않는다 — pre-push hook 은 `deploy.yml` 가드만 남아(codex 게이트 2026-09-03 제거, [[prepush-codex-review]]) 검증 실패는 CI·배포에서 드러난다. 모듈 구조와 산출물은 [[architecture-overview]] 참조.

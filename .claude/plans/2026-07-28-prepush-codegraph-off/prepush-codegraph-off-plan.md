@@ -1,8 +1,8 @@
 ---
 title: prepush-codegraph-off — pre-push codex 리뷰에서 codegraph MCP 비활성화 (#60)
-status: in_progress
+status: done
 started: 2026-07-28
-updated: 2026-07-28
+updated: 2026-09-03
 ---
 
 # Goal
@@ -18,6 +18,8 @@ updated: 2026-07-28
 - 2026-07-28: **실측 검증 통과.** codegraph serve **6개 가동**(경합 조건 성립) 상태에서 `CODEX_SKIP` 없이 push → **3분 47초에 정상 완료**(상한 480초). 수정 전 동일 조건에서 2회 연속 타임아웃한 것과 대비된다. hook 로그: `running codex exec review` → `codex found no blocking issues` — **bypass 가 아니라 리뷰가 실제로 돌아 통과**했다. 리뷰 JSONL 파싱 결과 `item.type == mcp_tool_call` **0건**(grep 이 잡은 문자열은 diff 안의 브랜치명·문서 내용). 이 push 가 code-review 를 겸했다(P0/P1 0).
 
 # Next
+
+- (종료) codegraph 비활성화(#60)는 정본에 랜딩됐고 pre-push codex 게이트 자체가 2026-09-03 제거됐다 — 후속 없음.
 
 PR 생성(`Closes #60`) → 머지 → worktree 정리.
 

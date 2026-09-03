@@ -40,7 +40,7 @@ check "백테를 라이브와 같다고 볼 수 있나"  "$P/concept/backtest-en
 check "worktree 를 지울 때 주의할 점"      "$P/decision/worktree-workflow.md"          "gitignored|경고 없이"
 check "JDK 25 로 빌드가 깨지면"            "$P/entity/jdk-gradle-toolchain.md"         "JAVA_HOME"
 check "청산 조건 우선순위"                 "$P/concept/trading-engine-loop.md"         "STOP_LOSS.*TRAILING"
-check "push 가 막히면"                     "$P/decision/prepush-codex-review.md"       "CODEX_ACK|CODEX_SKIP"
+check "push 가 막히면"                     "$P/decision/prepush-codex-review.md"       "paths-ignore|자기제외"
 check "보유 중 설정을 바꾸면 청산 기준은"  "$P/concept/exit-gates.md"                  "소비하지 않는|즉시 적용"
 
 # 음성 검사: 진행 중 작업의 상태는 plan·이슈 소유다(WIKI.md §1).

@@ -2,7 +2,7 @@
 title: .claude/plans/ 를 git 추적한다 (이 repo 고유)
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-09-03
 claim_state: current
 verified: 2026-07-28 — .gitignore:62-71 의 `.claude/*` + `!.claude/tasks/` + `!.claude/plans/` 실측, git check-ignore .claude/plans = not ignored
 sources:
@@ -25,7 +25,7 @@ tracked 로 두면 부수 효과가 하나 더 있다: plan 을 브랜치와 함
 - 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`)하거나 작업 커밋에 포함한다.
 - **미커밋 plan 변경이 있으면 `git worktree remove` 가 거부한다** — tracked 라서 `git status` 에 뜨기 때문이다. 이건 안전장치다([[worktree-workflow]]).
 - 글로벌 `/e`·`/c`·`/wt` skill 은 plans 가 gitignored 라고 전제하고 만들어졌다(worktree 삭제 전 main 에 백업하는 절차 등). 이 repo 에선 그 전제가 어긋나며, **plan 이 git 에 있으므로 별도 백업이 불필요**하다.
-- plan 에 raw token·credential·PII 를 붙여넣지 않는다. tracked 라 그대로 원격에 올라간다. pre-commit 검사가 staged `plans/*.md` 를 스캔한다([[prepush-codex-review]]).
+- plan 에 raw token·credential·PII 를 붙여넣지 않는다. tracked 라 그대로 원격에 올라간다. **이 clone 엔 pre-commit hook 이 설치돼 있지 않다**(2026-09-03 확인 — `~/.claude` 의 `pre-commit-check` 는 그 repo 에만 설치) — 스캔에 기대지 말 것.
 
 ## plan 과 wiki 의 역할 분리
 
