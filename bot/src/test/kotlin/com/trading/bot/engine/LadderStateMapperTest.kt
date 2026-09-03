@@ -57,6 +57,19 @@ class LadderStateMapperTest {
     }
 
     @Test
+    fun `cost tolerance agrees with the ninety percent sell rule`() {
+        // 4단에서 한 단이 90% 체결돼 rung 을 소모(→3): 남은 원가 3.1단은 3 으로 읽혀야 한다(다시 4 로 살아나면 안 된다).
+        val consumed = TradingState("KRW-BTC", position = true, avgBuyPrice = 20_000.0, holdVolume = 3.1, rungsFilled = 3, lastActionPrice = 20_000.0)
+        assertNull(LadderStateMapper.reconcile(consumed, params, price = 20_000.0))
+        assertEquals(3, consumed.rungsFilled)
+
+        // 89% 체결이라 rung 을 남겼다(4): 남은 원가 3.11단은 4 로 읽혀야 한다.
+        val kept = TradingState("KRW-BTC", position = true, avgBuyPrice = 20_000.0, holdVolume = 3.11, rungsFilled = 4, lastActionPrice = 20_000.0)
+        assertNull(LadderStateMapper.reconcile(kept, params, price = 20_000.0))
+        assertEquals(4, kept.rungsFilled)
+    }
+
+    @Test
     fun `a normal partial sell does not trip the cost cap`() {
         // 5단(원가 100,000) 에서 1/5 을 팔면 원가 80,000·4단 — 부동소수 오차로 5단 요구가 나오면 안 된다.
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 20_000.0, holdVolume = 4.0, rungsFilled = 4, lastActionPrice = 20_000.0)

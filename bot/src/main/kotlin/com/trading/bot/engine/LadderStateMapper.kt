@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.domain.TradingState
+import com.trading.common.strategy.AccumulateLadder
 import com.trading.common.strategy.LadderInput
 import com.trading.common.strategy.LadderParams
 import kotlin.math.ceil
@@ -58,10 +59,12 @@ object LadderStateMapper {
         }
     }
 
-    // 원가 / 단당 금액의 올림. 단 매수는 매번 단당 KRW 를 쓰고 분할 매도는 원가를 정확히 1/n 씩 줄이므로 정상 경로에서는
-    // 항상 장부와 같다 — 수수료·부동소수 오차만큼 여유를 둔다.
+    // 원가 / 단당 금액의 올림. 단 매수는 매번 단당 KRW 를 쓰고 분할 매도는 원가를 1/n 씩 줄이므로 정상 경로에서는 장부와 같다.
+    // 허용치는 매도 rung 소모 기준(SELL_FILL_RATIO)과 짝이다: 90% 체결로 한 단을 지우면 원가가 x.1 단 남는데 그것이 다시
+    // 올림돼 살아나면 안 되고, 89% 체결로 단을 남겼으면(x.11) 올림돼 남아야 한다 — 그 경계가 1 − 0.9 = 0.1 이다.
     private fun rungsByCost(state: TradingState, params: LadderParams): Int =
         ceil(state.avgBuyPrice * state.holdVolume / params.rungAmountKrw - COST_TOLERANCE_RUNGS).toInt().coerceIn(1, params.maxRungs)
 
-    private const val COST_TOLERANCE_RUNGS = 0.05
+    // 경계(x.1)에서 부동소수 오차로 올림이 튀지 않게 아주 작은 여유만 더한다 — 0.01 처럼 크게 두면 89% 체결(x.11)이 x 로 내려간다.
+    private const val COST_TOLERANCE_RUNGS = (1.0 - AccumulateLadder.SELL_FILL_RATIO) + 1e-6
 }

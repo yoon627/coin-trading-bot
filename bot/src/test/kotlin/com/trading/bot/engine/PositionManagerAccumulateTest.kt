@@ -331,7 +331,7 @@ class PositionManagerAccumulateTest {
         manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
 
         assertTrue(state.position)
-        assertEquals(0.00005, state.holdVolume)
+        assertEquals(0.00005, state.holdVolume, 1e-12)
         assertEquals(1, state.rungsFilled)
         assertEquals(52_000_000.0, state.lastActionPrice)
     }
@@ -376,6 +376,24 @@ class PositionManagerAccumulateTest {
         assertEquals(0.00076, state.holdVolume)
         assertTrue(state.position)
         assertNull(state.pendingSellUuid)
+    }
+
+    @Test
+    fun `reconciled partial sell does not shrink the holding when the unlock lags`() = runTest {
+        // 1개 중 0.25 주문, 0.1 체결 후 취소. 거래소가 free 0.75 + locked 0.15 로 답하면 heldVolume 은 0.75 — 실제는 0.9.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("1.0", "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "lag")
+        coEvery { upbitClient.getOrder("lag") } returns Order(uuid = "lag", state = "wait", executedVolume = "0")
+
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 1.0, rungsFilled = 4, lastActionPrice = 40_000_000.0)
+        manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.25, 52_000_000.0, isFinal = false))
+
+        coEvery { upbitClient.getOrder("lag") } returns Order(uuid = "lag", state = "cancel", executedVolume = "0.1")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.75", locked = "0.15", avgBuyPrice = "50000000"))
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertEquals(0.9, state.holdVolume, 1e-12)
+        assertEquals(4, state.rungsFilled) // 0.1/0.25 = 40% 체결 — rung 유지
     }
 
     @Test

@@ -56,7 +56,8 @@ class PositionManager(
         private const val FILL_POLL_ATTEMPTS = 10
         private const val FILL_POLL_DELAY_MS = 300L
         // 적립 단 매도는 요청 대비 이 비율 이상 체결됐을 때만 rung 을 소모한다 — 10% 체결로 한 단을 지우면 사다리가 어긋난다.
-        private const val RUNG_FILL_RATIO = 0.9
+        // 원가 정합(LadderStateMapper)의 허용치와 짝이라 common 에 둔다.
+        private const val RUNG_FILL_RATIO = AccumulateLadder.SELL_FILL_RATIO
         private const val BUDGET_TOLERANCE_KRW = 1.0
         private const val VOLUME_SCALE = 8
         private const val VOLUME_EPSILON = 1e-8
@@ -811,7 +812,15 @@ class PositionManager(
                 val record = buildSellRecord(ticker, state, currentPrice, executed)
                 val account = findAccount(ticker.substringAfter("-"))
                 val unfilled = (ourSellLockCeiling(state) - executed).coerceAtLeast(0.0)
-                val remaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
+                val exchangeRemaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
+                // 적립은 잔량이 곧 다음 단의 분모다. 취소된 미체결 잔량의 unlock 이 늦으면 거래소 기준이 과소(free 0.75 +
+                // locked 0.15 → 0.75)라 원가 정합이 rung 을 조기에 줄인다 — 주문 전 보유 − 체결량을 하한으로 둔다(60초 주기
+                // 동기화가 이후 실측으로 다시 맞춘다). 스윙은 종전 규칙 그대로.
+                val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && state.holdVolume > 0.0) {
+                    maxOf(exchangeRemaining, state.holdVolume - executed)
+                } else {
+                    exchangeRemaining
+                }
                 val recoveredAvg = account?.avgBuyPriceDouble() ?: 0.0
                 val now = LocalDateTime.now(TradingDay.KST)
                 commitFillAndApply(state, record, sellTransition(state, executed, remaining, recoveredAvg, now))

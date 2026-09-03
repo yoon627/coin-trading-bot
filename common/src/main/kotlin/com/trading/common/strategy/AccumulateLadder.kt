@@ -62,6 +62,12 @@ object AccumulateLadder {
     /** 기록·집계의 `strategy` 귀속명. 스윙 전략 집계와 섞이지 않게 별도 이름을 쓴다. */
     const val STRATEGY_NAME = "accumulate"
 
+    /**
+     * 단 매도가 요청 대비 이 비율 이상 체결돼야 rung 을 하나 소모한다. 원가 기반 rung 정합의 허용치가 이 값에서 나온다 —
+     * 둘이 어긋나면 90% 체결로 지운 rung 을 다음 tick 정합이 되살린다.
+     */
+    const val SELL_FILL_RATIO = 0.9
+
     // 원가 합산의 부동소수 오차 흡수 — 1원 미만 차이로 마지막 단이 막히지 않게.
     private const val BUDGET_TOLERANCE_KRW = 1.0
 
