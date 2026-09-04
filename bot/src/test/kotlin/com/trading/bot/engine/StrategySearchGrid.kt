@@ -1,5 +1,17 @@
 package com.trading.bot.engine
 
+import com.trading.common.strategy.AdxTrend
+import com.trading.common.strategy.CciReversal
+import com.trading.common.strategy.DonchianBreakout
+import com.trading.common.strategy.KeltnerBreakout
+import com.trading.common.strategy.MoneyFlowIndex
+import com.trading.common.strategy.ObvTrend
+import com.trading.common.strategy.StochasticCross
+import com.trading.common.strategy.Supertrend
+import com.trading.common.strategy.TradingStrategy
+import com.trading.common.strategy.VwapBand
+import com.trading.common.strategy.WilliamsR
+
 /**
  * 스윕 그리드의 **좌표계**. 사전고정 plan `2026-09-03-strategy-search-yearly` Decisions 3) 이 단일 소스다.
  *
@@ -60,7 +72,21 @@ internal object StrategySearchGrid {
     /** 절대 발동하지 않는 트레일링 폭(고점 대비 −1000% 하락은 불가능). */
     const val TRAILING_OFF = 1_000.0
 
+    /**
+     * Stage A 탐색 대상 — 라이브에 등록된 기존 9종.
+     *
+     * 신규 지표 전략([STAGE_D_STRATEGIES])은 여기 넣지 않는다. `ALL_STRATEGIES` 는 선행 측정
+     * ([[yearly-strategy-comparison]])의 모집단이라 늘리면 그 리포트가 조용히 달라진다.
+     */
     val STRATEGIES = YearlyStrategyComparison.ALL_STRATEGIES.map { it.name }
+
+    /** Stage D — repo 에 없던 지표로 만든 진입 전략. 백테 탐색 전용이며 라이브·연간비교에 등록하지 않는다. */
+    val STAGE_D: List<TradingStrategy> = listOf(
+        AdxTrend(), DonchianBreakout(), KeltnerBreakout(), Supertrend(), StochasticCross(),
+        WilliamsR(), ObvTrend(), MoneyFlowIndex(), CciReversal(), VwapBand(),
+    )
+
+    val STAGE_D_STRATEGIES = STAGE_D.map { it.name }
 
     val TAKE_PROFITS = listOf(2.0, 3.0, 5.0, 8.0, 12.0, TAKE_PROFIT_OFF)
     val STOP_LOSSES = listOf(2.0, 3.0, 5.0, 7.0, 10.0)
@@ -101,6 +127,10 @@ internal object StrategySearchGrid {
     const val BASELINE_STRATEGY = "combined"
 
     fun stageA(): SweepGrid = build(TAKE_PROFITS, STOP_LOSSES, TRAILING_STOPS, HOLD_DAYS, MARKET_FILTERS_STAGE_A)
+
+    /** Stage D — 같은 exit 공간을 신규 전략 10종에 그대로 적용한다(kValue 축 없음: 이 전략들은 신호에서 읽지 않는다). */
+    fun stageD(): SweepGrid =
+        build(TAKE_PROFITS, STOP_LOSSES, TRAILING_STOPS, HOLD_DAYS, MARKET_FILTERS_STAGE_A, STAGE_D_STRATEGIES)
 
     private fun build(
         takeProfits: List<Double>,

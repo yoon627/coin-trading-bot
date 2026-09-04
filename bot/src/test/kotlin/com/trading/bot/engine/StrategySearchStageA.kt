@@ -19,6 +19,7 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
     )
 
     suspend fun run(
+        title: String = "Stage A — 진입·청산 파라미터 스윕 (yearly fixture, 2025-09-03~2026-09-02)",
         grid: SweepGrid = StrategySearchGrid.stageA(),
         baseline: SweepPoint = StrategySearchGrid.baselinePoint(),
         yearly: Map<String, List<Candle>>,
@@ -31,7 +32,8 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         val points = grid.points
         log("[stageA] 좌표 ${points.size} · 마켓 ${yearly.size}")
 
-        val select = search.measure(yearly, StrategySearch.SELECT, points)
+        // baseline 이 그리드 안에 있다고 가정하지 않는다 — Stage D 는 신규 전략만 담은 그리드라 baseline 이 없다.
+        val select = search.measure(yearly, StrategySearch.SELECT, (points + baseline).distinct())
         val baseSelect = select.getValue(baseline)
         log("[stageA] 선택창 측정 완료 — baseline 거래 ${baseSelect.trades}건")
 
@@ -111,8 +113,24 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
             )
         }
 
+        // 통과 0건일 때 "얼마나 못 미쳤나" 가 없으면 독자가 "근처까지 갔다" 와 "전혀 아니다" 를 구분할 수 없다.
+        val nearMiss = unique
+            .filter { select.getValue(it).let { m -> StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) } }
+            .map { p -> p to returnDeltas(select, p, baseline) }
+            .sortedByDescending { SwingMetrics.median(it.second) }
+            .take(3)
+            .map { (p, d) ->
+                StrategySearchReport.NearMiss(
+                    label = p.label(),
+                    selectMedian = SwingMetrics.median(d),
+                    selectPositive = d.count { it > 0 },
+                    trades = select.getValue(p).trades,
+                )
+            }
+
         val report = StrategySearchReport.render(
-            title = "Stage A — 진입·청산 파라미터 스윕 (yearly fixture, 2025-09-03~2026-09-02)",
+            nearMiss = nearMiss,
+            title = title,
             nominalConfigs = points.size,
             uniqueBehaviours = unique.size,
             eliminations = eliminations,
@@ -127,9 +145,9 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
      * null 대조군 — 진입 신호를 무작위로 바꾼 뒤 **같은 exit 그리드**를 뒤진다. 각 seed 가 곧 한 번의 탐색이고,
      * seed 별 최고 선택창 delta(max-statistic)의 분포가 "잡음만 있을 때 이 정도는 나온다"의 기준선이다.
      *
-     * 실제 탐색은 전략×kValue 13조합 × exit 3,960 = 51,480 좌표이고 seed 하나는 3,960 좌표뿐이다. 즉 seed 단위
-     * max-statistic 은 실제 탐색보다 **좁은** 탐색의 값이므로, 13배 넓은 탐색의 95% 분위는
-     * `q(0.95^(1/13)) ≈ q(0.9961)` 로 환산해 함께 보고한다(경험 분포의 사실상 최댓값).
+     * 실제 탐색은 전략×kValue **23조합**(기존 13 + Stage D 신규 10) × exit 3,960 이고 seed 하나는 3,960 좌표뿐이다.
+     * 즉 seed 단위 max-statistic 은 실제 탐색보다 **좁은** 탐색의 값이므로, 23배 넓은 탐색의 95% 분위를
+     * `q(0.95^(1/23))` 로 환산해 함께 보고한다(사전고정 plan Decisions 15 — 결과를 보기 전에 고정했다).
      */
     suspend fun runNull(
         yearly: Map<String, List<Candle>>,
@@ -229,8 +247,8 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
                 anyPassRate = anyPass.toDouble() / maxStats.size,
                 meanPassCount = passTotal.toDouble() / maxStats.size,
                 maxStatQ95 = q(0.95),
-                // 실제 탐색은 전략×kValue 13조합만큼 넓다 — 13배 넓은 탐색의 95% 분위 = q(0.95^(1/13)).
-                maxStatQ95Scaled = q(Math.pow(0.95, 1.0 / 13.0)),
+                // 실제 탐색은 전략×kValue 23조합만큼 넓다(기존 13 + Stage D 10) — 그 폭의 95% 분위 = q(0.95^(1/23)).
+                maxStatQ95Scaled = q(Math.pow(0.95, 1.0 / SEARCH_BREADTH)),
             )
         }
     }
@@ -267,6 +285,9 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
     )
 
     companion object {
+        /** 탐색 폭(전략×kValue 조합 수) — null max-statistic 을 실제 탐색 넓이로 환산할 때 쓴다. 사전고정 값. */
+        const val SEARCH_BREADTH = 23.0
+
         /** G7 비용 민감도 — 왕복 0.2% / 0.4%. 거래가 잦은 후보의 우위가 비용에서 오는지 본다. */
         val FEE_LEVELS = listOf(0.001, 0.002)
 
