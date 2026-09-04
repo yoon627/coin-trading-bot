@@ -106,7 +106,7 @@ internal object StrategySearchReport {
                 )
             }
             appendLine()
-            appendLine("⚠️ bear 열은 **독립 증거가 아니다** — bear fixture(2026-01~08)는 yearly 구간(2025-09~2026-09) 안에 통째로 들어간다. 시간 독립 holdout 은 bull(2023-11~2024-06) 뿐이다.")
+            appendLine("⚠️ bear 열은 **독립 증거가 아니다** — bear fixture(2026-01~08)는 yearly 구간(2025-09~2026-09) 안에 통째로 들어간다. 시간 독립 holdout 은 그 앞의 " + holdoutNames.joinToString(" · ") + " 이고, G4a 는 그 **각각** 을 요구한다.")
             appendLine()
         }
 

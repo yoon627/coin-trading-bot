@@ -97,7 +97,7 @@ class DailyResetCounterfactualTest {
 
             val perRegimePerEvent = mutableMapOf<BacktestFixtures.Regime, MutableMap<String, Double>>()
 
-            for (regime in BacktestFixtures.Regime.values()) {
+            for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
                 report.appendLine("### ${regime.label}")
                 report.appendLine()
                 report.appendLine("| 마켓 | 팔 | 가법수익합%p | 거래수 | 리셋이벤트 | 수수료%p | END(건/기여) |")
@@ -206,7 +206,7 @@ class DailyResetCounterfactualTest {
         val sb = StringBuilder("### maxHoldDays 민감도 (별도 축 — primary 와 섞지 말 것)\n\n")
         sb.append("`live-reproduction` 팔에서 상한만 바꾼다. 값은 마켓 균등가중 가법수익합%p / 리셋이벤트 수.\n\n")
         sb.append("| 국면 | h=1 | h=2 | h=3 | h=5 |\n|---|---|---|---|---|\n")
-        for (regime in BacktestFixtures.Regime.values()) {
+        for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
             val cols = listOf(1, 2, 3, 5).map { h ->
                 val cells = BacktestFixtures.markets(regime).mapNotNull { market ->
                     engine.run(
