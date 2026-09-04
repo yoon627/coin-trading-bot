@@ -50,7 +50,15 @@ STABLECOINS = {"KRW-USDT", "KRW-USDC", "KRW-DAI", "KRW-BUSD", "KRW-TUSD", "KRW-P
 MAX_WINDOW_SPAN_DAYS = RANK_WINDOW + 2
 
 # 구간 = [시작, 시작+199]. 국면이 둘인 이유는 fixture README 참조.
-REGIMES = {"bear": date(2026, 1, 31), "bull": date(2023, 11, 23)}
+# 이름은 **구간**으로 붙인다 — 결과를 보고 "상승장/하락장" 이라 이름 붙이면 그 자체가 사후 라벨이다.
+# 실현된 성격은 fixture README 에 수집 후 기술한다.
+REGIMES = {
+    "bear": date(2026, 1, 31),
+    "bull": date(2023, 11, 23),
+    # 아래 둘은 yearly(2025-09-03~2026-09-02)·bull·bear 어느 구간과도 겹치지 않는다 → 시간 독립 holdout.
+    "p2024h2": date(2024, 6, 10),
+    "p2025h1": date(2025, 1, 1),
+}
 
 # rate limit: `remaining-req: group=candles; min=600; sec=9` (실측) → 초당 9 아래로 유지
 THROTTLE_SEC = 0.13

@@ -23,7 +23,8 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         grid: SweepGrid = StrategySearchGrid.stageA(),
         baseline: SweepPoint = StrategySearchGrid.baselinePoint(),
         yearly: Map<String, List<Candle>>,
-        bull: Map<String, List<Candle>>,
+        /** 시간 독립 holdout — yearly 구간과 겹치지 않는 국면들. **각각** G4a 를 통과해야 한다. */
+        holdouts: Map<String, Map<String, List<Candle>>>,
         bear: Map<String, List<Candle>>,
         nullSummary: StrategySearchReport.NullSummary?,
         metadata: Map<String, String>,
@@ -71,12 +72,13 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         val validate = measureIfAny(yearly, StrategySearch.VALIDATE, alive, baseline)
         stage("G2") { p -> validate?.let { StrategySearchGates.g2(returnDeltas(it, p, baseline)) } ?: false }
 
-        val bullMetrics = measureIfAny(bull, StrategySearch.REGIME, alive, baseline)
+        // 시간 독립 국면 **각각** 을 통과해야 한다 — 하나에서만 버티는 후보를 거르는 게 이 게이트의 목적이다.
+        // paired 교차검사는 네 국면 공통 마켓이 2개뿐이라 적용하지 않는다(3 미만 — 사전고정 plan Decisions 2).
+        val holdoutMetrics = holdouts.mapValues { (_, fixtures) -> measureIfAny(fixtures, StrategySearch.REGIME, alive, baseline) }
         stage("G4a") { p ->
-            bullMetrics?.let {
-                StrategySearchGates.g4(returnDeltas(it, p, baseline)) &&
-                    StrategySearchGates.g4(returnDeltas(it, p, baseline, BacktestFixtures.PAIRED_MARKETS))
-            } ?: false
+            holdoutMetrics.isNotEmpty() && holdoutMetrics.values.all { m ->
+                m?.let { StrategySearchGates.g4(returnDeltas(it, p, baseline)) } ?: false
+            }
         }
 
         val bearMetrics = measureIfAny(bear, StrategySearch.REGIME, alive, baseline)
@@ -97,7 +99,7 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
                 selectPositive = returnDeltas(select, p, baseline).count { it > 0 },
                 validateMedian = SwingMetrics.median(returnDeltas(validate!!, p, baseline)),
                 validatePositive = returnDeltas(validate, p, baseline).count { it > 0 },
-                bullMedian = SwingMetrics.median(returnDeltas(bullMetrics!!, p, baseline)),
+                holdoutMedians = holdoutMetrics.mapValues { (_, m) -> SwingMetrics.median(returnDeltas(m!!, p, baseline)) },
                 bearMedian = SwingMetrics.median(returnDeltas(bearMetrics!!, p, baseline)),
                 mddMedianDelta = SwingMetrics.median(mddDeltas(select, p, baseline)),
                 worstMdd = s.worstMdd,
