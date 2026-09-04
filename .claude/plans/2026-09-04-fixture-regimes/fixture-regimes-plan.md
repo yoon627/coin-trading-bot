@@ -16,16 +16,21 @@ G4(국면 게이트)를 3개 holdout 으로 확장한 뒤 Stage A·D 를 재판�
 
 # Progress
 
+- 2026-09-04 — 수집·확장·재판정 완료(`5947abb` 이후). p2024h2 는 **강한 상승**(XRP +366%·DOGE +132%·BTC +48%),
+  p2025h1 은 **혼조·약세**(8종 중 6종 마이너스)로 성격이 갈렸다. G4a 를 3-holdout 각각 통과로 강화한 뒤 재실행:
+  **Stage A 생존 3건이 그대로 유지**되고 out-of-sample 성적이 선택창(+4.92%p)보다 좋았다 —
+  p2024h2 +10.3~11.9%p · p2025h1 +11.2~12.5%p · bull +6.5~7.0%p. Stage D 는 여전히 통과 0.
+  사전고정 규칙(선택창 통계 vs null max-stat)은 그대로라 **판정은 "발견 없음" 유지** — 규칙을 결과 본 뒤 고치지 않는다.
 - 2026-09-04 — worktree 생성(base `strategy-search-yearly@1207206`). `collect_backtest_fixtures.py` 의 `REGIMES` 에
   `p2024h2`(2024-06-10~2024-12-26) · `p2025h1`(2025-01-01~2025-07-19) 추가. 네 구간이 서로 겹치지 않음을 확인:
   bull 2023-11-23~2024-06-09 / p2024h2 / p2025h1 / bear 2026-01-31~2026-08-18, yearly 는 2025-09-03~2026-09-02.
 
 # Next
 
-1. 유니버스 미리보기 확인 → `--write` 로 수집.
-2. `BacktestFixtures.Regime` 확장 + 로스터 핀 + `BacktestFixturesTest` 갱신.
-3. G4 확장(아래 사전고정)을 코드에 반영하고 Stage A·D 재실행.
-4. wiki `parameter-search-2026-09` 재판정 결과 반영, fixture README 갱신.
+code-reviewer 검토 → 지적 반영 → `/e merge`.
+
+후속(별도 작업): **holdout 기반 사전고정을 새로 쓰고 소액 전향 검증**. 이번 결과가 그 근거다 —
+선택창보다 out-of-sample 이 좋게 나왔으므로 null 대조군도 선택창이 아니라 holdout 통계에 걸어야 한다.
 
 # Decisions
 

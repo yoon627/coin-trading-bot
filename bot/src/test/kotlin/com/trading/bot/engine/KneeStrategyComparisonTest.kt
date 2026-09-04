@@ -102,10 +102,10 @@ class KneeStrategyComparisonTest {
     fun `compares all strategies across both regimes and prints the record`() = runTest {
         val report = buildString {
             appendLine("무릎 전략 백테 관찰 기록 — pooled per-trade net pnl%")
-            appendLine(Regime.entries.joinToString(" / ") { "$it ${it.label} ${BacktestFixtures.markets(it).size}마켓" })
+            appendLine(BacktestFixtures.ORIGINAL_REGIMES.joinToString(" / ") { "$it ${it.label} ${BacktestFixtures.markets(it).size}마켓" })
             appendLine("주의: 마켓 상관이 높아 실효 독립 표본은 몇 개 되지 않는다. 판정이 아니라 기록이다.")
             appendLine()
-            for (regime in Regime.entries) {
+            for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
                 val all = BacktestFixtures.loadAll(regime)
                 appendLine(render("[$regime] IN / LIVE_DEFAULT", aggregate(all, BacktestFixtures::inSample, liveDefault)))
                 appendLine(render("[$regime] OUT / LIVE_DEFAULT", aggregate(all, BacktestFixtures::outOfSample, liveDefault)))
@@ -131,7 +131,7 @@ class KneeStrategyComparisonTest {
         val report = buildString {
             appendLine("국면 paired 비교 — 같은 ${BacktestFixtures.PAIRED_MARKETS.size}마켓(${BacktestFixtures.PAIRED_MARKETS.joinToString(", ")})")
             appendLine()
-            for (regime in Regime.entries) {
+            for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
                 val paired = BacktestFixtures.loadPaired(regime)
                 appendLine(render("[$regime] OUT / LIVE_DEFAULT", aggregate(paired, BacktestFixtures::outOfSample, liveDefault)))
                 appendLine(render("[$regime] OUT / SWING", aggregate(paired, BacktestFixtures::outOfSample, swing)))
@@ -141,7 +141,7 @@ class KneeStrategyComparisonTest {
 
         // aggregate 는 거래가 0건이어도 strategies.map 으로 늘 9행을 만든다. 행 수만 세면 fixture 로드가
         // 실패해 전부 N/A 가 돼도 통과하므로, 두 국면 모두에서 무릎 전략이 실제로 거래했는지까지 본다.
-        for (regime in Regime.entries) {
+        for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
             val rows = aggregate(BacktestFixtures.loadPaired(regime), BacktestFixtures::outOfSample, liveDefault)
             listOf("knee_reversal", "knee_pullback").forEach { name ->
                 val row = rows.single { it.strategy == name }
@@ -158,7 +158,7 @@ class KneeStrategyComparisonTest {
         var inChecked = 0
         var outChecked = 0
 
-        for (regime in Regime.entries) {
+        for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
             for ((market, candles) in BacktestFixtures.loadAll(regime)) {
                 for (strategy in strategies) {
                     val inTrades = engine.run(strategy.name, BacktestFixtures.inSample(candles), market, liveDefault)
