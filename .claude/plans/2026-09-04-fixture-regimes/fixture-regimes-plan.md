@@ -1,6 +1,6 @@
 ---
 title: fixture-regimes — 국면 fixture 2개 추가로 시간 독립 holdout 을 1개에서 3개로
-status: in_progress
+status: done
 started: 2026-09-04
 updated: 2026-09-04
 ---
@@ -27,7 +27,7 @@ G4(국면 게이트)를 3개 holdout 으로 확장한 뒤 Stage A·D 를 재판�
 
 # Next
 
-code-reviewer 검토 → 지적 반영 → `/e merge`.
+없음 — `strategy-search-yearly`·`reset-policy` 와 함께 PR 하나로 머지되어 닫혔다.
 
 후속(별도 작업): **holdout 기반 사전고정을 새로 쓰고 소액 전향 검증**. 이번 결과가 그 근거다 —
 선택창보다 out-of-sample 이 좋게 나왔으므로 null 대조군도 선택창이 아니라 holdout 통계에 걸어야 한다.

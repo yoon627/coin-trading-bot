@@ -1,6 +1,6 @@
 ---
 title: strategy-search-yearly — 1년 fixture 위 알고리즘 탐색(파라미터 스윕 + 신규 신호 아이디어), 사전고정 게이트로 판정
-status: in_progress
+status: done
 started: 2026-09-03
 updated: 2026-09-04
 ---
@@ -73,7 +73,10 @@ updated: 2026-09-04
 
 # Next
 
-`/e merge` (push → PR → 머지 → 정리).
+없음 — `fixture-regimes`·`reset-policy` 와 함께 PR 하나로 머지되어 닫혔다.
+
+후속(별도 작업): holdout 기반 사전고정을 새로 쓰고 소액 전향 검증. 선택창보다 out-of-sample 이 좋게 나왔으므로
+null 대조군도 선택창이 아니라 holdout 통계에 걸어야 한다.
 
 권고(사용자 결정 대기, 코드 변경 아님): **라이브 파라미터를 지금 바꾸지 않는다.** 다음으로 유효한 축은 그리드를 더 뒤지는 게
 아니라 표본을 늘리는 쪽 — 전향적 관찰(소액 카나리아·페이퍼), 국면 fixture 추가, M1 fixture(#143).
