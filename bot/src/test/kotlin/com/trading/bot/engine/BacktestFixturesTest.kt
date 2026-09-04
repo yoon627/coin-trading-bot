@@ -61,11 +61,25 @@ class BacktestFixturesTest {
             BacktestFixtures.markets(Regime.BULL),
             "BULL 도 8개다 — 2023-11 시점 상위 8이지, 오늘의 상위 8 중 그때 살아있던 것이 아니다",
         )
+        assertEquals(
+            listOf("KRW-BTC", "KRW-ETH", "KRW-SHIB", "KRW-SOL", "KRW-DOGE", "KRW-ETC", "KRW-XRP", "KRW-PYTH"),
+            BacktestFixtures.markets(Regime.P2024H2),
+        )
+        assertEquals(
+            listOf("KRW-XRP", "KRW-BTC", "KRW-DOGE", "KRW-ETH", "KRW-HBAR", "KRW-ENS", "KRW-AGLD", "KRW-CTC"),
+            BacktestFixtures.markets(Regime.P2025H1),
+        )
         // 하드코딩끼리 비교하면 "교집합" 이라는 관계 자체는 검증되지 않는다. 관계를 직접 계산해 고정한다.
         assertEquals(
             BacktestFixtures.markets(Regime.BEAR).intersect(BacktestFixtures.markets(Regime.BULL).toSet()),
             BacktestFixtures.PAIRED_MARKETS.toSet(),
             "paired 마켓은 두 국면 교집합이어야 한다",
+        )
+        // 국면이 넷으로 늘면 공통 마켓은 XRP·BTC 둘뿐 — paired 비교를 쓰지 않는 근거를 관계로 고정한다.
+        assertEquals(
+            setOf("KRW-XRP", "KRW-BTC"),
+            BacktestFixtures.PAIRED_MARKETS_ALL_REGIMES.toSet(),
+            "유동 유니버스가 회전해 네 국면 공통은 2개다(3 미만 → paired 교차검사 미적용)",
         )
     }
 

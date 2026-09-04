@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test
 class StrategySearchOrchestrationTest {
 
     private val yearly = YearlyFixtures.loadAll()
+    private val holdouts = BacktestFixtures.TIME_INDEPENDENT.associate { it.dir to BacktestFixtures.loadAll(it) }
     private val bull = BacktestFixtures.loadAll(BacktestFixtures.Regime.BULL)
     private val bear = BacktestFixtures.loadAll(BacktestFixtures.Regime.BEAR)
 
@@ -34,7 +35,7 @@ class StrategySearchOrchestrationTest {
             grid = SweepGrid(candidates),
             baseline = weakBaseline,
             yearly = yearly,
-            bull = bull,
+            holdouts = holdouts,
             bear = bear,
             nullSummary = null,
             metadata = mapOf("fixture" to "테스트"),
@@ -50,7 +51,8 @@ class StrategySearchOrchestrationTest {
         assertTrue(outcome.report.contains("통과 ${outcome.survivors.size} / ${outcome.uniqueBehaviours}"))
         // 생존자가 나온 경로면 검증창·국면·수수료 열이 채워졌는지 확인한다(non-null 경로의 유일한 커버리지).
         for (s in outcome.survivors) {
-            assertTrue(s.validateMedian.isFinite() && s.bullMedian.isFinite() && s.bearMedian.isFinite())
+            assertTrue(s.validateMedian.isFinite() && s.bearMedian.isFinite())
+            assertTrue(s.holdoutMedians.isNotEmpty() && s.holdoutMedians.values.all { it.isFinite() }, "국면별 중앙값이 채워진다")
             assertTrue(s.feeSensitivity.isNotBlank())
             assertTrue(s.plateauRatio in 0.0..1.0)
         }
@@ -79,7 +81,7 @@ class StrategySearchOrchestrationTest {
             grid = SweepGrid(listOf(weakBaseline, degenerate)),
             baseline = weakBaseline,
             yearly = oneMarket,
-            bull = BacktestFixtures.loadPaired(BacktestFixtures.Regime.BULL),
+            holdouts = mapOf("bull" to BacktestFixtures.loadPaired(BacktestFixtures.Regime.BULL)),
             bear = BacktestFixtures.loadPaired(BacktestFixtures.Regime.BEAR),
             nullSummary = null,
             metadata = emptyMap(),
