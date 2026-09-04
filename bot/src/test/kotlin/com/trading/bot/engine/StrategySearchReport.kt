@@ -80,11 +80,13 @@ internal object StrategySearchReport {
             appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
             for (s in survivors.sortedByDescending { it.selectMedian }) {
                 appendLine(
-                    "| ${s.point.label()} | %.2f | %d/8 | %.2f | %d/8 | %.2f | %.2f | %.2f | %.1f | %d | %.2f | %.1f | %.1f | %.0f%% | %s | %.0f%% |".format(
-                        s.selectMedian, s.selectPositive, s.validateMedian, s.validatePositive,
+                    // 손익분기 승률은 승/패 한쪽이 0 이면 정의되지 않는다 — 표에 NaN 을 흘리지 않고 —로 적는다.
+                    "| %s | %.2f | %d/8 | %.2f | %d/8 | %.2f | %.2f | %.2f | %.1f | %d | %.2f | %.1f | %s | %.0f%% | %s | %.0f%% |".format(
+                        s.point.label(), s.selectMedian, s.selectPositive, s.validateMedian, s.validatePositive,
                         s.bullMedian, s.bearMedian, s.mddMedianDelta, s.worstMdd,
-                        s.trades, s.exposure, s.winRate, s.breakEvenWinRate, s.priceGateShare * 100,
-                        s.feeSensitivity, s.plateauRatio * 100,
+                        s.trades, s.exposure, s.winRate,
+                        if (s.breakEvenWinRate.isFinite()) "%.1f".format(s.breakEvenWinRate) else "—",
+                        s.priceGateShare * 100, s.feeSensitivity, s.plateauRatio * 100,
                     ),
                 )
             }
@@ -116,7 +118,7 @@ internal object StrategySearchReport {
     private val GATE_MEANING = mapOf(
         "G1" to "선택창 paired delta 중앙 ≥ +2.0%p 이고 양수 마켓 ≥ 6/8",
         "G2" to "검증창 중앙 ≥ 0 이고 양수 마켓 ≥ 5/8 (기대 통과율 ≈50%)",
-        "G3" to "이웃 좌표 ≥70% 가 G1 통과 (단일 peak 배제)",
+        "G3" to "이웃 좌표 ≥70% 가 G5+G1 통과 (단일 peak 배제 — 거래를 안 한 이웃은 세지 않는다)",
         "G4a" to "bull 국면(시간 독립) 중앙 ≥ −1.0%p",
         "G4b" to "bear 국면(구간 중복 — robustness) 중앙 ≥ −1.0%p",
         "G5" to "창별 거래수 ≥ 8, 0거래 마켓 ≤ 1",

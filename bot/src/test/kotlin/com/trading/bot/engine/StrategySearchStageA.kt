@@ -19,6 +19,8 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
     )
 
     suspend fun run(
+        grid: SweepGrid = StrategySearchGrid.stageA(),
+        baseline: SweepPoint = StrategySearchGrid.baselinePoint(),
         yearly: Map<String, List<Candle>>,
         bull: Map<String, List<Candle>>,
         bear: Map<String, List<Candle>>,
@@ -26,8 +28,6 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         metadata: Map<String, String>,
         log: (String) -> Unit = {},
     ): Outcome {
-        val grid = StrategySearchGrid.stageA()
-        val baseline = StrategySearchGrid.baselinePoint()
         val points = grid.points
         log("[stageA] 좌표 ${points.size} · 마켓 ${yearly.size}")
 
@@ -41,8 +41,13 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         val unique = representatives.values.toList()
         log("[stageA] 고유 행동 ${unique.size} / 명목 ${points.size}")
 
-        // plateau 는 **모든** 좌표의 G1 통과 여부를 봐야 한다(이웃이 대표 좌표가 아닐 수 있다).
-        val g1Pass = points.filter { StrategySearchGates.g1(returnDeltas(select, it, baseline)) }.toHashSet()
+        // plateau 는 **모든** 좌표의 통과 여부를 봐야 한다(이웃이 대표 좌표가 아닐 수 있다).
+        // G5 를 함께 건다 — 하락 국면에서는 **거래를 거의 안 한 좌표**의 paired delta 가 양수가 되므로,
+        // G5 없이 세면 "효과가 이웃으로 이어진다" 가 아니라 "이웃이 아무것도 안 한다" 로 plateau 가 채워진다.
+        val g1Pass = points.filter {
+            val m = select.getValue(it)
+            StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) && StrategySearchGates.g1(returnDeltas(select, it, baseline))
+        }.toHashSet()
 
         val eliminations = LinkedHashMap<String, Int>()
         var alive = unique
@@ -130,13 +135,9 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         yearly: Map<String, List<Candle>>,
         seeds: List<Int>,
         entryRate: Double,
+        exitGrid: SweepGrid = defaultNullExitGrid(),
         log: (String) -> Unit = {},
     ): StrategySearchReport.NullSummary {
-        val exitGrid = SweepGrid(
-            StrategySearchGrid.stageA().points
-                .filter { it.strategy == StrategySearchGrid.BASELINE_STRATEGY && it.kValue == 0.5 }
-                .map { it.copy(strategy = RandomEntryStrategy.NAME) },
-        )
         val noiseBaseline = StrategySearchGrid.baselinePoint().copy(strategy = RandomEntryStrategy.NAME)
         val liveBaseline = StrategySearchGrid.baselinePoint()
 
@@ -153,7 +154,10 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
 
             // 변종 A(주 판정) — 후보만 무작위, 기준은 실제 라이브 baseline. 실제 탐색이 던지는 질문과 같은 질문이다.
             val liveDeltas = exitGrid.points.associateWith { StrategySearchGates.pairedDeltas(select.getValue(it).returnByMarket, liveSelect.returnByMarket) }
-            val liveG1 = exitGrid.points.filter { StrategySearchGates.g1(liveDeltas.getValue(it)) }.toHashSet()
+            val liveG1 = exitGrid.points.filter {
+                val m = select.getValue(it)
+                StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) && StrategySearchGates.g1(liveDeltas.getValue(it))
+            }.toHashSet()
             val liveAlive = exitGrid.points.filter { p ->
                 val m = select.getValue(p)
                 StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) &&
@@ -171,11 +175,15 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
                     StrategySearchGates.g2(StrategySearchGates.pairedDeltas(it.getValue(p).returnByMarket, liveValidate.returnByMarket))
                 } ?: false
             }
-            vsLive.add(livePassed, exitGrid.points.maxOf { SwingMetrics.median(liveDeltas.getValue(it)) })
+            val eligible = exitGrid.points.filter { select.getValue(it).let { m -> StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) } }
+            vsLive.add(livePassed, eligible.maxOfOrNull { SwingMetrics.median(liveDeltas.getValue(it)) } ?: Double.NEGATIVE_INFINITY)
 
             // 변종 B(진단용) — 후보·기준 둘 다 무작위. 게이트 스택이 순수 잡음 환경에서 어떻게 움직이는지 보여줄 뿐,
             // 실제 탐색의 임계로 쓰면 사과-오렌지 비교다(기준이 형편없고 변동이 커서 delta 분포가 부푼다).
-            val noiseG1 = exitGrid.points.filter { StrategySearchGates.g1(returnDeltas(select, it, noiseBaseline)) }.toHashSet()
+            val noiseG1 = exitGrid.points.filter {
+                val m = select.getValue(it)
+                StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) && StrategySearchGates.g1(returnDeltas(select, it, noiseBaseline))
+            }.toHashSet()
             val noiseAlive = exitGrid.points.filter { p ->
                 val m = select.getValue(p)
                 StrategySearchGates.g5(m.trades, m.zeroTradeMarkets) &&
@@ -185,7 +193,7 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
             }
             val noiseValidate = measureIfAny(yearly, StrategySearch.VALIDATE, noiseAlive, noiseBaseline, options)
             val noisePassed = noiseAlive.count { p -> noiseValidate?.let { StrategySearchGates.g2(returnDeltas(it, p, noiseBaseline)) } ?: false }
-            vsNoise.add(noisePassed, exitGrid.points.maxOf { SwingMetrics.median(returnDeltas(select, it, noiseBaseline)) })
+            vsNoise.add(noisePassed, eligible.maxOfOrNull { SwingMetrics.median(returnDeltas(select, it, noiseBaseline)) } ?: Double.NEGATIVE_INFINITY)
 
             log("[null] seed=$seed vsLive 통과 $livePassed(max %.2f) · vsNoise 통과 $noisePassed(max %.2f)"
                 .format(vsLive.lastMax, vsNoise.lastMax))
@@ -258,14 +266,18 @@ internal class StrategySearchStageA(private val search: StrategySearch = Strateg
         metrics.getValue(baseline).mddByMarket,
     )
 
-    private fun quantile(sorted: List<Double>, q: Double): Double {
-        if (sorted.isEmpty()) return Double.NaN
-        val idx = ((sorted.size - 1) * q).toInt().coerceIn(0, sorted.size - 1)
-        return sorted[idx]
-    }
-
     companion object {
         /** G7 비용 민감도 — 왕복 0.2% / 0.4%. 거래가 잦은 후보의 우위가 비용에서 오는지 본다. */
         val FEE_LEVELS = listOf(0.001, 0.002)
+
+        /**
+         * null 대조군이 뒤지는 exit 공간 — 실제 탐색의 전략×kValue 한 조합분과 같은 넓이다.
+         * kValue 축은 `random_entry` 가 신호에서 읽지 않으므로 이웃에서 빠지고, 그만큼 plateau 분모가 실제보다 작다.
+         */
+        fun defaultNullExitGrid() = SweepGrid(
+            StrategySearchGrid.stageA().points
+                .filter { it.strategy == StrategySearchGrid.BASELINE_STRATEGY && it.kValue == 0.5 }
+                .map { it.copy(strategy = RandomEntryStrategy.NAME) },
+        )
     }
 }

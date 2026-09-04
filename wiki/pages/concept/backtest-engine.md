@@ -51,7 +51,7 @@ sources:
 - **재진입 신호 window 는 봉 `i` 를 제외**한다(`subList(max(0, i-MIN_CANDLES), i)`). 공용 `window` 는 봉 `i` 를 포함하므로 그대로 재사용하면 봉 D 종가를 보고 봉 D 시가에 사는 셈이 된다.
 - **재진입 포지션도 그 봉의 intrabar 게이트를 받는다.** 안 그러면 churn 포지션만 손절·익절 보호가 사라져 편향된다. Upbit 일봉 경계가 `T09:00:00` KST 라 봉 D 는 09:00→09:00 구간이고, 시가 재진입 포지션은 봉 D 전 구간을 실제로 겪으므로 이 평가가 옳다([[upbit-api]]).
 - **봉당 재진입 1회** (라이브 `boughtToday` 등가).
-- **기본값을 바꾸면 안 된다** — `M1ReplayBiasTest`·`KneeStrategyComparisonTest`·`StrategySearch`·`/backtest` 호출자가 `BacktestConfig()` 를 쓰므로 모집단이 조용히 달라진다. `BacktestLegacyGoldenTest` 가 trade 단위로 이를 가둔다.
+- **기본값을 바꾸면 안 된다** — `M1ReplayBiasTest`·`KneeStrategyComparisonTest`·`/backtest` 호출자가 `BacktestConfig()` 를 쓰므로 모집단이 조용히 달라진다. `BacktestLegacyGoldenTest` 가 trade 단위로 이를 가둔다.
 
 `holdLimitOnlyWhenProfitable` 은 보유상한 청산을 수익 중일 때만 내는 정책 노브다(#128 2안 측정용, 기본 off).
 
