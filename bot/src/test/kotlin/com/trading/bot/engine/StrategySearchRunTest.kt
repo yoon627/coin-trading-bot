@@ -127,10 +127,23 @@ class StrategySearchRunTest {
             log = ::println,
         )
 
+        // Stage D — 신규 지표 전략 10종을 같은 게이트로. baseline 은 여전히 라이브 현행이다.
+        val stageD = StrategySearchStageA().run(
+            title = "Stage D — 신규 지표 진입 전략 10종 (yearly fixture, 2025-09-03~2026-09-02)",
+            grid = StrategySearchGrid.stageD(),
+            yearly = yearly, bull = bull, bear = bear, nullSummary = nullSummary,
+            metadata = mapOf("grid" to "Stage D — 신규 지표 10종 × exit 공간 (사전고정 plan dad0b7a)"),
+            log = ::println,
+        )
+        println("[stageD] 통과 ${stageD.survivors.size} / 고유 ${stageD.uniqueBehaviours}")
+
         val stageBRows = StrategySearchStageB().run(yearly, bull, ::println)
         val out = Path.of("build/reports/parameter-search.md")
         Files.createDirectories(out.parent)
-        Files.writeString(out, outcome.report + "\n" + StrategySearchStageB.render(stageBRows))
+        Files.writeString(
+            out,
+            outcome.report + "\n" + stageD.report + "\n" + StrategySearchStageB.render(stageBRows),
+        )
         assertTrue(stageBRows.map { it.group }.distinct().containsAll(listOf("레짐필터", "ATR", "부분익절")), "Stage B 세 축 모두 측정")
         println("[stageA] 리포트 기록: ${out.toAbsolutePath()}")
 
