@@ -33,7 +33,31 @@ internal object BacktestFixtures {
          * 채워져 있었기 때문**이다(#112).
          */
         BULL("bull", "상승장 2023-11~2024-06"),
+
+        /**
+         * 2024-06-10 ~ 2024-12-26. XRP +366%, DOGE +132%, BTC +48% / ETH −2%, PYTH −4% — **강한 상승 국면**.
+         * 이름을 기간으로 붙인 이유: 성격은 수집 뒤에야 알 수 있고, 이름이 곧 결론이 되면 사후 서사가 데이터보다 먼저 자리잡는다.
+         */
+        P2024H2("p2024h2", "2024-06~12"),
+
+        /** 2025-01-01 ~ 2025-07-19. XRP +35%, BTC +14% / 나머지 6종 −2 ~ −71% — **혼조·약세 국면**. */
+        P2025H1("p2025h1", "2025-01~07"),
     }
+
+    /**
+     * yearly fixture(2025-09-03~2026-09-02) 구간과 **겹치지 않는** 국면 — 시간 독립 holdout.
+     * `BEAR`(2026-01~08)는 yearly 안에 통째로 들어가므로 여기 없다(robustness 표기 전용).
+     */
+    val TIME_INDEPENDENT = listOf(Regime.BULL, Regime.P2024H2, Regime.P2025H1)
+
+    /**
+     * 국면 fixture 가 둘뿐이던 시절의 모집단.
+     *
+     * 골든·paired 비교·적립 스윕처럼 **이미 결과가 인용된 측정**은 이 목록을 순회해야 한다 — `Regime.entries` 를 쓰면
+     * 국면을 추가할 때마다 그 측정의 모집단이 조용히 달라져 과거 수치와 비교가 끊긴다(#112 이후 같은 함정).
+     * 새 국면을 함께 보고 싶으면 그 측정의 사전고정을 다시 쓴 뒤 옮긴다.
+     */
+    val ORIGINAL_REGIMES = listOf(Regime.BEAR, Regime.BULL)
 
     /**
      * 두 국면 모두의 상위 8에 든 마켓 — 마켓 효과를 통제한 paired 비교에 쓴다.
@@ -43,6 +67,15 @@ internal object BacktestFixtures {
      * 대신 BULL 국면 내 표본이 4 → 8 로 늘었다.
      */
     val PAIRED_MARKETS = listOf("KRW-XRP", "KRW-BTC", "KRW-SOL")
+
+    /**
+     * 국면이 넷으로 늘면서 **네 구간 공통 마켓은 XRP·BTC 둘뿐**이다(SOL 은 `p2025h1` 상위 8에 없다).
+     * paired 비교는 3개 미만이면 하지 않는다 — 교집합을 늘리려 선정 규칙을 손대면 그게 다시 선택 편향이다.
+     */
+    // by lazy — 이 object 안에서 로스터 맵보다 먼저 선언돼 있어 즉시 계산하면 초기화 순서에 걸린다.
+    val PAIRED_MARKETS_ALL_REGIMES: List<String> by lazy {
+        Regime.entries.map { markets(it).toSet() }.reduce { acc, set -> acc intersect set }.toList()
+    }
 
     // 각 구간 **시작 시점 이전** 30일 평균 거래대금 상위 8 (스테이블 제외).
     // 선정 규칙과 재수집은 `scripts/collect_backtest_fixtures.py` 가 소유한다 — 여기 목록은 그 산출물이다.
@@ -54,6 +87,14 @@ internal object BacktestFixtures {
         Regime.BULL to listOf(
             "KRW-GAS", "KRW-XRP", "KRW-BTC", "KRW-SOL",
             "KRW-ARK", "KRW-MINA", "KRW-BLUR", "KRW-POLYX",
+        ),
+        Regime.P2024H2 to listOf(
+            "KRW-BTC", "KRW-ETH", "KRW-SHIB", "KRW-SOL",
+            "KRW-DOGE", "KRW-ETC", "KRW-XRP", "KRW-PYTH",
+        ),
+        Regime.P2025H1 to listOf(
+            "KRW-XRP", "KRW-BTC", "KRW-DOGE", "KRW-ETH",
+            "KRW-HBAR", "KRW-ENS", "KRW-AGLD", "KRW-CTC",
         ),
     )
 

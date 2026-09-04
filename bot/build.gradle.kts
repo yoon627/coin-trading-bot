@@ -47,6 +47,12 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")
 }
 
+tasks.test {
+    // 기본 512m 로는 파라미터 스윕(좌표 5만 × 마켓 8의 지표 집계)이 힙을 넘긴다 — env 게이트를 켠 실행에서만 쓰이지만
+    // 태스크 단위로만 걸어 다른 서브프로젝트 테스트까지 예약하지 않는다.
+    maxHeapSize = "2g"
+}
+
 tasks.jacocoTestReport {
     dependsOn(tasks.test)
     reports {
