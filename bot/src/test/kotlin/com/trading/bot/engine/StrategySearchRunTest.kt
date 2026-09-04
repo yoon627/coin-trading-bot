@@ -102,6 +102,8 @@ class StrategySearchRunTest {
     fun `stage A full run writes the report`() = runBlocking {
         val yearly = YearlyFixtures.loadAll()
         val bull = BacktestFixtures.loadAll(BacktestFixtures.Regime.BULL)
+        // 시간 독립 holdout — yearly 구간과 겹치지 않는 국면 전부(bull · p2024h2 · p2025h1).
+        val holdouts = BacktestFixtures.TIME_INDEPENDENT.associate { it.dir to BacktestFixtures.loadAll(it) }
         val bear = BacktestFixtures.loadAll(BacktestFixtures.Regime.BEAR)
         val stage = StrategySearchStageA()
 
@@ -114,7 +116,7 @@ class StrategySearchRunTest {
         }
 
         val outcome = stage.run(
-            yearly = yearly, bull = bull, bear = bear, nullSummary = nullSummary,
+            yearly = yearly, holdouts = holdouts, bear = bear, nullSummary = nullSummary,
             metadata = linkedMapOf(
                 "code" to (System.getenv("GIT_SHA") ?: "미기재"),
                 "fixture" to "yearly 8마켓×365봉 / bull·bear 8마켓×200봉",
@@ -131,7 +133,7 @@ class StrategySearchRunTest {
         val stageD = StrategySearchStageA().run(
             title = "Stage D — 신규 지표 진입 전략 10종 (yearly fixture, 2025-09-03~2026-09-02)",
             grid = StrategySearchGrid.stageD(),
-            yearly = yearly, bull = bull, bear = bear, nullSummary = nullSummary,
+            yearly = yearly, holdouts = holdouts, bear = bear, nullSummary = nullSummary,
             metadata = mapOf("grid" to "Stage D — 신규 지표 10종 × exit 공간 (사전고정 plan dad0b7a)"),
             log = ::println,
         )

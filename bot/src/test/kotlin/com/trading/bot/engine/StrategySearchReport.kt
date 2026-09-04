@@ -14,7 +14,8 @@ internal object StrategySearchReport {
         val selectPositive: Int,
         val validateMedian: Double,
         val validatePositive: Int,
-        val bullMedian: Double,
+        /** 국면별(시간 독립 holdout) paired delta 중앙값. */
+        val holdoutMedians: Map<String, Double>,
         val bearMedian: Double,
         val mddMedianDelta: Double,
         val worstMdd: Double,
@@ -88,14 +89,16 @@ internal object StrategySearchReport {
         } else {
             appendLine("## 통과 후보")
             appendLine()
-            appendLine("| 후보 | 선택 중앙 %p | 선택 +마켓 | 검증 중앙 %p | 검증 +마켓 | bull %p | bear %p | MDD Δ중앙 %p | 최악 MDD %p | 거래수 | 노출 | 승률 % | 손익분기 % | TP/SL 비중 | 비용민감도 | plateau |")
-            appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+            val holdoutNames = survivors.first().holdoutMedians.keys.toList()
+            appendLine("| 후보 | 선택 중앙 %p | 선택 +마켓 | 검증 중앙 %p | 검증 +마켓 | " + holdoutNames.joinToString(" | ") { "$it %p" } + " | bear %p | MDD Δ중앙 %p | 최악 MDD %p | 거래수 | 노출 | 승률 % | 손익분기 % | TP/SL 비중 | 비용민감도 | plateau |")
+            appendLine("|---|---|---|---|" + holdoutNames.joinToString("") { "---|" } + "---|---|---|---|---|---|---|---|---|---|---|")
             for (s in survivors.sortedByDescending { it.selectMedian }) {
                 appendLine(
                     // 손익분기 승률은 승/패 한쪽이 0 이면 정의되지 않는다 — 표에 NaN 을 흘리지 않고 —로 적는다.
-                    "| %s | %.2f | %d/8 | %.2f | %d/8 | %.2f | %.2f | %.2f | %.1f | %d | %.2f | %.1f | %s | %.0f%% | %s | %.0f%% |".format(
+                    ("| %s | %.2f | %d/8 | %.2f | %d/8 | " + holdoutNames.joinToString(" | ") { "%.2f" } + " | %.2f | %.2f | %.1f | %d | %.2f | %.1f | %s | %.0f%% | %s | %.0f%% |").format(
                         s.point.label(), s.selectMedian, s.selectPositive, s.validateMedian, s.validatePositive,
-                        s.bullMedian, s.bearMedian, s.mddMedianDelta, s.worstMdd,
+                        *holdoutNames.map { s.holdoutMedians.getValue(it) }.toTypedArray(),
+                        s.bearMedian, s.mddMedianDelta, s.worstMdd,
                         s.trades, s.exposure, s.winRate,
                         if (s.breakEvenWinRate.isFinite()) "%.1f".format(s.breakEvenWinRate) else "—",
                         s.priceGateShare * 100, s.feeSensitivity, s.plateauRatio * 100,
@@ -131,7 +134,7 @@ internal object StrategySearchReport {
         "G1" to "선택창 paired delta 중앙 ≥ +2.0%p 이고 양수 마켓 ≥ 6/8",
         "G2" to "검증창 중앙 ≥ 0 이고 양수 마켓 ≥ 5/8 (기대 통과율 ≈50%)",
         "G3" to "이웃 좌표 ≥70% 가 G5+G1 통과 (단일 peak 배제 — 거래를 안 한 이웃은 세지 않는다)",
-        "G4a" to "bull 국면(시간 독립) 중앙 ≥ −1.0%p",
+        "G4a" to "시간 독립 국면 **각각** 중앙 ≥ −1.0%p (bull · p2024h2 · p2025h1)",
         "G4b" to "bear 국면(구간 중복 — robustness) 중앙 ≥ −1.0%p",
         "G5" to "창별 거래수 ≥ 8, 0거래 마켓 ≤ 1",
         "G6" to "MDD 중앙 delta ≤ +2.0%p, 최악 MDD ≤ baseline×1.5",
