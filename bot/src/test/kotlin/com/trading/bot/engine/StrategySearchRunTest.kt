@@ -35,7 +35,7 @@ class StrategySearchRunTest {
         } * StrategySearchGrid.TAKE_PROFITS.size * StrategySearchGrid.STOP_LOSSES.size *
             StrategySearchGrid.TRAILING_STOPS.size * StrategySearchGrid.ARM_CANDIDATES.size *
             StrategySearchGrid.HOLD_DAYS.size * StrategySearchGrid.MARKET_FILTERS_STAGE_A.size
-        println("[grid] conditional=${grid.points.size} cartesian=$cartesian coarse=${StrategySearchGrid.coarse().points.size}")
+        println("[grid] conditional=${grid.points.size} cartesian=$cartesian")
         assertTrue(grid.points.size < cartesian, "arm alias 를 걷어내면 Cartesian 보다 작아야 한다")
     }
 
@@ -108,13 +108,13 @@ class StrategySearchRunTest {
         val entryRate = search.signalRate(CombinedStrategy(), yearly, StrategySearch.SELECT)
         println("[stageA] baseline 원시 신호 발생률 = %.4f".format(entryRate))
         val nullSummary = if (System.getenv("RUN_SEARCH_NULL") == "true") {
-            stage.runNull(yearly, NULL_SEEDS, entryRate, ::println)
+            stage.runNull(yearly, NULL_SEEDS, entryRate, log = ::println)
         } else {
             null
         }
 
         val outcome = stage.run(
-            yearly, bull, bear, nullSummary,
+            yearly = yearly, bull = bull, bear = bear, nullSummary = nullSummary,
             metadata = linkedMapOf(
                 "code" to (System.getenv("GIT_SHA") ?: "미기재"),
                 "fixture" to "yearly 8마켓×365봉 / bull·bear 8마켓×200봉",
