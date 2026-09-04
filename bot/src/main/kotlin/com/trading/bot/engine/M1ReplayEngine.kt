@@ -47,6 +47,9 @@ object M1ReplayEngine {
         require(config.partialTakeProfitPct == null) {
             "M1 replay cannot model partial take-profits — it has no partial fill state"
         }
+        require(config.holdLimitSellFraction == null) {
+            "M1 replay cannot model partial hold-limit exits — the remainder outlives the boundary it knows"
+        }
         var peak = entryPrice
         var seen = 0
         for (b in m1BarsAsc) {
