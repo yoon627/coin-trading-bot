@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.strategy.ExitGates
@@ -42,7 +43,7 @@ data class BacktestConfig(
      */
     val holdLimitOnlyWhenProfitable: Boolean = false,
     /**
-     * 기본값을 라이브(0공백)와 다르게 두는 이유 — `M1ReplayBiasTest`·`ParameterSweepTest`·
+     * 기본값을 라이브(0공백)와 다르게 두는 이유 — `M1ReplayBiasTest`·`StrategySearch`·
      * `KneeStrategyComparisonTest` 가 `BacktestConfig()` 를 상속하므로, 기본값을 바꾸면 그 측정들의
      * 모집단 자체가 달라진다. `/backtest` public 계약도 조용히 바뀐다. 전환은 라이브 변경을 결정하는
      * 후속 작업에서 함께 판단한다(#128 plan Decision 6).
@@ -91,6 +92,12 @@ data class BacktestConfig(
             "partialTakeProfitPct and partialTakeProfitFraction are set together or not at all"
         }
         require(partialTakeProfitPct == null || partialTakeProfitPct > 0) { "partialTakeProfitPct must be positive, was $partialTakeProfitPct" }
+        // 부분 익절선이 전량 익절선 이상이면 같은 봉에서 두 다리를 모두 인정해 pnl 이 이중계상된다
+        // (가격은 낮은 선을 먼저 통과하므로 실제로는 전량 청산이 먼저다). ATR 모드의 익절선은 진입 ATR 에
+        // 달려 있어 여기서 못 보므로 IntrabarExitModel 쪽에서 가격으로 한 번 더 막는다.
+        require(partialTakeProfitPct == null || atrStopMultiplier != null || takeProfitPct > partialTakeProfitPct) {
+            "partialTakeProfitPct($partialTakeProfitPct) must be below takeProfitPct($takeProfitPct) — otherwise the full exit fires first"
+        }
         require(partialTakeProfitFraction == null || partialTakeProfitFraction in PARTIAL_FRACTION_RANGE) {
             "partialTakeProfitFraction must be in $PARTIAL_FRACTION_RANGE (0 or 1 은 부분 익절이 아니다), was $partialTakeProfitFraction"
         }
@@ -118,8 +125,17 @@ data class BacktestTrade(
      *
      * 이 값이 null 이 아니면 [pnlPercent] 는 두 다리의 **가중 합성**이라 `(sellPrice−buyPrice)/buyPrice − 수수료`
      * 와 일치하지 않는다. 그 불변식을 기대하는 소비자(equity 곡선·승률·M1 대조)가 합성 레코드를 구분할 수 있어야 한다.
+     *
+     * 아래 셋은 리서치 전용이라 `/backtest` 응답에는 싣지 않는다(계약 무변경).
      */
+    @get:JsonIgnore
     val partialFraction: Double? = null,
+    /** 부분 익절이 체결된 봉 인덱스. 그 전 구간의 투입 비중은 1.0, 이후는 `1 − f` 다. */
+    @get:JsonIgnore
+    val partialIndex: Int? = null,
+    /** 부분 익절 다리의 net pnl%(왕복 수수료 차감). 체결 시점에 확정되므로 그 이후 구간에서는 실현분이다. */
+    @get:JsonIgnore
+    val partialLegPnlPct: Double? = null,
 )
 
 data class BacktestResult(
@@ -265,10 +281,16 @@ class BacktestEngine(
 
         // 부분 익절은 전량 청산(트레일링·손절)이 없을 때만 이 봉에서 체결된다 — 같은 봉에서 둘 다 닿았으면
         // 손절이 이긴다(순서 불명 시 보수 쪽). 전량 익절과 겹치면 부분이 먼저 체결되고 잔여가 익절선에서 나간다.
-        val fullExitBeforePartial = decision != null && (decision.reason == "TRAILING_STOP" || decision.reason == "STOP_LOSS")
+        // 전량 청산이 부분 익절선 **이하**에서 나면 가격이 그 선을 먼저 통과한 것이므로 부분은 체결되지 않는다.
+        // 손절·트레일링은 물론이고, 익절선이 부분선보다 낮은 조합(ATR 모드에서 가능)도 이 비교가 함께 막는다.
+        val fullExitBeforePartial = decision != null && (
+            decision.reason == "TRAILING_STOP" || decision.reason == "STOP_LOSS" ||
+                (levels.partialTakeProfitPrice != null && decision.sellPrice <= levels.partialTakeProfitPrice)
+            )
         if (!state.partialTaken && !fullExitBeforePartial && IntrabarExitModel.partialTakeProfitFires(bar, atHoldLimit, levels)) {
             val partialPrice = levels.partialTakeProfitPrice!!
             state.partialTaken = true
+            state.partialIndex = index
             state.partialLegPnl = ((partialPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         }
 
@@ -278,7 +300,12 @@ class BacktestEngine(
         val fraction = if (state.partialTaken) config.partialTakeProfitFraction else null
         val netPnl = fraction?.let { it * state.partialLegPnl + (1 - it) * remainderPnl } ?: remainderPnl
         state.balance *= (1 + netPnl / 100.0)
-        state.trades.add(BacktestTrade(state.buyIndex, index, buyPrice, sellPrice, netPnl, holdDays, reason, fraction))
+        state.trades.add(
+            BacktestTrade(
+                state.buyIndex, index, buyPrice, sellPrice, netPnl, holdDays, reason,
+                fraction, fraction?.let { state.partialIndex }, fraction?.let { state.partialLegPnl },
+            ),
+        )
         state.returns.add(netPnl)
         state.peakBalance = max(state.peakBalance, state.balance)
         state.maxDrawdown = max(state.maxDrawdown, (state.peakBalance - state.balance) / state.peakBalance * 100)
@@ -310,6 +337,7 @@ class BacktestEngine(
         if (config.atrStopMultiplier != null && (entryAtr == null || entryAtr <= 0.0)) return false
         state.entryAtr = entryAtr
         state.partialTaken = false
+        state.partialIndex = -1
         state.partialLegPnl = 0.0
         state.buyPrice = fillPrice
         state.peakPrice = fillPrice
@@ -326,7 +354,13 @@ class BacktestEngine(
         val fraction = if (state.partialTaken) config.partialTakeProfitFraction else null
         val pnl = fraction?.let { it * state.partialLegPnl + (1 - it) * remainderPnl } ?: remainderPnl
         state.balance *= (1 + pnl / 100.0)
-        state.trades.add(BacktestTrade(state.buyIndex, chronological.size - 1, state.buyPrice, lastPrice, pnl, chronological.size - 1 - state.buyIndex, "END", fraction))
+        state.trades.add(
+            BacktestTrade(
+                state.buyIndex, chronological.size - 1, state.buyPrice, lastPrice, pnl,
+                chronological.size - 1 - state.buyIndex, "END",
+                fraction, fraction?.let { state.partialIndex }, fraction?.let { state.partialLegPnl },
+            ),
+        )
         state.returns.add(pnl)
         // processExit 와 같은 갱신 — 빠뜨리면 END 로 끝난 손실이 낙폭에 반영되지 않아 MDD 가 과소평가된다.
         state.peakBalance = max(state.peakBalance, state.balance)
@@ -399,6 +433,7 @@ class BacktestEngine(
         /** 진입 시점에 고정한 ATR — 보유 중 재계산하면 추적형 스탑이 되어 트레일링과 축이 겹친다. */
         var entryAtr: Double? = null,
         var partialTaken: Boolean = false,
+        var partialIndex: Int = -1,
         var partialLegPnl: Double = 0.0,
         val trades: MutableList<BacktestTrade> = mutableListOf(),
         val returns: MutableList<Double> = mutableListOf(),

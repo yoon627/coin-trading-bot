@@ -69,12 +69,6 @@ internal object StrategySearchGrid {
     val HOLD_DAYS = listOf(1, 2, 3, 5, 10, 365)
     val MARKET_FILTERS_STAGE_A = listOf(0, 50)
 
-    /** coarse grid — null 대조군과 런타임 초과 시 폴백. 사전고정(plan Decisions 3). */
-    val COARSE_TAKE_PROFITS = listOf(3.0, 5.0, 12.0, TAKE_PROFIT_OFF)
-    val COARSE_STOP_LOSSES = listOf(3.0, 5.0, 10.0)
-    val COARSE_TRAILING_STOPS = listOf(TRAILING_OFF, 2.0, 5.0)
-    val COARSE_HOLD_DAYS = listOf(1, 3, 365)
-
     /** `kValue` 를 신호에서 읽는 전략만 그 축을 갖는다(엔진이 신호에 넘기는 유일한 config 필드). */
     fun kValuesFor(strategy: String): List<Double> =
         if (strategy == "volatility_breakout" || strategy == "combined") listOf(0.3, 0.5, 0.7) else listOf(0.5)
@@ -108,9 +102,6 @@ internal object StrategySearchGrid {
 
     fun stageA(): SweepGrid = build(TAKE_PROFITS, STOP_LOSSES, TRAILING_STOPS, HOLD_DAYS, MARKET_FILTERS_STAGE_A)
 
-    fun coarse(strategies: List<String> = STRATEGIES): SweepGrid =
-        build(COARSE_TAKE_PROFITS, COARSE_STOP_LOSSES, COARSE_TRAILING_STOPS, COARSE_HOLD_DAYS, MARKET_FILTERS_STAGE_A, strategies, kValueAxis = false)
-
     private fun build(
         takeProfits: List<Double>,
         stopLosses: List<Double>,
@@ -118,11 +109,10 @@ internal object StrategySearchGrid {
         holdDays: List<Int>,
         filters: List<Int>,
         strategies: List<String> = STRATEGIES,
-        kValueAxis: Boolean = true,
     ): SweepGrid = SweepGrid(
         buildList {
             for (strategy in strategies)
-                for (k in if (kValueAxis) kValuesFor(strategy) else listOf(0.5))
+                for (k in kValuesFor(strategy))
                     for (tp in takeProfits)
                         for (sl in stopLosses)
                             for (trail in trailingStops)

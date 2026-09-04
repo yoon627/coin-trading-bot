@@ -226,7 +226,7 @@ class StrategySearchTest {
         val a = mapOf("KRW-BTC" to listOf(trade))
         val b = mapOf("KRW-BTC" to listOf(trade.copy()))
         val c = mapOf("KRW-BTC" to listOf(trade.copy(sellPrice = 106.0)))
-        assertEquals(StrategySearchGates.fingerprint(a), StrategySearchGates.fingerprint(b))
-        assertNotEquals(StrategySearchGates.fingerprint(a), StrategySearchGates.fingerprint(c))
+        assertEquals(StrategySearch.fingerprintOf(a), StrategySearch.fingerprintOf(b))
+        assertNotEquals(StrategySearch.fingerprintOf(a), StrategySearch.fingerprintOf(c))
     }
 }

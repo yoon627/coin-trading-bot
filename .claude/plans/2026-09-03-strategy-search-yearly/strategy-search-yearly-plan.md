@@ -25,12 +25,41 @@ updated: 2026-09-04
 - 2026-09-03 — 빌드 확인: JDK25 로는 Gradle 8.12 가 죽는다(`IllegalArgumentException: 25.0.2`).
   `JAVA_HOME=~/Library/Java/JavaVirtualMachines/jbr-21.0.9/Contents/Home` 프리픽스로 `:bot:test --tests "*YearlyStrategyComparisonTest*"` BUILD SUCCESSFUL(21s).
 - 2026-09-04 — plan-reviewer + codex(medium) + architecture-reviewer(planning) 검토. Critical 9(중복 제외)·Major 14.
-  방법론을 무너뜨리는 4건(bear⊂yearly / 전략축소가 FULL 순위 유래 / arm×trail alias 37.5% / paired 미사용)을 포함해 전면 개정 — 아래 `# Decisions` 는 개정본이고 `# Review Disposition` 에 처분을 남겼다.
+  방법론을 무너뜨리는 4건(bear⊂yearly / 전략축소가 FULL 순위 유래 / arm×trail alias 37.5% / paired 미사용)을 포함해 전면 개정 — 아래 `# Decisions` 는 개정본이고 `# Review Disposition
+
+**code-reviewer (2026-09-04, 구현 후)** — Critical 0 / Major 4 / Minor 12. **Codex 미가용: 워크스페이스 크레딧 소진**(2026-09-02 이후 지속).
+
+| 지적 | 처분 | 반영 |
+|---|---|---|
+| M1 부분TP선 ≥ 전량TP선이면 두 다리 모두 인정 → pnl 이중계상 | fix | `BacktestConfig.init` require(퍼센트 모드) + `processExit` 에서 **전량 청산가 ≤ 부분선이면 부분 억제**(ATR 모드 포함) |
+| M2 `1 − f/2` 근사가 부분익절 후보의 MDD·노출을 후보 유리 방향으로 과소평가 | fix | `BacktestTrade.partialIndex`/`partialLegPnlPct` 추가 → equity 곡선·노출을 **체결 전 1.0 / 후 1−f** 로 구간별 정확 계산 |
+| M3 G3 의 `g1Pass` 가 G5 미적용 → 0거래 이웃이 plateau 를 채움 | fix | `g1Pass` 에 G5 동반(실측·null 양쪽), max-statistic 도 G5 통과 좌표에서만 |
+| M4 StageA/StageB/runNull 이 게이트 없는 테스트 0건 | fix | `StrategySearchOrchestrationTest` 신설(축소 그리드로 4경로 — 생존자 non-null 경로 포함) |
+| Minor `ROUND_TRIP_FEE_PCT` 상수가 미실현 항에 박힘(G7 실행에서 MDD 부풀림) | fix | `measure` 가 `config.feeRate` 를 곡선에 전달 |
+| Minor 죽은 코드(`quantile`·`keepTrades`/`tradesByMarket`·`coarse()`) | fix | 전부 삭제 — 런타임이 예산(30분) 대비 4분이라 coarse 폴백은 쓰이지 않았다 |
+| Minor 지문 구현 2개(String/Long) 중 테스트가 안 쓰는 쪽만 검증 | fix | String 판 삭제, `StrategySearch.fingerprintOf`(Long) 단일화 + 테스트 이전 |
+| Minor 삭제된 `ParameterSweepTest` 참조 3곳 | fix | 주석 갱신 |
+| Minor `measureWithConfigs` 가 `options` 를 조용히 무시 | fix | `strategyFor` 만 받도록 축소(수수료·재진입은 넘어온 config 가 소유) |
+| Minor `strategyFor` 가 전략 이름 불일치를 조용히 통과 | fix | `require(base.name == name)` |
+| Minor 테스트 힙 2g 를 전 서브프로젝트에 | fix | `:bot` 태스크로 범위 축소 |
+| Minor `partialFraction` 이 `/backtest` JSON 에 노출 | fix | 신규 3필드 `@get:JsonIgnore` — REST 계약 무변경 |
+| Minor null max-stat 이 G5 미적용 좌표 포함 | fix | G5 통과 좌표에서만 max 산출 |
+| Minor 대표 좌표가 그리드 순서에 의존 / kValue 축이 null 이웃에 없음 | wontfix | 결정적이고 방향이 보수적(둘 다 통과를 어렵게 함). wiki 한계에 기록 |
+| Nit `check` 메시지·NaN 표기·wiki 문구 | fix | 각각 수정 |
+
+**재실행 결과(교정 후)**: Stage A 통과 3(게이트별 탈락 동일), null A 0.0%·B 85.7%(교정 전 86.8%) — **결론 불변**. 계기를 고쳐도 같은 답이 나온 것이 이번 교정의 결과다.` 에 처분을 남겼다.
 - 2026-09-04 — 사전고정 커밋(`391118e`) 후 Stage A 하네스 구현·실행(`4aeb519`). 합성 벤치 0.185ms/run, 전체 실행 33초.
   그리드 51,480 좌표(Cartesian 93,600 대비 arm alias 제거로 −45%) → **고유 행동 22,952**.
   게이트별 탈락: G5 974 · G1 21,513 · G3 330 · G6 132 · G2/G4a/G4b/G7 0 → **통과 3건**(전부 같은 행동 계열:
   `combined` k0.3 / SL7 / 트레일1.5·arm0 / hold1 / 필터off / TP 8~off). 선택 +4.92%p · 검증 +2.13%p · bull +6.5~7.0%p ·
   MDD Δ중앙 +0.30%p · 수수료 4배에서도 +3.71%p.
+- 2026-09-04 — Stage B(`5c24760`): 프로덕션 노브 3종을 4중 가드와 함께 추가(`Indicators.calculateAtr` · `BacktestConfig`
+  5필드 + init require · `IntrabarExitModel.exitLevels()`/`partialTakeProfitFires()` · `BacktestTrade.partialFraction` ·
+  `M1ReplayEngine` require 2개). 75셀 측정 결과 **통과 0건** — 레짐필터 MA10/20/50 = −0.53/0.00/−2.20%p,
+  ATR 은 선택창 전 셀 ≤0(hold 365 계열은 −4~−16%p·MDD 20~48%p), 부분익절 최고가 `2%@50%/TP12~off/h1` +1.21%p(6/8)로 G1 미달.
+  `ParameterSweepTest` 삭제, wiki `query/parameter-search-2026-09` 신규 + `backtest-engine`·`index`·fixture README 동기화.
+  검증: `./gradlew build` 통과(실행 906 / skip 11 / 실패 0 — skip 은 전부 env·인프라 게이트이고 신규 2건은 게이트 켠 실행에서 통과),
+  wiki 검증 3종 통과.
 - 2026-09-04 — **null 대조군이 판정을 뒤집었다**(Decisions 14). 최초 설계(후보·기준 둘 다 무작위)는 seed 86.8% 가 통과하는
   고장난 계기였고, 기준을 실제 라이브 baseline 으로 고쳐 다시 돌리니 **91 seed 중 0건 통과**. 다만 사전고정한 max-statistic
   기준(잡음 탐색 최고 delta 95% 분위 = 7.84%p, 탐색폭 13배 환산 13.60%p)을 실제 후보(4.92%p)가 **넘지 못했다** →
@@ -38,8 +67,10 @@ updated: 2026-09-04
 
 # Next
 
-Stage B 구현 — 신규 노브(레짐필터 기간·ATR 가변 손절익절·부분익절)를 Decisions 5~8 의 4중 가드와 함께 넣고 같은 게이트로 측정.
-그 다음 Stage C(wiki query 페이지 + 권고).
+`/e merge` (push → PR → 머지 → 정리).
+
+권고(사용자 결정 대기, 코드 변경 아님): **라이브 파라미터를 지금 바꾸지 않는다.** 다음으로 유효한 축은 그리드를 더 뒤지는 게
+아니라 표본을 늘리는 쪽 — 전향적 관찰(소액 카나리아·페이퍼), 국면 fixture 추가, M1 fixture(#143).
 
 # Decisions
 
@@ -231,16 +262,16 @@ max-stat 은 G1(선택창 효과크기) 하나만 보고, 통과율은 G2·G3·G
 
 # Acceptance
 
-1. **사전고정이 감사 가능하다** — G1~G7·그리드·seed 목록·런타임 예산·축소 규칙이 담긴 이 plan 이 **결과 실행 전에 커밋**됐고(git 이력), 게이트가 순수 함수로 구현돼 각 경계가 단위 테스트로 고정된다.
-2. **신호 캐시 동치성** — 캐시 유/무가 trade 단위 동일. **마켓 충돌 케이스**(같은 날짜, BTC/ETH 상이 신호) 포함.
-3. **null 대조군이 순수하다** — 같은 (seed, market, 봉) 이면 exit config 와 무관하게 같은 진입. 단위 테스트로 고정.
-4. **Stage A 산출물** — `build/reports/strategy-search-yearly.md` 에 명목 config 수 / **고유 행동 수** / 게이트별 탈락 수 / 통과 후보표(선택·검증·bull·bear·MDD·거래수·노출·손익분기승률) / null 분위수·max-statistic 이 있다. **통과 0건이어도 `0 / N` 과 게이트별 탈락 수를 출력**(테스트로 강제).
-5. **Stage B 산출물** — 레짐필터 기간·ATR·부분익절 각각 같은 표 형식. 신규 노브가 기본값에서 기존 결과를 바꾸지 않음을 `BacktestLegacyGoldenTest` + parity 가드로 확인.
-6. **결론이 증거와 함께** — 통과 후보가 있으면 null 분위수 대비 위치·한계와 함께, 0건이면 "이 공간에 없다"를 표본·게이트와 함께. 추측 기반 권고 0건.
-7. **문서 동기화** — `wiki/pages/query/` 신규 페이지 + `wiki/index.md` 등재 + fixture README 소비자 목록 + `backtest-engine.md` 의 `ParameterSweepTest` 언급 갱신. wiki 검증 3종 통과.
-8. **검증** — `JAVA_HOME=<jbr-21> ./gradlew :bot:test` 통과(`common` 은 test source set 이 없어 `:bot:test` 가 지표 테스트까지 덮는다). 무거운 스윕은 env 게이트 뒤, **게이트를 켠 실행에서 "실행 N건 / skip 0"** 을 로그로 남긴다([[lesson-skip-is-not-pass]]).
-9. **라이브 무변경** — `TradingProperties`·`deploy/` diff 0.
-10. **롤백 기준** — 신규 필드·분기를 되돌리면 `BacktestLegacyGoldenTest` 통과 + M1 replay parity 복원. 리포트에 code SHA·fixture 해시·grid hash·seed·JVM/Gradle·실행 명령을 남겨 재현 가능하게 한다.
+1. ✅ **사전고정이 감사 가능하다**(`391118e` — 실행 전 커밋, 게이트는 `StrategySearchGates` 순수 함수 + `StrategySearchTest` 경계 테스트) — G1~G7·그리드·seed 목록·런타임 예산·축소 규칙이 담긴 이 plan 이 **결과 실행 전에 커밋**됐고(git 이력), 게이트가 순수 함수로 구현돼 각 경계가 단위 테스트로 고정된다.
+2. ✅ **신호 캐시 동치성**(마켓 충돌 재현 포함 — `StrategySearchTest`) — 캐시 유/무가 trade 단위 동일. **마켓 충돌 케이스**(같은 날짜, BTC/ETH 상이 신호) 포함.
+3. ✅ **null 대조군이 순수하다**(`RandomEntryStrategy` 순수성 테스트) — 같은 (seed, market, 봉) 이면 exit config 와 무관하게 같은 진입. 단위 테스트로 고정.
+4. ✅ **Stage A 산출물**(`bot/build/reports/parameter-search.md` — 명목 51,480 / 고유 22,952 / 게이트별 탈락 / null 분위수) — `build/reports/strategy-search-yearly.md` 에 명목 config 수 / **고유 행동 수** / 게이트별 탈락 수 / 통과 후보표(선택·검증·bull·bear·MDD·거래수·노출·손익분기승률) / null 분위수·max-statistic 이 있다. **통과 0건이어도 `0 / N` 과 게이트별 탈락 수를 출력**(테스트로 강제).
+5. ✅ **Stage B 산출물**(75셀 3축, 골든·parity 통과) — 레짐필터 기간·ATR·부분익절 각각 같은 표 형식. 신규 노브가 기본값에서 기존 결과를 바꾸지 않음을 `BacktestLegacyGoldenTest` + parity 가드로 확인.
+6. ✅ **결론이 증거와 함께**(발견 없음 + 두 통계가 갈린 이유를 리포트·wiki 에 기록) — 통과 후보가 있으면 null 분위수 대비 위치·한계와 함께, 0건이면 "이 공간에 없다"를 표본·게이트와 함께. 추측 기반 권고 0건.
+7. ✅ **문서 동기화**(wiki 신규 페이지 + index + `backtest-engine` + fixture README, 검증 3종 통과) — `wiki/pages/query/` 신규 페이지 + `wiki/index.md` 등재 + fixture README 소비자 목록 + `backtest-engine.md` 의 `ParameterSweepTest` 언급 갱신. wiki 검증 3종 통과.
+8. ✅ **검증** — `JAVA_HOME=<jbr-21> ./gradlew :bot:test` 통과(`common` 은 test source set 이 없어 `:bot:test` 가 지표 테스트까지 덮는다). 무거운 스윕은 env 게이트 뒤, **게이트를 켠 실행에서 "실행 N건 / skip 0"** 을 로그로 남긴다([[lesson-skip-is-not-pass]]).
+9. ✅ **라이브 무변경**(`TradingProperties`·`deploy/` diff 0) — `TradingProperties`·`deploy/` diff 0.
+10. ✅ **롤백 기준**(리포트에 code SHA·fixture 해시·seed·JVM·명령 기록) — 신규 필드·분기를 되돌리면 `BacktestLegacyGoldenTest` 통과 + M1 replay parity 복원. 리포트에 code SHA·fixture 해시·grid hash·seed·JVM/Gradle·실행 명령을 남겨 재현 가능하게 한다.
 
 # Deferred
 

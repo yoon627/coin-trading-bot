@@ -65,16 +65,4 @@ internal object StrategySearchGates {
         return neighbours.count { it in passing }.toDouble() / neighbours.size >= PLATEAU_MIN_RATIO
     }
 
-    /**
-     * 거래 **행동**의 지문 — 서로 다른 좌표가 같은 거래를 내면 하나로 접어 다중비교 분모(고유 행동 수)를 만든다.
-     * 가격까지 포함해 접는 쪽이 보수적이다(덜 접히므로 분모가 커진다).
-     */
-    fun fingerprint(tradesByMarket: Map<String, List<BacktestTrade>>): String =
-        tradesByMarket.keys.sorted().joinToString("|") { market ->
-            market + ":" + tradesByMarket.getValue(market).joinToString(",") {
-                "${it.buyIndex}>${it.sellIndex}@${round6(it.buyPrice)}/${round6(it.sellPrice)}:${it.reason}:${round6(it.pnlPercent)}"
-            }
-        }
-
-    private fun round6(v: Double) = Math.round(v * 1_000_000.0) / 1_000_000.0
 }
