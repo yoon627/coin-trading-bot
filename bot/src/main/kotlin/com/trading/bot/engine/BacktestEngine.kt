@@ -70,6 +70,14 @@ data class BacktestConfig(
     val partialTakeProfitPct: Double? = null,
     /** 1차 익절선에서 청산할 비중(0<f<1). [partialTakeProfitPct] 와 항상 함께 설정한다. */
     val partialTakeProfitFraction: Double? = null,
+    /**
+     * 보유상한(라이브 09:00 리셋)이 걸릴 때 **전량이 아니라 이 비중만** 매도한다(null = 현행 전량).
+     *
+     * 잔여는 그 뒤 가격 게이트(손절·트레일링·익절)에만 맡기고 **보유상한을 다시 걸지 않는다** — 매일 조금씩 파는
+     * 사다리가 아니라 "첫 경계에서 일부만 실현하고 나머지는 추세에 맡긴다" 정책이다. 사다리는 단일 포지션 엔진으로
+     * 표현할 수 없다(거래 하나에 다리가 셋 이상 생긴다).
+     */
+    val holdLimitSellFraction: Double? = null,
 ) {
     init {
         // 음수면 reentryDueAt < i 가 되어 조용히 cooldown=1 처럼 동작하고, 거대값이면 `i + cooldown` 이
@@ -100,6 +108,17 @@ data class BacktestConfig(
         }
         require(partialTakeProfitFraction == null || partialTakeProfitFraction in PARTIAL_FRACTION_RANGE) {
             "partialTakeProfitFraction must be in $PARTIAL_FRACTION_RANGE (0 or 1 은 부분 익절이 아니다), was $partialTakeProfitFraction"
+        }
+        require(holdLimitSellFraction == null || holdLimitSellFraction in PARTIAL_FRACTION_RANGE) {
+            "holdLimitSellFraction must be in $PARTIAL_FRACTION_RANGE, was $holdLimitSellFraction"
+        }
+        // 부분 청산이 둘이면 한 거래에 다리가 셋이 되어 가중 합성(2다리)으로 표현할 수 없다.
+        require(holdLimitSellFraction == null || partialTakeProfitPct == null) {
+            "holdLimitSellFraction and partialTakeProfitPct cannot be combined — one trade would need three legs"
+        }
+        // 조건부 상한(손실이면 넘김)과 부분 상한(일부만 판다)은 같은 경계에서 서로 다른 정책이다.
+        require(holdLimitSellFraction == null || !holdLimitOnlyWhenProfitable) {
+            "holdLimitSellFraction and holdLimitOnlyWhenProfitable are two different policies for the same boundary"
         }
     }
 
@@ -263,12 +282,17 @@ class BacktestEngine(
         // 상한이 걸려도 손실이면 청산하지 않는 정책(#128 2안)은 M1 replay 와 공유해야 하므로
         // 판정식은 IntrabarExitModel 이 소유한다. 억제되면 이 봉은 일반 보유 구간처럼 평가된다 —
         // open 으로 눌리지 않고 high/low 를 그대로 본다.
-        val atHoldLimit = IntrabarExitModel.holdLimitFires(
-            bar,
-            buyPrice,
-            holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays),
-            config,
-        )
+        val rawAtHoldLimit = holdDays >= ExitGates.effectiveMaxHoldDays(config.maxHoldDays) && !state.holdLimitConsumed
+        // 부분 보유상한: 경계 시각(bar.open = 라이브 09:00)에 f 만 실현하고, 잔여는 **그 봉의 전 구간을 정상으로**
+        // 겪는다. 여기서 open 으로 눌러버리면 잔여가 그날의 고저를 못 겪어 측정이 낙관/비관 어느 쪽으로든 틀어진다.
+        val fraction = config.holdLimitSellFraction
+        if (fraction != null && rawAtHoldLimit && !state.partialTaken) {
+            state.partialTaken = true
+            state.holdLimitConsumed = true
+            state.partialIndex = index
+            state.partialLegPnl = ((bar.openingPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
+        }
+        val atHoldLimit = fraction == null && IntrabarExitModel.holdLimitFires(bar, buyPrice, rawAtHoldLimit, config)
 
         // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
         // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
@@ -297,13 +321,13 @@ class BacktestEngine(
         val (reason, sellPrice) = decision?.let { it.reason to it.sellPrice } ?: return null
 
         val remainderPnl = ((sellPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
-        val fraction = if (state.partialTaken) config.partialTakeProfitFraction else null
-        val netPnl = fraction?.let { it * state.partialLegPnl + (1 - it) * remainderPnl } ?: remainderPnl
+        val bankedFraction = if (state.partialTaken) (config.partialTakeProfitFraction ?: config.holdLimitSellFraction) else null
+        val netPnl = bankedFraction?.let { it * state.partialLegPnl + (1 - it) * remainderPnl } ?: remainderPnl
         state.balance *= (1 + netPnl / 100.0)
         state.trades.add(
             BacktestTrade(
                 state.buyIndex, index, buyPrice, sellPrice, netPnl, holdDays, reason,
-                fraction, fraction?.let { state.partialIndex }, fraction?.let { state.partialLegPnl },
+                bankedFraction, bankedFraction?.let { state.partialIndex }, bankedFraction?.let { state.partialLegPnl },
             ),
         )
         state.returns.add(netPnl)
@@ -337,6 +361,7 @@ class BacktestEngine(
         if (config.atrStopMultiplier != null && (entryAtr == null || entryAtr <= 0.0)) return false
         state.entryAtr = entryAtr
         state.partialTaken = false
+        state.holdLimitConsumed = false
         state.partialIndex = -1
         state.partialLegPnl = 0.0
         state.buyPrice = fillPrice
@@ -351,7 +376,7 @@ class BacktestEngine(
         val lastPrice = chronological.last().tradePrice
         val remainderPnl = ((lastPrice - state.buyPrice) / state.buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         // 구간 끝 강제 청산도 부분 익절을 반영한다 — 빠뜨리면 마지막 거래만 합성 규칙이 달라진다.
-        val fraction = if (state.partialTaken) config.partialTakeProfitFraction else null
+        val fraction = if (state.partialTaken) (config.partialTakeProfitFraction ?: config.holdLimitSellFraction) else null
         val pnl = fraction?.let { it * state.partialLegPnl + (1 - it) * remainderPnl } ?: remainderPnl
         state.balance *= (1 + pnl / 100.0)
         state.trades.add(
@@ -433,6 +458,8 @@ class BacktestEngine(
         /** 진입 시점에 고정한 ATR — 보유 중 재계산하면 추적형 스탑이 되어 트레일링과 축이 겹친다. */
         var entryAtr: Double? = null,
         var partialTaken: Boolean = false,
+        /** 부분 보유상한 청산을 이미 소진했는가 — 소진 후에는 잔여에 상한을 다시 걸지 않는다. */
+        var holdLimitConsumed: Boolean = false,
         var partialIndex: Int = -1,
         var partialLegPnl: Double = 0.0,
         val trades: MutableList<BacktestTrade> = mutableListOf(),
