@@ -43,9 +43,12 @@ class ResetPolicySweepTest {
     private val policies = listOf(
         Policy("전량 리셋 h1 (현행)") { it },
         Policy("조건부 — 손실이면 넘김") { it.copy(holdLimitOnlyWhenProfitable = true) },
-        Policy("부분 30%") { it.copy(holdLimitSellFraction = 0.3) },
-        Policy("부분 50%") { it.copy(holdLimitSellFraction = 0.5) },
-        Policy("부분 70%") { it.copy(holdLimitSellFraction = 0.7) },
+        // 2단 사다리 — 경계에서 f, 다음 경계에서 잔여 전량. f→1 이면 현행, f→0 이면 연장 2일로 수렴한다.
+        Policy("부분 30% + 익일 잔여") { it.copy(holdLimitSellFraction = 0.3, holdLimitRemainderBoundaryDays = 1) },
+        Policy("부분 50% + 익일 잔여") { it.copy(holdLimitSellFraction = 0.5, holdLimitRemainderBoundaryDays = 1) },
+        Policy("부분 70% + 익일 잔여") { it.copy(holdLimitSellFraction = 0.7, holdLimitRemainderBoundaryDays = 1) },
+        // 잔여를 상한에서 놓아주는 변종 — 위 사다리와 달리 사실상 '폐지 + 조기 일부 실현' 이다(거래수가 폐지와 같다).
+        Policy("부분 50% + 잔여 방목") { it.copy(holdLimitSellFraction = 0.5) },
         Policy("연장 2일") { it.copy(maxHoldDays = 2) },
         Policy("연장 3일") { it.copy(maxHoldDays = 3) },
         Policy("연장 5일") { it.copy(maxHoldDays = 5) },
@@ -53,8 +56,13 @@ class ResetPolicySweepTest {
         Policy("폐지 — 가격 게이트만") { it.copy(maxHoldDays = 365) },
         Policy("재진입 1봉 쿨다운") { it.copy(reentryCooldownBars = 1) },
         Policy("재진입 2봉 쿨다운") { it.copy(reentryCooldownBars = 2) },
-        Policy("재진입 legacy(2봉 공백)") { it.copy(reentryMode = ReentryMode.LEGACY_NEXT_BAR, reentryCooldownBars = 0) },
     )
+
+    /**
+     * 왕복 비용 수준 — 백테는 슬리피지·부분체결을 0 으로 두는데, **거래수가 가장 많은 현행 정책이 그 누락으로
+     * 가장 크게 과대평가된다**. 비용을 올려가며 정책 순위가 언제 뒤집히는지 본다.
+     */
+    private val feeLevels = listOf(0.0005 to "왕복 0.10%(현행 가정)", 0.001 to "왕복 0.20%", 0.0015 to "왕복 0.30%", 0.002 to "왕복 0.40%")
 
     @Test
     @EnabledIfEnvironmentVariable(named = "RUN_RESET_POLICY", matches = "true")
@@ -74,7 +82,7 @@ class ResetPolicySweepTest {
         md.appendLine("# 보유상한(익일 09:00) 정책 스윕")
         md.appendLine()
         md.appendLine("고정 노셔널 ${"%,.0f".format(notionalKrw)}원/마켓. `Δ중앙`·`Δ+마켓` 은 **같은 base 의 현행 전량 정책 대비** 마켓별 paired delta 다.")
-        md.appendLine("부분 청산 정책의 잔여는 보유상한을 다시 받지 않고 가격 게이트로만 나간다. 백테는 일봉이라 09:00 **시각 자체**는 검증 대상이 아니다(M1 fixture 부재 — #143).")
+        md.appendLine("부분 청산은 **2단 사다리**(경계에서 f, 다음 경계에서 잔여 전량)라 f→1 이면 현행, f→0 이면 연장 2일로 수렴한다. `잔여 방목` 변종만 잔여가 상한을 벗어나며, 그 행은 거래수가 `폐지` 와 같아진다(측정 아티팩트 대조군으로 남겨 둔다). 백테는 일봉이라 09:00 **시각 자체**는 검증 대상이 아니다(M1 fixture 부재 — #143).")
         md.appendLine()
 
         for ((windowName, fixtures, segment) in windows) {
@@ -110,6 +118,47 @@ class ResetPolicySweepTest {
                     )
                 }
             }
+            md.appendLine()
+        }
+
+        // 비용 민감도 — 현행이 거래수 최다이므로 비용이 오르면 가장 먼저 손해를 본다. 어느 비용에서 순위가 뒤집히나.
+        md.appendLine("## 비용 민감도 (1년 전체 · 독립 3창)")
+        md.appendLine()
+        md.appendLine("백테는 슬리피지·부분체결을 0 으로 둔다. **현행은 거래수가 가장 많은 정책**이라 그 누락으로 가장 크게 과대평가된다 — 비용을 올려 순위가 언제 뒤집히는지 본다. Δ중앙은 같은 비용 수준의 현행 대비다.")
+        md.appendLine()
+        val feeWindows = listOf(
+            Triple("1년 전체", yearly, StrategySearch.Segment("전체", 0..364)),
+        ) + BacktestFixtures.TIME_INDEPENDENT.map { Triple(it.label, BacktestFixtures.loadAll(it), StrategySearch.REGIME) }
+        for (base in bases) {
+            md.appendLine("### ${base.name}")
+            md.appendLine()
+            md.appendLine("| 정책 | " + feeLevels.joinToString(" | ") { it.second } + " |")
+            md.appendLine("|---|" + feeLevels.joinToString("") { "---|" })
+            val points = policies.mapIndexed { i, p -> p to marker(i) }
+            val byPolicy = LinkedHashMap<String, MutableList<String>>()
+            for ((fee, _) in feeLevels) {
+                val perPolicy = HashMap<String, MutableList<Double>>()
+                for ((windowName, fixtures, segment) in feeWindows) {
+                    val configs = points.associate { (policy, point) -> point to policy.apply(base.config).copy(feeRate = fee) }
+                    val metrics = search.measureWithConfigs(fixtures, segment, configs)
+                    val reference = metrics.getValue(points.first().second).returnByMarket
+                    for ((policy, point) in points) {
+                        val d = StrategySearchGates.pairedDeltas(metrics.getValue(point).returnByMarket, reference)
+                        perPolicy.getOrPut(policy.name) { ArrayList() }.add(SwingMetrics.median(d))
+                        tsv.append(
+                            "%s@fee%.2f\t%s\t%s\t0\t0\t0\t0\t0\t0\t%.4f\t0\n".format(
+                                windowName, fee * 2 * 100, base.name, policy.name, SwingMetrics.median(d),
+                            ),
+                        )
+                    }
+                }
+                for ((name, values) in perPolicy) {
+                    byPolicy.getOrPut(name) { ArrayList() }.add("%+.2f (창별 최악 %+.2f)".format(values.average(), values.min()))
+                }
+            }
+            for ((name, cells) in byPolicy) md.appendLine("| $name | " + cells.joinToString(" | ") + " |")
+            md.appendLine()
+            md.appendLine("각 칸 = 4창(1년 전체 + 독립 3창) **평균 Δ중앙 %p**, 괄호는 그중 최악 창.")
             md.appendLine()
         }
 

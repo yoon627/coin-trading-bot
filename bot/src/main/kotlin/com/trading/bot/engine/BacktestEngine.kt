@@ -78,6 +78,14 @@ data class BacktestConfig(
      * 표현할 수 없다(거래 하나에 다리가 셋 이상 생긴다).
      */
     val holdLimitSellFraction: Double? = null,
+    /**
+     * [holdLimitSellFraction] 의 잔여를 **첫 경계로부터 N봉 뒤 경계에서 전량** 청산한다(null = 잔여는 상한 면제).
+     *
+     * null 로 두면 f 축이 "현행 전량"으로 수렴하지 않는다 — 잔여가 상한을 영영 벗어나 사실상 *폐지 + 조기 일부 실현*
+     * 이 되고, 실제로 거래수가 폐지와 정확히 같아진다(실측 42/42 셀). N=1 이면 "오늘 f, 내일 나머지" 2단 사다리라
+     * f→1 에서 현행에, f→0 에서 연장 2일에 수렴해 축이 해석 가능해진다.
+     */
+    val holdLimitRemainderBoundaryDays: Int? = null,
 ) {
     init {
         // 음수면 reentryDueAt < i 가 되어 조용히 cooldown=1 처럼 동작하고, 거대값이면 `i + cooldown` 이
@@ -117,6 +125,12 @@ data class BacktestConfig(
             "holdLimitSellFraction and partialTakeProfitPct cannot be combined — one trade would need three legs"
         }
         // 조건부 상한(손실이면 넘김)과 부분 상한(일부만 판다)은 같은 경계에서 서로 다른 정책이다.
+        require(holdLimitRemainderBoundaryDays == null || holdLimitSellFraction != null) {
+            "holdLimitRemainderBoundaryDays only means something with holdLimitSellFraction"
+        }
+        require(holdLimitRemainderBoundaryDays == null || holdLimitRemainderBoundaryDays >= 1) {
+            "holdLimitRemainderBoundaryDays must be >= 1, was $holdLimitRemainderBoundaryDays"
+        }
         require(holdLimitSellFraction == null || !holdLimitOnlyWhenProfitable) {
             "holdLimitSellFraction and holdLimitOnlyWhenProfitable are two different policies for the same boundary"
         }
@@ -292,7 +306,15 @@ class BacktestEngine(
             state.partialIndex = index
             state.partialLegPnl = ((bar.openingPrice - buyPrice) / buyPrice) * 100.0 - (config.feeRate * 2 * 100)
         }
-        val atHoldLimit = fraction == null && IntrabarExitModel.holdLimitFires(bar, buyPrice, rawAtHoldLimit, config)
+        // 잔여 경계가 설정돼 있으면 첫 경계로부터 N봉 뒤에 전량 청산한다 — 그래야 f 축이 현행(f→1)과
+        // 연장(f→0) 사이를 실제로 보간한다. 없으면 잔여는 가격 게이트에만 맡긴다.
+        val remainderBoundary = fraction != null && state.partialTaken &&
+            config.holdLimitRemainderBoundaryDays?.let { index - state.partialIndex >= it } == true
+        val atHoldLimit = if (fraction == null) {
+            IntrabarExitModel.holdLimitFires(bar, buyPrice, rawAtHoldLimit, config)
+        } else {
+            remainderBoundary
+        }
 
         // 청산 판정은 IntrabarExitModel 로 위임 — D1 백테와 M1 replay 가 동일 게이트식을 공유(편향 정합).
         // armPeak 은 이 봉 high 반영 전 peak(트레일링 arm 팬텀 방지), peak 갱신은 다음 봉 판정용.
