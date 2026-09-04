@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test
  *
  * 재진입 모델(`ReentryMode`)은 기본값이 [ReentryMode.LEGACY_NEXT_BAR] 라 기존 결과를 바꾸지 않아야 하는데,
  * 단위 테스트 통과만으로는 그걸 못 덮는다 — 실제로 도입 직전 커밋(`db48763`)과 이 골든이 바이트 동일함을
- * 대조해 확인했다. 기본값을 바꾸면 `M1ReplayBiasTest`·`ParameterSweepTest`·`/backtest` 호출자의 모집단이
+ * 대조해 확인했다. 기본값을 바꾸면 `M1ReplayBiasTest`·`StrategySearch`·`/backtest` 호출자의 모집단이
  * 조용히 달라지므로, 그 변경이 여기서 먼저 빨갛게 뜨도록 둔다.
  *
  * fixture 유니버스나 기본값을 **의도적으로** 바꿀 때만 재생성한다:
@@ -51,7 +51,7 @@ class BacktestLegacyGoldenTest {
 
     private suspend fun renderAllFixtures(): String {
         val sb = StringBuilder()
-        for (regime in BacktestFixtures.Regime.values()) {
+        for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
             for (market in BacktestFixtures.markets(regime)) {
                 val candles = BacktestFixtures.load(regime, market)
                 for (strategy in listOf("volatility_breakout", "combined")) {
