@@ -50,7 +50,7 @@ class BacktestReentryEquivalenceTest {
             reentryCooldownBars = 2,
         )
 
-        for (regime in BacktestFixtures.Regime.values()) {
+        for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
             for (market in BacktestFixtures.markets(regime)) {
                 val candles = BacktestFixtures.load(regime, market)
                 for (strategy in listOf("volatility_breakout", "combined")) {

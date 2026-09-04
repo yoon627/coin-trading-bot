@@ -4,10 +4,16 @@
 
 **국면별로 나뉜다** — 하락장 하나만 보면 "이 전략이 원래 나쁜지, 이 장에서만 나쁜지"를 가를 수 없다.
 
+구간 이름 중 `p2024h2`·`p2025h1` 은 **기간**으로 붙였다. 성격은 수집한 뒤에야 알 수 있고, 결과를 보고 "상승장"이라 이름 붙이면 그 라벨이 곧 사후 서사가 된다(`bear`/`bull` 은 그 전에 붙은 이름이라 그대로 둔다).
+
+네 구간 중 `bull`·`p2024h2`·`p2025h1` 셋은 `yearly/`(2025-09-03~2026-09-02) 구간과 **겹치지 않는다** — 시간 독립 holdout 이다. `bear/`(2026-01~08)는 `yearly/` 안에 통째로 들어가므로 robustness 표기 전용이며 독립 증거로 세지 않는다.
+
 | 디렉토리 | 구간 | 마켓 | 성격 |
 |---|---|---|---|
 | `bear/` | 2026-01-31 ~ 2026-08-18 | 8개 | **8개 전부 마이너스** (−27% ~ −91%) |
 | `bull/` | 2023-11-23 ~ 2024-06-09 | 8개 | SOL +196%, POLYX +153%, BTC +96%, MINA +27% / XRP −14%, BLUR −23%, GAS −40%, ARK −43% |
+| `p2024h2/` | 2024-06-10 ~ 2024-12-26 | 8개 | **강한 상승** — XRP +366%, DOGE +132%, BTC +48%, SOL +27% / ETH −2%, PYTH −4% |
+| `p2025h1/` | 2025-01-01 ~ 2025-07-19 | 8개 | **혼조·약세** — XRP +35%, BTC +14% / 나머지 6종 −2 ~ −71%(AGLD −71%) |
 
 **상승장에서도 거래대금 상위의 절반이 손실**이라는 점에 주목할 것. 예전 `bull/` 은 BTC +96%·ETH +89%·
 DOGE +102%·XRP −16% 로 균일하게 오르는 장처럼 보였는데, 그건 **오늘의 승자만 담았기 때문**이었다(#112).
@@ -81,6 +87,6 @@ python3 scripts/collect_backtest_fixtures.py --write     # fixture 파일까지 
 | 수집 | 2026-09-03, `python3 scripts/collect_yearly_fixtures.py --write` — 요청당 200봉 상한이라 `to` 로 2회 페이징, 종료일은 스크립트 상수 `END_DATE`(재현성) |
 | 용량 | ≈540KB(8파일) |
 | 로더 | `YearlyFixtures`(테스트 소스). `BacktestFixtures.Regime` 에 얹지 않는다 — 그 enum 을 순회하는 기존 측정의 모집단이 바뀐다 |
-| 소비자 | `YearlyStrategyComparisonTest` — `RUN_YEARLY_COMPARE=true` 로 전체 비교, 결과는 `bot/build/reports/yearly-strategy-comparison.md`. wiki `query/yearly-strategy-comparison` |
+| 소비자 | `YearlyStrategyComparisonTest` — `RUN_YEARLY_COMPARE=true` 로 전체 비교, 결과는 `bot/build/reports/yearly-strategy-comparison.md`. wiki `query/yearly-strategy-comparison`<br>`StrategySearchRunTest` — `RUN_STRATEGY_SEARCH=true` 로 파라미터·아이디어 탐색(bull·bear fixture 도 함께 쓴다), 결과는 `bot/build/reports/parameter-search.md`. wiki `query/parameter-search-2026-09` |
 
 한계: 이 8종은 지난 1년을 **살아남아 운용 중인** 종목이라 생존편향이 있고(그해 상장폐지·이탈 종목은 표본 밖), 상관이 높아 실효 독립 표본은 2~3 이다. 이 구간은 8종 전부 −36~−72% 인 단일 하락 국면이다.
