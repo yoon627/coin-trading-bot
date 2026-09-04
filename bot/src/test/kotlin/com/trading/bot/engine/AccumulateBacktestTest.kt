@@ -90,7 +90,7 @@ class AccumulateBacktestTest {
     @Test
     fun `grid sweep over major fixtures with pre-registered adoption rule`() {
         val majors = setOf("KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL")
-        val fixtures = Regime.entries.flatMap { regime ->
+        val fixtures = BacktestFixtures.ORIGINAL_REGIMES.flatMap { regime ->
             BacktestFixtures.markets(regime).filter { it in majors }.map { market -> Triple(regime, market, BacktestFixtures.load(regime, market)) }
         }
         assertEquals(7, fixtures.size)
