@@ -88,8 +88,8 @@ class ResetPolicySweepTest {
         for ((windowName, fixtures, segment) in windows) {
             md.appendLine("## $windowName (거래봉 ${segment.inputRange.count() - BacktestEngine.MIN_CANDLES}, 마켓 ${fixtures.size})")
             md.appendLine()
-            md.appendLine("| base | 정책 | 중앙값 % | 합계 % | 금액 | Δ중앙 %p | Δ+마켓 | 거래수 | 노출 | 최악 MDD %p |")
-            md.appendLine("|---|---|---|---|---|---|---|---|---|---|")
+            md.appendLine("| base | 정책 | 중앙값 % | 합계 % | 금액 | Δ중앙 %p | **Δ합계 %p** | Δ+마켓 | 거래수 | 노출 | 최악 MDD %p |")
+            md.appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
             for (base in bases) {
                 val points = policies.mapIndexed { i, p -> p to marker(i) }
                 val configs = points.associate { (policy, point) -> point to policy.apply(base.config) }
@@ -103,10 +103,12 @@ class ResetPolicySweepTest {
                     val deltas = StrategySearchGates.pairedDeltas(m.returnByMarket, reference)
                     val dMedian = SwingMetrics.median(deltas)
                     val dPositive = deltas.count { it > 0 }
+                    // Δ중앙만 보면 소수 마켓에서만 갈리는 정책이 구조적으로 0 으로 찍힌다(8마켓의 4·5번째 값만 반영).
+                    val dSum = sum - reference.values.sum()
                     md.appendLine(
-                        "| %s | %s | %.2f | %.2f | %s원 | %+.2f | %d/%d | %d | %.2f | %.1f |".format(
+                        "| %s | %s | %.2f | %.2f | %s원 | %+.2f | %+.2f | %d/%d | %d | %.2f | %.1f |".format(
                             base.name, policy.name, SwingMetrics.median(values), sum,
-                            "%,.0f".format(sum * notionalKrw / 100.0), dMedian, dPositive, deltas.size,
+                            "%,.0f".format(sum * notionalKrw / 100.0), dMedian, dSum, dPositive, deltas.size,
                             m.trades, m.exposure, m.worstMdd,
                         ),
                     )
@@ -121,51 +123,58 @@ class ResetPolicySweepTest {
             md.appendLine()
         }
 
-        // 비용 민감도 — 현행이 거래수 최다이므로 비용이 오르면 가장 먼저 손해를 본다. 어느 비용에서 순위가 뒤집히나.
-        md.appendLine("## 비용 민감도 (1년 전체 · 독립 3창)")
+        // 비용 민감도 — 현행이 거래수 최다이므로 비용이 오르면 가장 먼저 손해를 본다.
+        // ⚠️ 창 평균으로 집계하면 한 창의 큰 열세가 다른 창의 역전을 상쇄해 **가린다**(실제로 그렇게 놓쳤다).
+        // 창별 승수와 최악 창을 함께 낸다.
+        md.appendLine("## 비용 민감도 (전 7창)")
         md.appendLine()
-        md.appendLine("백테는 슬리피지·부분체결을 0 으로 둔다. **현행은 거래수가 가장 많은 정책**이라 그 누락으로 가장 크게 과대평가된다 — 비용을 올려 순위가 언제 뒤집히는지 본다. Δ중앙은 같은 비용 수준의 현행 대비다.")
+        md.appendLine("백테는 슬리피지·부분체결을 0 으로 둔다. **현행은 거래수가 가장 많은 정책**이라 그 누락으로 가장 크게 과대평가된다.")
+        md.appendLine("각 칸 = `현행을 이긴 창 수/7 (독립 3창 중 승수) · 최악 창 Δ중앙`. 독립 3창 = 상승장 2023-11~2024-06 · 2024-06~12 · 2025-01~07.")
         md.appendLine()
-        val feeWindows = listOf(
-            Triple("1년 전체", yearly, StrategySearch.Segment("전체", 0..364)),
-        ) + BacktestFixtures.TIME_INDEPENDENT.map { Triple(it.label, BacktestFixtures.loadAll(it), StrategySearch.REGIME) }
+        val independent = BacktestFixtures.TIME_INDEPENDENT.map { it.label }.toSet()
         for (base in bases) {
             md.appendLine("### ${base.name}")
             md.appendLine()
             md.appendLine("| 정책 | " + feeLevels.joinToString(" | ") { it.second } + " |")
             md.appendLine("|---|" + feeLevels.joinToString("") { "---|" })
             val points = policies.mapIndexed { i, p -> p to marker(i) }
-            val byPolicy = LinkedHashMap<String, MutableList<String>>()
+            val cells = LinkedHashMap<String, MutableList<String>>()
             for ((fee, _) in feeLevels) {
-                val perPolicy = HashMap<String, MutableList<Double>>()
-                for ((windowName, fixtures, segment) in feeWindows) {
+                val perPolicy = HashMap<String, MutableList<Pair<String, Double>>>()
+                for ((windowName, fixtures, segment) in windows) {
                     val configs = points.associate { (policy, point) -> point to policy.apply(base.config).copy(feeRate = fee) }
                     val metrics = search.measureWithConfigs(fixtures, segment, configs)
                     val reference = metrics.getValue(points.first().second).returnByMarket
                     for ((policy, point) in points) {
-                        val d = StrategySearchGates.pairedDeltas(metrics.getValue(point).returnByMarket, reference)
-                        perPolicy.getOrPut(policy.name) { ArrayList() }.add(SwingMetrics.median(d))
+                        val m = metrics.getValue(point)
+                        val d = SwingMetrics.median(StrategySearchGates.pairedDeltas(m.returnByMarket, reference))
+                        perPolicy.getOrPut(policy.name) { ArrayList() }.add(windowName to d)
                         tsv.append(
-                            "%s@fee%.2f\t%s\t%s\t0\t0\t0\t0\t0\t0\t%.4f\t0\n".format(
-                                windowName, fee * 2 * 100, base.name, policy.name, SwingMetrics.median(d),
+                            "%s@fee%.2f\t%s\t%s\t%.4f\t%.4f\t%.0f\t%d\t%.4f\t%.4f\t%.4f\t%d\n".format(
+                                windowName, fee * 2 * 100, base.name, policy.name,
+                                SwingMetrics.median(m.returnByMarket.values.toList()), m.returnByMarket.values.sum(),
+                                m.returnByMarket.values.sum() * notionalKrw / 100.0, m.trades, m.exposure, m.worstMdd,
+                                d, StrategySearchGates.pairedDeltas(m.returnByMarket, reference).count { it > 0 },
                             ),
                         )
                     }
                 }
                 for ((name, values) in perPolicy) {
-                    byPolicy.getOrPut(name) { ArrayList() }.add("%+.2f (창별 최악 %+.2f)".format(values.average(), values.min()))
+                    val wins = values.count { it.second > 0 }
+                    val indepWins = values.count { it.first in independent && it.second > 0 }
+                    val worst = values.minByOrNull { it.second }!!
+                    cells.getOrPut(name) { ArrayList() }
+                        .add("%d/7 (독립 %d/3) · 최악 %s %+.2f".format(wins, indepWins, worst.first, worst.second))
                 }
             }
-            for ((name, cells) in byPolicy) md.appendLine("| $name | " + cells.joinToString(" | ") + " |")
-            md.appendLine()
-            md.appendLine("각 칸 = 4창(1년 전체 + 독립 3창) **평균 Δ중앙 %p**, 괄호는 그중 최악 창.")
+            for ((name, row) in cells) md.appendLine("| $name | " + row.joinToString(" | ") + " |")
             md.appendLine()
         }
 
-        val out = Path.of("build/reports/reset-policy.md")
+        val out = Path.of("build/reports/hold-limit-policy.md")
         Files.createDirectories(out.parent)
         Files.writeString(out, md.toString())
-        Files.writeString(Path.of("build/reports/reset-policy.tsv"), tsv.toString())
+        Files.writeString(Path.of("build/reports/hold-limit-policy.tsv"), tsv.toString())
         println("[reset] 리포트: ${out.toAbsolutePath()}")
         assertTrue(md.contains("1년 전체"))
     }
