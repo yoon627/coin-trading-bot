@@ -19,14 +19,11 @@ internal class StrategySearch(
 ) {
 
     /** 입력 구간(시간순 인덱스). 거래 구간은 앞 [BacktestEngine.MIN_CANDLES] 봉을 워밍업으로 뗀 나머지다. */
-    data class Segment(val label: String, val inputRange: IntRange) {
-        val tradeBars: Int get() = inputRange.count() - BacktestEngine.MIN_CANDLES
-    }
+    data class Segment(val label: String, val inputRange: IntRange)
 
     data class Options(
         val feeRate: Double = SweepPoint.DEFAULT_FEE_RATE,
         val reentryMode: ReentryMode = ReentryMode.LIVE_SAME_BAR,
-        val keepTrades: Boolean = false,
         /** 마켓 이름을 받아 그 마켓용 전략을 돌려준다(null 대조군 주입 지점). */
         val strategyFor: ((String) -> TradingStrategy)? = null,
     )
@@ -44,7 +41,6 @@ internal class StrategySearch(
         val priceGateTrades: Int,
         /** 거래 행동의 64bit 지문 — 서로 다른 좌표가 같은 거래를 내면 하나로 접는다(다중비교 분모). */
         val fingerprint: Long,
-        val tradesByMarket: Map<String, List<BacktestTrade>> = emptyMap(),
     ) {
         val winRate: Double get() = if (trades == 0) 0.0 else wins.toDouble() / trades * 100.0
 
@@ -80,8 +76,11 @@ internal class StrategySearch(
         fixtures: Map<String, List<Candle>>,
         segment: Segment,
         configs: Map<SweepPoint, BacktestConfig>,
-        options: Options = Options(),
-    ): Map<SweepPoint, Metrics> = measureResolved(fixtures, segment, configs.keys.toList(), options) { configs.getValue(it) }
+        strategyFor: ((String) -> TradingStrategy)? = null,
+    ): Map<SweepPoint, Metrics> =
+        // feeRate·reentryMode 는 넘어온 config 가 이미 들고 있다 — Options 로 또 받으면 그쪽이 조용히 무시돼
+        // "수수료를 올렸는데 반영 안 된 표" 가 나온다.
+        measureResolved(fixtures, segment, configs.keys.toList(), Options(strategyFor = strategyFor)) { configs.getValue(it) }
 
     private suspend fun measureResolved(
         fixtures: Map<String, List<Candle>>,
@@ -101,6 +100,9 @@ internal class StrategySearch(
             val cache = SignalCache()
             val engines = points.map { it.strategy }.distinct().associateWith { name ->
                 val base = options.strategyFor?.invoke(market) ?: strategies.first { it.name == name }
+                // 주입 전략은 이름까지 맞아야 한다 — 엔진이 `strategies.find { it.name == name }` 로 찾으므로
+                // 어긋나면 run() 이 null 을 돌려주고 측정이 "결과 없음" 으로 죽는다.
+                require(base.name == name) { "주입 전략 '${base.name}' 이 좌표 전략 '$name' 과 다르다" }
                 BacktestEngine(listOf(cache.decorate(base, market)), props)
             }
             for (point in points) {
@@ -112,7 +114,7 @@ internal class StrategySearch(
                     warmup = BacktestEngine.MIN_CANDLES,
                     config = configFor(point),
                 )
-                acc.getValue(point).add(market, measurement, options.keepTrades)
+                acc.getValue(point).add(market, measurement)
             }
         }
         return acc.mapValues { it.value.build() }
@@ -145,7 +147,6 @@ internal class StrategySearch(
     private class Accumulator {
         private val returns = LinkedHashMap<String, Double>()
         private val mdds = LinkedHashMap<String, Double>()
-        private val kept = LinkedHashMap<String, List<BacktestTrade>>()
         private val exposures = ArrayList<Double>()
         private var trades = 0
         private var zeroTradeMarkets = 0
@@ -155,7 +156,7 @@ internal class StrategySearch(
         private var priceGate = 0
         private var hash = FNV_OFFSET
 
-        fun add(market: String, m: SwingMetrics.Measurement, keepTrades: Boolean) {
+        fun add(market: String, m: SwingMetrics.Measurement) {
             returns[market] = m.netReturnPct
             mdds[market] = m.mddPct
             exposures += m.exposure
@@ -166,7 +167,6 @@ internal class StrategySearch(
                 if (t.reason == "TAKE_PROFIT" || t.reason == "STOP_LOSS") priceGate++
                 mix(market, t)
             }
-            if (keepTrades) kept[market] = m.trades
         }
 
         fun build() = Metrics(
@@ -181,31 +181,36 @@ internal class StrategySearch(
             sumLossPct = sumLoss,
             priceGateTrades = priceGate,
             fingerprint = hash,
-            tradesByMarket = kept.toMap(),
         )
 
-        /** [StrategySearchGates.fingerprint] 와 같은 정보(마켓·인덱스·가격·사유·pnl)를 문자열 없이 섞는다. */
         private fun mix(market: String, t: BacktestTrade) {
-            fold(market.hashCode().toLong())
-            fold(t.buyIndex.toLong())
-            fold(t.sellIndex.toLong())
-            fold(t.reason.hashCode().toLong())
-            fold(Math.round(t.buyPrice * 1e6))
-            fold(Math.round(t.sellPrice * 1e6))
-            fold(Math.round(t.pnlPercent * 1e6))
-        }
-
-        private fun fold(v: Long) {
-            hash = (hash xor v) * FNV_PRIME
-        }
-
-        private companion object {
-            const val FNV_OFFSET = -0x340d631b7bdddcdbL
-            const val FNV_PRIME = 0x100000001b3L
+            hash = mixTrade(hash, market, t)
         }
     }
 
     companion object {
+        private const val FNV_OFFSET = -0x340d631b7bdddcdbL
+        private const val FNV_PRIME = 0x100000001b3L
+
+        /**
+         * 거래 **행동**의 64bit 지문 — 서로 다른 좌표가 같은 거래를 내면 하나로 접어 다중비교 분모(고유 행동 수)를 만든다.
+         * 가격까지 섞는 쪽이 보수적이다(덜 접히므로 분모가 커진다).
+         */
+        fun fingerprintOf(tradesByMarket: Map<String, List<BacktestTrade>>): Long {
+            var h = FNV_OFFSET
+            for (market in tradesByMarket.keys) for (t in tradesByMarket.getValue(market)) h = mixTrade(h, market, t)
+            return h
+        }
+
+        private fun mixTrade(hash: Long, market: String, t: BacktestTrade): Long {
+            var h = hash
+            for (v in longArrayOf(
+                market.hashCode().toLong(), t.buyIndex.toLong(), t.sellIndex.toLong(), t.reason.hashCode().toLong(),
+                Math.round(t.buyPrice * 1e6), Math.round(t.sellPrice * 1e6), Math.round(t.pnlPercent * 1e6),
+            )) h = (h xor v) * FNV_PRIME
+            return h
+        }
+
         /** yearly fixture(365봉)의 사전고정 창 — [YearlyStrategyComparison.Window] 와 같은 경계를 쓴다. */
         val SELECT = Segment("선택", 0..242)
         val VALIDATE = Segment("검증", 193..364)
