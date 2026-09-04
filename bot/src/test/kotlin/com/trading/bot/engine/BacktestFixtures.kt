@@ -51,6 +51,15 @@ internal object BacktestFixtures {
     val TIME_INDEPENDENT = listOf(Regime.BULL, Regime.P2024H2, Regime.P2025H1)
 
     /**
+     * 국면 fixture 가 둘뿐이던 시절의 모집단.
+     *
+     * 골든·paired 비교·적립 스윕처럼 **이미 결과가 인용된 측정**은 이 목록을 순회해야 한다 — `Regime.entries` 를 쓰면
+     * 국면을 추가할 때마다 그 측정의 모집단이 조용히 달라져 과거 수치와 비교가 끊긴다(#112 이후 같은 함정).
+     * 새 국면을 함께 보고 싶으면 그 측정의 사전고정을 다시 쓴 뒤 옮긴다.
+     */
+    val ORIGINAL_REGIMES = listOf(Regime.BEAR, Regime.BULL)
+
+    /**
      * 두 국면 모두의 상위 8에 든 마켓 — 마켓 효과를 통제한 paired 비교에 쓴다.
      *
      * 시점 중립 선정으로 바꾸면서 4개(XRP·BTC·ETH·DOGE)에서 3개로 줄었다. 유동 유니버스가 실제로
