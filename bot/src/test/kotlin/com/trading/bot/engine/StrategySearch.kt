@@ -15,7 +15,8 @@ import com.trading.common.strategy.TradingStrategy
  */
 internal class StrategySearch(
     private val props: TradingProperties = TradingProperties(),
-    private val strategies: List<TradingStrategy> = YearlyStrategyComparison.ALL_STRATEGIES,
+    // 기존 9종 + Stage D 신규 10종. 좌표가 전략 이름으로 조회하므로 양쪽 다 들고 있어야 한다.
+    private val strategies: List<TradingStrategy> = YearlyStrategyComparison.ALL_STRATEGIES + StrategySearchGrid.STAGE_D,
 ) {
 
     /** 입력 구간(시간순 인덱스). 거래 구간은 앞 [BacktestEngine.MIN_CANDLES] 봉을 워밍업으로 뗀 나머지다. */
