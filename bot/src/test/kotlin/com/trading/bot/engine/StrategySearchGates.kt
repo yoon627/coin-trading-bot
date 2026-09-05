@@ -8,7 +8,12 @@ package com.trading.bot.engine
  * `median(후보) − median(baseline)` 은 부호까지 갈릴 수 있다.
  *
  * 임계값(2.0%p·6/8·70%·1.5배)은 **운영상 최소효과·리스크 허용치**이지 통계적 유의 임계가 아니다.
- * 실효 독립 표본이 2~3(마켓 상관 0.49)이라 이 표본에서 유의성을 주장할 수 없다.
+ *
+ * ⚠️ 2026-09-05 정정 — 아래 상수는 사전고정 산출물이라 **그대로 둔다**. 다만 위 문단이 원래 인용하던
+ * "실효 독립 표본 2~3(마켓 상관 0.49)" 은 `yearly/` 에 대해 틀렸다: 실측 평균 ρ **0.796**, n_eff **1.22** 다
+ * (0.49 는 bear/bull 값). 즉 [G1_POSITIVE_MARKETS_MIN] 의 "양수 마켓 6/8" 은 `yearly/` 에서 사실상 "1/1" 이라
+ * 다수결로서 검정력이 없다. 후속 판정은 마켓축 대신 **청산 달력일 블록 부트스트랩**을 주 통계량으로 쓴다 —
+ * wiki `query/exit-resolution-verdict-2026-09`, 하네스 [CandidateAnatomyTest].
  */
 internal object StrategySearchGates {
 

@@ -1,0 +1,68 @@
+{
+  "bear": {
+    "KRW-AXS": [],
+    "KRW-BERA": [],
+    "KRW-BTC": [],
+    "KRW-DATA": [],
+    "KRW-ENSO": [],
+    "KRW-ETH": [],
+    "KRW-SOL": [],
+    "KRW-XRP": []
+  },
+  "bull": {
+    "KRW-ARK": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-BLUR": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-BTC": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-GAS": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-MINA": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-POLYX": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-SOL": [
+      "2023-12-03T16:00:00"
+    ],
+    "KRW-XRP": [
+      "2023-12-03T16:00:00"
+    ]
+  },
+  "p2024h2": {
+    "KRW-BTC": [],
+    "KRW-DOGE": [],
+    "KRW-ETC": [],
+    "KRW-ETH": [],
+    "KRW-PYTH": [],
+    "KRW-SHIB": [],
+    "KRW-SOL": [],
+    "KRW-XRP": []
+  },
+  "p2025h1": {
+    "KRW-AGLD": [],
+    "KRW-BTC": [],
+    "KRW-CTC": [],
+    "KRW-DOGE": [],
+    "KRW-ENS": [],
+    "KRW-ETH": [],
+    "KRW-HBAR": [],
+    "KRW-XRP": []
+  },
+  "yearly": {
+    "KRW-ADA": [],
+    "KRW-AVAX": [],
+    "KRW-BTC": [],
+    "KRW-DOGE": [],
+    "KRW-ETH": [],
+    "KRW-LINK": [],
+    "KRW-SOL": [],
+    "KRW-XRP": []
+  }
+}
