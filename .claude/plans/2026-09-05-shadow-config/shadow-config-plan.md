@@ -24,7 +24,7 @@ PR #171 이 넣은 그림자 관측기(`trading.shadow-exit.*`, 기본 off)를 *
 
 # Next
 
-없음 — 닫혔다. 관측을 실제로 켜는 것(`.env` 에 `TRADING_SHADOW_EXIT_ENABLED=true`)은 사람이 한다.
+없음 — PR #172 로 닫혔다. 관측을 실제로 켜는 것(`.env` 에 `TRADING_SHADOW_EXIT_ENABLED=true`)은 사람이 한다.
 
 # Decisions
 
