@@ -44,6 +44,15 @@ WINDOWS: dict[str, tuple[date, date, list[str]]] = {
              ["KRW-GAS", "KRW-XRP", "KRW-BTC", "KRW-SOL", "KRW-ARK", "KRW-MINA", "KRW-BLUR", "KRW-POLYX"]),
     "p2024h2": (date(2024, 6, 10), date(2024, 12, 26), None),
     "p2025h1": (date(2025, 1, 1), date(2025, 7, 19), None),
+    # 비중첩 7창(2020-01~2023-11). 일봉 fixture 와 같은 구간·같은 로스터를 쓴다 —
+    # 시각·경로 의존 게이트를 일봉으로 판정하면 안 되므로 신규 국면도 일중봉이 함께 있어야 한다.
+    "p2020h1": (date(2020, 1, 23), date(2020, 8, 9), None),
+    "p2020h2": (date(2020, 8, 10), date(2021, 2, 25), None),
+    "p2021h1": (date(2021, 2, 26), date(2021, 9, 13), None),
+    "p2021h2": (date(2021, 9, 14), date(2022, 4, 1), None),
+    "p2022h1": (date(2022, 4, 2), date(2022, 10, 18), None),
+    "p2022h2": (date(2022, 10, 19), date(2023, 5, 6), None),
+    "p2023h1": (date(2023, 5, 7), date(2023, 11, 22), None),
 }
 OUT_ROOT = pathlib.Path(__file__).resolve().parent.parent / "bot/src/test/resources/backtest/intraday240"
 FIXTURE_ROOT = OUT_ROOT.parent
@@ -117,7 +126,7 @@ def fetch_window(market: str, start: date, end: date) -> tuple[list[dict] | None
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="fixture 파일까지 기록")
-    parser.add_argument("--only", help="구간 하나만 (yearly|bear|bull|p2024h2|p2025h1)")
+    parser.add_argument("--only", help="이 구간만 (쉼표 구분). 신규 구간 추가 시 지정해 기존 fixture 재수집을 피한다")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -125,7 +134,7 @@ def main() -> None:
     gaps: dict[str, dict[str, list[str]]] = {}
     failures: list[str] = []
     for regime, (start, end, markets) in WINDOWS.items():
-        if args.only and regime != args.only:
+        if args.only and regime not in set(args.only.split(",")):
             continue
         boundary = datetime(end.year, end.month, end.day, tzinfo=timezone.utc) + timedelta(days=1)
         if now < boundary:
