@@ -24,7 +24,7 @@ updated: 2026-09-05
 
 # Next
 
-없음 — 닫혔다. 관측을 켜면(`TRADING_SHADOW_EXIT_ENABLED=true`) 두 마찰이 함께 쌓인다.
+없음 — PR #173 로 닫혔다. 관측을 켜면(`TRADING_SHADOW_EXIT_ENABLED=true`) 두 마찰이 함께 쌓인다.
 
 # Decisions
 
