@@ -73,8 +73,11 @@ class ShadowExitObserver(
     /**
      * 라이브가 실제로 청산했을 때 호출. 그 포지션에서 후보가 발동한 적이 있으면 관측 1건을 남기고,
      * 없으면 아무것도 남기지 않는다(두 팔이 같은 청산을 낸 경우라 정보가 0이다).
+     *
+     * @param executedVwap 거래소 실체결 단가. [exitPrice](판단 시점 tick)와의 차이가 **실행 슬리피지**다.
+     *   얻지 못하면 null 로 남긴다 — 추정하면 마찰을 과소평가한다.
      */
-    suspend fun onLiveExit(ticker: String, exitPrice: Double, reason: String) {
+    suspend fun onLiveExit(ticker: String, exitPrice: Double, reason: String, executedVwap: Double? = null) {
         val f = fired.remove(ticker) ?: return
         try {
             repository.save(
@@ -89,6 +92,7 @@ class ShadowExitObserver(
                     observedTickPrice = f.tickPrice,
                     firedAt = f.at,
                     liveExitPrice = exitPrice,
+                    liveExitVwap = executedVwap,
                     liveExitReason = reason,
                     liveExitAt = clock.instant(),
                 ),
