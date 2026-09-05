@@ -42,6 +42,27 @@ internal object BacktestFixtures {
 
         /** 2025-01-01 ~ 2025-07-19. XRP +35%, BTC +14% / 나머지 6종 −2 ~ −71% — **혼조·약세 국면**. */
         P2025H1("p2025h1", "2025-01~07"),
+
+        /** 2020-01-23 ~ 2020-08-09. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2020H1("p2020h1", "2020-01-23 ~ 2020-08-09"),
+
+        /** 2020-08-10 ~ 2021-02-25. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2020H2("p2020h2", "2020-08-10 ~ 2021-02-25"),
+
+        /** 2021-02-26 ~ 2021-09-13. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2021H1("p2021h1", "2021-02-26 ~ 2021-09-13"),
+
+        /** 2021-09-14 ~ 2022-04-01. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2021H2("p2021h2", "2021-09-14 ~ 2022-04-01"),
+
+        /** 2022-04-02 ~ 2022-10-18. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2022H1("p2022h1", "2022-04-02 ~ 2022-10-18"),
+
+        /** 2022-10-19 ~ 2023-05-06. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2022H2("p2022h2", "2022-10-19 ~ 2023-05-06"),
+
+        /** 2023-05-07 ~ 2023-11-22. 시점 중립 상위 8 — 라벨은 성격이 아니라 기간이다. */
+        P2023H1("p2023h1", "2023-05-07 ~ 2023-11-22"),
     }
 
     /**
@@ -60,6 +81,26 @@ internal object BacktestFixtures {
     val ORIGINAL_REGIMES = listOf(Regime.BEAR, Regime.BULL)
 
     /**
+     * 국면이 넷이던 시절의 모집단 — **이미 wiki 에 인용된 측정**(`query/hold-limit-policy-2026-09` 의 7창,
+     * `query/parameter-search-2026-09` 의 금액 비교)은 이 목록을 순회해야 한다. `Regime.entries` 를 쓰면
+     * 2026-09-05 의 7국면 추가로 그 수치의 모집단이 조용히 11국면으로 바뀐다.
+     */
+    val PUBLISHED_FOUR = listOf(Regime.BEAR, Regime.BULL, Regime.P2024H2, Regime.P2025H1)
+
+    /**
+     * 2026-09-05 추가한 비중첩 7창(2020-01~2023-11). 기존 4국면·`yearly` 어느 구간과도 겹치지 않는다.
+     *
+     * ⚠️ **생존편향이 과거로 갈수록 심해진다** — 유니버스 선정이 *오늘 상장된* 마켓만 열거하므로
+     * "그 시점 상위 8" 은 실제로 "2026년까지 살아남은 것 중 상위 8" 이다. 그 시점 미상장으로 제외된 수가
+     * p2020h2 220 / p2021h2 205 / p2023h1 189(오늘 287개 기준)이고, 상장폐지 종목은 API 404 라
+     * 표본에 넣을 수도 편향 크기를 추정할 수도 없다.
+     */
+    val EXPANSION_2020_2023 = listOf(
+        Regime.P2020H1, Regime.P2020H2, Regime.P2021H1, Regime.P2021H2,
+        Regime.P2022H1, Regime.P2022H2, Regime.P2023H1,
+    )
+
+    /**
      * 두 국면 모두의 상위 8에 든 마켓 — 마켓 효과를 통제한 paired 비교에 쓴다.
      *
      * 시점 중립 선정으로 바꾸면서 4개(XRP·BTC·ETH·DOGE)에서 3개로 줄었다. 유동 유니버스가 실제로
@@ -74,7 +115,7 @@ internal object BacktestFixtures {
      */
     // by lazy — 이 object 안에서 로스터 맵보다 먼저 선언돼 있어 즉시 계산하면 초기화 순서에 걸린다.
     val PAIRED_MARKETS_ALL_REGIMES: List<String> by lazy {
-        Regime.entries.map { markets(it).toSet() }.reduce { acc, set -> acc intersect set }.toList()
+        PUBLISHED_FOUR.map { markets(it).toSet() }.reduce { acc, set -> acc intersect set }.toList()
     }
 
     // 각 구간 **시작 시점 이전** 30일 평균 거래대금 상위 8 (스테이블 제외).
@@ -96,6 +137,34 @@ internal object BacktestFixtures {
             "KRW-XRP", "KRW-BTC", "KRW-DOGE", "KRW-ETH",
             "KRW-HBAR", "KRW-ENS", "KRW-AGLD", "KRW-CTC",
         ),
+        Regime.P2020H1 to listOf(
+            "KRW-A", "KRW-BCH", "KRW-BSV", "KRW-BTC",
+            "KRW-ETC", "KRW-ETH", "KRW-TRX", "KRW-XRP",
+        ),
+        Regime.P2020H2 to listOf(
+            "KRW-A", "KRW-ADA", "KRW-BCH", "KRW-BSV",
+            "KRW-BTC", "KRW-ETH", "KRW-XLM", "KRW-XRP",
+        ),
+        Regime.P2021H1 to listOf(
+            "KRW-ADA", "KRW-BCH", "KRW-BORA", "KRW-BTC",
+            "KRW-ETH", "KRW-PUNDIX", "KRW-XLM", "KRW-XRP",
+        ),
+        Regime.P2021H2 to listOf(
+            "KRW-ADA", "KRW-AXS", "KRW-BTC", "KRW-DOGE",
+            "KRW-ETC", "KRW-ETH", "KRW-XEC", "KRW-XRP",
+        ),
+        Regime.P2022H1 to listOf(
+            "KRW-BTC", "KRW-ETC", "KRW-ETH", "KRW-MBL",
+            "KRW-SAND", "KRW-WAVES", "KRW-XRP", "KRW-ZIL",
+        ),
+        Regime.P2022H2 to listOf(
+            "KRW-ADA", "KRW-ALGO", "KRW-BTC", "KRW-ETC",
+            "KRW-ETH", "KRW-GMT", "KRW-POLYX", "KRW-XRP",
+        ),
+        Regime.P2023H1 to listOf(
+            "KRW-ARB", "KRW-BTC", "KRW-DOGE", "KRW-ETH",
+            "KRW-MLK", "KRW-POLYX", "KRW-SOL", "KRW-XRP",
+        )
     )
 
     private val mapper = jacksonObjectMapper()

@@ -72,7 +72,9 @@ class ResetPolicySweepTest {
             add(Triple("1년 전체", yearly, StrategySearch.Segment("전체", 0..364)))
             add(Triple("선택창", yearly, StrategySearch.SELECT))
             add(Triple("검증창", yearly, StrategySearch.VALIDATE))
-            for (regime in BacktestFixtures.Regime.entries) {
+            // `Regime.entries` 가 아니라 고정 목록이다 — 2026-09-05 에 국면이 7개 추가돼, entries 를 쓰면
+            // 이미 wiki 에 인용된 수치(`query/hold-limit-policy-2026-09` 의 7창)의 모집단이 11국면으로 조용히 바뀐다.
+            for (regime in BacktestFixtures.PUBLISHED_FOUR) {
                 add(Triple(regime.label, BacktestFixtures.loadAll(regime), StrategySearch.REGIME))
             }
         }
