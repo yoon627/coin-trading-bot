@@ -35,6 +35,85 @@
       "2023-12-03T16:00:00"
     ]
   },
+  "p2020h1": {
+    "KRW-A": [],
+    "KRW-BCH": [],
+    "KRW-BSV": [],
+    "KRW-BTC": [],
+    "KRW-ETC": [],
+    "KRW-ETH": [],
+    "KRW-TRX": [],
+    "KRW-XRP": []
+  },
+  "p2020h2": {
+    "KRW-A": [],
+    "KRW-ADA": [],
+    "KRW-BCH": [],
+    "KRW-BSV": [],
+    "KRW-BTC": [],
+    "KRW-ETH": [],
+    "KRW-XLM": [],
+    "KRW-XRP": []
+  },
+  "p2021h1": {
+    "KRW-ADA": [],
+    "KRW-BCH": [],
+    "KRW-BORA": [],
+    "KRW-BTC": [],
+    "KRW-ETH": [],
+    "KRW-PUNDIX": [
+      "2021-03-31T08:00:00",
+      "2021-03-31T12:00:00",
+      "2021-03-31T16:00:00",
+      "2021-03-31T20:00:00"
+    ],
+    "KRW-XLM": [],
+    "KRW-XRP": []
+  },
+  "p2021h2": {
+    "KRW-ADA": [],
+    "KRW-AXS": [],
+    "KRW-BTC": [],
+    "KRW-DOGE": [],
+    "KRW-ETC": [],
+    "KRW-ETH": [],
+    "KRW-XEC": [
+      "2021-09-29T08:00:00",
+      "2021-09-29T12:00:00",
+      "2021-09-29T16:00:00"
+    ],
+    "KRW-XRP": []
+  },
+  "p2022h1": {
+    "KRW-BTC": [],
+    "KRW-ETC": [],
+    "KRW-ETH": [],
+    "KRW-MBL": [],
+    "KRW-SAND": [],
+    "KRW-WAVES": [],
+    "KRW-XRP": [],
+    "KRW-ZIL": []
+  },
+  "p2022h2": {
+    "KRW-ADA": [],
+    "KRW-ALGO": [],
+    "KRW-BTC": [],
+    "KRW-ETC": [],
+    "KRW-ETH": [],
+    "KRW-GMT": [],
+    "KRW-POLYX": [],
+    "KRW-XRP": []
+  },
+  "p2023h1": {
+    "KRW-ARB": [],
+    "KRW-BTC": [],
+    "KRW-DOGE": [],
+    "KRW-ETH": [],
+    "KRW-MLK": [],
+    "KRW-POLYX": [],
+    "KRW-SOL": [],
+    "KRW-XRP": []
+  },
   "p2024h2": {
     "KRW-BTC": [],
     "KRW-DOGE": [],

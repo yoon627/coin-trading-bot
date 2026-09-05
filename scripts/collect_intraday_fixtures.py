@@ -170,7 +170,11 @@ def main() -> None:
             for market, candles in got.items():
                 (d / f"{market}.json").write_text(json.dumps(candles, ensure_ascii=False, separators=(",", ":")) + "\n")
         # 결측 시각은 fixture 옆에 함께 커밋한다 — 청산 경계가 그 시각이면 그 거래는 모든 팔에서 제외해야 한다.
-        (OUT_ROOT / "gaps.json").write_text(json.dumps(gaps, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        # `--only` 로 일부만 돌 때 통째로 덮어쓰면 **돌지 않은 구간의 결측 기록이 사라진다** → 병합한다.
+        gaps_path = OUT_ROOT / "gaps.json"
+        merged = json.loads(gaps_path.read_text()) if gaps_path.exists() else {}
+        merged.update(gaps)
+        gaps_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     print(f"\n총 {total:,}봉" + (" — 기록함" if args.write else " — 미리보기(--write 로 기록)"))
 
 

@@ -46,7 +46,9 @@ class CandidateComparisonTest {
             add("1년 전체" to (yearly to StrategySearch.Segment("전체", 0..364)))
             add("선택창" to (yearly to StrategySearch.SELECT))
             add("검증창" to (yearly to StrategySearch.VALIDATE))
-            for (regime in BacktestFixtures.Regime.entries) {
+            // `Regime.entries` 가 아니라 고정 목록이다 — 2026-09-05 에 국면이 7개 추가돼, entries 를 쓰면
+            // 이미 wiki 에 인용된 수치(`query/parameter-search-2026-09` 의 금액 비교)의 모집단이 11국면으로 조용히 바뀐다.
+            for (regime in BacktestFixtures.PUBLISHED_FOUR) {
                 add(regime.label to (BacktestFixtures.loadAll(regime) to StrategySearch.REGIME))
             }
         }
