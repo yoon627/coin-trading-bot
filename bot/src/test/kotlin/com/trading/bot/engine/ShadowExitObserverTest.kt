@@ -45,7 +45,7 @@ class ShadowExitObserverTest {
 
         o.onTick("KRW-BTC", state, 108.0)
         o.onTick("KRW-BTC", state, 107.0) // 두 번째 발동은 무시된다 — 이후는 두 팔이 갈라진다
-        o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "DAILY_RESET")
+        o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "DAILY_RESET", executedVwap = 104.7)
 
         verify(exactly = 1) { repo.save(any<ShadowExitObservationEntity>()) }
         val e = captured.captured
@@ -56,6 +56,24 @@ class ShadowExitObserverTest {
         // 모델은 실제 발동 tick 이상이다 — 이 부등호가 깨지면 "모델 과대추정폭" 이라는 해석 자체가 무너진다.
         assertTrue(e.modeledExitPrice >= e.observedTickPrice)
         assertEquals("DAILY_RESET", e.liveExitReason)
+        // 실행 슬리피지의 입력 — 판단가(105.0)와 실체결가(104.7)를 **둘 다** 남겨야 차이를 잴 수 있다.
+        assertEquals(105.0, e.liveExitPrice)
+        assertEquals(104.7, e.liveExitVwap)
+    }
+
+    @Test
+    fun `leaves the fill price null when the exchange did not report one`() = runBlocking {
+        val repo = mockk<ShadowExitObservationRepository>()
+        val captured = slot<ShadowExitObservationEntity>()
+        every { repo.save(capture(captured)) } returns Mono.empty()
+        val o = observer(repo)
+        val state = armedState()
+
+        o.onTick("KRW-BTC", state, 108.0)
+        o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "DAILY_RESET") // vwap 미제공
+
+        // 추정해서 채우면 마찰이 0 으로 보인다 — 모른다는 사실이 남아야 그 관측이 분모에서 빠진다.
+        org.junit.jupiter.api.Assertions.assertNull(captured.captured.liveExitVwap)
     }
 
     @Test

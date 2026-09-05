@@ -452,8 +452,10 @@ class TradingEngine(
             // 라이브 판정 **뒤에** 관측한다 — decideSell 이 peak 을 갱신한 뒤라야 같은 tick 을 본다.
             // (손절이 먼저 걸린 tick 은 peak 갱신을 건너뛰지만, 그 구간은 진입가 아래라 후보도 발동하지 않는다.)
             shadowExitObserver?.onTick(ticker, state, currentPrice)
-            if (reason != null && positionManager.sell(ticker, state, currentPrice, reason) != null) {
-                shadowExitObserver?.onLiveExit(ticker, currentPrice, reason.name)
+            val sold = if (reason != null) positionManager.sell(ticker, state, currentPrice, reason) else null
+            if (sold != null) {
+                // 실체결 단가를 함께 넘긴다 — currentPrice 와의 차이가 실행 슬리피지이고 백테에는 없는 항목이다.
+                shadowExitObserver?.onLiveExit(ticker, currentPrice, reason!!.name, sold.executedVwap)
                 return
             }
         } else {
