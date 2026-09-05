@@ -24,6 +24,11 @@ data class ShadowExitObservationEntity(
     val observedTickPrice: Double,
     val firedAt: Instant,
     val liveExitPrice: Double? = null,
+    /**
+     * 라이브가 실제로 체결한 단가(VWAP). [liveExitPrice] 는 **판단 시점 tick 가격**이라 둘의 차이가 실행 슬리피지다.
+     * 얻지 못하면 null 이고 **추정하지 않는다** — 0 을 넣으면 "마찰 없음" 으로 오독된다.
+     */
+    val liveExitVwap: Double? = null,
     val liveExitReason: String? = null,
     val liveExitAt: Instant? = null,
     val createdAt: Instant = Instant.now(),

@@ -57,6 +57,13 @@ data class TradeRecord(
     // 거래소 주문 uuid — 재시작 후 reconcile 중복 기록을 막는 멱등 dedup 키(#20). null 이면 dedup 대상 아님.
     val exchangeOrderId: String? = null,
     val userId: Long = 0,
+    /**
+     * 거래소가 실제로 체결한 단가(VWAP). [price] 는 **판단 시점 tick 가격**이므로 둘의 차이가 실행 슬리피지다.
+     *
+     * 얻을 수 있을 때만 값이고 아니면 null — 추정하지 않는다([Order.filledVwap]). 장부·손익은 지금도
+     * [price] 로 계산한다(이 필드는 연구용 관측 입력이며 회계 의미를 바꾸지 않는다).
+     */
+    val executedVwap: Double? = null,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )
 
