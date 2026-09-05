@@ -169,7 +169,12 @@ TRADING_OVERRIDE_KEYS=(
     TRADING_ACCUMULATE_TICKERS TRADING_ACCUMULATE_BUDGET_KRW TRADING_ACCUMULATE_MAX_RUNGS
     TRADING_ACCUMULATE_STEP_DOWN_PCT TRADING_ACCUMULATE_STEP_UP_PCT
     TRADING_UNIVERSE_AUTO TRADING_UNIVERSE_ALT_COUNT
+    TRADING_RECONCILE_HALT_THRESHOLD
+    TRADING_SHADOW_EXIT_ENABLED TRADING_SHADOW_EXIT_TRAILING_STOP_PCT TRADING_SHADOW_EXIT_TRAILING_ARM_PCT
 )
+# ⚠️ 이 목록은 `docker-compose.prod.yml` 의 `environment:` 목록과 **쌍으로 유지**한다.
+# 한쪽에만 있으면 값이 서버 .env 까지 가고도 컨테이너에 안 들어가거나(그 반대) 조용히 기본값으로 돈다.
+# `TradingEnvPassthroughTest` 가 두 목록을 **모두** 앱 설정과 대조한다 — 새 설정을 추가하면 그 테스트가 깨진다.
 # 변수에 담아야 [[ =~ ]] 가 공백을 패턴의 일부로 읽는다(따옴표로 감싸면 리터럴이 된다).
 # `-` 는 범위로 해석되지 않도록 클래스 끝에 둔다. 개행은 ^…$ 가 걸러낸다.
 TRADING_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
