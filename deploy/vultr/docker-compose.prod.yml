@@ -73,6 +73,8 @@ services:
       - TRADING_ROUND_TRIP_FEE_RATE
       - TRADING_K_VALUE
       - TRADING_INTERVAL_SECONDS
+      # #19 halt 임계. 지금까지 목록에 없어 운영에서 조정할 수 없었다(2026-09-05 전달목록 테스트가 발견).
+      - TRADING_RECONCILE_HALT_THRESHOLD
       - TRADING_ACCUMULATE_TICKERS
       - TRADING_ACCUMULATE_BUDGET_KRW
       - TRADING_ACCUMULATE_MAX_RUNGS
@@ -80,6 +82,11 @@ services:
       - TRADING_ACCUMULATE_STEP_UP_PCT
       - TRADING_UNIVERSE_AUTO
       - TRADING_UNIVERSE_ALT_COUNT
+      # 그림자 청산 관측(기본 off). 켜도 매매는 바뀌지 않는다 — 후보 청산 파라미터를 나란히 평가해 기록만 한다.
+      # 이 세 줄이 없으면 .env 에 적어도 컨테이너에 도달하지 않아 **조용히 꺼진 채로 돈다**(#75 와 같은 함정).
+      - TRADING_SHADOW_EXIT_ENABLED
+      - TRADING_SHADOW_EXIT_TRAILING_STOP_PCT
+      - TRADING_SHADOW_EXIT_TRAILING_ARM_PCT
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
       - DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
