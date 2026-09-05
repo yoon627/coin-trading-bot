@@ -58,6 +58,16 @@ REGIMES = {
     # 아래 둘은 yearly(2025-09-03~2026-09-02)·bull·bear 어느 구간과도 겹치지 않는다 → 시간 독립 holdout.
     "p2024h2": date(2024, 6, 10),
     "p2025h1": date(2025, 1, 1),
+    # 2020-01 ~ 2023-11 을 200일씩 끊은 비중첩 7창. 위 4구간·yearly 어느 쪽과도 겹치지 않는다.
+    # ⚠️ 생존편향은 과거로 갈수록 심해진다 — `krw_markets()` 가 **오늘 상장된** 마켓만 열거하므로
+    # "그 시점 거래대금 상위 8" 은 실제로 "2026년까지 살아남은 것 중 상위 8" 이다. README 한계 참조.
+    "p2020h1": date(2020, 1, 23),
+    "p2020h2": date(2020, 8, 10),
+    "p2021h1": date(2021, 2, 26),
+    "p2021h2": date(2021, 9, 14),
+    "p2022h1": date(2022, 4, 2),
+    "p2022h2": date(2022, 10, 19),
+    "p2023h1": date(2023, 5, 7),
 }
 
 # rate limit: `remaining-req: group=candles; min=600; sec=9` (실측) → 초당 9 아래로 유지
@@ -178,7 +188,13 @@ def fetch_window(market: str, start: date) -> tuple[list[dict] | None, str]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="fixture 파일까지 기록")
+    # 기존 fixture 재수집 금지 — 다시 받으면 선행 측정(`query/*`)의 모집단이 조용히 달라진다.
+    # 유니버스 선정이 **현재 상장 마켓** 을 열거하므로 그 사이 상장폐지가 있으면 옛 구간의 로스터도 바뀐다.
+    parser.add_argument("--only", help="이 구간만 (쉼표 구분). 생략하면 전체 — 신규 구간 추가 시 반드시 지정할 것")
     args = parser.parse_args()
+    selected = set(args.only.split(",")) if args.only else None
+    if selected and not selected <= set(REGIMES):
+        raise SystemExit(f"알 수 없는 구간: {sorted(selected - set(REGIMES))}")
 
     markets = krw_markets()
     print(f"현재 상장 KRW 마켓 {len(markets)}개 (스테이블 {len(STABLECOINS)}종 제외)\n")
@@ -187,6 +203,8 @@ def main() -> None:
     # 실패하면 새 bear + 옛 bull 이 섞인 fixture 가 남고, 그 상태의 백테는 아무도 모르는 채 결과를 낸다.
     prepared: dict[str, list[tuple[str, list[dict]]]] = {}
     for regime, start in REGIMES.items():
+        if selected and regime not in selected:
+            continue
         top, unlisted, too_new, gapped = select_universe(markets, start)
         end = start + timedelta(days=BARS - 1)
         print(f"## {regime}  {start} ~ {end} ({BARS}봉)")
