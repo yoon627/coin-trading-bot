@@ -11,6 +11,8 @@ sources:
   - bot/src/test/kotlin/com/trading/bot/engine/IntradayFixtures.kt
   - bot/src/test/kotlin/com/trading/bot/engine/HoldLimitPolicyIntradayTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/HoldLimitPolicyReplayEquivalenceTest.kt
+  - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
+  - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArmTest.kt
   - bot/src/main/kotlin/com/trading/bot/engine/IntrabarExitModel.kt
   - bot/src/main/kotlin/com/trading/bot/engine/M1ReplayEngine.kt
   - scripts/collect_intraday_fixtures.py
@@ -198,6 +200,35 @@ yearly 단독의 개선(+21.0 → +31.2, MDD 20.8 → 17.2)은 **8마켓 전부 
 그리고 `legacy ≡ cooldown 2` 이므로(`BacktestReentryEquivalenceTest`) 이 값은 **새 정책이 아니라 재진입 모드의 다른 이름**이다.
 라이브(`TradingProperties`)에는 대응 노브가 아예 없어 양성이 나와도 코드 없이는 적용 불가였다.
 
+## 9. 진입까지 라이브 의미론으로 맞춘 팔 (2026-09-05 추가)
+
+위 §4 의 replay 는 **청산만** 라이브에 맞췄다. 진입은 여전히 백테 규약(신호 = 일봉 종가, 체결 = 다음 09:00 시가)이었고,
+라이브는 10초마다 보다가 `현재가 > 당일시가 + 전일레인지×k` 를 넘는 **장중 그 순간** 산다
+(`TradingEngine.runSwing` → `positionManager.buy(..., currentPrice, ...)`). 그리고 그때 참조하는 일봉 window 에는
+**형성 중인 오늘 봉이 들어 있다**(`MarketDataStore.addCandle` 이 `openTime` 으로 upsert). 240분봉으로 그 진입을 재현했다.
+
+당일 부분봉은 **직전 봉까지만** 누적해 넘긴다 — 그 봉의 고·저·종가를 쓰면 체결 이후 정보가 MA·RSI 에 들어간다.
+미래 봉을 1.5배로 흔들어도 첫 진입의 시각·체결가가 불변임을 테스트로 고정했다(`entry decisions do not depend on future bars`).
+
+**거래 모집단이 실제로 달라진다.** 1년 창에서 라이브 설정의 거래가 **125건 → 199건(+59%)** 이다 —
+백테는 *종가가 돌파선 위에서 마감한 날만* 고르는데 라이브는 장중에 넘으면 종가가 되밀려도 이미 보유 중이기 때문이다.
+
+| 창 | 라이브 현행 | 변형 A 격차 / P(≤0) | 후보 E 격차 / P(≤0) |
+|---|---|---|---|
+| yearly (199건) | +13.47 | +14.71 / 0.102 | −18.07 / 0.695 |
+| 상승장 (105건) | +17.87 | −3.06 / 0.597 | **+78.51 / 0.009** |
+| 2024-06~12 (98건) | −11.95 | +21.25 / 0.054 | +5.16 / 0.441 |
+| 2025-01~07 (97건) | +23.18 | +2.27 / 0.428 | +4.95 / 0.473 |
+| 하락장 (94건) | −17.19 | −0.34 / 0.501 | −3.93 / 0.556 |
+
+**여기서도 발견은 없다.** 5창 중 p<0.05 는 각 후보당 최대 1개이고, **A 와 E 가 이기는 창이 서로 다르다**
+(A 는 어느 창도 0.05 미만이 아니고, E 는 상승장 하나뿐이며 그 창에서 A 는 오히려 진다). 부호가 창마다 뒤집히는 것은
+잡음의 전형적 서명이다. 세 계기(D1 · 청산만 일중 · 진입까지 일중) 중 **어느 하나에서도 일관되게 이기는 설정이 없다.**
+
+**부수로 운영에 직접 걸리는 사실 하나**: 백테는 **라이브 자신의 성적도 과대평가**한다 —
+1년 창 라이브 설정이 D1 +21.02 → 진입까지 맞춘 팔 **+13.47**(고정 노셔널 8마켓 합계, 10만원/마켓 기준 21,016 → 13,466원).
+그리고 청산의 **83%가 TIME_EXIT**(199건 중 165건)이다 — 이 봇의 손익은 사실상 09:00 경계가 결정한다.
+
 ## 읽는 법
 
 1. **라이브를 바꾸지 않는다.** 이 작업이 새로 준 근거는 "바꿀 이유가 없다"가 아니라 **"바꿀 근거로 보였던 것이 청산모델 가정이었다"** 이다.
@@ -219,7 +250,9 @@ yearly 단독의 개선(+21.0 → +31.2, MDD 20.8 → 17.2)은 **8마켓 전부 
   ⚠️ 저가 알트 비중이 큰 유니버스라면 이 마찰이 훨씬 커진다. 그리고 이 표는 **현행** 호가단위이고
   Upbit 은 표를 바꿔 왔다(1,000~10,000원 구간 예전 5원 → 실측 1원) — 과거 표가 더 굵었다면 실제 영향은 더 크다.
 - **스프레드·부분체결·시장충격은 여전히 어느 열에도 없다.** 위 호가 반영은 그 중 **격자 마찰 하나만**이고 최소치다.
-- **진입 의미론도 라이브와 다르다 — 그리고 이 replay 는 그쪽을 고치지 않았다.** 백테는 신호를 봉 종가로 판정하고
+- ~~**진입 의미론도 라이브와 다르다 — 그리고 이 replay 는 그쪽을 고치지 않았다.**~~ → **2026-09-05 해소, §9 참조.**
+  아래 서술은 그 시점의 한계였고 지금은 진입까지 맞춘 팔이 있다.
+- (해소 전 서술) 백테는 신호를 봉 종가로 판정하고
   **다음 봉 09:00 시가**에 체결하는데, 라이브는 10초마다 보다가 `현재가 > 당일시가 + 전일레인지×k` 를 넘는 **장중 그 순간**에 산다
   (`TradingEngine` vs `BacktestEngine.simulateTrades` — [[reset-churn-measurement]] 가 기록한 divergence 와 같은 성질).
   즉 여기서 잰 것은 청산 해상도뿐이고 **거래 모집단 자체가 라이브와 다르다**. 이 방향의 미해소 편향은
