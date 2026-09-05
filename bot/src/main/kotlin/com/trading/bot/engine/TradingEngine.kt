@@ -49,6 +49,8 @@ class TradingEngine(
     private val universeSource: UniverseSource? = null,
     // null = 엔진의 인증 클라이언트로 직접 조회(단위 테스트·레거시 경로). 운영은 싱글톤 캐시를 주입한다.
     private val dailyCandleCache: DailyCandleCache? = null,
+    // null = 그림자 관측 off. 켜도 매매는 바뀌지 않는다 — 후보 청산 파라미터를 나란히 평가해 기록만 한다.
+    private val shadowExitObserver: ShadowExitObserver? = null,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -447,7 +449,16 @@ class TradingEngine(
     private suspend fun runSwing(ticker: String, state: TradingState, strategy: TradingStrategy, currentPrice: Double) {
         if (state.position) {
             val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
-            if (reason != null && positionManager.sell(ticker, state, currentPrice, reason) != null) return
+            // 라이브 판정 **뒤에** 관측한다 — decideSell 이 peak 을 갱신한 뒤라야 같은 tick 을 본다.
+            // (손절이 먼저 걸린 tick 은 peak 갱신을 건너뛰지만, 그 구간은 진입가 아래라 후보도 발동하지 않는다.)
+            shadowExitObserver?.onTick(ticker, state, currentPrice)
+            if (reason != null && positionManager.sell(ticker, state, currentPrice, reason) != null) {
+                shadowExitObserver?.onLiveExit(ticker, currentPrice, reason.name)
+                return
+            }
+        } else {
+            // 재동기화·수동 청산으로 포지션이 사라졌으면 관측 상태를 흘리지 않는다(다음 포지션에 섞이면 짝이 깨진다).
+            shadowExitObserver?.forget(ticker)
         }
 
         // 당일 1회 진입: 이미 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
