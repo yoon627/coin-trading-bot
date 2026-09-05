@@ -135,8 +135,9 @@ Upbit 일봉 경계가 곧 09:00 이라 **일봉 종가 ≡ 익일 일봉 시가
 6. ✅ 라이브 무변경 — `TradingProperties`·`deploy/` diff 0.
 7. ✅ wiki 적립(`query/exit-resolution-verdict-2026-09`) + `index.md` 등재 + 선행 페이지 4곳 정정
    (상관 0.49→0.796 · "생존 3건"→실질 1건 · null 임계가 분위수가 아님 · 쿨다운 라벨·결론 철회) + 검증 3종 통과.
-8. ✅ `./gradlew build` 통과 — 실행 969 / skip 15 / 실패 0. skip 은 전부 env·인프라 게이트이고,
-   신규 2건(`CandidateAnatomyTest`·`ExitHourSweepTest`)은 게이트를 켠 실행에서 통과했다.
+8. ✅ `./gradlew build` 통과 — **실행 970 / skip 16 / 실패 0**. skip 은 전부 env·인프라 게이트이고,
+   신규 env 게이트 3건(`CandidateAnatomyTest`·`ExitHourSweepTest`·`HoldLimitPolicyIntradayTest`)은
+   게이트를 켠 실행에서 통과했다. `HoldLimitPolicyReplayEquivalenceTest` 는 무조건 실행이라 실행 수에 포함된다.
 
 # Deferred
 
