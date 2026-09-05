@@ -30,7 +30,7 @@ updated: 2026-09-05
 
 # Next
 
-없음 — 관측기는 들어갔고 **기본 off** 다. 다음 액션은 사람이 `trading.shadow-exit.enabled=true` 로 켜는 것이며
+없음 — PR #171 로 닫혔다. 관측기는 들어갔고 **기본 off** 다. 다음 액션은 사람이 `trading.shadow-exit.enabled=true` 로 켜는 것이며
 배포 설정 변경이라 이 작업 범위 밖이다. 켠 뒤 판정은 아래 `# Acceptance` 4 의 사전고정을 따른다.
 
 # Decisions
