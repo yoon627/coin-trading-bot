@@ -14,6 +14,8 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
+import com.trading.bot.persistence.ShadowExitObservationRepository
+import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.UniverseProperties
 import com.trading.common.strategy.TradingStrategy
 import java.time.LocalDateTime
@@ -60,6 +62,9 @@ class UserTradingManager(
     private val universeProperties: UniverseProperties = UniverseProperties(),
     private val universeSource: UniverseSource? = null,
     private val dailyCandleCache: DailyCandleCache? = null,
+    private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
+    // null 이면 그림자 관측을 만들지 않는다 — 저장소 없이 켜면 매 tick 관측이 조용히 버려진다.
+    private val shadowExitObservationRepository: ShadowExitObservationRepository? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -394,6 +399,25 @@ class UserTradingManager(
             universeProperties = universeProperties,
             universeSource = universeSource,
             dailyCandleCache = dailyCandleCache,
+            shadowExitObserver = shadowExitObserver(user.id!!),
+        )
+    }
+
+    /**
+     * 그림자 관측기. 설정이 꺼져 있거나 저장소가 없으면 null(=관측 없음)이다 —
+     * 저장할 곳 없이 켜면 매 tick 계산만 하고 결과가 사라져 "돌고 있다"는 착각만 남는다.
+     */
+    private fun shadowExitObserver(userId: Long): ShadowExitObserver? {
+        if (!shadowExitProperties.enabled) return null
+        val repository = shadowExitObservationRepository ?: run {
+            log.warn("trading.shadow-exit.enabled=true 인데 저장소가 없어 관측을 켜지 않는다")
+            return null
+        }
+        return ShadowExitObserver(
+            repository = repository,
+            userId = userId,
+            trailingStopPct = shadowExitProperties.trailingStopPct,
+            trailingArmPct = shadowExitProperties.trailingArmPct,
         )
     }
 
