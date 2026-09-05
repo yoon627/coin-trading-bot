@@ -34,7 +34,7 @@ updated: 2026-09-05
 
 # Next
 
-없음 — 닫혔다. 라이브 무변경. **후속은 소액 전향 검증**(승격은 사람 승인 — [[strategy-evolution-expectations]]).
+없음 — PR #170 로 닫혔다. 라이브 무변경. **후속은 소액 전향 검증**(승격은 사람 승인 — [[strategy-evolution-expectations]]).
 
 # Decisions
 
