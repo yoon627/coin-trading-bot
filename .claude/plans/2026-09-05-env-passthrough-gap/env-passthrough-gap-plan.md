@@ -22,7 +22,7 @@ updated: 2026-09-05
 
 # Next
 
-없음 — 닫혔다. 관측을 켜는 것은 `VULTR_DEPLOY_ENV` 시크릿 갱신이 필요하고 그건 사람이 한다(아래 Decisions 2).
+없음 — PR #174 로 닫혔다. 관측을 켜는 것은 `VULTR_DEPLOY_ENV` 시크릿 갱신이 필요하고 그건 사람이 한다(아래 Decisions 2).
 
 # Decisions
 
