@@ -163,6 +163,13 @@ class CandidateAnatomyTest {
             out.appendLine()
         }
 
+        out.appendLine("## 호가단위 — 트레일링 체결가를 실제 격자에 올리면")
+        out.appendLine()
+        out.appendLine("백테는 청산가로 임계선의 실수값을 그대로 쓴다. 실거래는 호가 위에서만 체결되고, 매도는 격자 **아래**로 내려간다.")
+        out.appendLine("틱이 굵은 저가 코인에서는 이 반올림 하나가 트레일링 이익을 통째로 먹는다.")
+        out.appendLine()
+        out.appendLine(tickImpact(arms, YearlyFixtures.loadAll(), StrategySearch.Segment("전체", 0..364)))
+        out.appendLine()
         out.appendLine("## 사전고정 게이트 재적용 — 변형 A 는 새 가설이 아니라 **이미 탈락한 좌표**다")
         out.appendLine()
         out.appendLine("`armValuesFor(1.5)` 가 `arm=0.0` 을 항상 포함하므로(`StrategySearchGrid.kt`) 변형 A 는 Stage A 의")
@@ -183,6 +190,50 @@ class CandidateAnatomyTest {
         Files.writeString(path, out.toString())
         println("[anatomy] 리포트: ${path.toAbsolutePath()}")
         assertTrue(out.contains("날짜 블록 부트스트랩"))
+    }
+
+    /** 청산 체결가를 [UpbitTickSize] 격자로 내렸을 때의 Σpnl 변화. 트레일링 청산에 가장 크게 걸린다. */
+    private suspend fun tickImpact(
+        arms: List<Arm>,
+        fixtures: Map<String, List<Candle>>,
+        segment: StrategySearch.Segment,
+    ): String {
+        val sb = StringBuilder()
+        sb.appendLine("| 설정 | 청산 | Σpnl %p | 호가 반영 후 | 차이 | 트레일링 청산 평균 틱/가격 |")
+        sb.appendLine("|---|---|---|---|---|---|")
+        for (arm in arms) {
+            val config = arm.point.toConfig()
+            val feePct = config.feeRate * 2 * 100
+            var raw = 0.0
+            var snapped = 0.0
+            var trailN = 0
+            var trailTickPct = 0.0
+            var n = 0
+            for ((market, newestFirst) in fixtures) {
+                val chronological = newestFirst.reversed()
+                val input = chronological.subList(segment.inputRange.first, segment.inputRange.last + 1)
+                val engine = BacktestEngine(listOf(YearlyStrategyComparison.ALL_STRATEGIES.first { it.name == arm.point.strategy }), props)
+                val m = SwingMetrics.measure(engine, arm.point.strategy, market, input, BacktestEngine.MIN_CANDLES, config)
+                for (t in m.trades) {
+                    n++
+                    raw += t.pnlPercent
+                    // 매수는 격자 위로 올라가고(불리) 매도는 아래로 내려간다(불리) — 양쪽 다 반영한다.
+                    val buy = UpbitTickSize.of(t.buyPrice).let { Math.ceil(t.buyPrice / it) * it }
+                    val sell = UpbitTickSize.roundSellDown(t.sellPrice)
+                    snapped += (sell - buy) / buy * 100.0 - feePct
+                    if (t.reason == "TRAILING_STOP") {
+                        trailN++
+                        trailTickPct += UpbitTickSize.of(t.sellPrice) / t.sellPrice * 100.0
+                    }
+                }
+            }
+            sb.appendLine("| %s | %d | %+.2f | %+.2f | **%+.2f** | %s |".format(
+                arm.label, n, raw, snapped, snapped - raw,
+                if (trailN == 0) "—" else "%.3f%% (%d건)".format(trailTickPct / trailN, trailN)))
+        }
+        sb.appendLine()
+        sb.appendLine("매수는 격자 위로, 매도는 아래로 올린다 — 양쪽 다 불리한 방향이고 이것이 **최소** 마찰이다(스프레드·부분체결은 별도).")
+        return sb.toString()
     }
 
     /** 사전고정 게이트(G1·G2·G4a·G4b·G5·G6·G7·G3)를 후보에 그대로 재적용한다. 상수는 `StrategySearchGates` 가 소유한다. */
