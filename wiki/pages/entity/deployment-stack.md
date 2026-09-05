@@ -38,8 +38,10 @@ sources:
 - **배포 계층은 앱 설정의 기본값을 갖지 않는다**(#75, 2026-08-04). `deploy.sh` 의 `render_server_env` 는 로컬 `.env` 에 실제로 설정된 `TRADING_*` 만 서버 `.env` 에 쓰고, compose 는 그 키들을 **값 없이 이름만**(`- TRADING_TAKE_PROFIT_PCT`) 선언한다 — 값이 해결되지 않으면 compose 가 변수를 컨테이너에서 제거하므로 `TradingProperties` 기본값이 적용된다. 배포 스크립트에 `${VAR:-기본값}` 폴백을 되살리면 앱 기본값과 갈려 2026-07-30 사고가 재발한다.
   ⚠️ **반대 방향의 함정도 있다** — compose 목록에 **이름을 안 적으면** `.env` 에 적어도 컨테이너에 도달하지 않아
   **조용히 기본값으로 돈다**(켰다고 믿는데 안 켜진 상태). 2026-09-05 에 `TRADING_RECONCILE_HALT_THRESHOLD` 가
-  그 상태였음이 발견됐다(운영에서 조정 불가). 이제 `TradingEnvPassthroughTest` 가 `trading.*`
-  `@ConfigurationProperties` 생성자 파라미터를 전부 열거해 compose 목록과 대조하므로, 새 설정을 추가하면 그 테스트가 먼저 깨진다.
+  그 상태였음이 발견됐다(운영에서 조정 불가). **전달 화이트리스트는 둘이고 둘 다 통과해야 한다** — `deploy.sh` 의 `TRADING_OVERRIDE_KEYS`(서버 `.env` 에 쓸지)와
+  compose 의 `environment:`(컨테이너에 넘길지). 2026-09-05 에 compose 만 고치고 `deploy.sh` 를 빠뜨려 **세 번째** 같은 실패가 났다.
+  이제 `TradingEnvPassthroughTest` 가 `trading.*` `@ConfigurationProperties` 생성자 파라미터를 전부 열거해
+  **두 목록 모두와** 대조하므로, 새 설정을 추가하면 그 테스트가 먼저 깨진다(변이 검사로 두 축 다 CAUGHT 확인).
 - **앱 코드 변경은 이미지 재빌드가 있어야 반영된다.** `deploy.sh deploy`(pull)만으로는 안 바뀐다([[lesson-cors-origin-rebuild]]).
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.
