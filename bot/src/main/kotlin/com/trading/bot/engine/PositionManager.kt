@@ -786,7 +786,12 @@ class PositionManager(
                 if (filled?.state == "done") {
                     // 즉시 체결 — 주문량으로 기록. done 은 upbit 시장가 매도의 정상 종결.
                     // #52: 상태 전이 저장과 감사 기록을 원자 커밋하고, 성공 후에만 메모리 전이를 적용한다.
-                    completeSellAtomically(ticker, state, currentPrice, qty.volume, reason, remaining = sellable - qty.volume)
+                    completeSellAtomically(
+                        ticker, state, currentPrice, qty.volume, reason,
+                        remaining = sellable - qty.volume,
+                        // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 백테에 없는 항목이라 실물로만 얻는다.
+                        executedVwap = filled.filledVwap(),
+                    )
                 } else {
                     // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
                     log.warn("Sell not confirmed for {}: state={} — pending kept for reconcile", ticker, filled?.state)
@@ -822,7 +827,7 @@ class PositionManager(
                 // 취소된 미체결 잔량은 free 로 돌아오지만 반영이 늦을 수 있고, 반대로 남은 locked 가 우리
                 // 주문 것이 아닐 수도 있다(출금 대기 등). 둘 다 [heldVolume] 의 상한이 처리한다.
                 // buildSellRecord 는 평단이 필요하므로 전이 전에 만든다. 잔고 조회도 트랜잭션 밖에서 끝낸다(#52).
-                val record = buildSellRecord(ticker, state, currentPrice, executed)
+                val record = buildSellRecord(ticker, state, currentPrice, executed, executedVwap = filled?.filledVwap())
                 val account = findAccount(ticker.substringAfter("-"))
                 val unfilled = (ourSellLockCeiling(state) - executed).coerceAtLeast(0.0)
                 val exchangeRemaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
@@ -908,8 +913,9 @@ class PositionManager(
         volume: Double,
         reason: SellReason?,
         remaining: Double,
+        executedVwap: Double? = null,
     ): TradeRecord {
-        val record = buildSellRecord(ticker, state, currentPrice, volume, reason)
+        val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap)
         val now = LocalDateTime.now(TradingDay.KST)
         commitFillAndApply(state, record, sellTransition(state, volume, remaining, state.avgBuyPrice, now))
         log.info(
@@ -931,6 +937,7 @@ class PositionManager(
         currentPrice: Double,
         volume: Double,
         reason: SellReason? = state.pendingSellReason,
+        executedVwap: Double? = null,
     ): TradeRecord {
         // 재시작 복원 경로에서는 avgBuyPrice 가 이미 0 으로 동기화돼 있으므로 주문 시점 평단을 쓴다.
         val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
@@ -942,6 +949,7 @@ class PositionManager(
             price = currentPrice,
             volume = volume,
             totalAmount = currentPrice * volume,
+            executedVwap = executedVwap,
             pnlPercent = pnl,
             pnlAmount = TradePnl.amount(pnl, basisPrice, volume),
             // 청산은 진입 전략의 성과로 귀속한다. 매도 시점의 활성 전략을 쓰면 설정을 바꾼 뒤의 청산이
