@@ -9,6 +9,22 @@ data class M1Exit(val reason: String, val sellPrice: Double, val exitUtc: String
 data class M1ReplayResult(val exit: M1Exit?, val barsSeen: Int, val reachedLimit: Boolean)
 
 /**
+ * 경계 정책 replay 의 결과. [netPnlPct] 는 부분 청산이 있으면 두 다리의 가중 합성이라
+ * `(sellPrice−entry)/entry − 수수료` 와 일치하지 않는다 — [BacktestTrade.partialFraction] 과 같은 규약이다.
+ */
+data class M1PolicyExit(
+    val reason: String,
+    val sellPrice: Double,
+    val exitUtc: String,
+    val minutesHeld: Int,
+    val netPnlPct: Double,
+    val partialFraction: Double? = null,
+    val partialLegPnlPct: Double? = null,
+)
+
+data class M1PolicyResult(val exit: M1PolicyExit?, val barsSeen: Int)
+
+/**
  * M1(1분봉)을 tick 프록시로 삼아 한 트레이드의 청산을 replay 한다(#33 편향 실측용).
  * D1 백테와 [IntrabarExitModel] 을 공유하되, 청산 게이트를 보유구간 M1 봉마다 순차 평가해
  * "먼저 닿는 게이트"를 실제 도달 순서대로 잡는다 — D1 의 worst-case 가정이 사라지는 지점이 편향의 본체.
@@ -24,6 +40,78 @@ object M1ReplayEngine {
      * @param limitInstant TIME_EXIT 경계(UTC) = 진입일 00:00Z + effectiveMaxHoldDays 일 (= KST 09:00 리셋).
      * @return exit=null 이면 데이터가 limitInstant 까지 못 미친 것(집계 제외 대상).
      */
+    /**
+     * 경계에서 **무엇을 하는가** 를 일중봉에서 replay 한다 — 전량(현행)·조건부·부분(2단 사다리)·연장·폐지.
+     *
+     * [replayExit] 은 경계를 하나만 알아서 조건부·부분을 표현할 수 없다(그래서 `require` 로 막혀 있다).
+     * 이 함수는 경계를 **집합**으로 받아 그 제약을 푼다. 판정식은 여전히 [IntrabarExitModel] 이 소유하므로
+     * D1 백테와 같은 정책이 돈다 — [BacktestEngine.processExit] 의 부분/조건부 분기와 1:1 대응한다.
+     *
+     * @param boundaries 경계 시각 집합(UTC). 라이브 09:00 KST 격자만 넣는다 — 봉마다 재평가하면
+     *   조건부가 "첫 회복 분봉에 청산" 으로 바뀌어 다른 정책이 된다. 비어 있으면 상한 없음(폐지).
+     * @return exit=null 이면 구간 안에서 청산되지 않았다(집계에서 제외하거나 구간 끝 청산은 caller 가 정한다).
+     */
+    fun replayPolicy(
+        entryPrice: Double,
+        entryUtc: LocalDateTime,
+        boundaries: Set<LocalDateTime>,
+        m1BarsAsc: List<Candle>,
+        config: BacktestConfig,
+    ): M1PolicyResult {
+        require(config.atrStopMultiplier == null) { "ATR exits need the entry-time ATR, which this function does not carry" }
+        require(config.partialTakeProfitPct == null) { "partial take-profits need fill state this function does not carry" }
+        val fraction = config.holdLimitSellFraction
+        val feePct = config.feeRate * 2 * 100
+
+        var peak = entryPrice
+        var seen = 0
+        var holdLimitConsumed = false
+        var partialTaken = false
+        var partialLegPnl = 0.0
+        var partialAt: LocalDateTime? = null
+
+        for (b in m1BarsAsc) {
+            val t = LocalDateTime.parse(b.candleDateTimeUtc)
+            if (t.isBefore(entryUtc)) continue
+            seen++
+            val rawAtHoldLimit = t in boundaries && !holdLimitConsumed
+
+            // 부분 청산: 첫 경계에서 f 만 실현하고 잔여는 그 봉의 전 구간을 정상으로 겪는다.
+            if (fraction != null && rawAtHoldLimit && !partialTaken) {
+                partialTaken = true
+                holdLimitConsumed = true
+                partialAt = t
+                partialLegPnl = ((b.open - entryPrice) / entryPrice) * 100.0 - feePct
+            }
+            val remainderBoundary = fraction != null && partialTaken &&
+                config.holdLimitRemainderBoundaryDays?.let { days ->
+                    partialAt?.let { t in boundaries && !t.isBefore(it.plusDays(days.toLong())) } == true
+                } == true
+            val atHoldLimit = if (fraction == null) {
+                IntrabarExitModel.holdLimitFires(b, entryPrice, rawAtHoldLimit, config)
+            } else {
+                remainderBoundary
+            }
+
+            val armPeak = peak
+            peak = IntrabarExitModel.updatedPeak(peak, b, atHoldLimit)
+            val decision = IntrabarExitModel.evaluate(b, entryPrice, armPeak, atHoldLimit, config, chartExitSignal = false)
+                ?: continue
+
+            val remainderPnl = ((decision.sellPrice - entryPrice) / entryPrice) * 100.0 - feePct
+            val banked = if (partialTaken) fraction else null
+            val net = banked?.let { it * partialLegPnl + (1 - it) * remainderPnl } ?: remainderPnl
+            return M1PolicyResult(
+                M1PolicyExit(
+                    decision.reason, decision.sellPrice, b.candleDateTimeUtc,
+                    ChronoUnit.MINUTES.between(entryUtc, t).toInt(), net, banked, banked?.let { partialLegPnl },
+                ),
+                seen,
+            )
+        }
+        return M1PolicyResult(exit = null, barsSeen = seen)
+    }
+
     fun replayExit(
         entryPrice: Double,
         entryUtc: LocalDateTime,

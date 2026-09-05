@@ -81,7 +81,24 @@ D1 기준 5창 전부에서 유의(P(격차≤0) 0.000/0.001/0.000/0.000/0.000),
 `DailyResetCounterfactualTest` 가 같은 이유로 MDD 를 팔 간 비교에서 제외한 전례가 있다.
 또한 라이브(`TradingProperties`)에 대응 노브가 없어 **양성이 나와도 코드 없이는 적용 불가**였다.
 
-## 6) 09:00 **시각** — 일봉으로는 원리적으로 측정 불가라 240분봉을 도입했다
+## 6) 사용자 질문 재확인 — Q2 는 "몇 시"가 아니라 "꼭 전량인가" 였다
+
+2026-09-05 사용자 정정: 시각이 아니라 **전량매도 방식**을 물은 것이다. 그 축은 [[hold-limit-policy-2026-09]] 이
+13정책으로 이미 답했지만 **일봉 판정**이었고, 이 작업이 보인 실패 양식(경로 의존 게이트를 일봉으로 재면 안 된다)이
+**부분 청산·조건부에 그대로 적용된다**. 그래서 240분봉에서 재판정했다.
+
+`M1ReplayEngine` 은 경계를 하나만 알아 조건부·부분을 `require` 로 막고 있었다 → 경계를 **집합**으로 받는
+`replayPolicy` 를 추가해 제약을 풀되, D1 엔진과의 등가성을 실 fixture 로 가뒀다
+(`HoldLimitPolicyReplayEquivalenceTest` — 5정책 × 5마켓 × **357거래에서 사유·청산가·부분합성 pnl 완전 일치**).
+
+결과: 현행(전량 h1) 대비 45셀 중 유의하게 이긴 것 1개(2025-01~07 연장 2일, p=0.044 — 우연 기대치 2.25보다 적다).
+그리고 **부분 청산 f 축이 단조**다(yearly f30 −25.9 → f50 −19.4 → f70 −12.8 → 전량 0). 데이터가 말하는 것은
+"부분도 비슷하다"가 아니라 **"덜 팔수록 나쁘다"** 이고 극값이 현행이다.
+
+⚠️ 연장·폐지 값은 **상한**이다 — 진입을 현행 D1 일정에 고정해 "연장이 다음 진입을 막는 기회비용"이 빠져 있다.
+부분 청산은 잔여를 하루 더 들 뿐이라 그 채널의 영향이 가장 작아, 이 계기가 가장 잘 답하는 정책이다.
+
+## 7) 09:00 **시각**(부산물) — 일봉으로는 원리적으로 측정 불가라 240분봉을 도입했다
 
 Upbit 일봉 경계가 곧 09:00 이라 **일봉 종가 ≡ 익일 일봉 시가**다(KRW-BTC 364쌍 평균 |차| 0.012%).
 따라서 일봉에는 09:00 이외 시각 정보가 0비트다. 240분봉(KST 01/05/09/13/17/21)이면 청산 시각의 체결가가
@@ -93,6 +110,9 @@ Upbit 일봉 경계가 곧 09:00 이라 **일봉 종가 ≡ 익일 일봉 시가
 
 - `bot/src/test/kotlin/com/trading/bot/engine/CandidateAnatomyTest.kt` — 해부·부트스트랩·봉투·게이트 재적용. `RUN_CANDIDATE_ANATOMY=true`
 - `bot/src/test/kotlin/com/trading/bot/engine/ExitHourSweepTest.kt` — 드리프트 패널·시각 스윕·D1 편향. `RUN_EXIT_HOUR=true`
+- `bot/src/main/kotlin/com/trading/bot/engine/M1ReplayEngine.kt` — `replayPolicy` 추가(경계 집합 + 부분·조건부)
+- `bot/src/test/kotlin/com/trading/bot/engine/HoldLimitPolicyIntradayTest.kt` — 경계 정책 재판정. `RUN_HOLD_POLICY_INTRADAY=true`
+- `bot/src/test/kotlin/com/trading/bot/engine/HoldLimitPolicyReplayEquivalenceTest.kt` — D1↔replay 정책 등가성(무조건 실행)
 - `bot/src/test/kotlin/com/trading/bot/engine/IntradayFixtures.kt` — 240분봉 로더
 - `scripts/collect_intraday_fixtures.py` — 240분봉 수집(구간·로스터는 일봉 fixture 를 따른다)
 - `bot/src/test/resources/backtest/intraday240/` — 5창 55,912봉 + `gaps.json`
@@ -107,6 +127,7 @@ Upbit 일봉 경계가 곧 09:00 이라 **일봉 종가 ≡ 익일 일봉 시가
 2. ✅ 주 통계량이 마켓 중앙값이 아니라 청산일 블록 부트스트랩이고, 5창 전부에 적용된다.
 3. ✅ 변형 A 의 사전고정 게이트별 판정이 같은 게이트 객체로 재적용돼 기록된다.
 4. ✅ 09:00 시각 축이 일중봉으로 실제 측정되고, 무조건부/거래조건부 추정대상이 분리돼 보고된다.
+4b. ✅ **"꼭 전량인가" 축이 240분봉에서 재판정되고, replay 가 D1 엔진과 등가임이 실 fixture 로 고정된다.**
 5. ✅ D1 청산모델 편향이 같은 거래·같은 경계에서 실측된다.
 6. ✅ 라이브 무변경 — `TradingProperties`·`deploy/` diff 0.
 7. ✅ wiki 적립(`query/exit-resolution-verdict-2026-09`) + `index.md` 등재 + 선행 페이지 4곳 정정
