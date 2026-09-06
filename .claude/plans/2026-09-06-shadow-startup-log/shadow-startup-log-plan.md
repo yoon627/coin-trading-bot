@@ -17,7 +17,7 @@ updated: 2026-09-06
 
 # Next
 
-머지·배포 후 운영 로그에서 `[shadow-exit] 관측 on` 을 실제로 확인한다.
+PR #175 머지·배포 후 운영 로그에서 `[shadow-exit] 관측 on` 을 실제로 확인한다.
 
 # Decisions
 
