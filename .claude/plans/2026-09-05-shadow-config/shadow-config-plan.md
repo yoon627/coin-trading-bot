@@ -61,4 +61,4 @@ PR #171 이 넣은 그림자 관측기(`trading.shadow-exit.*`, 기본 off)를 *
 
 # Deferred
 
-- **관측 켜기** — 운영 `.env` 에 `TRADING_SHADOW_EXIT_ENABLED=true` 후 재배포. 사람이 결정한다. (사용자)
+- ✅ **완료(2026-09-06)** — 관측 켜기 — 운영 `.env` 에 `TRADING_SHADOW_EXIT_ENABLED=true` 후 재배포. 사람이 결정한다. (사용자)

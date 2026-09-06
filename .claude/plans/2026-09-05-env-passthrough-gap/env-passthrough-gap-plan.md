@@ -57,4 +57,4 @@ CI 배포는 서버 `.env` 를 **`VULTR_DEPLOY_ENV` 시크릿에서 전부 다�
 
 # Deferred
 
-- **관측 켜기** — `VULTR_DEPLOY_ENV` 시크릿에 `TRADING_SHADOW_EXIT_ENABLED=true` 추가. 사람만 가능. (사용자)
+- ✅ **완료(2026-09-06)** — 관측 켜기 — `VULTR_DEPLOY_ENV` 시크릿에 `TRADING_SHADOW_EXIT_ENABLED=true` 추가. 사람만 가능. (사용자)
