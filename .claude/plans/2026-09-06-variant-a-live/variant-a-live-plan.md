@@ -21,7 +21,7 @@ updated: 2026-09-06
 
 # Next
 
-없음 — 닫혔다. 관측 누적을 지켜본다(아래 Decisions 3).
+없음 — PR #176 로 닫혔다. 관측 누적을 지켜본다(아래 Decisions 3).
 
 # Decisions
 
