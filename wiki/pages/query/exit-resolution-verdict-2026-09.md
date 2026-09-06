@@ -2,13 +2,15 @@
 title: 일봉 백테가 만든 우위 — 청산 해상도를 올리면 combined 를 이기는 설정이 남지 않는다
 category: query
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-06
 claim_state: current
 verified: 2026-09-05 — `RUN_CANDIDATE_ANATOMY=true ./gradlew :bot:test --tests "*CandidateAnatomyTest*" --rerun-tasks` 와 `RUN_EXIT_HOUR=true ./gradlew :bot:test --tests "*ExitHourSweepTest*" --rerun-tasks` (JDK 21.0.9), fixture `yearly/`·`bull/`·`p2024h2/`·`p2025h1/`·`bear/` + `intraday240/`(240분봉 55,912봉, 수집 2026-09-05)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/CandidateAnatomyTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/ExitHourSweepTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/IntradayFixtures.kt
+  - bot/src/test/kotlin/com/trading/bot/engine/PlateauAliasAuditTest.kt
+  - bot/src/test/kotlin/com/trading/bot/engine/PlateauStructureAuditTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/HoldLimitPolicyIntradayTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/HoldLimitPolicyReplayEquivalenceTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
@@ -111,6 +113,29 @@ A 는 Stage A 의 51,480 좌표 **안에 실재했고 생존 3건에 들지 못�
 
 A 는 **plateau 하나에서만 죽었다**. 그것을 사후 통계량으로 되살리는 것은 사전고정 강건성 게이트를 결과 본 뒤
 덮어쓰는 것이라, 다중비교 회계가 성립하지 않는다.
+
+> [!note] 2026-09-06 감사 — 이 탈락은 실재한다 (#181)
+> A 가 뒤늦게 [[trailing-arm-finding-2026-09]] 로 승격되면서 "그 6/10 이 **자기별칭 이웃**(파라미터만 다르고
+> 거래 결과가 동일한 이웃, 예: 발동하지 않는 손절값) 때문 아니냐" 는 의심이 생겼다. 아니다.
+> 이웃 세는 법을 네 가지로 바꿔도(원안 / 자기별칭 제외 / 지문 dedup / 둘 다) A 는 **전부 탈락**하고
+> (6/10 · 5/9 · 6/10 · 5/9) 위 생존 3좌표는 **전부 통과**한다. 사실 **별칭 가설은 A 를 되살릴 수 없는 가설이었다** —
+> G1+G5 를 통과한 좌표의 자기별칭 이웃은 지문이 같으니 반드시 함께 통과하고, 그것을 분모에서 빼면 비율은
+> 낮아지기만 한다. A 를 구제할 수 있었던 유일한 셈법은 지문 dedup 인데 A 의 이웃 10개는 지문이 전부 달라 항등이었다.
+> 방향은 G3 판정 대상(G1+G5 통과) **578** 좌표에서 확인된다 — 세는 법을 바꿨을 때 **탈락→통과 0건**.
+> 반대 방향은 실재한다: **통과→탈락 17건, 원안 G3 통과 165 의 10.3%** — 즉 **G3 통과의 열에 하나는 별칭이 만든 plateau**다.
+> 게이트가 무른 쪽으로 틀린 것이고 A 는 그 17 에 없다. 이건 임계 눈금 과제(#185)에 속한다.
+> "단일 축 효과라 구조적으로 불리하다" 는 변호도 성립하지 않는다 — 효과 축 이웃을 분모에서 빼도 6/9 = 66.7% 로
+> 미달이고, 그 편향은 이 격자에서 애초에 구속력이 없다(A 의 상한 90.0%, 격자 최소 80.0%, 기준 미달 좌표 0개).
+> "되돌리면 정의상 탈락" 이라는 강한 형태는 **거짓**이다 — 생존 E1 의 트레일↑ 이웃은 +2.13%p·6/8 로 통과한다.
+> "실패 이웃은 원래 나쁜 방향" 도 성립하지 않는다 — 전역으로 죽은 방향은 **필터↑(0.3%) 하나뿐**이고
+> 보유↑ 53.1% · SL↓ 62.9% 는 대체로 통과한다. 생존 3좌표도 보유↑·필터↑ 를 똑같이 잃고 통과했다.
+> **A 와 E 를 가른 것은 축 개수가 아니라 G1 마진이다**(+3.28 vs +4.92, 절대임계 2.0%p) —
+> 즉 G3 는 plateau 라는 이름과 달리 사실상 **마진 테스트**로 작동한다.
+> 그리고 G3 의 70% 는 눈금이 맞은 적이 없다 — G1+G5 통과 578 중 G3 통과 165(28.5%), plateau 비율 중앙 0.556 이라
+> **A 의 0.600 은 중앙보다 위**다. 별개 과제로 남긴다(#185).
+> **이 감사가 배제한 결함 후보는 정확일치 별칭 하나뿐**이며, "게이트에 결함이 없다" 는 뜻이 아니다.
+> 재현: `RUN_PLATEAU_AUDIT=true ./gradlew :bot:test --tests "*PlateauAliasAuditTest*" --rerun-tasks`,
+> `RUN_PLATEAU_STRUCTURE=true ./gradlew :bot:test --tests "*PlateauStructureAuditTest*" --rerun-tasks`
 
 ## 4. 결정타 — 청산을 4시간마다 판정하면 우위가 사라진다
 
