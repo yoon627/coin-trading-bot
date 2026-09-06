@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-09-02
 claim_state: current
-verified: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
+verified: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/ExitGates.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
@@ -53,14 +53,26 @@ sources:
 - **진입 전략으로 청산한다**: `resolveExitStrategy` 가 `entryStrategy` 를 복원해 그 전략의 `shouldSell` 을 쓴다. 전략이 목록에서 사라졌으면 활성 전략으로 폴백하며 WARN — 이때는 청산 기준이 진입과 달라진다([[swing-strategies]]). 같은 `entryStrategy` 가 **매도 기록의 전략 귀속**에도 쓰인다(`buildSellRecord` 가 `markSold` 이전에 읽는다 — [[persistence-schema]]).
 - **차트 청산은 기본 off** (`chartExitEnabled=false`). 켜기 전 백테스트 검증이 전제다.
 
-## ⚠️ 진입 시점 스냅샷은 아직 소비되지 않는다
+## 진입 시점 스냅샷을 따른다 (2026-09-06~, #177)
 
-`ExitParamsSnapshot` 이 진입 시점에 기록되고 재시작 시 복원되지만, **청산 판정은 그 값을 읽지 않는다.** 손절·익절·트레일링·보유상한 모두 **현재** `tradingProperties` 를 읽는다(`PositionManager` 의 게이트 함수들, `DailyResetManager`).
+손절·익절·트레일링·보유상한은 **그 포지션이 진입할 때의 값**으로 판정한다. 보유 중 전역 설정을 바꿔도
+이미 열린 포지션의 청산 기준은 바뀌지 않는다.
 
+```kotlin
+// PositionManager.exitParamsOf
+private fun exitParamsOf(state: TradingState): ExitParamsSnapshot = state.exitParams ?: snapshotExitParams()
 ```
-TradingState.kt:41
-// 진입 시점 청산 파라미터 스냅샷. 저장·복원 전용 —
-// 소비(진입 시점 값으로 청산)는 strategy-evolution Phase 2.
-```
 
-실무상 의미: **보유 중에 설정을 바꾸면 이미 열려 있는 포지션의 청산 기준까지 즉시 적용된다.** 운영 중 파라미터를 조정할 때는 열린 포지션이 있는지 먼저 확인해야 한다. 스냅샷이 있으니 안전하다고 가정하면 안 된다.
+- 소비처: `checkTakeProfit` · `checkStopLoss` · `checkTrailingStop`(`PositionManager`), `shouldSellForDailyReset`(`DailyResetManager`).
+- **스냅샷이 없으면 전역값으로 폴백**한다 — 이 변경 이전에 열린 포지션·복원 실패분의 동작을 보존한다.
+- **`chartExitEnabled` 는 스냅샷에 없다.** 임계가 아니라 모드 스위치라 전역이 소유한다.
+- 생명주기: 진입 시 기록(`markBought` 가 신규 진입에서 옛 값을 비우고 호출부가 다시 찍는다) → `exit_params_json` 으로 durable →
+  청산 시 `markSold` 가 비운다. 재시작 복원은 durable 값을 그대로 쓴다.
+
+> [!conflict] 2026-09-06 이전에는 소비되지 않았다
+> 그전에는 스냅샷이 저장·복원만 되고 청산은 **현재** `tradingProperties` 를 읽었다. 그래서
+> **보유 중 설정을 바꾸면 열린 포지션의 청산 기준까지 즉시 바뀌었다** — 2026-09-06 트레일링 승격
+> ([[trailing-arm-finding-2026-09]])에서 실제로 발생했고, 그 거래들은 *진입은 옛 규칙, 청산은 새 규칙*이다.
+> 그 기간의 성과를 어느 설정 몫으로 셀지는 정의되지 않는다. 이후 진입분부터는 이 문제가 없다.
+
+⚠️ **KIS 주식 경로(`StockPositionManager`)는 아직 전역을 읽는다** — 별도 상태(`StockPositionState`)에 스냅샷 자체가 없다.
