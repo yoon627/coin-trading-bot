@@ -49,11 +49,11 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 
 ## 기본 리스크 파라미터 (TradingProperties.kt)
 
-| 항목 | 기본값 |
-|---|---|
-| `takeProfitPct` | 5.0 (+5% 익절) |
-| `maxLossPct` | 5.0 (−5% 손절) |
-| `trailingStopPct` / `trailingArmPct` | 2.0 / 3.0 |
+| 항목 | 코드 기본값 | 운영값 |
+|---|---|---|
+| `takeProfitPct` | 5.0 (+5% 익절) | 같음 |
+| `maxLossPct` | 5.0 (−5% 손절) | 같음 |
+| `trailingStopPct` / `trailingArmPct` | 2.0 / 3.0 | **1.5 / 0** (2026-09-06~) |
 | `maxHoldDays` | 1 (KST 09:00 경계) |
 | `chartExitEnabled` | **false** (기본 off) |
 | `intervalSeconds` | 10 |
@@ -62,6 +62,13 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 
 > [!conflict] 이 표는 두 번 어긋난 적이 있다 — 과거 `PROJECT_ANALYSIS.md` 가 정반대로(손절 −3%/익절 +5%) 적었고, #75(리스크 기본값 단일화) 이후에는 이 페이지가 `takeProfitPct` 2.0 · `trailingArmPct` 0.0 인 옛 값을 들고 있었다(2026-08-23 교정).
 > **문서가 아니라 `TradingProperties.kt` 가 근거다.** 기본값이 바뀌면 이 표를 같은 커밋에서 고친다.
+>
+> ⚠️ **2026-09-06 부터 코드 기본값과 운영값이 갈린다.** 트레일링만 env 오버라이드로 **1.5 / arm 0** 을 쓴다
+> (`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`). 미관측 7국면 사전고정 판정을 통과한 승격이며
+> 근거·한계는 [[trailing-arm-finding-2026-09]]. **운영값의 근거는 코드가 아니라 그 env 다** —
+> 확인은 `docker compose exec app printenv | grep TRADING_TRAILING`.
+> 코드 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`legacy-golden.txt` 핀·기본 생성자를 쓰는 테스트 76곳이
+> 2.0/3.0 을 전제한다. 이전은 골든 재생성을 동반한 별도 작업이다.
 
 ## 주문 유실 방지 구조
 
