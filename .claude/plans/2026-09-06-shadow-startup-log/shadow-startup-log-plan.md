@@ -1,6 +1,6 @@
 ---
 title: shadow-startup-log — 관측 활성 여부를 로그로 드러낸다
-status: in_progress
+status: done
 started: 2026-09-06
 updated: 2026-09-06
 ---
@@ -17,7 +17,7 @@ updated: 2026-09-06
 
 # Next
 
-PR #175 머지·배포 후 운영 로그에서 `[shadow-exit] 관측 on` 을 실제로 확인한다.
+없음 — 닫혔다. 로그 확인까지 완료.
 
 # Decisions
 
@@ -43,7 +43,10 @@ PR #175 머지·배포 후 운영 로그에서 `[shadow-exit] 관측 on` 을 실
 
 1. ✅ 기동 시 on/off 가 INFO 로 남고, on 이면 후보 파라미터가 함께 찍힌다.
 2. ✅ `./gradlew build` 통과(실행 984 / skip 19 / 실패 0), wiki 검증 3종 통과.
-3. ⏳ 운영 배포 후 실제 로그에서 `[shadow-exit] 관측 on` 확인.
+3. ✅ 운영 배포 후 실제 로그에서 확인(2026-09-06 01:17 UTC):
+   `[shadow-exit] 관측 on — user 4 후보 트레일링 1.5% / arm 0.0% (매매 무영향, 기록 전용)`.
+   이후 라이브가 같은 값으로 승격되면서 관측 대상이 후보에서 **라이브 자신**으로 바뀌었다
+   ([[trailing-arm-finding-2026-09]] 승격 절) — 로그 문구는 그대로 유효하다.
 4. ✅ 라이브 매매 무영향 — 로그만 추가.
 
 # Deferred
