@@ -112,7 +112,16 @@ internal object StrategySearchGrid {
         return listOf(0.0) + ARM_CANDIDATES.filter { it > floor }
     }
 
-    /** 라이브 현행 설정 — 모든 게이트·리포트가 참조하는 대조군. */
+    /**
+     * **2026-09-06 이전** 라이브 설정 — 게이트·리포트가 참조하는 대조군.
+     *
+     * ⚠️ 라이브는 2026-09-06 에 트레일링만 **1.5% / arm 0** 으로 바뀌었다([[trailing-arm-finding-2026-09]]).
+     * 그런데도 이 값을 옮기지 않는 이유: 공표된 측정(`query/parameter-search-2026-09`·`exit-resolution-verdict-2026-09`·
+     * `trailing-arm-finding-2026-09`)이 전부 이 좌표를 기준선으로 쓴다. 여기를 바꾸면 그 수치들이 조용히
+     * 다른 대조군의 값이 되어 과거와 비교가 끊긴다(`ORIGINAL_REGIMES`·`PUBLICHED_FOUR` 와 같은 이유).
+     *
+     * **새 측정에서 "현행 라이브"와 비교하려면 [currentLivePoint] 를 쓴다.**
+     */
     fun baselinePoint() = SweepPoint(
         strategy = BASELINE_STRATEGY,
         kValue = 0.5,
@@ -123,6 +132,13 @@ internal object StrategySearchGrid {
         maxHoldDays = 1,
         marketFilterMa = 0,
     )
+
+    /**
+     * 현행 라이브 설정(2026-09-06~). [baselinePoint] 에서 트레일링 1축만 다르다 —
+     * 그 변경이 미관측 7국면 사전고정 판정을 통과해 승격됐다([[trailing-arm-finding-2026-09]]).
+     * 운영값은 `TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT` env 가 소유한다.
+     */
+    fun currentLivePoint() = baselinePoint().copy(trailingStopPct = 1.5, trailingArmPct = 0.0)
 
     const val BASELINE_STRATEGY = "combined"
 
