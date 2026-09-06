@@ -524,6 +524,17 @@ class PositionManager(
         maxHoldDays = tradingProperties.maxHoldDays,
     )
 
+    /**
+     * 이 포지션에 적용할 청산 파라미터 — **진입 시점 스냅샷**이 있으면 그것, 없으면 현재 전역값.
+     *
+     * 보유 중 전역 설정이 바뀌어도 그 포지션의 규칙은 진입 때 그대로다. 그러지 않으면 진입은 옛 규칙,
+     * 청산은 새 규칙인 거래가 생겨 **성과 귀속이 깨진다**(2026-09-06 트레일링 승격에서 실제로 발생, #177).
+     *
+     * 폴백이 전역인 이유: 이 변경 이전에 열린 포지션·복원 실패분에는 스냅샷이 없다. 그때는 기존 동작을 그대로 둔다.
+     * `chartExitEnabled` 는 스냅샷에 없다 — 임계가 아니라 모드 스위치라 전역이 소유한다.
+     */
+    private fun exitParamsOf(state: TradingState): ExitParamsSnapshot = state.exitParams ?: snapshotExitParams()
+
     private fun recordReconcileFailure(state: TradingState) {
         state.reconcileFailureCount++
         if (!state.halted && state.reconcileFailureCount >= tradingProperties.reconcileHaltThreshold) {
@@ -1017,24 +1028,25 @@ class PositionManager(
 
     fun checkTakeProfit(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
-        return state.pnlPercent(currentPrice) >= tradingProperties.takeProfitPct
+        return state.pnlPercent(currentPrice) >= exitParamsOf(state).takeProfitPct
     }
 
     fun checkStopLoss(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
-        return state.pnlPercent(currentPrice) <= -tradingProperties.maxLossPct
+        return state.pnlPercent(currentPrice) <= -exitParamsOf(state).maxLossPct
     }
 
     fun checkTrailingStop(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
         // Update peak price
         state.updatePeakPrice(currentPrice)
+        val params = exitParamsOf(state)
         return ExitGates.isTrailingStopTriggered(
             pnlPct = state.pnlPercent(currentPrice),
             peakPnlPct = state.pnlPercent(state.peakPrice),
             dropFromPeakPct = state.dropFromPeakPercent(currentPrice),
-            trailingStopPct = tradingProperties.trailingStopPct,
-            trailingArmPct = tradingProperties.trailingArmPct,
+            trailingStopPct = params.trailingStopPct,
+            trailingArmPct = params.trailingArmPct,
         )
     }
 
