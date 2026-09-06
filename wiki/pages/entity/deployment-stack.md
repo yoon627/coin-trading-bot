@@ -42,6 +42,8 @@ sources:
   compose 의 `environment:`(컨테이너에 넘길지). 2026-09-05 에 compose 만 고치고 `deploy.sh` 를 빠뜨려 **세 번째** 같은 실패가 났다.
   이제 `TradingEnvPassthroughTest` 가 `trading.*` `@ConfigurationProperties` 생성자 파라미터를 전부 열거해
   **두 목록 모두와** 대조하므로, 새 설정을 추가하면 그 테스트가 먼저 깨진다(변이 검사로 두 축 다 CAUGHT 확인).
+  테스트는 목록 누락만 잡는다 — **실제로 켜졌는지는 기동 로그로 확인한다**(예: `[shadow-exit] 관측 on/off`).
+  전달 계층이 넷(앱 기본값 → 시크릿 → 서버 `.env` → compose → 컨테이너)이라, 한 곳만 봐서는 알 수 없다.
 - **앱 코드 변경은 이미지 재빌드가 있어야 반영된다.** `deploy.sh deploy`(pull)만으로는 안 바뀐다([[lesson-cors-origin-rebuild]]).
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.

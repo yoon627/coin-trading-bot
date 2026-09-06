@@ -408,11 +408,22 @@ class UserTradingManager(
      * 저장할 곳 없이 켜면 매 tick 계산만 하고 결과가 사라져 "돌고 있다"는 착각만 남는다.
      */
     private fun shadowExitObserver(userId: Long): ShadowExitObserver? {
-        if (!shadowExitProperties.enabled) return null
+        // 켜짐/꺼짐을 **둘 다** 로그로 남긴다. 이 값은 앱 기본값 → GitHub 시크릿 → 서버 .env → compose 전달목록
+        // → 컨테이너 순으로 네 계층을 지나며, 어느 한 곳에서 빠지면 조용히 기본값으로 돈다(이 repo 에서 세 번 났다).
+        // 그때 "켰다고 믿는데 안 켜진" 상태를 로그만으로 구분할 수 있어야 한다 — 첫 관측이 몇 주 뒤일 수 있어
+        // `[shadow-exit]` 발동 로그를 기다리는 것으로는 늦다.
+        if (!shadowExitProperties.enabled) {
+            log.info("[shadow-exit] 관측 off (trading.shadow-exit.enabled=false) — user {}", userId)
+            return null
+        }
         val repository = shadowExitObservationRepository ?: run {
             log.warn("trading.shadow-exit.enabled=true 인데 저장소가 없어 관측을 켜지 않는다")
             return null
         }
+        log.info(
+            "[shadow-exit] 관측 on — user {} 후보 트레일링 {}% / arm {}% (매매 무영향, 기록 전용)",
+            userId, shadowExitProperties.trailingStopPct, shadowExitProperties.trailingArmPct,
+        )
         return ShadowExitObserver(
             repository = repository,
             userId = userId,
