@@ -53,7 +53,8 @@ class ExitResolutionLadderTest {
             val bh = LinkedHashMap<String, Double>()
             for ((market, newestFirst) in daily) {
                 val ch = newestFirst.reversed()
-                val byDay = intraday.getValue(market).groupBy { it.candleDateTimeUtc.substring(0, 10) }
+                // fixture 는 최신순 — 시간순으로 정렬해야 `first()` 가 그날 첫 봉이다.
+                val byDay = intraday.getValue(market).sortedBy { it.candleDateTimeUtc }.groupBy { it.candleDateTimeUtc.substring(0, 10) }
                 for (i in BacktestEngine.MIN_CANDLES until ch.size) {
                     val d = ch[i].candleDateTimeKst.substring(0, 10)
                     days += d
