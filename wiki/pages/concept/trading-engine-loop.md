@@ -2,10 +2,12 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-09-02
+updated: 2026-09-08
 claim_state: current
-verified: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
+verified: 2026-09-08 — 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
+  - bot/src/main/kotlin/com/trading/bot/config/ExitParamsDeclarationCheck.kt
+  - deploy/vultr/deploy.sh
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
@@ -59,6 +61,13 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 | `intervalSeconds` | 10 |
 | `investRatio` / `maxInvestAmount` | 0.1 / 100,000 KRW |
 | `reconcileHaltThreshold` | 20 |
+
+> **이 차이가 조용히 사라지지 않게 하는 장치** (#179): 배포는 `deploy/vultr/deploy.sh` 의
+> `preflight_exit_params` 가 막는다 — `TRADING_AUTO_START=true` 인데 청산 6개 키가 렌더된 `.env` 에
+> 없으면 **업로드 전에** 배포를 중단한다. 앱은 `ExitParamsDeclarationCheck` 가 기동·수동 기동 시
+> 실효값을 로그하고 미선언이면 ERROR(→ Discord)를 낸다. **기동이나 거래를 막지는 않는다** —
+> 막으면 보유 포지션의 손절·트레일링이 아예 평가되지 않는 공백이 생기고, 그 손해가 파라미터 차이보다 크다.
+> 둘 다 값이 아니라 *선언 여부*만 본다.
 
 > [!conflict] 이 표는 두 번 어긋난 적이 있다 — 과거 `PROJECT_ANALYSIS.md` 가 정반대로(손절 −3%/익절 +5%) 적었고, #75(리스크 기본값 단일화) 이후에는 이 페이지가 `takeProfitPct` 2.0 · `trailingArmPct` 0.0 인 옛 값을 들고 있었다(2026-08-23 교정).
 > **문서가 아니라 `TradingProperties.kt` 가 근거다.** 기본값이 바뀌면 이 표를 같은 커밋에서 고친다.
