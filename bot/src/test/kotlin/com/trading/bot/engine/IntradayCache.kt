@@ -10,6 +10,7 @@ import java.util.zip.GZIPInputStream
 /**
  * 240분보다 짧은 분봉 fixture — `scripts/collect_intraday_fixtures.py --unit 15|5 --write` 가
  * `<repo>/backtest-cache/intraday{unit}/<regime>/<market>.json.gz` 에 둔다. 수백 MB 라 저장소에 넣지 않는다.
+ * 환경변수 `BACKTEST_CACHE_DIR` 가 있으면 그 디렉토리를 캐시 루트로 쓴다 — 작업 사본을 지워도 캐시가 남게 저장소 밖에 둘 수 있다.
  *
  * 없으면 **실패**한다(skip 아님 — 건너뛴 판정이 초록불로 위장하는 것을 막는다, `lesson-skip-is-not-pass`).
  * [IntradayFixtures] 와 같은 최신순 규약.
@@ -25,8 +26,10 @@ internal object IntradayCache {
         return requireNotNull(p) { "settings.gradle.kts 를 가진 저장소 루트를 찾지 못했다" }
     }
 
+    fun cacheRoot(): Path = System.getenv("BACKTEST_CACHE_DIR")?.takeIf { it.isNotBlank() }?.let { Path.of(it) } ?: repoRoot().resolve("backtest-cache")
+
     fun path(unit: Int, dir: String, market: String): Path =
-        repoRoot().resolve("backtest-cache").resolve("intraday$unit").resolve(dir).resolve("$market.json.gz")
+        cacheRoot().resolve("intraday$unit").resolve(dir).resolve("$market.json.gz")
 
     fun available(unit: Int, dir: String, markets: Collection<String>): Boolean =
         markets.all { Files.exists(path(unit, dir, it)) }

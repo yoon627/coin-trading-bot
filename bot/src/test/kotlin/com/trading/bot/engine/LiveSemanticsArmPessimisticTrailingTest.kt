@@ -66,6 +66,21 @@ class LiveSemanticsArmPessimisticTrailingTest {
     }
 
     @Test
+    fun `a bar that crosses the take-profit line is a take-profit even when its pullback would trail from its own high`() {
+        // 진입 봉(고가 106 > 돌파선 105, 체결 105) 뒤 두 번째 봉: 고가 112 ≥ 익절선 110.25 이고 저가 109 ≤ 112×0.985 = 110.32.
+        // 비관 가정(이 봉 고가가 저가보다 먼저)은 가격이 고가로 가는 길에 익절선을 먼저 지난다는 뜻이라 익절이지, 그 고가에서 파생한 트레일링선이 아니다.
+        val bars = listOf(
+            bar(day(0), 0, 100.0, 106.0, 100.0, 106.0),
+            bar(day(0), 4, 106.0, 112.0, 109.0, 110.0),
+        ) + listOf(8, 12, 16, 20).map { bar(day(0), it, 110.0, 110.0, 110.0, 110.0) } + listOf(bar(day(1), 0, 110.0, 110.0, 110.0, 110.0))
+        val optimistic = run(bars, pessimistic = false)
+        assertEquals("TAKE_PROFIT", optimistic.reason, "직전 고점 106 의 트레일링선 104.41 은 진입가 아래라 걸리지 않고 익절")
+        val pessimistic = run(bars, pessimistic = true)
+        assertEquals("TAKE_PROFIT", pessimistic.reason, "익절선을 지난 봉에서 이 봉 고가 기준 트레일링(110.32)을 먼저 걸면 불가능한 경로다")
+        assertEquals(105.0 * 1.05, pessimistic.exitPrice, 1e-9)
+    }
+
+    @Test
     fun `the pessimistic bracket does not touch the entry bar`() {
         // 진입 봉 고가 112·저가 104·종가 108: 비관을 진입 봉에 적용하면 112×0.985=110.32 에 유령 트레일링이 났을 것이다. 적용하지 않으므로 두 처리가 같다.
         val bars = listOf(bar(day(0), 0, 100.0, 112.0, 104.0, 108.0)) +

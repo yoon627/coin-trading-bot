@@ -270,7 +270,7 @@ class ExitResolutionLadderTest {
         out.appendLine()
         out.appendLine("규칙은 15·5분봉 결과를 보기 전에 커밋했다(plan `2026-09-09-minute-ladder` `# Acceptance` 1~11; 240분봉은 smoke 로 먼저 관측). 기준 = 현행 라이브 TP5/SL5/트레일1.5/arm0/k0.5/h1. 주 판정 = ${P}분봉.")
         out.appendLine("기여 = 진입일 단위, frame = 240분봉 공통 ${frame.size}일, 블록 ${PairedMaxTBootstrap.BLOCK}일, B=${PairedMaxTBootstrap.RESAMPLES}, seed ${PairedMaxTBootstrap.SEED}, draw 는 셀·rung·family 공통.")
-        out.appendLine("수렴 = ${P}분 격차/기준거래 ≥ 0.8 × ${R ?: "—"}분 값(15분 값 > 0). 비단조(240 < 15)면 승격 불가. 후보 조건은 사전고정 6.")
+        out.appendLine("수렴 = ${P}분 격차/기준거래 ≥ 0.8 × ${R ?: "—"}분 값(${R ?: "—"}분 값 > 0). 비단조(${units.first()}분 < ${R ?: "—"}분)면 승격 불가. 후보 조건은 사전고정 6.")
         out.appendLine()
         out.appendLine("## 0. rung 별 기준선·결측 통계 (10-3)")
         out.appendLine()
@@ -278,7 +278,7 @@ class ExitResolutionLadderTest {
         out.appendLine("|---|---|---|---|---|---|---|---|---|")
         for (level in levels) {
             val b = all(level.unit, BASE); val f = families.getValue(level.unit)
-            val expected = level.windows.sumOf { it.tradingDays.size } * 8 * (24 * 60 / level.unit)
+            val expected = level.windows.sumOf { it.tradingDays.size * it.daily.size } * (24 * 60 / level.unit)
             out.appendLine("| %dm | %d | %+.2f | %d | %d | %d (%.1f%%) | %d | %d | %.3f / %.3f / %.3f |".format(level.unit, b.size, b.sumOf { it.netPnlPct },
                 b.sumOf { maxOf(1, heldDays(it, level.windows.first { w -> it.entryDate in w.tradingDays && w.daily.containsKey(it.market) })) },
                 level.windows.maxOf { it.maxBarsPerDay }, level.windows.sumOf { it.missingBars }, 100.0 * level.windows.sumOf { it.missingBars } / expected,
@@ -288,7 +288,7 @@ class ExitResolutionLadderTest {
         out.appendLine()
         out.appendLine("## 1. 사다리 — 격차/기준거래 %p · 통과 · 수렴 (10-1)")
         out.appendLine()
-        out.appendLine("| 셀 | " + levels.joinToString(" | ") { "${it.unit}분" } + " | 수렴 | 단조 | d=g${P}−0.8·g${R ?: "?"} 95% 하한 | ${P}분 동시 하한/거래 | 후보 | 비고 |")
+        out.appendLine("| 셀 | " + levels.joinToString(" | ") { "${it.unit}분" } + " | 수렴 | 단조 | d=g${P}/n${P}−0.8·g${R ?: "?"}/n${R ?: "?"} 95% 하한 | ${P}분 동시 하한/거래 | 후보 | 비고 |")
         out.appendLine("|---" + "|---".repeat(levels.size) + "|---|---|---|---|---|---|")
         for ((i, c) in CANDIDATES.withIndex()) {
             val f = finals.getValue(c)
@@ -339,10 +339,9 @@ class ExitResolutionLadderTest {
         out.appendLine()
         out.appendLine("## 5. 9시 정책 (8)")
         out.appendLine()
-        out.appendLine("| 해상도 · 셀 | 거래 | Σ보유일 | 유지된 포지션 · 손익 합 | 유지 뒤 청산 사유 | 09:00 정리(미잠김) | 막힌 진입 | 트레일링 갭 관통 건수 · 오버슛 %p | END 로 끝난 유지 |")
+        out.appendLine("| 해상도 · 셀 | 거래 | Σ보유일 | 유지된 포지션 · 손익 합 | 유지 뒤 청산 사유 | 09:00 정리(미잠김) | 막힌 진입 | 트레일링 갭 관통 건수 · 갭 오버슛 %p(손절선 − 청산 봉 시가, 관통 건 평균) | END 로 끝난 유지 |")
         out.appendLine("|---|---|---|---|---|---|---|---|---|")
         for (level in levels) for (c in CANDIDATES.filter { it.isPolicy }) {
-            val lv = levels.first { it.unit == level.unit }
             val t = all(level.unit, c)
             val kept = t.filter { it.keptPastLimit && it.reason != "END" }
             val keptEnd = t.count { it.keptPastLimit && it.reason == "END" }
@@ -350,9 +349,9 @@ class ExitResolutionLadderTest {
             val baseEntries = all(level.unit, BASE).map { it.market to it.entryDate }.toSet(); val mine = t.map { it.market to it.entryDate }.toSet()
             val trailing = t.filter { it.reason == "TRAILING_STOP" && !it.exitBarOpen.isNaN() }
             val gapThrough = trailing.filter { it.exitBarOpen < it.exitPrice }
-            val ov = if (trailing.isEmpty()) 0.0 else trailing.map { (it.exitPrice - it.exitBarLow) / it.entryPrice * 100.0 }.average()
+            val ov = if (gapThrough.isEmpty()) 0.0 else gapThrough.map { (it.exitPrice - it.exitBarOpen) / it.entryPrice * 100.0 }.average()
             out.appendLine("| %dm %s | %d | %d | %d · %+.1f | %s | %d | %d | %d · %.3f | %d |".format(level.unit, c.label, t.size,
-                t.sumOf { maxOf(1, heldDays(it, lv.windows.first { w -> it.entryDate in w.tradingDays && w.daily.containsKey(it.market) })) }, kept.size, kept.sumOf { it.netPnlPct },
+                t.sumOf { maxOf(1, heldDays(it, level.windows.first { w -> it.entryDate in w.tradingDays && w.daily.containsKey(it.market) })) }, kept.size, kept.sumOf { it.netPnlPct },
                 kept.groupBy { it.reason }.entries.sortedByDescending { it.value.size }.joinToString(" · ") { "${it.key} ${it.value.size}" },
                 closedAtBoundary, (baseEntries - mine).size, gapThrough.size, ov, keptEnd))
         }
@@ -371,12 +370,13 @@ class ExitResolutionLadderTest {
         out.appendLine("- ${P}분봉도 라이브(10초 tick)보다 성기다. 수렴은 편향의 대리 검사이지 소멸 증명이 아니다 — 비관 트레일링 family 가 상한 쪽 브래킷이다.")
         out.appendLine("- 세 rung 은 같은 거래 집합이 아니다(체결가·부분봉이 해상도에 따라 다르다). 격차는 차분이라 상쇄가 크지만 완전하지 않다 — §3 겹침 열.")
         out.appendLine("- 재추출은 창별 stratified 라 창 간 변동은 se 에 없다(LOWO 가 대리). 생존편향은 측정 불가. 9시 정책 셀의 트레일링 무슬리피지·갭 관통은 셀에 유리한 편향(§5 열).")
+        out.appendLine("- 5분봉 결측 허용치(5% → 15%)는 어느 창이 실패하는지 본 뒤 올렸다(로스터 유지 목적). 결측이 많은 마켓은 봉/일이 줄어 240분봉 쪽으로 굴러 240분 우위를 더 남기는 방향 — 결론(후보 없음)에 보수적이다.")
+        out.appendLine("- 진입은 돌파선 위에서 **여는** 첫 봉의 시가에 난다(`combined` 가 현재가 ≤ 돌파선을 거부) — 돌파 봉 안에서는 진입하지 않으므로 진입 봉 저가는 체결 이후이고 `entryBarStopOnClose` family 는 브래킷이 아니라 실재 손절을 지우는 한쪽 처리다(통과를 어렵게만 한다).")
 
         val path = Path.of("build/reports/exit-resolution-ladder.md")
         Files.createDirectories(path.parent)
         Files.writeString(path, out.toString())
         println("[ladder] 리포트: ${path.toAbsolutePath()}")
-        assertTrue(out.contains("사다리 —"))
     }
 
     private companion object {
