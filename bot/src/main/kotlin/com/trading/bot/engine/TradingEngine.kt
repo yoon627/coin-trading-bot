@@ -16,6 +16,9 @@ import com.trading.common.strategy.AccumulateLadder
 import com.trading.common.strategy.LadderAction
 import com.trading.common.strategy.TradingStrategy
 import java.time.Clock
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -92,6 +95,8 @@ class TradingEngine(
         // lookback 은 distinct 방어 여유분 포함(store openTime upsert 후엔 중복 없으나 안전망).
         private const val MIN_DAILY_CANDLES = 21
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
+        // 경계 뒤 이 시간 안에 오늘 D1 이 없는 것은 정상(1분봉 폴링 주기 60s + 마켓 간 간격, 캐시 TTL 60s)이고, 넘기면 수집 정지로 본다.
+        private const val STALE_DAILY_CANDLE_WARN_MS = 5 * 60_000L
         // 자동 선정 알트가 채울 수 있는 활성 티커 수의 목표치(API 입력 상한 20 과 동일). 적립·보유·pending 티커는
         // 자르지 않으므로 실제 활성 총수는 이를 넘을 수 있다 — 하드 상한이 아니라 알트 몫의 cap 이다.
         internal const val SWING_UNIVERSE_CAP = 20
@@ -104,8 +109,8 @@ class TradingEngine(
     private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
-    // 캔들 부족 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 키에 전략·경로를 넣는 이유:
-    // 런타임 setStrategy 로 전략이 바뀌면 새로 알려야 하고, 매수/청산이 중복 발화하면 안 된다.
+    // 캔들 부족·낡은 D1 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 키에 전략·경로(또는 소스)를 넣는 이유:
+    // 런타임 setStrategy 로 전략이 바뀌면 새로 알려야 하고, 매수/청산·store/REST 가 서로의 경고를 삼키면 안 된다.
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
     // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
     @Volatile
@@ -473,14 +478,31 @@ class TradingEngine(
         // 전략을 죽였다(MeanReversion 등 size<21 false) → loadStoreDailyCandles 게이트로 매수/청산 통일.
         val minCandles = effectiveMinCandles(strategy)
         val storeCandles = loadStoreDailyCandles(ticker, minCandles)
-        val shouldBuy = if (storeCandles != null) {
-            strategy.shouldBuyNormalized(storeCandles, currentPrice, tradingProperties)
+        // 09:00 경계 직후 store 의 최신 D1 은 새 날 첫 1분봉이 폴링되기까지(약 60~120초) 어제 봉이다. 그 window 로 판정하면
+        // "당일시가" 가 어제 시가라 어제 매수를 만든 신호가 그대로 참이고, 방금 보유상한으로 판 포지션을 같은 가격에
+        // 되산다(#128 의 0.0h 재매수). 그래서 오늘 봉이 있는 소스로만 판정한다.
+        val dayOpen = currentTradingDayOpen()
+        val currentStoreCandles = storeCandles?.takeIf { isCurrentDay(it.first().openTime, dayOpen) }
+        val shouldBuy = if (currentStoreCandles != null) {
+            strategy.shouldBuyNormalized(currentStoreCandles, currentPrice, tradingProperties)
         } else {
+            if (storeCandles != null) {
+                // 경계 직후 잠깐은 다음 1분봉이 채우므로 REST 를 치지 않고 건너뛴다. 그 이상 지속되면 캔들 수집이 멈춘 것이라
+                // (캔들 폴링 코루틴은 워치독 밖이다) 경고하고 REST 로 간다 — 거기엔 오늘 봉이 있고 DailyCandleCache 가 60초로 묶는다.
+                if (!pastBoundaryGrace(dayOpen)) return
+                warnStaleDailyCandle("store", ticker, dayOpen, storeCandles.first().openTime, "falling back to REST")
+            }
             val candles = fetchDailyCandles(ticker)
             // 부족해도 막지 않는다 — 전략이 자기 가드로 false 를 내므로 결과는 같고, 여기서 끊으면
             // volatility_breakout(진입 2봉)처럼 짧은 이력으로도 매매하던 전략의 계약이 바뀐다.
             // 목적은 차단이 아니라 "왜 신호가 없는지"를 드러내는 것이다.
             if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, "buy", candles.size, blocked = false)
+            // Upbit 일봉도 그날 첫 체결 전엔 어제 봉이 [0] 이고 캐시 TTL 이 60초라 store 와 같은 경계 문제가 있다.
+            val newestOpen = candles.firstOrNull()?.openTimeUtcOrNull()
+            if (candles.isNotEmpty() && !isCurrentDay(newestOpen, dayOpen)) {
+                if (pastBoundaryGrace(dayOpen)) warnStaleDailyCandle("rest", ticker, dayOpen, newestOpen, "buy evaluation skipped")
+                return
+            }
             strategy.shouldBuy(candles, currentPrice, tradingProperties)
         }
         if (shouldBuy) {
@@ -638,6 +660,37 @@ class TradingEngine(
             if (blocked) "신호 평가를 건너뛴다" else "신호 평가는 계속하나 대부분 false 다",
         )
     }
+
+    /** 현재 거래일 D1 의 openTime — UTC 자정(= KST 09:00). [CandleAggregator] 의 D1 정렬·Upbit `candle_date_time_utc` 와 같은 기준이다. */
+    private fun currentTradingDayOpen(): Instant =
+        dailyResetManager.getTradingDate().atStartOfDay(ZoneOffset.UTC).toInstant()
+
+    /**
+     * 최신 D1 이 현재 거래일(이후)의 봉인가. `>=` 인 이유: 시계가 경계에서 조금 뒤처져 봉이 먼저 넘어가도 오늘 봉이지
+     * 낡은 봉이 아니다. [newestOpen] 이 null(파싱 불가)이면 오늘 봉으로 보지 않는다.
+     */
+    private fun isCurrentDay(newestOpen: Instant?, dayOpen: Instant): Boolean =
+        newestOpen != null && !newestOpen.isBefore(dayOpen)
+
+    /** 경계 뒤 [STALE_DAILY_CANDLE_WARN_MS] 가 지났는가 — 그 안쪽은 정상 지연, 바깥은 수집 이상. */
+    private fun pastBoundaryGrace(dayOpen: Instant): Boolean =
+        clock.millis() - dayOpen.toEpochMilli() > STALE_DAILY_CANDLE_WARN_MS
+
+    // 조용히 매수만 막지 않도록 알린다. tick 마다 반복되지 않게 소스·ticker 당 1분 1회.
+    private fun warnStaleDailyCandle(source: String, ticker: String, dayOpen: Instant, newestOpen: Instant?, action: String) {
+        val now = System.currentTimeMillis()
+        val key = "$ticker:$source:stale-d1"
+        if (now - (candleWarnAtMs[key] ?: 0L) < STALE_WARN_INTERVAL_MS) return
+        candleWarnAtMs[key] = now
+        log.warn(
+            "{} D1 for {} (user {}) has no candle for trading-day open {} (newest {}) — {}s past the boundary; {}",
+            source, ticker, userId, dayOpen, newestOpen, (clock.millis() - dayOpen.toEpochMilli()) / 1000, action,
+        )
+    }
+
+    /** REST 일봉의 `candle_date_time_utc`("yyyy-MM-ddTHH:mm:ss") → openTime. [UpbitMarketFeed] 가 store 에 넣을 때와 같은 변환이다. */
+    private fun Candle.openTimeUtcOrNull(): Instant? =
+        runCatching { LocalDateTime.parse(candleDateTimeUtc).toInstant(ZoneOffset.UTC) }.getOrNull()
 
     /**
      * 매수·청산 공통 D1 캔들 로딩. store 에 충분한(>=MIN_DAILY_CANDLES) D1 이 있으면 반환, 없으면 null(호출측 REST 폴백).

@@ -5,7 +5,12 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.domain.*
+import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.Ticker
+import com.trading.bot.domain.TradeRecord
+import com.trading.bot.domain.TradeSide
+import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
@@ -18,7 +23,10 @@ import com.trading.common.strategy.GoldenCross
 import com.trading.common.strategy.MacdCross
 import com.trading.common.strategy.VolatilityBreakout
 import io.mockk.*
+import java.time.Clock
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -60,6 +68,7 @@ class TradingEngineTest {
     private fun createEngine(
         strategies: List<TradingStrategy> = listOf(strategy),
         props: TradingProperties = tradingProperties,
+        clock: Clock = Clock.systemUTC(),
     ): TradingEngine {
         return TradingEngine(
             upbitClient = upbitClient,
@@ -71,6 +80,7 @@ class TradingEngineTest {
             username = "testuser",
             discordWebhookUrl = null,
             marketDataStore = marketDataStore,
+            clock = clock,
         )
     }
 
@@ -554,6 +564,102 @@ class TradingEngineTest {
             listOf(strategy), tradingProperties,
         )
         assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+    }
+
+    // --- 09:00 경계 stale window: store 최신 D1 이 오늘 거래일 봉일 때만 매수 판정 ---
+
+    // 오늘 봉이 [0], 하루씩 과거로 21개. openTime 은 CandleAggregator 의 D1 정렬(UTC 자정 = KST 09:00)과 같다.
+    private fun dailyNormalized(newest: LocalDate): List<NormalizedCandle> =
+        (0 until 21).map { idx ->
+            NormalizedCandle(
+                Exchange.UPBIT, "KRW-BTC", 100.0, 100.0, 100.0, 100.0, 1.0,
+                openTime = newest.minusDays(idx.toLong()).atStartOfDay(ZoneOffset.UTC).toInstant(),
+            )
+        }
+
+    private val today: LocalDate = LocalDate.of(2026, 9, 8)
+
+    // 거래일 경계(KST 09:00 = UTC 자정)에서 [secondsAfter] 지난 고정 시계.
+    private fun clockAfterBoundary(secondsAfter: Long): Clock =
+        Clock.fixed(today.atStartOfDay(ZoneOffset.UTC).toInstant().plusSeconds(secondsAfter), ZoneOffset.UTC)
+
+    @Test
+    fun `runSwing skips buy evaluation while store newest D1 is still yesterday's`() = runTest {
+        // 09:00 직후 새 날 첫 1분봉이 오기 전 — store window 는 어제 봉으로 끝나고, 그 신호는 어제 매수를 만든 신호 그대로다.
+        val engine = createEngine(clock = clockAfterBoundary(30))
+        every { dailyResetManager.getTradingDate() } returns today
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns dailyNormalized(today.minusDays(1))
+        coEvery { strategy.shouldBuyNormalized(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+
+        coVerify(exactly = 0) { strategy.shouldBuyNormalized(any(), any(), any()) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { upbitClient.getDayCandles(any(), any()) } // 경계 직후엔 REST 를 치지 않는다 — 다음 1분봉이 채운다
+    }
+
+    @Test
+    fun `runSwing falls back to REST when store stays stale past the boundary grace`() = runTest {
+        // 캔들 수집이 멈춘 티커: store 는 개수가 충분해 계속 반환되지만 어제 봉이다. 하루 종일 매수가 막히면 안 된다.
+        val engine = createEngine(clock = clockAfterBoundary(10 * 60))
+        every { dailyResetManager.getTradingDate() } returns today
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns dailyNormalized(today.minusDays(1))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns dailyLegacy(today)
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+
+        coVerify(exactly = 0) { strategy.shouldBuyNormalized(any(), any(), any()) }
+        coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
+    }
+
+    @Test
+    fun `runSwing evaluates buy on store window once today's D1 exists`() = runTest {
+        val engine = createEngine(clock = clockAfterBoundary(30))
+        every { dailyResetManager.getTradingDate() } returns today
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns dailyNormalized(today)
+        coEvery { strategy.shouldBuyNormalized(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+
+        coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
+    }
+
+    // REST 일봉은 Upbit 형식 그대로 — candle_date_time_utc 가 UTC 자정.
+    private fun dailyLegacy(newest: LocalDate): List<Candle> =
+        (0 until 21).map { idx -> Candle(candleDateTimeUtc = "${newest.minusDays(idx.toLong())}T00:00:00", tradePrice = 100.0) }
+
+    @Test
+    fun `runSwing REST fallback also skips buy while newest daily candle is yesterday's`() = runTest {
+        // store 부족(워밍업·watchlist 밖 티커) → REST. 그날 첫 체결 전 Upbit 일봉도 어제 봉이 [0] 이다.
+        val engine = createEngine(clock = clockAfterBoundary(30))
+        every { dailyResetManager.getTradingDate() } returns today
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns emptyList()
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns dailyLegacy(today.minusDays(1))
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+
+        coVerify(exactly = 0) { strategy.shouldBuy(any(), any(), any()) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `runSwing REST fallback evaluates buy once today's daily candle exists`() = runTest {
+        val engine = createEngine(clock = clockAfterBoundary(30))
+        every { dailyResetManager.getTradingDate() } returns today
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns emptyList()
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns dailyLegacy(today)
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+
+        coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
 
     // --- resolveExitStrategy: 청산을 진입 전략으로 (entryStrategy 복원 + 폴백) ---
