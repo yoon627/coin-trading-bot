@@ -7,16 +7,22 @@
 
 **왜 240분인가**: 청산 시각 H 의 체결가는 그 시각 봉의 `open` 이고, 이 값은 240분봉이든 1분봉이든
 동일하다. granularity 가 바꾸는 것은 후보 시각의 개수(240m → KST 01/05/09/13/17/21 6개)와
-경계 **사이** 가격게이트 판정 횟수뿐이다. 1분봉은 8마켓 1년에 2.5GB·67,104요청이면서 시각 축에
-추가 정보를 주지 않는다.
+경계 **사이** 가격게이트 판정 횟수뿐이다. 그래서 **청산 시각** 질문에는 240분봉이면 충분하다(1분봉은 8마켓 1년에
+2.5GB·67,104요청). 경계 사이 판정 횟수가 결과를 바꾸는 경로 의존 게이트는 아래 단위 사다리가 다룬다.
 
 마켓·구간은 기존 fixture 를 그대로 따른다(`BacktestFixtures.MARKETS_BY_REGIME` · `YearlyFixtures.MARKETS`) —
 일봉과 다른 유니버스를 쓰면 일중 결과를 일봉 측정과 나란히 놓을 수 없다.
 
 사용: python3 scripts/collect_intraday_fixtures.py            # 미리보기
       python3 scripts/collect_intraday_fixtures.py --write    # 기록
+      python3 scripts/collect_intraday_fixtures.py --unit 5 --write   # 5분봉 → backtest-cache/intraday5/ (저장소 밖, gzip)
+
+**단위 사다리(2026-09)**: 240분봉은 트레일링·진입 봉 손절 같은 경로 의존 게이트에 편향이 남는다(`query/take-profit-stop-loss-2026-09`).
+15분·5분봉으로 같은 창을 다시 재면 해상도가 오를수록 우위가 얼마나 줄어드는지가 보인다. 초봉은 최근 3개월만 제공돼 쓸 수 없다.
 """
 import argparse
+import gzip
+import os
 import json
 import pathlib
 import sys
@@ -27,13 +33,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from collect_backtest_fixtures import THROTTLE_SEC, _get  # noqa: E402
 from collect_yearly_fixtures import MARKETS as YEARLY_MARKETS  # noqa: E402
 
-UNIT = 240  # 분. KST 격자 = 09/13/17/21/01/05
 PAGE = 200
-BARS_PER_DAY = 24 * 60 // UNIT
 # 거래소 측 공백은 실재한다 — 2023-12-04 01:00 KST 봉은 8마켓 전부에 없다(bull 구간, 실측).
 # 결측을 실패로 두면 fixture 를 아예 못 만들고, 무시하면 청산 경계가 조용히 다음 봉으로 밀린다.
 # 그래서 **허용하되 목록으로 남기고**, 소비자가 그 시각을 경계로 쓰는 거래를 제외하게 한다.
-MAX_MISSING_RATIO = 0.005
+# 봉이 짧을수록 체결 없는 구간(봉 자체가 생성되지 않음)이 흔하므로 허용 비율은 단위별이다.
+# 5분: 저유동 마켓(2020 TRX·ETC, 2023 POLYX·ARB, 2025 CTC)이 6~11% 결측 — 실측(2026-09-09) 위에 여유를 둔 15%.
+# 5분 15% 는 10창 실측(저유동 마켓 6~11%)에서 정했다. 1분 25% 는 실측 없는 외삽이다.
+# TODO: 1분봉 허용치를 첫 `--unit 1` 수집의 실측으로 확정 (1분봉을 실제로 쓰는 작업이 생길 때)
+MAX_MISSING_RATIO = {240: 0.005, 15: 0.02, 5: 0.15, 1: 0.25}
 
 # 일봉 fixture 와 같은 구간·같은 로스터. 값은 `BacktestFixtures.MARKETS_BY_REGIME` 과 `README.md` 의 산출물이다.
 WINDOWS: dict[str, tuple[date, date, list[str]]] = {
@@ -54,8 +62,15 @@ WINDOWS: dict[str, tuple[date, date, list[str]]] = {
     "p2022h2": (date(2022, 10, 19), date(2023, 5, 6), None),
     "p2023h1": (date(2023, 5, 7), date(2023, 11, 22), None),
 }
-OUT_ROOT = pathlib.Path(__file__).resolve().parent.parent / "bot/src/test/resources/backtest/intraday240"
-FIXTURE_ROOT = OUT_ROOT.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+FIXTURE_ROOT = REPO_ROOT / "bot/src/test/resources/backtest"
+# 240분봉은 추적 fixture(27MB). 그보다 짧은 단위는 수백 MB 라 저장소 밖 캐시에 gzip 으로 둔다(`.gitignore` 의 `backtest-cache/`).
+# `BACKTEST_CACHE_DIR` 로 저장소 밖에 둘 수 있다(worktree 삭제에 딸려 지워지지 않게). 로더 `IntradayCache.cacheRoot()` 와 같은 규약.
+CACHE_ROOT = pathlib.Path(os.environ.get("BACKTEST_CACHE_DIR") or (REPO_ROOT / "backtest-cache"))
+
+
+def out_root(unit: int) -> pathlib.Path:
+    return FIXTURE_ROOT / "intraday240" if unit == 240 else CACHE_ROOT / f"intraday{unit}"
 
 
 def rosters_from_daily(regime: str) -> list[str]:
@@ -81,17 +96,17 @@ def normalize(c: dict) -> dict:
     }
 
 
-def fetch_window(market: str, start: date, end: date) -> tuple[list[dict] | None, str, list[str]]:
-    """[start 09:00 KST, end+1 09:00 KST) 의 240분봉을 최신순으로. 중복은 실패, 결측은 목록으로 돌려준다."""
+def fetch_window(market: str, start: date, end: date, unit: int) -> tuple[list[dict] | None, str, list[str]]:
+    """[start 09:00 KST, end+1 09:00 KST) 의 `unit` 분봉을 최신순으로. 중복은 실패, 결측은 목록으로 돌려준다."""
     # 구간 끝 다음날 00:00 UTC = 09:00 KST — 그 시각 **이전** 봉을 받으면 end 일의 마지막 봉까지다.
     to_utc = datetime(end.year, end.month, end.day, tzinfo=timezone.utc) + timedelta(days=1)
     begin_utc = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
-    expected = int((to_utc - begin_utc).total_seconds() // 60 // UNIT)
+    expected = int((to_utc - begin_utc).total_seconds() // 60 // unit)
 
     out: list[dict] = []
     cursor = to_utc
     while len(out) < expected:
-        page, status = _get(f"candles/minutes/{UNIT}", market=market, count=PAGE,
+        page, status = _get(f"candles/minutes/{unit}", market=market, count=PAGE,
                             to=cursor.strftime("%Y-%m-%dT%H:%M:%SZ"))
         time.sleep(THROTTLE_SEC)
         if not page:
@@ -116,10 +131,11 @@ def fetch_window(market: str, start: date, end: date) -> tuple[list[dict] | None
     t = begin_utc
     while t < to_utc:
         grid.append(t.strftime("%Y-%m-%dT%H:%M:%S"))
-        t += timedelta(minutes=UNIT)
-    missing = [g for g in grid if g not in set(stamps)]
-    if len(missing) > expected * MAX_MISSING_RATIO:
-        return None, f"결측 {len(missing)}봉 / {expected} (허용 {MAX_MISSING_RATIO:.1%} 초과)", missing
+        t += timedelta(minutes=unit)
+    stamp_set = set(stamps)
+    missing = [g for g in grid if g not in stamp_set]
+    if len(missing) > expected * MAX_MISSING_RATIO[unit]:
+        return None, f"결측 {len(missing)}봉 / {expected} (허용 {MAX_MISSING_RATIO[unit]:.1%} 초과)", missing
     return [normalize(c) for c in kept], "", missing
 
 
@@ -127,7 +143,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="fixture 파일까지 기록")
     parser.add_argument("--only", help="이 구간만 (쉼표 구분). 신규 구간 추가 시 지정해 기존 fixture 재수집을 피한다")
+    parser.add_argument("--unit", type=int, default=240, choices=sorted(MAX_MISSING_RATIO),
+                        help="봉 단위(분). 240 은 추적 fixture, 그 외는 backtest-cache/ 에 gzip 으로 기록")
     args = parser.parse_args()
+    unit = args.unit
+    bars_per_day = 24 * 60 // unit
+    root = out_root(unit)
 
     now = datetime.now(timezone.utc)
     prepared: dict[str, dict[str, list[dict]]] = {}
@@ -140,16 +161,16 @@ def main() -> None:
         if now < boundary:
             raise SystemExit(f"{regime}: 마지막 봉은 {boundary.isoformat()} 이후에야 완결된다")
         roster = markets or rosters_from_daily(regime)
-        print(f"[{regime}] {start} ~ {end}, 마켓 {len(roster)}, 기대 {(boundary - datetime(start.year, start.month, start.day, tzinfo=timezone.utc)).days * BARS_PER_DAY}봉/마켓")
+        print(f"[{regime}] {unit}분봉 {start} ~ {end}, 마켓 {len(roster)}, 기대 {(boundary - datetime(start.year, start.month, start.day, tzinfo=timezone.utc)).days * bars_per_day}봉/마켓", flush=True)
         got: dict[str, list[dict]] = {}
         for market in roster:
-            candles, reason, missing = fetch_window(market, start, end)
+            candles, reason, missing = fetch_window(market, start, end, unit)
             if candles is None:
                 print(f"  ✗ {market}: {reason}")
                 failures.append(f"{regime}/{market}: {reason}")
                 continue
             gap = f" 결측 {len(missing)}봉" if missing else ""
-            print(f"  ✓ {market}: {len(candles)}봉{gap} ({candles[-1]['candle_date_time_kst']} ~ {candles[0]['candle_date_time_kst']})")
+            print(f"  ✓ {market}: {len(candles)}봉{gap} ({candles[-1]['candle_date_time_kst']} ~ {candles[0]['candle_date_time_kst']})", flush=True)
             got[market] = candles
             gaps.setdefault(regime, {})[market] = missing
         prepared[regime] = got
@@ -163,15 +184,20 @@ def main() -> None:
     total = sum(len(c) for g in prepared.values() for c in g.values())
     if args.write:
         for regime, got in prepared.items():
-            d = OUT_ROOT / regime
+            d = root / regime
             d.mkdir(parents=True, exist_ok=True)
-            for old in d.glob("KRW-*.json"):
+            for old in list(d.glob("KRW-*.json")) + list(d.glob("KRW-*.json.gz")):
                 old.unlink()
             for market, candles in got.items():
-                (d / f"{market}.json").write_text(json.dumps(candles, ensure_ascii=False, separators=(",", ":")) + "\n")
+                payload = json.dumps(candles, ensure_ascii=False, separators=(",", ":")) + "\n"
+                if unit == 240:
+                    (d / f"{market}.json").write_text(payload)
+                else:
+                    with gzip.open(d / f"{market}.json.gz", "wt", encoding="utf-8") as fh:
+                        fh.write(payload)
         # 결측 시각은 fixture 옆에 함께 커밋한다 — 청산 경계가 그 시각이면 그 거래는 모든 팔에서 제외해야 한다.
         # `--only` 로 일부만 돌 때 통째로 덮어쓰면 **돌지 않은 구간의 결측 기록이 사라진다** → 병합한다.
-        gaps_path = OUT_ROOT / "gaps.json"
+        gaps_path = root / "gaps.json"
         merged = json.loads(gaps_path.read_text()) if gaps_path.exists() else {}
         merged.update(gaps)
         gaps_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
