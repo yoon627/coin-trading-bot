@@ -37,7 +37,8 @@ PAGE = 200
 # 결측을 실패로 두면 fixture 를 아예 못 만들고, 무시하면 청산 경계가 조용히 다음 봉으로 밀린다.
 # 그래서 **허용하되 목록으로 남기고**, 소비자가 그 시각을 경계로 쓰는 거래를 제외하게 한다.
 # 봉이 짧을수록 체결 없는 구간(봉 자체가 생성되지 않음)이 흔하므로 허용 비율은 단위별이다.
-MAX_MISSING_RATIO = {240: 0.005, 15: 0.02, 5: 0.05, 1: 0.10}
+# 5분: 저유동 마켓(2020 TRX·ETC, 2023 POLYX·ARB, 2025 CTC)이 6~11% 결측 — 실측(2026-09-09) 위에 여유를 둔 15%.
+MAX_MISSING_RATIO = {240: 0.005, 15: 0.02, 5: 0.15, 1: 0.25}
 
 # 일봉 fixture 와 같은 구간·같은 로스터. 값은 `BacktestFixtures.MARKETS_BY_REGIME` 과 `README.md` 의 산출물이다.
 WINDOWS: dict[str, tuple[date, date, list[str]]] = {
