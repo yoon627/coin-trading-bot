@@ -42,6 +42,7 @@
 - [[lesson-llm-alpha-verification]] — LLM 알파는 과거 백테스트로 증명 불가(학습 오염), 전향적 shadow mode + LLM 없는 baseline 선행
 - [[lesson-rollback-removal]] — 롤백 보험을 거두기 전에 "무엇으로 되돌리는가"를 먼저 정의할 것
 - [[lesson-skip-is-not-pass]] — 건너뛴 테스트는 통과가 아니다 (초록불이 미검증을 가린다)
+- [[lesson-bracket-needs-fill-semantics]] — 브래킷·감도 family 는 계기의 체결 규칙을 코드로 확인한 뒤 설계한다 (유령 손절이 없었던 이유, 비관 브래킷의 불가능한 경로)
 
 ## entity — 외부 사실·버전
 
