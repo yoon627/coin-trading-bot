@@ -1,6 +1,6 @@
 ---
 title: tp-sl-grid — 익절×손절 격자 240분봉 라이브 의미론 사전명세 비교 (maxT · 진입일 페어링 · 진입봉 감도)
-status: in_progress
+status: done
 started: 2026-09-09
 updated: 2026-09-09
 ---
@@ -40,10 +40,14 @@ updated: 2026-09-09
   계기는 맞고 시나리오가 틀렸던 것) 통과, 리포트 열 3건(오버슛 전체/진입봉 이후 분리·frame 문구·지문 없음 명시)·진입봉-민감 대칭 표기로 3차 실행 — 판정·수치 불변.
   최종 `./gradlew build` 실행 1013 / skip 23 / 실패 0, wiki 검증 3종·plan-lint 통과. simplify: 무효 NaN 가드 제거, 지문 hashCode → 문자열, `!!` 없음.
 
+- 2026-09-09 — 종결(`minute-ladder` 브랜치에서). 후속 판별 (a) 를 사다리(240→15→5분봉)로 수행: 통과 9 의 우위는 해상도를 올릴수록 0 으로 수렴, 5분봉 통과 0.
+  사다리 리뷰(code-reviewer + codex)가 이 작업의 계기 전제 하나를 반증했다 — `combined` 가 현재가 ≤ 돌파선을 거부해 체결은 항상 봉 시가이므로 진입 봉 저가는 체결 이후이고,
+  "진입봉 유령 손절"·감도 family=브래킷 프레이밍은 성립하지 않는다(한쪽 처리). wiki 페이지 답·손절 축·읽는 법·index 정정. 하네스(`PairedMaxTBootstrap`·`LiveSemanticsArm`)는
+  그 리뷰에서 검토됐고 240분봉 5셀 격차는 사다리 7b 단정이 ±0.01 로 재현했다. `TakeProfitStopLossIntradayTest` 자체의 별도 코드 리뷰는 없었다.
+
 # Next
 
-1. code-reviewer + codex 리뷰(하네스·wiki 수치 대조) → 처분 → simplify → `./gradlew build` + wiki 3종 → 커밋.
-2. 사용자 결정: 후속 판별 경로 — (a) 15분봉 fixture 재수집 후 익절 축 재판정(새 사전고정), (b) 라이브 그림자에 "가상 보유" 관측 추가(코드), (c) 종료.
+없음 — 종결. 후속 판별 (a) 는 `minute-ladder`(plan `2026-09-09-minute-ladder`, wiki [[exit-resolution-ladder-2026-09]])가 15·5분봉으로 수행했다: 5분봉 통과 0, 현행 유지.
 
 # Decisions
 
