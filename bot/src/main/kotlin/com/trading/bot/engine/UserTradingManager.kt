@@ -13,6 +13,7 @@ import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.AccumulateProperties
+import com.trading.bot.config.ExitParamsDeclarationCheck
 import com.trading.common.config.TradingProperties
 import com.trading.bot.persistence.ShadowExitObservationRepository
 import com.trading.common.config.ShadowExitProperties
@@ -65,6 +66,8 @@ class UserTradingManager(
     private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
     // null 이면 그림자 관측을 만들지 않는다 — 저장소 없이 켜면 매 tick 관측이 조용히 버려진다.
     private val shadowExitObservationRepository: ShadowExitObservationRepository? = null,
+    // null 이면 보고를 건너뛴다 — 이 클래스를 직접 만드는 테스트가 많아 기본값을 둔다.
+    private val exitParamsDeclarationCheck: ExitParamsDeclarationCheck? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -232,6 +235,7 @@ class UserTradingManager(
         if (strategy != null) engine.setStrategy(strategy)
 
         val tickerList = tickers ?: tradingProperties.tickerList()
+        exitParamsDeclarationCheck?.report("수동 기동 user=$userId")
         engine.start(tickerList, initialStates)
 
         saveState(userId, true, engine.getActiveStrategyName(), tickerList)
