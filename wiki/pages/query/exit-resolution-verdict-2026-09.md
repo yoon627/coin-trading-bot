@@ -4,7 +4,7 @@ category: query
 created: 2026-09-05
 updated: 2026-09-09
 claim_state: current
-verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose` 옵션·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 §9 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_CANDIDATE_ANATOMY=true ./gradlew :bot:test --tests "*CandidateAnatomyTest*" --rerun-tasks` 와 `RUN_EXIT_HOUR=true ./gradlew :bot:test --tests "*ExitHourSweepTest*" --rerun-tasks` (JDK 21.0.9), fixture `yearly/`·`bull/`·`p2024h2/`·`p2025h1/`·`bear/` + `intraday240/`(240분봉 55,912봉, 수집 2026-09-05)
+verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 §9 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_CANDIDATE_ANATOMY=true ./gradlew :bot:test --tests "*CandidateAnatomyTest*" --rerun-tasks` 와 `RUN_EXIT_HOUR=true ./gradlew :bot:test --tests "*ExitHourSweepTest*" --rerun-tasks` (JDK 21.0.9), fixture `yearly/`·`bull/`·`p2024h2/`·`p2025h1/`·`bear/` + `intraday240/`(240분봉 55,912봉, 수집 2026-09-05)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/CandidateAnatomyTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/ExitHourSweepTest.kt

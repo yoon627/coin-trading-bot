@@ -4,7 +4,7 @@ category: query
 created: 2026-09-08
 updated: 2026-09-09
 claim_state: current
-verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose` 옵션·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 `ce9c4f5f…` 동일). 이전 확인분: 2026-09-08 — `RUN_TRAILING_WIDTH=true ./gradlew :bot:test --tests "*TrailingWidthIntradayTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`52c38c7`). fixture 10창 D1 + `intraday240/`
+verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 `ce9c4f5f…` 동일). 이전 확인분: 2026-09-08 — `RUN_TRAILING_WIDTH=true ./gradlew :bot:test --tests "*TrailingWidthIntradayTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`52c38c7`). fixture 10창 D1 + `intraday240/`
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/TrailingWidthIntradayTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
