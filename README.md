@@ -171,6 +171,13 @@ coin-trading-bot/
 
 기본값의 정의처는 `common/src/main/kotlin/com/trading/common/config/TradingProperties.kt` 하나입니다(#75). `application.yml`·`docker-compose*.yml`·`deploy/*/deploy.sh` 는 기본값을 갖지 않으며, 환경변수를 설정하지 않으면 위 값이 그대로 적용됩니다.
 
+> ⚠️ **자동매매 인스턴스(`TRADING_AUTO_START=true`)는 청산 파라미터를 `.env` 에 명시하세요.**
+> 운영값이 코드 기본값과 다를 수 있어(예: 트레일링), 환경변수 한 줄이 빠지면 봇이 조용히 다른 청산
+> 규칙으로 거래하게 됩니다. 두 장치가 이를 막습니다 — `deploy.sh` 가 **업로드 전에** 배포를 중단하고
+> (`preflight_exit_params`), 앱은 기동·봇 시작 시 실효값을 로그하고 미선언이면 ERROR 알림을 냅니다.
+> 어느 쪽도 *값*은 검사하지 않으므로 운영값을 바꾸는 데는 제약이 없고, 앱이 거래를 멈추지도 않습니다.
+> 대상 키: `TRADING_TAKE_PROFIT_PCT`·`TRADING_MAX_LOSS_PCT`·`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`·`TRADING_MAX_HOLD_DAYS`·`TRADING_CHART_EXIT_ENABLED`.
+
 매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다. 50일 이동평균 시장 필터는 백테스트 전용입니다.
 
 > **익절·트레일링 값의 관계**: 익절(`TAKE_PROFIT`)이 트레일링 폭·활성 수익률보다 **커야** 트레일링이 실효합니다.
@@ -263,7 +270,7 @@ coin-trading-bot/
 
 > **적립 프로파일·자동 유니버스를 처음 켤 때** — 두 기능은 마이그레이션(V23)을 동반하며, `deploy.sh` 는 마이그레이션이 포함된 배포를 자동 롤백하지 않습니다. 켜기 전에 DB 를 수동 백업(`deploy/vultr/backup.sh` 와 별개로 `pg_dump`)하고, 문제가 생기면 이미지를 되돌리지 말고 `TRADING_ACCUMULATE_TICKERS` 를 비우고 `TRADING_UNIVERSE_AUTO=false` 로 재기동하세요(forward-off). 구버전 이미지는 V23 컬럼과 `ACCUMULATE_STEP` 사유를 모릅니다.
 >
-> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_STRATEGY`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지).
+> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_STRATEGY`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지). ⚠️ **단 위 청산 6개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
 
 ## AWS 배포 (historical)
 
