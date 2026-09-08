@@ -44,6 +44,8 @@ internal object LiveSemanticsArm {
          */
         val exitBarOpen: Double = Double.NaN,
         val exitBarLow: Double = Double.NaN,
+        /** `keepWinnersUntilDays` 로 보유상한 봉을 **넘겨서 유지된** 포지션인가 — 사유·날짜 재구성(한도봉 갭 TP/SL 과 혼동)이 아니라 플래그로 센다. */
+        val keptPastLimit: Boolean = false,
     )
 
     /**
@@ -52,6 +54,13 @@ internal object LiveSemanticsArm {
      * @param entryBarStopOnClose 진입 봉의 손절만 봉 저가 대신 **종가**로 판정한다(발동 시 체결가는 손절선). 돌파 봉의 저가는 대개
      *   돌파 **이전**에 찍힌 값이라 기본(false)은 유령 손절 쪽으로, true 는 미발동 쪽으로 치우친다 — 둘이 진입 봉 편향의 브래킷이다.
      *   진입 봉은 `armPeak = 체결가` 라 트레일링이 걸리지 않고 익절은 봉 고가(돌파 이후)로 보므로 다른 게이트는 영향받지 않는다.
+     * @param keepWinnersUntilDays 0 이면 현행(보유상한 봉에서 무조건 청산). 양수면 **트레일링 손절선이 진입가 위로 잠긴**
+     *   (`peak × (1 − trail/100) > 진입가`) 포지션만 보유상한을 넘겨 트레일링·익절·손절에 맡기고, 진입 후 이 일수에 도달하면 강제 청산한다.
+     *   잠기지 않은 포지션(손실·미미한 이익)은 현행대로 09:00 시가에 청산 — "손실만 정리, 이익은 트레일링 유지" 정책.
+     *   "잠김"(gross)은 `ExitGates.isTrailingStopTriggered` 의 `pnlPct > 0` 전제와 동치 — "트레일링이 발동할 수 있는 포지션만 유지" 다.
+     * @param pessimisticTrailing 트레일링 판정의 고점에 **이 봉의 고가까지** 넣는다(봉 안에서 고점이 저점보다 먼저 왔다고 가정). 기본(false)은
+     *   직전 봉까지의 고점이라 트레일링을 **덜** 걸어 넓은 익절·보유 연장에 유리하고, true 는 **더** 걸어 그 반대다 — 둘이 트레일링 해상도 편향의 브래킷.
+     *   진입 봉에는 적용하지 않는다(체결 이전 고가를 고점으로 쓰면 유령 이익이 된다).
      */
     suspend fun run(
         market: String,
@@ -62,6 +71,8 @@ internal object LiveSemanticsArm {
         props: TradingProperties,
         warmup: Int = BacktestEngine.MIN_CANDLES,
         entryBarStopOnClose: Boolean = false,
+        keepWinnersUntilDays: Int = 0,
+        pessimisticTrailing: Boolean = false,
     ): List<Trade> {
         val signalProps = props.copy(kValue = config.kValue)
         val feePct = config.feeRate * 2 * 100
@@ -77,6 +88,7 @@ internal object LiveSemanticsArm {
         var entryDayIndex = -1
         var entryDate = ""
         var peak = 0.0
+        var keptPast = false
 
         for (dayIndex in warmup until days.size) {
             val day = days[dayIndex]
@@ -92,44 +104,56 @@ internal object LiveSemanticsArm {
             var pClose = dayOpen
             var pVolume = 0.0
 
-            for (bar in bars) {
-                // 이 봉 **시작 시점**의 부분봉 — 직전 봉까지의 누적이다(look-ahead 방지).
+            // 이 봉 **시작 시점**의 부분봉 — 직전 봉까지의 누적이다(look-ahead 방지).
+            fun partialWindow(): List<Candle> {
                 val partial = Candle(
                     market = market,
                     candleDateTimeKst = "${day}T09:00:00",
                     openingPrice = dayOpen, highPrice = pHigh, lowPrice = pLow,
                     tradePrice = pClose, candleAccTradeVolume = pVolume,
                 )
-                val window = (completed + partial).takeLast(warmup).reversed()
+                return (completed + partial).takeLast(warmup).reversed()
+            }
+            // 돌파선 = 당일시가 + 전일 레인지 × k — 하루 안에서 상수라 봉마다 window 를 만들지 않는다(5분봉에서 20배 가까이 절약).
+            val target = com.trading.common.strategy.Indicators.calculateTargetPrice(partialWindow(), config.kValue)
 
+            for (bar in bars) {
                 if (position) {
-                    val atHoldLimit = dayIndex - entryDayIndex >= holdLimit
-                    val armPeak = peak
+                    val daysHeld = dayIndex - entryDayIndex
+                    // 잠긴 이익 = 트레일링 손절선이 진입가 위 → 어떤 청산도 이익이다. 그런 포지션만 보유상한을 넘긴다.
+                    val lockedProfit = peak * (1 - config.trailingStopPct / 100.0) > entryPrice
+                    val keepWinner = keepWinnersUntilDays > 0 && daysHeld < keepWinnersUntilDays && lockedProfit
+                    if (keepWinner && daysHeld >= holdLimit) keptPast = true
+                    val atHoldLimit = daysHeld >= holdLimit && !keepWinner
+                    val peakBefore = peak
                     peak = IntrabarExitModel.updatedPeak(peak, bar, atHoldLimit)
+                    // 기본은 직전 봉까지의 고점(낙관 — 이 봉 안의 신고점은 다음 봉에나 본다). 비관 브래킷은 이 봉 고가까지 넣은 고점으로 판정한다.
+                    val armPeak = if (pessimisticTrailing) peak else peakBefore
                     val decision = IntrabarExitModel.evaluate(bar, entryPrice, armPeak, atHoldLimit, config, chartExitSignal = false)
                     if (decision != null) {
                         trades += Trade(
                             market, entryDate, day, entryPrice, decision.sellPrice,
                             (decision.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, decision.reason,
-                            exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice,
+                            exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice, keptPastLimit = keptPast,
                         )
                         position = false
+                        keptPast = false
                     }
                 }
 
                 // 라이브는 청산과 같은 tick 에서 곧바로 매수를 평가한다(09:00 리셋 직후 재매수가 그래서 가능하다).
                 if (!position && !boughtToday) {
-                    val target = com.trading.common.strategy.Indicators.calculateTargetPrice(window, config.kValue)
                     // 돌파를 이 봉 안에서 실제로 했는가. 라이브는 그 순간의 현재가에 사므로 하한이 target 이다.
                     if (target > 0 && bar.highPrice > target) {
                         val fill = max(target, bar.openingPrice)
-                        if (strategy.shouldBuy(window, fill, signalProps)) {
+                        if (strategy.shouldBuy(partialWindow(), fill, signalProps)) {
                             position = true
                             boughtToday = true
                             entryPrice = fill
                             entryDayIndex = dayIndex
                             entryDate = day
                             peak = fill
+                            keptPast = false
                             // 진입 봉의 intrabar 게이트도 받는다 — 빼면 진입 당일만 손절·익절 보호가 없어 편향된다.
                             val armPeak = peak
                             peak = IntrabarExitModel.updatedPeak(peak, bar, false)
@@ -157,7 +181,7 @@ internal object LiveSemanticsArm {
             val last = intradayChronological.last()
             trades += Trade(
                 market, entryDate, last.candleDateTimeUtc.substring(0, 10), entryPrice, last.tradePrice,
-                (last.tradePrice - entryPrice) / entryPrice * 100.0 - feePct, "END",
+                (last.tradePrice - entryPrice) / entryPrice * 100.0 - feePct, "END", keptPastLimit = keptPast,
             )
         }
         return trades
