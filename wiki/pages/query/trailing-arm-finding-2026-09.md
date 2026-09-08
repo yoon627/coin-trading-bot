@@ -2,9 +2,9 @@
 title: 트레일링 1축 변경 — 이 repo 최초의 사전고정 확증 결과 (신규 7국면)
 category: query
 created: 2026-09-05
-updated: 2026-09-08
+updated: 2026-09-09
 claim_state: current
-verified: 2026-09-05 — `RUN_REGIME_EXPANSION=true ./gradlew :bot:test --tests "*RegimeExpansionTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`a25096d`). fixture `p2020h1`~`p2023h1` D1 + `intraday240/`(7창 67,193봉, 수집 2026-09-05)
+verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose` 옵션·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_REGIME_EXPANSION=true ./gradlew :bot:test --tests "*RegimeExpansionTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`a25096d`). fixture `p2020h1`~`p2023h1` D1 + `intraday240/`(7창 67,193봉, 수집 2026-09-05)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/RegimeExpansionTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt

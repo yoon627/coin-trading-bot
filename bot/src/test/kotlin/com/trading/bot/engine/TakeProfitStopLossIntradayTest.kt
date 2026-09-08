@@ -74,7 +74,8 @@ class TakeProfitStopLossIntradayTest {
     @Test
     @EnabledIfEnvironmentVariable(named = "RUN_TP_SL_GRID", matches = "true")
     fun `pre-registered take-profit x stop-loss comparison on ten windows`() = runBlocking {
-        val windows = (BacktestFixtures.TIME_INDEPENDENT + BacktestFixtures.EXPANSION_2020_2023).map { r ->
+        // 사전고정 4: 창은 시간순으로 이어붙인다 — 7국면(2020-01~2023-11) 뒤에 bull(2023-11~)·p2024h2·p2025h1.
+        val windows = (BacktestFixtures.EXPANSION_2020_2023 + BacktestFixtures.TIME_INDEPENDENT).map { r ->
             val daily = BacktestFixtures.loadAll(r)
             WindowData(r.label, r.dir, daily, IntradayFixtures.loadAll(r.dir, daily.keys))
         }
@@ -189,7 +190,7 @@ class TakeProfitStopLossIntradayTest {
         }
         data class Diag(
             val effectiveN: Int, val entryBarStops: Int, val entryBarStopPnl: Double,
-            val stops: Int, val stopOvershootPct: Double,
+            val stops: Int, val stopOvershootPct: Double, val laterStopOvershootPct: Double,
             val worstWindow: String, val worstWindowGapPerTrade: Double,
             val lowoMin: Double, val lowoWindow: String,
             val lowoNegMin: Double, val lowoNegWindow: String,
@@ -199,8 +200,11 @@ class TakeProfitStopLossIntradayTest {
             val all = windows.flatMap { runs.getValue(Triple(cell, false, it.dir)) }
             val effN = windows.sumOf { paired.getValue(Triple(cell, false, it.dir)).exitPriceChanged }
             val ebs = all.filter { it.exitOnEntryBar && it.reason == "STOP_LOSS" }
-            val stops = all.filter { it.reason == "STOP_LOSS" && !it.exitBarLow.isNaN() }
-            val overshoot = if (stops.isEmpty()) 0.0 else stops.map { (it.exitPrice - it.exitBarLow) / it.entryPrice * 100.0 }.average()
+            val stops = all.filter { it.reason == "STOP_LOSS" }
+            fun overshoot(ts: List<LiveSemanticsArm.Trade>) = if (ts.isEmpty()) 0.0 else ts.map { (it.exitPrice - it.exitBarLow) / it.entryPrice * 100.0 }.average()
+            // 진입 봉의 오버슛은 진입 이전 저가가 섞일 수 있어 따로 낸다 — 무슬리피지 체결 편향의 크기는 진입 봉 이후 손절이 더 정직하다.
+            val overshoot = overshoot(stops)
+            val laterOvershoot = overshoot(stops.filter { !it.exitOnEntryBar })
             val perWindow = windows.map { w ->
                 val cnt = paired.getValue(Triple(cell, false, w.dir)).deltaByEntryKey.size
                 w to (if (cnt == 0) 0.0 else windowGap(cell, w) / cnt)
@@ -222,7 +226,7 @@ class TakeProfitStopLossIntradayTest {
                 }
             }
             return Diag(
-                effN, ebs.size, ebs.sumOf { it.netPnlPct }, stops.size, overshoot,
+                effN, ebs.size, ebs.sumOf { it.netPnlPct }, stops.size, overshoot, laterOvershoot,
                 worst.first.label, worst.second, lowo.second, lowo.first.label, lowoNeg.second, lowoNeg.first.label,
                 if (cnt == 0) 0.0 else g / cnt,
                 PairedMaxTBootstrap.spearman(xs.toDoubleArray(), ys.toDoubleArray()),
@@ -264,7 +268,8 @@ class TakeProfitStopLossIntradayTest {
             val notes = ArrayList<String>()
             var cand = p.pass
             if (p.se == 0.0) notes += "기준과 동일 행동"
-            if (p.pass && !s.pass) { notes += "진입봉-민감"; cand = false }
+            if (p.pass != s.pass) notes += "진입봉-민감"
+            if (p.pass && !s.pass) cand = false
             if (p.pass && perTrade < ECONOMIC_FLOOR) { notes += "경제 하한 미달"; cand = false }
             if (p.pass && neg[i].ciHigh < 0) { notes += "하락 창에서 유의하게 열세"; cand = false }
             if (p.pass && c.tp > 5.0) { notes += "익절 8·off — 전향 검증 필요(후보 불가)"; cand = false }
@@ -282,7 +287,7 @@ class TakeProfitStopLossIntradayTest {
         out.appendLine("규칙은 결과를 보기 전에 커밋했다(plan `2026-09-09-tp-sl-grid` `# Acceptance` 1~12). 기준 = 현행 라이브 TP5/SL5/트레일1.5/arm0/k0.5/h1.")
         out.appendLine("확증 실험이 아니다 — 10창은 이미 트레일링 판정에 쓰였고 익절·손절 값은 옛 일봉 격자의 축이다. 통과 셀도 이 측정만으로는 승격되지 않는다.")
         out.appendLine()
-        out.appendLine("frame: 창별 워밍업 이후 거래일 ${frame.size}일(마켓-일 결측 ${windows.sumOf { it.skippedMarketDays }}건은 그 마켓 진입 불가로만 작용), 블록 ${PairedMaxTBootstrap.BLOCK}일, B=${PairedMaxTBootstrap.RESAMPLES}, seed ${PairedMaxTBootstrap.SEED}.")
+        out.appendLine("frame: 10창 합계 워밍업 이후 거래일 ${frame.size}일(창당 ${EXPECTED_DAYS_PER_WINDOW}일, 마켓-일 결측 ${windows.sumOf { it.skippedMarketDays }}건은 그 마켓 진입 불가로만 작용), 블록 ${PairedMaxTBootstrap.BLOCK}일, B=${PairedMaxTBootstrap.RESAMPLES}, seed ${PairedMaxTBootstrap.SEED}.")
         out.appendLine("maxT 95% 임계 q — 주 family ${"%.3f".format(primary.q)}, 진입봉 감도 family ${"%.3f".format(sens.q)}. 통과 = G/se > q (동시 95% 하한 > 0).")
         out.appendLine()
 
@@ -310,7 +315,7 @@ class TakeProfitStopLossIntradayTest {
 
         out.appendLine("## 2. 19셀 판정표 (전부 싣는다)")
         out.appendLine()
-        out.appendLine("| 셀 | 거래 | 격차 %p | 격차/거래 | se | T | 동시95%하한 | 한계p | 통과 | L1 · L10 통과 | 감도(진입봉 종가) 통과 · 격차 | 선행정의 P(G≤0) | 후보 | 비고 |")
+        out.appendLine("| 셀 | 거래 | 격차 %p | 격차/거래 | se | T | 동시95%하한 | 한계p | 통과 | L1 · L10 통과 | 감도(진입봉 종가) 통과 · 격차 | 선행정의 P(S*≤0) | 후보 | 비고 |")
         out.appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for (c in candidates) {
             val i = idx.getValue(c); val p = primary.cells[i]; val s = sens.cells[i]; val v = verdicts.getValue(c); val lg = legacy(c)
@@ -324,27 +329,28 @@ class TakeProfitStopLossIntradayTest {
         out.appendLine()
         out.appendLine("후보 조건(사전고정 8): 통과 ∧ 격차/거래 ≥ %.2f ∧ 감도 family 통과 ∧ bhNeg 95%% 상한 ≥ 0 ∧ 익절 ≤ 5. 후보 순서는 동시 하한/거래 내림차순(점추정 최대를 고르지 않는다 — winner's curse).".format(ECONOMIC_FLOOR))
         out.appendLine("검정력 맥락: 기준선 ${baseTrades.size}건 중 익절·손절이 실제로 청산가를 바꾸는 거래는 각 8%% 안팎이라, 전체 평균 ≥ %.2f%%p 는 영향 거래당 약 +1.2%%p 를 요구한다 — 통과 0 은 효과 부재가 아니라 검정력 부족일 수 있다.".format(ECONOMIC_FLOOR))
-        out.appendLine("선행정의 열은 청산일 합집합 frame 의 길이 1 iid 재추출 꼬리비율(`DateBlockBootstrap` — 이름과 달리 블록이 아니다)이며 비교용이다.")
+        out.appendLine("선행정의 열은 청산일 합집합 frame 의 길이 1 iid 재추출 합 S* 가 0 이하인 비율(`DateBlockBootstrap` — 이름과 달리 블록이 아니다)이며 비교용이다. L1·L10 열은 블록 길이가 달라 주 family 와 draw 를 공유하지 못한다(각 family 안에서만 유효).")
         out.appendLine(if (ranked.isEmpty()) "**후보 없음**" + (if (candidates.none { verdicts.getValue(it).pass }) " — 통과 셀 0: 현행 TP5/SL5 유지, 이 격자·계기에서 바꿀 근거 없음." else "") else "**후보 순서**: " + ranked.joinToString(" → ") { it.label })
-        if (sameBehaviour.isNotEmpty()) out.appendLine("동일 행동 셀(지문 일치): " + sameBehaviour.joinToString(" · ") { g -> g.joinToString("=") { it.label } })
+        out.appendLine(if (sameBehaviour.isEmpty()) "동일 행동 셀(지문 일치): 없음 — 20셀 청산 집합이 전부 다르다." else "동일 행동 셀(지문 일치): " + sameBehaviour.joinToString(" · ") { g -> g.joinToString("=") { it.label } })
         out.appendLine()
 
         out.appendLine("## 3. 생존편향·강건성 진단 (전 셀)")
         out.appendLine()
         out.appendLine("단순보유(거래구간) 중앙값: " + windows.joinToString(" · ") { "${it.label} ${"%+.1f".format(it.buyAndHoldMedian)}" } + "; bhNeg = ${bhNeg.sorted()}")
         out.appendLine()
-        out.appendLine("| 셀 | bhPos 격차/거래 [95%] | bhNeg 격차/거래 [95%] | LOWO 최소 (제외 창) | bhNeg LOWO 최소 (제외 창) | 탑 생존자 제거 | Spearman ρ | 유효 N | 진입봉 SL 건수 · pnl | SL 건수 · 평균 오버슛 %p | 최악 창 (격차/거래) |")
+        out.appendLine("| 셀 | bhPos 격차/거래 [95%] | bhNeg 격차/거래 [95%] | LOWO 최소 (제외 창) | bhNeg LOWO 최소 (제외 창) | 탑 생존자 제거 | Spearman ρ | 유효 N | 진입봉 SL 건수 · pnl | SL 건수 · 평균 오버슛 %p (전체 / 진입봉 이후) | 최악 창 (격차/거래) |")
         out.appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
         for (c in candidates) {
             val i = idx.getValue(c); val d = diags.getValue(c)
             val nPos = pairedCount(c, false) { it.dir !in bhNeg }; val nNeg = pairedCount(c, false) { it.dir in bhNeg }
-            out.appendLine("| %s | %+.3f [%+.3f, %+.3f] | %+.3f [%+.3f, %+.3f] | %+.3f (%s) | %+.3f (%s) | %+.3f | %+.2f | %d | %d · %+.1f | %d · %.3f | %s (%+.3f) |".format(
+            out.appendLine("| %s | %+.3f [%+.3f, %+.3f] | %+.3f [%+.3f, %+.3f] | %+.3f (%s) | %+.3f (%s) | %+.3f | %+.2f | %d | %d · %+.1f | %d · %.3f / %.3f | %s (%+.3f) |".format(
                 c.label, pos[i].g / nPos, pos[i].ciLow / nPos, pos[i].ciHigh / nPos, neg[i].g / nNeg, neg[i].ciLow / nNeg, neg[i].ciHigh / nNeg,
                 d.lowoMin, d.lowoWindow, d.lowoNegMin, d.lowoNegWindow, d.topSurvivorRemoved, d.spearman, d.effectiveN, d.entryBarStops, d.entryBarStopPnl,
-                d.stops, d.stopOvershootPct, d.worstWindow, d.worstWindowGapPerTrade))
+                d.stops, d.stopOvershootPct, d.laterStopOvershootPct, d.worstWindow, d.worstWindowGapPerTrade))
         }
         out.appendLine()
-        out.appendLine("단위: 격차/거래 %p. LOWO = 창 하나 제외 시 pooled 격차/거래 최소값. 탑 생존자 제거 = 창별 단순보유 최고 마켓 제외. ρ 는 (마켓, 창) 80점의 단순보유 ↔ 격차 합. 오버슛 = (손절선 − 봉 저가)/진입가 평균 — 무슬리피지 체결 편향의 상한.")
+        out.appendLine("단위: 격차/거래 %p. LOWO = 창 하나 제외 시 pooled 격차/거래 최소값. 탑 생존자 제거 = 창별 단순보유 최고 마켓 제외. ρ 는 (마켓, 창) 80점의 단순보유 ↔ 격차 합. 오버슛 = (손절선 − 봉 저가)/진입가 평균 — 무슬리피지 체결 편향의 상한이며, 진입 봉의 저가는 진입 이전일 수 있어 진입 봉 이후 값을 따로 둔다.")
+        out.appendLine("재추출은 창별 stratified 라 창 사이(국면) 변동은 재추출되지 않는다 — se 는 창 안 변동만 담고, 창 간 강건성은 LOWO 가 대리한다.")
         out.appendLine()
 
         out.appendLine("## 4. 10창 × 19셀 격차 %p (판정에 쓰지 않는다)")

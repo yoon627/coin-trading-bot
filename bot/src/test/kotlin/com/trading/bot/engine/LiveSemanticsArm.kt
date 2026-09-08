@@ -38,7 +38,10 @@ internal object LiveSemanticsArm {
         val reason: String,
         /** 진입한 바로 그 240분봉에서 청산됐는가 — 진입 봉 손절 편향(봉 저가가 진입 이전일 수 있다)의 노출을 세는 데 쓴다. */
         val exitOnEntryBar: Boolean = false,
-        /** 청산 봉의 시가·저가(END 는 NaN). 임계선 체결이 시가 체결·봉 저가와 얼마나 다른지(무슬리피지 편향 크기)를 재는 진단용. */
+        /**
+         * 청산 봉의 시가·저가(END 는 NaN). 임계선 체결이 시가 체결·봉 저가와 얼마나 다른지(무슬리피지 편향 크기)를 재는 진단용.
+         * `entryBarStopOnClose` 로 판정 기준을 바꿔도 여기엔 **원본 봉의 저가**가 남는다 — 판정과 진단을 섞지 않기 위해서다.
+         */
         val exitBarOpen: Double = Double.NaN,
         val exitBarLow: Double = Double.NaN,
     )

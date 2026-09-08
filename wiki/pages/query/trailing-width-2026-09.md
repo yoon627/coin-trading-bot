@@ -2,9 +2,9 @@
 title: 트레일링 폭 재판정 — 240분봉에서도 조일수록 좋고 세 후보가 모두 사전고정을 통과했다, 그러나 계기 편향과 같은 방향이다
 category: query
 created: 2026-09-08
-updated: 2026-09-08
+updated: 2026-09-09
 claim_state: current
-verified: 2026-09-08 — `RUN_TRAILING_WIDTH=true ./gradlew :bot:test --tests "*TrailingWidthIntradayTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`52c38c7`). fixture 10창 D1 + `intraday240/`
+verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose` 옵션·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 `ce9c4f5f…` 동일). 이전 확인분: 2026-09-08 — `RUN_TRAILING_WIDTH=true ./gradlew :bot:test --tests "*TrailingWidthIntradayTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`52c38c7`). fixture 10창 D1 + `intraday240/`
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/TrailingWidthIntradayTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
@@ -74,6 +74,7 @@ sources:
   **같은 정의**라 비교 가능성은 유지되지만, Šidák 보정을 얹은 "발견" 선언은 그 정의 위에서 읽어야 한다. 재정의는 판정 4건을 함께 새 사전고정으로 재실행할 일이다.
 - 이 판정은 트레일링 **폭** 한 축이다. 익절 5%·손절 5%·k 0.5·보유 1일과의 상호작용은 재지 않았다
   — 09:00 청산의 정당성이 익절 5% 와 짝인 것처럼([[exit-resolution-verdict-2026-09]] §7) 트레일링을 더 조이면 익절 발동이 준다(86건 → 57건).
+  익절·손절 축은 트레일링 1.5 고정 위에서 [[take-profit-stop-loss-2026-09]] 가 따로 쟀다(익절 5% 가 상방을 자른다는 같은 방향의 신호, 단 계기 편향 순방향).
 
 ## 재현
 

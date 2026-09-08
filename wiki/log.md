@@ -137,3 +137,9 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 - [[trailing-width-2026-09]] 신설: 10창(yearly·bear 제외) 라이브 의미론 계기에서 0.75·1.00·1.25 전부 사전고정 통과, 단조성은 계기 편향과 같은 방향이라 승격 아님. 판별 경로 = 그림자 관측 1.0.
 - [[trailing-arm-finding-2026-09]] 한계 절에 후속 링크. [[trading-engine-loop]] 8번·[[exit-gates]] 재진입 문단에 09:00 경계 stale-window 가드(`hasCurrentDayCandle`) 반영.
 - 근거: `TrailingWidthIntradayTest`(`RUN_TRAILING_WIDTH=true`) 산출물, `TradingEngineTest` 재현 테스트 Red→Green, 사전고정 커밋 `52c38c7`. 진행 상태는 plan 소유.
+
+## [2026-09-09] query | take-profit-stop-loss-2026-09 — 익절×손절 20셀 사전명세 비교 1페이지 추가 + sources 3페이지 verified 갱신
+
+- [[take-profit-stop-loss-2026-09]] 신설: 진입일 1:1 페어링·전 거래일 이동블록·셀 공통 draw 의 단일단계 maxT(FWER 5%)로 19셀 동시 판정. 통과 9(익절 8·off 8셀 + TP5/SLoff), 후보 0 — 익절 축은 계기 편향 순방향이라 사전고정이 후보 제외, 손절 off 는 진입봉 손절을 종가로 판정하는 감도에서 미통과. 익절 3·손절 3 은 편향 무관 열세.
+- `LiveSemanticsArm` 에 `entryBarStopOnClose`·진단 필드 추가(기본값 종전 동작, `RUN_TRAILING_WIDTH` 리포트 md5 동일) → 그 파일을 sources 로 가진 [[trailing-width-2026-09]]·[[exit-resolution-verdict-2026-09]]·[[trailing-arm-finding-2026-09]] verified 갱신.
+- 근거: `TakeProfitStopLossIntradayTest`(`RUN_TP_SL_GRID=true`) 산출물, 사전고정 커밋 `a04ab34`(plan-reviewer 2회·codex 1회 검토 반영). 진행 상태는 plan 소유.

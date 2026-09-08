@@ -30,11 +30,20 @@ updated: 2026-09-09
 - 2026-09-09 — plan-reviewer 2차(CONDITIONAL, 강한 우려 4) 반영: 한도봉 TP/SL 단정 → 진단(fixture 에 `open ∉ [직전 low, high]` 일 경계 36건 실측),
   손절 축 양방향 편향(임계선 무슬리피지 체결) 추가, 프로덕션 경로 정정, 판정 규칙 3건 pin, 상수 고정, `Trade.exitBarOpen/exitBarLow` 추가.
   **하네스는 이 시점까지 한 번도 실행하지 않았다** — `bot/build/reports/take-profit-stop-loss-intraday.md` 부재로 확인. 사전고정 커밋 = plan + 하네스.
+- 2026-09-09 — **사전고정 커밋 `a04ab34` 뒤 실행.** 배관 단정 전부 통과(20셀×2처리 진입 집합 동일, off 셀 0건, frame 1,500일·결측 0·기준선 1,058건, 한도봉 TP/SL 0건).
+  **통과 9셀 / 후보 0**: 익절 8·off × 손절 ≥5 (8셀, 격차/거래 +0.092 ~ +0.388, 동시 하한 전부 > 0, bhNeg 에서 더 큼, LOWO·탑생존자제거·ρ 전부 무해) 는 사전고정 8(e) 로 후보 불가;
+  TP5/SLoff(+0.131, 하한 +33.8) 는 진입봉 감도 family 미통과(+138.6 → +47.0) 로 "진입봉-민감". 익절 3·손절 3 은 통과 없이 대부분 열세. L1/L10 열은 결론 불변, 선행정의는 TP5/SLoff 만 미통과(0.057).
+  wiki [[take-profit-stop-loss-2026-09]] 기록, index·log·sources 3페이지 verified 갱신. `./gradlew build` 실행 1010 / skip 23 / 실패 0, wiki 검증 3종 통과.
+- 2026-09-09 — codex 리뷰가 창 순서 위반(사전고정 4 "시간순")을 잡아 `EXPANSION + TIME_INDEPENDENT` 로 고치고 **같은 규칙으로 재실행**: 판정·통과 집합 불변,
+  q 2.655 → 2.644, 하한·구간 소수 둘째 자리 이동(첫 실행 리포트는 scratchpad `tp-sl-run1.md` 로 보관). wiki 서술 오류 4건(선행정의 P·상한 산술 건수·유령 손절 인과·전환 건수) 정정.
+- 2026-09-09 — code-reviewer(Major 2·Minor 6) 반영: `LiveSemanticsArmEntryBarTest` 3건(합성 봉 — 첫 시나리오는 이후 봉 108 이 peak 110 의 1.5% 되돌림에 걸려 TRAILING 이 나 109.5 로 수정,
+  계기는 맞고 시나리오가 틀렸던 것) 통과, 리포트 열 3건(오버슛 전체/진입봉 이후 분리·frame 문구·지문 없음 명시)·진입봉-민감 대칭 표기로 3차 실행 — 판정·수치 불변.
+  최종 `./gradlew build` 실행 1013 / skip 23 / 실패 0, wiki 검증 3종·plan-lint 통과. simplify: 무효 NaN 가드 제거, 지문 hashCode → 문자열, `!!` 없음.
 
 # Next
 
-1. **plan + 하네스 커밋(결과 보기 전)** → `RUN_TP_SL_GRID=true` 실행.
-2. 결과 그대로 wiki `query/take-profit-stop-loss-2026-09` 로 기록(사전고정 커밋 sha 인용), index·log·`sources` 페이지 verified 동기화, 검증 3종.
+1. code-reviewer + codex 리뷰(하네스·wiki 수치 대조) → 처분 → simplify → `./gradlew build` + wiki 3종 → 커밋.
+2. 사용자 결정: 후속 판별 경로 — (a) 15분봉 fixture 재수집 후 익절 축 재판정(새 사전고정), (b) 라이브 그림자에 "가상 보유" 관측 추가(코드), (c) 종료.
 
 # Decisions
 
@@ -100,6 +109,9 @@ entryPrice)` 가 전 셀 동일하므로 거래 단위 1:1 페어링이 가능�
 
 **아래 1~12 전부가 결과를 보기 전에 커밋하는 사전고정이다. 실행 후 문구를 고치지 않는다. 배관 단정(7)이 실패하면 배관을 고쳐 같은 규칙으로 재실행하며 규칙을 조정하지 않는다.**
 
+> 실행 결과(2026-09-09, 사전고정 커밋 `a04ab34`, 문구는 위·아래 그대로): 1~7 ✅ 배관 전부 통과(재실행 없음) · 6 통과 9셀 · 8 후보 0(익절 8·off 8셀은 (e), TP5/SLoff 는 (c) 미달) ·
+> 9·10·11 리포트에 고정 형식으로 산출 · 12 build 실행/skip 건수는 `# Progress` 마지막 줄. 결론 = "현행 TP5/SL5 유지".
+
 1. **계기** = `LiveSemanticsArm`(진입 장중 돌파 즉시, 청산 240분봉 `IntrabarExitModel`). **기준** = 현행 라이브
    `StrategySearchGrid.currentLivePoint()`(TP 5 / SL 5 / 트레일 1.5 / arm 0 / k 0.5 / h 1).
 2. **셀** = 익절 {3, 5, 8, off(=`TAKE_PROFIT_OFF`)} × 손절 {3, 5, 7, 10, off(=1000.0)} 20셀. 후보 family = (5, 5) 를 뺀 **19셀**. 나머지 축 불변. 참고 행 없음.
@@ -153,7 +165,26 @@ entryPrice)` 가 전 셀 동일하므로 거래 단위 1:1 페어링이 가능�
     `RUN_TRAILING_WIDTH` 리포트 md5 = `ce9c4f5f066c6e3cd640fbda2b0d59b2`(base 에서 생성한 값; 보관본 없이도 재생성 후 md5 로 비교 가능).
    단순보유 표는 `bh_median.py` 가 아니라 정의(시간순 index 50 시가 → 마지막 종가, 로스터 중앙값)로 재현한다 — 스크립트는 repo 에 없다.
 
+# Review Disposition
+
+| # | 출처 | finding | 처분 |
+|---|---|---|---|
+| 1 | codex Major | 창을 시간순으로 이어붙이라는 사전고정 4 와 달리 구현이 2023~2025 창을 앞에 둠(블록은 창을 안 넘지만 seed 배정이 달라짐) | **fix** — 배관 실패로 취급, 순서를 `EXPANSION + TIME_INDEPENDENT` 로 고쳐 같은 규칙으로 재실행 |
+| 2 | codex Major | wiki "선행 정의로 통과 9셀 전부 P ≤ 0.011" — TP5/SLoff 는 0.060 | **fix** — 정정 |
+| 3 | codex Major | 익절 편향 상한 산술에 다른 family 의 93건 혼입(기준 TAKE_PROFIT 은 86건) | **fix** — 86건·−138%p 로 정정, 최악/최선 양끝을 명시 |
+| 4 | codex Major | "유령 손절" 인과 단정 — `exitOnEntryBar` 는 같은 봉 청산만 뜻하고 저가가 진입 전인지 모른다 | **fix** — "순서 가정에 민감" 으로 서술 축소 |
+| 5 | codex Minor | 86건 → 75 TRAILING + 11 TIME_EXIT 로 갈림 / L1·L10 은 draw 공유 불가 / "익절 3 전부 열세" 과장 / index "10창 전부" 과장 / 열 이름 `P(G≤0)` → `P(S*≤0)` | **fix** — 전부 반영 |
+| 6 | code-reviewer Major | `entryBarStopOnClose`(후보 게이트 8c)에 단위테스트 0건 | **fix** — `LiveSemanticsArmEntryBarTest` 3건(유령 저가 → 저가 판정 SL/종가 판정 TIME_EXIT · 저가가 손절선 위면 두 처리 동일 · 동시 도달 시 저가=SL/종가=TP, 진단 필드는 원본 저가) |
+| 7 | code-reviewer Minor | 진입봉-민감 표기 비대칭 / 오버슛에 진입봉 손절 혼입 / 창별 stratified 라 창 간 분산 미재추출 / `align` KDoc·오류메시지 / "손절 3 어느 처리" 과장 / frame 문구·지문 없음 미표기 | **fix** — 대칭 표기, 오버슛 전체/진입봉 이후 분리, wiki·리포트 한계 명시, 오류메시지, 문구 정정 |
+| 8 | code-reviewer PLAUSIBLE | 창 간 분산이 se 에 없어 통과가 자유주의적일 수 있음(사전고정 5 의 stratified 규칙 자체) | **defer** — 규칙 위반 아님. 다음 사전고정에서 창 단위 재추출 감도 열 검토(#Deferred) |
+
 # Deferred
 
 - ⏳ 선행 판정(`exit-resolution-verdict`·`trailing-arm-finding`·`trailing-width`)의 통계 정의(청산일 frame 꼬리비율+Šidák)는 그대로 남아 있다 — 이번 정의로 재실행하려면
   각각 새 사전고정이 필요하다. (중간)
+- ⏳ **익절 축 해상도 판별** — 15분봉 fixture(10창 × 8마켓 × 150일 × 96봉 ≈ 5,800요청) 재수집 후 익절 {5, 8, off} 만 같은 사전고정으로 재판정. 해상도가 오를수록 우위가
+  줄어드는 폭이 곧 stale-peak 편향의 크기다. 진입봉 유령 손절도 같은 데이터로 대부분 사라진다(손절 축 재판정 가능). (높음)
+- ⏳ **라이브 가상 보유 관측** — `ShadowExitObserver` 를 확장해 라이브 익절(5%) 청산 뒤에도 09:00 경계까지 tick 으로 익절 8·off + 트레일링 1.5 의 가상 청산가를 기록.
+  라이브 무변경, 코드 필요. 익절 축의 tick 해상도 증거를 전향으로 쌓는 유일한 경로. (중간)
+- ⏳ `IntrabarExitModel` 한도봉 TP/SL 체결가가 시가가 아니라 임계선 — 이번 데이터에서는 0건이라 영향 없음. 백테 공용 코드라 골든 재생성이 따르므로 별도 작업. (낮음)
+- ⏳ 창별 stratified 재추출은 창 간(국면) 변동을 se 에 넣지 않는다 — 다음 사전고정에서 창 단위(cluster) 재추출을 감도 열로 병기. (중간)

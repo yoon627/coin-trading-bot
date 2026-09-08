@@ -32,12 +32,12 @@ internal object PairedMaxTBootstrap {
             windows.forEachIndexed { i, w -> w.forEachIndexed { j, key -> require(put(key, offsets[i] + j) == null) { "frame 키 중복: $key" } } }
         }
 
-        fun indexOf(key: String): Int = index.getValue(key)
+        fun indexOf(key: String): Int = index[key] ?: error("frame 밖 키: $key — 진입일이 frame(워밍업 이후·봉 있는 날) 밖이면 배관 오류다")
 
         /** 창 [w] 에 속한 전역 인덱스 범위. */
         fun rangeOf(w: Int): IntRange = offsets[w] until offsets[w] + windows[w].size
 
-        /** [keys] 에 [values] 를 더한 frame 정렬 배열. 없는 키는 [require] 로 막는다 — 조용히 버리면 격차가 사라진다. */
+        /** 키별 기여 [pairs] 를 frame 정렬 배열로 — 같은 키는 더한다. 없는 키는 [indexOf] 가 던진다(조용히 버리면 격차가 사라진다). */
         fun align(pairs: Map<String, Double>): DoubleArray {
             val out = DoubleArray(size)
             for ((k, v) in pairs) out[indexOf(k)] += v
