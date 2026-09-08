@@ -131,3 +131,9 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-09-03] ingest | pre-push codex 게이트 제거
 - [[prepush-codex-review]] 재정의(current): deploy.yml 가드만 남김 + 제거 이유·롤백·설치본 5주 드리프트. [[jdk-gradle-toolchain]]·[[worktree-workflow]] 의 push 게이트 서술 정정, [[plan-git-tracking]] 의 "pre-commit 이 plans 를 스캔" 주장은 이 clone 에 pre-commit 이 없어 철회. index·smoke.sh 갱신.
 - 근거: scripts/git-hooks/pre-push 슬림본 12케이스 실행, `.git/hooks/pre-push` 338줄 vs 정본 381줄 diff, PR #165, ~/.claude PR #156.
+
+## [2026-09-08] query | trailing-width-2026-09 — #184 트레일링 폭 240분봉 사전고정 재판정 1페이지 추가 + 3페이지 갱신
+
+- [[trailing-width-2026-09]] 신설: 10창(yearly·bear 제외) 라이브 의미론 계기에서 0.75·1.00·1.25 전부 사전고정 통과, 단조성은 계기 편향과 같은 방향이라 승격 아님. 판별 경로 = 그림자 관측 1.0.
+- [[trailing-arm-finding-2026-09]] 한계 절에 후속 링크. [[trading-engine-loop]] 8번·[[exit-gates]] 재진입 문단에 09:00 경계 stale-window 가드(`hasCurrentDayCandle`) 반영.
+- 근거: `TrailingWidthIntradayTest`(`RUN_TRAILING_WIDTH=true`) 산출물, `TradingEngineTest` 재현 테스트 Red→Green, 사전고정 커밋 `52c38c7`. 진행 상태는 plan 소유.

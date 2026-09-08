@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-09-08
 claim_state: current
-verified: 2026-09-08 — 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
+verified: 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/config/ExitParamsDeclarationCheck.kt
   - deploy/vultr/deploy.sh
@@ -32,6 +32,13 @@ sources:
 6. **보유 중이면 청산 평가** — `updatePeakPrice`(오를 때만 durable flush) → `decideSell` → `sell`.
 7. **당일 1회 가드** — `position || boughtToday` 면 매수 평가 자체를 생략.
 8. **매수 평가** — D1 캔들이 store 에 전략이 요구하는 만큼(`max(MIN_DAILY_CANDLES, strategy.minCandles)`) store 에 있으면 store, 아니면 REST 60개로 폴백해 [[swing-strategies]] 의 `shouldBuy` 판정.
+   **두 경로 모두 최신 D1 이 오늘 거래일 봉일 때만 평가한다**(2026-09-08, `isCurrentDay`). 09:00 직후 새 날 첫 1분봉이
+   폴링되기까지(약 60~120초 — 60초 주기 + 마켓 간 150ms 간격, 한 라운드 실패 시 2주기, [[marketdata-pipeline]]) store 의 최신 D1 은 어제 봉이고,
+   REST 일봉도 그날 첫 체결 전엔 어제 봉이 [0] 이며 `DailyCandleCache` 는 60초 TTL 이다. 그 window 로 판정하면 "당일시가" 가 어제 시가가 되어
+   어제 매수를 만든 신호가 그대로 참이고 방금 보유상한으로 판 포지션을 같은 가격에 되산다(#128 의 0.0h 재매수).
+   경계 뒤 5분(grace) 안에 오늘 봉이 없으면 그 tick 은 건너뛴다(REST 가 빈 목록이면 종전대로 전략 가드에 맡긴다).
+   **5분이 지나도 store 가 어제 봉이면 수집 정지로 보고 WARN(소스·티커당 1분 1회) 뒤 REST 로 간다** — 캔들 폴링 코루틴은 워치독 밖이라
+   store 가 "개수는 충분하지만 낡은" 채로 하루 종일 매수를 막는 일이 없어야 한다. 백테·라이브 의미론 팔은 당일 부분봉을 당일 시가에서 시작하므로 이 churn 을 재지 않는다.
 
 ## 프로파일 분기 (2026-09-02)
 
