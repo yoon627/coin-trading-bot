@@ -1,6 +1,6 @@
 ---
 title: minute-ladder — 분봉 해상도 사다리(240→15→5)로 익절·손절·9시 정책 사전명세 재판정
-status: in_progress
+status: done
 started: 2026-09-09
 updated: 2026-09-09
 ---
@@ -61,11 +61,11 @@ updated: 2026-09-09
   정정된 비관 열: 익절 8·off 5분봉 −7.12·−6.70(주 +7.96·+17.95 — 0 을 사이에 둔 브래킷), 정책 +20.43·+12.85. 갭 오버슛(관통 건 평균) 5분 0.81·0.90%p × 71·88건 ≈ 58·79%p > 셀 격차.
   wiki 수치 갱신, [[take-profit-stop-loss-2026-09]] 정정, 캐시 사본 `~/.cache/coin-trading-bot/backtest-cache`(114MB).
   최종 검증: `./gradlew build` 실행 1020 / skip 24 / 실패 0(Acceptance 11), wiki 검증 3종 통과(verify.sh tripwire 43±2), plan-lint 통과, `bot/src/main`·`deploy/` diff 0.
+- 2026-09-09 — 교훈 [[lesson-bracket-needs-fill-semantics]] 적립(승인), 후속 이슈 #189·#190·#191 생성. `/e merge`: PR #192(tp-sl-grid 포함) → status done.
 
 # Next
 
-1. 검증 3종·plan-lint·`./gradlew build`(실행/skip 기록) → 결과 커밋(stage: plan·bot 테스트 4파일·scripts 수집기·wiki 6파일+verify.sh).
-2. `/e merge`(사용자 선택 — 이 브랜치는 `tp-sl-grid` 를 포함하므로 PR 하나로 둘 다 main 에 들어간다). 후속 3건은 #189·#190·#191 로 등록. 교훈 [[lesson-bracket-needs-fill-semantics]] 적립 승인 → MEMORY.md 한 줄은 main 복귀 후.
+없음 — PR #192 로 머지. 후속은 #189·#190·#191, 교훈 MEMORY.md 한 줄은 main 복귀 후.
 
 # Decisions
 
