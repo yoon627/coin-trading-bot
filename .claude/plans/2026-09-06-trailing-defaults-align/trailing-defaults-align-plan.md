@@ -1,6 +1,6 @@
 ---
 title: trailing-defaults-align — env 누락 시 조용한 청산규칙 회귀를 예방+탐지로 막는다 (#179)
-status: in_progress
+status: done
 started: 2026-09-06
 updated: 2026-09-08
 ---
@@ -26,13 +26,14 @@ updated: 2026-09-08
   없어 `AUTO_START=true` 면 영구 crash loop. 더 근본적으로 기동을 막으면 **보유 포지션의 손절·트레일링이
   전혀 평가되지 않는 공백**이 생기는데, 기동 실패는 Discord 로도 안 나가고(appender 는 ready 이후 attach)
   자동 롤백은 이미지만 되돌려 결손 `.env` 로 거래를 재개시킨다. 막으려던 손해보다 크다.
+- 2026-09-08: simplify(파생 로직의 죽은 방어 코드 제거) 후 커밋 `78e7e44` → PR 로 main 머지.
 - 2026-09-08: 사용자 판단으로 **예방+탐지**로 재설계. `preflight_exit_params`(업로드 전 차단) +
   `ExitParamsDeclarationCheck`(로그·ERROR, 차단 없음). preflight 를 실제 운영 `.env` 로 통과 확인하고
   결손·빈값·autoStart off 4케이스로 동작 확인. 전체 1001건 / skip 21 / 실패 0.
 
 # Next
 
-- simplify 체크 → 커밋 → 종결 방식 결정(#179 는 닫지 않는다 — Decisions 참조).
+없음 — 머지로 종결. **#179 는 열어 둔다**(기본값 이전은 #184 로 1.5 가 확정된 뒤).
 
 # Decisions
 
