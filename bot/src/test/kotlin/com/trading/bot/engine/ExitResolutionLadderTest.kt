@@ -41,13 +41,15 @@ class ExitResolutionLadderTest {
         val zeroBarMarketDays: Int                // 그날 봉이 없는 (market, day)
         val firstBarMissing: Int                  // 첫 봉(00:00 UTC)만 없는 (market, day)
         val maxBarsPerDay: Int
+        val missingBars: Int                      // 거래일 안의 결측 봉 합계(기대 봉/일 × 일수 − 실제)
         val dayOpen: Map<Pair<String, String>, Double>  // (market, day) → 첫 존재 봉 시가
         val zeroBarDaysOf: Map<String, Set<String>>
         val buyAndHold: Map<String, Double>
         val buyAndHoldMedian: Double
         init {
             val days = sortedSetOf<String>()
-            var zero = 0; var firstMissing = 0; var maxBars = 0
+            var zero = 0; var firstMissing = 0; var maxBars = 0; var missing = 0
+            val expectedPerDay = 24 * 60 / unit
             val opens = HashMap<Pair<String, String>, Double>()
             val zeroOf = HashMap<String, MutableSet<String>>()
             val bh = LinkedHashMap<String, Double>()
@@ -59,15 +61,16 @@ class ExitResolutionLadderTest {
                     val d = ch[i].candleDateTimeKst.substring(0, 10)
                     days += d
                     val bars = byDay[d]
-                    if (bars == null) { zero++; zeroOf.getOrPut(market) { HashSet() } += d; continue }
+                    if (bars == null) { zero++; missing += expectedPerDay; zeroOf.getOrPut(market) { HashSet() } += d; continue }
                     maxBars = maxOf(maxBars, bars.size)
+                    missing += expectedPerDay - bars.size
                     if (!bars.first().candleDateTimeUtc.endsWith("T00:00:00")) firstMissing++
                     opens[market to d] = bars.first().openingPrice
                 }
                 val start = ch[BacktestEngine.MIN_CANDLES]
                 bh[market] = (ch.last().tradePrice - start.openingPrice) / start.openingPrice * 100.0
             }
-            tradingDays = days.toList(); zeroBarMarketDays = zero; firstBarMissing = firstMissing; maxBarsPerDay = maxBars
+            tradingDays = days.toList(); zeroBarMarketDays = zero; firstBarMissing = firstMissing; maxBarsPerDay = maxBars; missingBars = missing
             dayOpen = opens; zeroBarDaysOf = zeroOf; buyAndHold = bh
             val s = bh.values.sorted(); buyAndHoldMedian = (s[s.size / 2] + s[(s.size - 1) / 2]) / 2
         }
@@ -271,13 +274,15 @@ class ExitResolutionLadderTest {
         out.appendLine()
         out.appendLine("## 0. rung 별 기준선·결측 통계 (10-3)")
         out.appendLine()
-        out.appendLine("| 해상도 | 기준 거래 | 기준 Σpnl %p | Σ보유일 | 봉/일 최대 | 0봉 마켓-일 | 첫 봉 결측 마켓-일 | maxT q 주 / 진입봉 / 비관 |")
-        out.appendLine("|---|---|---|---|---|---|---|---|")
+        out.appendLine("| 해상도 | 기준 거래 | 기준 Σpnl %p | Σ보유일 | 봉/일 최대 | 결측 봉(거래일 내) | 0봉 마켓-일 | 첫 봉 결측 마켓-일 | maxT q 주 / 진입봉 / 비관 |")
+        out.appendLine("|---|---|---|---|---|---|---|---|---|")
         for (level in levels) {
             val b = all(level.unit, BASE); val f = families.getValue(level.unit)
-            out.appendLine("| %dm | %d | %+.2f | %d | %d | %d | %d | %.3f / %.3f / %.3f |".format(level.unit, b.size, b.sumOf { it.netPnlPct },
+            val expected = level.windows.sumOf { it.tradingDays.size } * 8 * (24 * 60 / level.unit)
+            out.appendLine("| %dm | %d | %+.2f | %d | %d | %d (%.1f%%) | %d | %d | %.3f / %.3f / %.3f |".format(level.unit, b.size, b.sumOf { it.netPnlPct },
                 b.sumOf { maxOf(1, heldDays(it, level.windows.first { w -> it.entryDate in w.tradingDays && w.daily.containsKey(it.market) })) },
-                level.windows.maxOf { it.maxBarsPerDay }, level.windows.sumOf { it.zeroBarMarketDays }, level.windows.sumOf { it.firstBarMissing },
+                level.windows.maxOf { it.maxBarsPerDay }, level.windows.sumOf { it.missingBars }, 100.0 * level.windows.sumOf { it.missingBars } / expected,
+                level.windows.sumOf { it.zeroBarMarketDays }, level.windows.sumOf { it.firstBarMissing },
                 f.getValue(Arm.PRIMARY).q, f.getValue(Arm.ENTRY_BAR).q, f.getValue(Arm.PESSIMISTIC).q))
         }
         out.appendLine()
