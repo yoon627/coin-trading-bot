@@ -1,6 +1,6 @@
 ---
 title: algorithm-improve — combined 전략·09:00 전량매도 재검토 + 트레일링 폭 240분봉 사전고정 판정 + 경계 재매수 stale-window 가드
-status: in_progress
+status: done
 started: 2026-09-08
 updated: 2026-09-08
 ---
@@ -36,12 +36,11 @@ updated: 2026-09-08
 - 2026-09-08 — 리뷰 라운드: codex(HIGH 1·MEDIUM 2) + code-reviewer(Major 2·Minor 8·Nit 4). fix 처분 전부 반영(REST 경로 가드,
   grace 뒤 REST 폴백, `!isBefore` 비교, WARN 문구, wiki 수치·verified·"60~120초", 판정 테스트 단정). defer 는 `# Review Disposition`·`# Deferred`.
   simplify: `storeCandles!!` 제거, WARN 의 action 을 실제 분기(REST 폴백/skip)와 일치시킴. 최종 `./gradlew build` 1006 / skip 22 / 실패 0.
+- 2026-09-08 — 커밋 `ec41cfe`, 사용자 선택 `/e merge` → PR #188. 후속(그림자 관측 1.0 전환·실매매 SQL 분석)은 `# Deferred`.
 
 # Next
 
-1. code-reviewer + codex 리뷰 finding 처분 → simplify 점검 → 커밋.
-2. 사용자 결정 대기: (a) 경계 가드 머지·배포(`/e merge`), (b) 그림자 관측을 1.0 으로 전환할지(env 1줄, 라이브 무변경),
-   (c) 실매매 SQL 실행 결과 공유 → 사유별 손익·0.0h churn 빈도 분석.
+없음 — PR #188 로 닫는다.
 
 # Decisions
 
@@ -104,7 +103,9 @@ yearly 는 진단 표기만.
 
 # Deferred
 
-- ⏳ 실매매 내역 분석(사유별 손익·재매수 공백·0h churn 빈도) — SQL 준비, 사용자 실행 대기. (높음)
+- ⏳ 실매매 내역 분석(사유별 손익·재매수 공백·0h churn 빈도) — SQL 준비(세션 scratchpad `live_trades.sql`·`dbq.sh`), 사용자 실행 대기. (높음)
+- ⏳ 그림자 관측을 트레일링 1.0 으로 전환 — `VULTR_DEPLOY_ENV` 의 `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT=1.0`(라이브 무변경). 사용자 결정. (중간)
+- ⏳ 배포 후 첫 09:00 경계 로그 확인 — `stale-d1` WARN 이 5분 grace 안에 뜨지 않는지, 재매수 공백이 ≥60초로 바뀌는지. (중간)
 - ⏳ `DateBlockBootstrap` 통계 정의 재검토 — `pLeZero` 는 관측 격차를 그대로 재추출한 합의 꼬리 비율(percentile-CI 보완)이지 귀무 중심 p 가 아니고,
   청산 없는 날이 frame 에서 빠지며, 이름과 달리 길이 1 iid 재추출이라 블록이 아니다. 또 이중 기준(P≤α ∧ 5% 하한>0)은 같은 분포의
   두 분위라 α<0.05 면 후자가 함의되고, Šidák 상수 0.0170 은 0.01695 의 올림이다. 이 정의 위에 세운 판정 4건(`exit-resolution-verdict`·`trailing-arm-finding`·`trailing-width`·`RegimeExpansionTest`)이
