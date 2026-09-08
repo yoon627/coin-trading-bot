@@ -150,3 +150,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 - `LiveSemanticsArm` 에 window 지연 생성·`keepWinnersUntilDays`·`pessimisticTrailing`·`Trade.keptPastLimit` 추가(기본값 종전 동작, md5 동일) → sources 인 [[trailing-width-2026-09]]·[[exit-resolution-verdict-2026-09]]·[[trailing-arm-finding-2026-09]]·[[take-profit-stop-loss-2026-09]] verified 갱신. 수집기 `--unit`·`backtest-cache/`(저장소 밖) 규약은 [[upbit-api]] 와 `scripts/collect_intraday_fixtures.py` docstring.
 - 리뷰(code-reviewer + codex) 정정 반영: [[take-profit-stop-loss-2026-09]] 의 "진입봉 유령 손절" 프레이밍은 코드와 어긋난다(`combined` 가 현재가 ≤ 돌파선을 거부해 체결은 항상 봉 시가 → 진입 봉 저가는 체결 이후). 답·손절 축·읽는 법·index 한 줄을 정정. 사다리 페이지의 진입 메커니즘·결측 허용치 방향·막힌 진입 정의도 같은 리뷰로 보강.
 - 근거: `ExitResolutionLadderTest`(`RUN_EXIT_LADDER=true`) 산출물, plan-reviewer 1회(NO-GO 반영)·code-reviewer·codex 검토. 진행 상태는 plan 소유.
+
+## [2026-09-09] decision | lesson-bracket-needs-fill-semantics — 사다리 리뷰가 반증한 브래킷 전제를 교훈으로
+
+- [[lesson-bracket-needs-fill-semantics]] 신설: 감도 family 를 "유령 손절 브래킷"으로 설계하면서 계기의 체결 규칙(`combined` 가 현재가 ≤ 돌파선 거부 → 체결은 항상 봉 시가)을 코드로 확인하지 않은 것, 비관 브래킷이 경로 가정과 모순되는 청산을 낸 것. 3 Whys·올바른 방법(체결 규칙 한 줄 + 경로 가정별 단위테스트). 사용자 승인 후 적립(§13).
