@@ -90,3 +90,6 @@ wiki/raw/
 # 추적 대상이지만, 아래는 도구가 생성하는 로컬 상태다.
 .serena/
 .codex/
+
+### Backtest intraday cache (분봉 fixture, git 밖 — scripts/collect_intraday_fixtures.py --unit 15|5)
+backtest-cache/
