@@ -36,11 +36,19 @@ internal object LiveSemanticsArm {
         val exitPrice: Double,
         val netPnlPct: Double,
         val reason: String,
+        /** 진입한 바로 그 240분봉에서 청산됐는가 — 진입 봉 손절 편향(봉 저가가 진입 이전일 수 있다)의 노출을 세는 데 쓴다. */
+        val exitOnEntryBar: Boolean = false,
+        /** 청산 봉의 시가·저가(END 는 NaN). 임계선 체결이 시가 체결·봉 저가와 얼마나 다른지(무슬리피지 편향 크기)를 재는 진단용. */
+        val exitBarOpen: Double = Double.NaN,
+        val exitBarLow: Double = Double.NaN,
     )
 
     /**
      * @param dailyChronological 시간순 일봉(워밍업·완결 봉 공급용). 앞 [warmup] 개는 신호에 쓰이고 거래는 그 뒤부터.
      * @param intradayChronological 시간순 240분봉. `candle_date_time_utc` 필수.
+     * @param entryBarStopOnClose 진입 봉의 손절만 봉 저가 대신 **종가**로 판정한다(발동 시 체결가는 손절선). 돌파 봉의 저가는 대개
+     *   돌파 **이전**에 찍힌 값이라 기본(false)은 유령 손절 쪽으로, true 는 미발동 쪽으로 치우친다 — 둘이 진입 봉 편향의 브래킷이다.
+     *   진입 봉은 `armPeak = 체결가` 라 트레일링이 걸리지 않고 익절은 봉 고가(돌파 이후)로 보므로 다른 게이트는 영향받지 않는다.
      */
     suspend fun run(
         market: String,
@@ -50,6 +58,7 @@ internal object LiveSemanticsArm {
         config: BacktestConfig,
         props: TradingProperties,
         warmup: Int = BacktestEngine.MIN_CANDLES,
+        entryBarStopOnClose: Boolean = false,
     ): List<Trade> {
         val signalProps = props.copy(kValue = config.kValue)
         val feePct = config.feeRate * 2 * 100
@@ -99,6 +108,7 @@ internal object LiveSemanticsArm {
                         trades += Trade(
                             market, entryDate, day, entryPrice, decision.sellPrice,
                             (decision.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, decision.reason,
+                            exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice,
                         )
                         position = false
                     }
@@ -120,10 +130,12 @@ internal object LiveSemanticsArm {
                             // 진입 봉의 intrabar 게이트도 받는다 — 빼면 진입 당일만 손절·익절 보호가 없어 편향된다.
                             val armPeak = peak
                             peak = IntrabarExitModel.updatedPeak(peak, bar, false)
-                            IntrabarExitModel.evaluate(bar, entryPrice, armPeak, false, config, chartExitSignal = false)?.let { d ->
+                            val entryBar = if (entryBarStopOnClose) bar.copy(lowPrice = bar.tradePrice) else bar
+                            IntrabarExitModel.evaluate(entryBar, entryPrice, armPeak, false, config, chartExitSignal = false)?.let { d ->
                                 trades += Trade(
                                     market, entryDate, day, entryPrice, d.sellPrice,
                                     (d.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, d.reason,
+                                    exitOnEntryBar = true, exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice,
                                 )
                                 position = false
                             }
