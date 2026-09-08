@@ -1,8 +1,8 @@
 ---
 title: exit-params-snapshot — 청산 게이트가 진입 시점 스냅샷을 따르게 한다 (#177)
-status: in_progress
+status: done
 started: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-08
 ---
 
 # Goal
@@ -23,7 +23,8 @@ updated: 2026-09-06
 
 # Next
 
-PR #183 머지·배포 후 운영에서 회귀 없음 확인.
+없음 — PR #183 머지(2026-09-06)·배포 success, 이슈 #177 closed. 이후 배포 3회에서 회귀 없음
+(2026-09-08 확인: 컨테이너 healthy, ERROR 0건).
 
 # Decisions
 
