@@ -7,8 +7,8 @@
 
 **왜 240분인가**: 청산 시각 H 의 체결가는 그 시각 봉의 `open` 이고, 이 값은 240분봉이든 1분봉이든
 동일하다. granularity 가 바꾸는 것은 후보 시각의 개수(240m → KST 01/05/09/13/17/21 6개)와
-경계 **사이** 가격게이트 판정 횟수뿐이다. 1분봉은 8마켓 1년에 2.5GB·67,104요청이면서 시각 축에
-추가 정보를 주지 않는다.
+경계 **사이** 가격게이트 판정 횟수뿐이다. 그래서 **청산 시각** 질문에는 240분봉이면 충분하다(1분봉은 8마켓 1년에
+2.5GB·67,104요청). 경계 사이 판정 횟수가 결과를 바꾸는 경로 의존 게이트는 아래 단위 사다리가 다룬다.
 
 마켓·구간은 기존 fixture 를 그대로 따른다(`BacktestFixtures.MARKETS_BY_REGIME` · `YearlyFixtures.MARKETS`) —
 일봉과 다른 유니버스를 쓰면 일중 결과를 일봉 측정과 나란히 놓을 수 없다.
@@ -22,6 +22,7 @@
 """
 import argparse
 import gzip
+import os
 import json
 import pathlib
 import sys
@@ -38,6 +39,8 @@ PAGE = 200
 # 그래서 **허용하되 목록으로 남기고**, 소비자가 그 시각을 경계로 쓰는 거래를 제외하게 한다.
 # 봉이 짧을수록 체결 없는 구간(봉 자체가 생성되지 않음)이 흔하므로 허용 비율은 단위별이다.
 # 5분: 저유동 마켓(2020 TRX·ETC, 2023 POLYX·ARB, 2025 CTC)이 6~11% 결측 — 실측(2026-09-09) 위에 여유를 둔 15%.
+# 5분 15% 는 10창 실측(저유동 마켓 6~11%)에서 정했다. 1분 25% 는 실측 없는 외삽이다.
+# TODO: 1분봉 허용치를 첫 `--unit 1` 수집의 실측으로 확정 (1분봉을 실제로 쓰는 작업이 생길 때)
 MAX_MISSING_RATIO = {240: 0.005, 15: 0.02, 5: 0.15, 1: 0.25}
 
 # 일봉 fixture 와 같은 구간·같은 로스터. 값은 `BacktestFixtures.MARKETS_BY_REGIME` 과 `README.md` 의 산출물이다.
@@ -62,7 +65,8 @@ WINDOWS: dict[str, tuple[date, date, list[str]]] = {
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURE_ROOT = REPO_ROOT / "bot/src/test/resources/backtest"
 # 240분봉은 추적 fixture(27MB). 그보다 짧은 단위는 수백 MB 라 저장소 밖 캐시에 gzip 으로 둔다(`.gitignore` 의 `backtest-cache/`).
-CACHE_ROOT = REPO_ROOT / "backtest-cache"
+# `BACKTEST_CACHE_DIR` 로 저장소 밖에 둘 수 있다(worktree 삭제에 딸려 지워지지 않게). 로더 `IntradayCache.cacheRoot()` 와 같은 규약.
+CACHE_ROOT = pathlib.Path(os.environ.get("BACKTEST_CACHE_DIR") or (REPO_ROOT / "backtest-cache"))
 
 
 def out_root(unit: int) -> pathlib.Path:
