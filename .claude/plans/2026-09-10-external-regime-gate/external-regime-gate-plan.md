@@ -1,6 +1,6 @@
 ---
 title: external-regime-gate — 김치프리미엄·펀딩·공포탐욕·ETH/BTC·테이커 흐름을 combined 진입 레짐 게이트로 얹어 5분봉 사전고정 판정
-status: in_progress
+status: done
 started: 2026-09-10
 updated: 2026-09-10
 ---
@@ -32,10 +32,14 @@ ETH/BTC 비율 추세, Binance BTC 테이커 매수 비율)이 현행 `combined`
 - 2026-09-10 구현: `scripts/collect_external_series.py`(+단위테스트 8건 통과) → fixture 5종 2,536행(2019-10-01~2026-09-09; Frankfurter 가 Python 기본 UA 를 403 으로 막아 UA 지정) → `ExternalSeries`·`ExternalRegime`·`DateGatedStrategy`·`ExternalRegimeGateTest` → `compileTestKotlin` 통과(JDK 는 `jbr-21.0.9` 지정 필요 — 기본 JDK 25 로는 Gradle 이 안 뜬다). 6(d)·6(f) 문구를 마켓 합집합·(market,day) 기준으로 정확히 고침(결과 보기 전).
 - 2026-09-10 smoke(`GATE_UNITS=240`): 배관 단정 8a(ALL_PASS = 기준)·8b(결측 0)·8d(위상 이동 불변) 통과, 240분 기준 거래 1,058 = 선행 사다리. ⚠️ 선행 관례대로 **240분봉 결과는 커밋 전에 관측됐다**(13셀 전부 격차 음수, 통과 0) — blind 인 것은 15·5분봉뿐이다. 마켓 이름 합집합은 35 라 6(d) 는 27/35 이상을 뜻한다.
 - **아래 `# Acceptance` 는 이 커밋 시점에 고정된다.**
+- 2026-09-10 본 실행(`ca3242e` 뒤, 3분 42초): 후보 0·null 무효(N0 21). wiki `query/external-signal-gate-2026-09` + index + log. 결과는 `# Acceptance` 아래 인용 블록.
 
 # Next
 
-1. `RUN_EXTERNAL_GATE=true` 15·5분봉 본 실행(사전고정 커밋 뒤) → 결과를 `# Acceptance` 아래 인용 블록으로 → wiki `query/external-regime-gate-2026-09.md` + index → 검증 3종.
+없음 — 판정 종료. 재시도는 5분봉 기준선 재판정(#189·#190) 뒤 새 사전고정으로.
+
+## (완료 전 마지막 단계였던 것)
+1. `RUN_EXTERNAL_GATE=true` 15·5분봉 본 실행(사전고정 커밋 뒤) → 결과를 `# Acceptance` 아래 인용 블록으로 → wiki `query/external-signal-gate-2026-09.md` + index → 검증 3종.
 
 # Decisions
 
@@ -99,7 +103,12 @@ Upbit 파생 데이터(존재하지 않음, 국내 파생 금지) · BTC 도미�
 9. **보고**(`bot/build/reports/external-regime-gate.md`): 셀별 240/15/5분 표(격차·격차/기준거래·95% 하한·한계 p·maxT 통과·차단율·마켓별 부호), null 게이트 `N0`, 후보 판정표 (a)~(g).
 10. **보고 형식**은 실행 전에 고정하고 실행 후 열을 더하지 않는다.
 11. `./gradlew build` 통과, `deploy/` diff 0, 라이브 코드(`bot/src/main`·`common/src/main`) diff 0.
-12. wiki `query/external-regime-gate-2026-09.md` + `wiki/index.md` 등재, 검증 3종 통과. 결과는 인용 블록으로 이 섹션 아래에 덧붙이고 원문은 안 고친다.
+12. wiki `query/external-signal-gate-2026-09.md` + `wiki/index.md` 등재, 검증 3종 통과. 결과는 인용 블록으로 이 섹션 아래에 덧붙이고 원문은 안 고친다.
+
+> 실행 결과(2026-09-10, 사전고정 커밋 `ca3242e`, 문구는 위 그대로): 1·2·3·4 ✅ 계기·family·기여·통계량 그대로 실행(3분 42초). 5 **null N0 = 21 > 13 → 계기 무효**.
+> 6 5분봉 maxT 통과 1셀(`FNG_FEAR` +0.164/거래, T 2.80)이나 (d) 26/35 < 27·(f) 차단율 82%·(g) null 무효로 후보 아님 — **후보 0, 현행 유지**. 나머지 12셀 통과 0(전부 양수, 최대 COMBO/FUND_NEG +0.104).
+> 7 fixture 5종 2,536행 ✅. 8 (a) 세 rung ALL_PASS = 기준 ✅ (b) 결측 0 ✅ (c) 차단율 표 ✅ (d) 위상 이동 불변 ✅ (e) 5분 기준 1,767 ✅. 9·10 리포트 형식 고정 ✅.
+> 11·12 는 아래 Progress 의 검증 줄. 결론 = "외부 정보 5부류 발견 없음. 5분봉 기준선이 음수인 한 진입을 줄이는 모든 규칙이 대조군과 구분되지 않는다 — #189·#190 이 선행".
 
 # Key Files
 
