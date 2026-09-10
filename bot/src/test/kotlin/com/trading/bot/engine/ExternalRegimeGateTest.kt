@@ -27,26 +27,32 @@ class ExternalRegimeGateTest {
     private val base: TradingStrategy = YearlyStrategyComparison.ALL_STRATEGIES.first { it.name == StrategySearchGrid.BASELINE_STRATEGY }
     private val config = StrategySearchGrid.currentLivePoint().toConfig()
 
-    private class WindowData(val label: String, val dir: String, val daily: Map<String, List<Candle>>, val intraday: Map<String, List<Candle>>) {
+    private class WindowData(val label: String, val dir: String, val unit: Int, val daily: Map<String, List<Candle>>, val intraday: Map<String, List<Candle>>) {
         val tradingDays: List<String>
         val zeroBarMarketDays: Int
+        val maxBarsPerDay: Int
+        val dayOpen: Map<Pair<String, String>, Double>   // (market, day) → 첫 존재 봉 시가 — rung 간 동일해야 한다(7e)
         val buyAndHoldMedian: Double
         init {
             val days = sortedSetOf<String>()
-            var zero = 0
+            var zero = 0; var maxBars = 0
+            val opens = HashMap<Pair<String, String>, Double>()
             val bh = ArrayList<Double>()
             for ((market, newestFirst) in daily) {
                 val ch = newestFirst.reversed()
-                val byDay = intraday.getValue(market).groupBy { it.candleDateTimeUtc.substring(0, 10) }
+                val byDay = intraday.getValue(market).sortedBy { it.candleDateTimeUtc }.groupBy { it.candleDateTimeUtc.substring(0, 10) }
                 for (i in BacktestEngine.MIN_CANDLES until ch.size) {
                     val d = ch[i].candleDateTimeKst.substring(0, 10)
                     days += d
-                    if (byDay[d] == null) zero++
+                    val bars = byDay[d]
+                    if (bars == null) { zero++; continue }
+                    maxBars = maxOf(maxBars, bars.size)
+                    opens[market to d] = bars.first().openingPrice
                 }
                 val start = ch[BacktestEngine.MIN_CANDLES]
                 bh += (ch.last().tradePrice - start.openingPrice) / start.openingPrice * 100.0
             }
-            tradingDays = days.toList(); zeroBarMarketDays = zero
+            tradingDays = days.toList(); zeroBarMarketDays = zero; maxBarsPerDay = maxBars; dayOpen = opens
             val s = bh.sorted(); buyAndHoldMedian = (s[s.size / 2] + s[(s.size - 1) / 2]) / 2
         }
         fun key(date: String) = "$dir/$date"
@@ -74,7 +80,7 @@ class ExternalRegimeGateTest {
             Level(unit, regimes.map { r ->
                 val daily = BacktestFixtures.loadAll(r)
                 val intraday = if (unit == 240) IntradayFixtures.loadAll(r.dir, daily.keys) else IntradayCache.loadAll(unit, r.dir, daily.keys)
-                WindowData(r.label, r.dir, daily, intraday)
+                WindowData(r.label, r.dir, unit, daily, intraday)
             })
         }
         val base240 = levels.first()
@@ -91,10 +97,23 @@ class ExternalRegimeGateTest {
         assertEquals(BH_NEG, bhNeg, "단순보유 창 분류가 선행 표와 다르다")
         val incomplete = base240.windows.flatMap { w -> w.tradingDays.filter { !regime.complete(LocalDate.parse(it)) }.map { w.key(it) } }
         assertTrue(incomplete.isEmpty(), "외부 시계열 결측(이월 ${ExternalSeries.MAX_CARRY}일 초과) ${incomplete.size}일: ${incomplete.take(5)} (8b)")
+        // 7d 봉/일 상한 · 7e rung 간 (market, day) 첫 봉 시가 동일 — 캐시 오염 검출(IntradayCache.available 은 파일 존재만 본다)
+        for (level in levels) level.windows.forEach { assertTrue(it.maxBarsPerDay <= 24 * 60 / level.unit, "${level.unit}m ${it.label}: 봉/일 ${it.maxBarsPerDay} (7d)") }
+        for (level in levels.drop(1)) for ((w240, w) in base240.windows.zip(level.windows)) for ((k, o) in w.dayOpen) {
+            val o240 = w240.dayOpen[k] ?: continue
+            assertTrue(kotlin.math.abs(o - o240) <= 1e-9 * maxOf(1.0, o240), "${level.unit}m ${w.label} $k: 첫 봉 시가 $o ≠ 240분 $o240 (7e)")
+        }
+        // 8d — 다섯 시계열 전부: 달력 구간 동일·값 개수 동일·값 다중집합 동일, 그리고 이동량이 정확히 s×17일
         for (s in 1..NULL_SEEDS) {
-            val shifted = regime.shifted(s * NULL_SHIFT_STEP)
-            assertEquals(regime.kimp.dates, shifted.kimp.dates, "위상 이동 날짜 집합 (8d)")
-            assertEquals(regime.kimp.dates.map { regime.kimp.lagged(it.plusDays(1))!! }.sorted(), shifted.kimp.dates.map { shifted.kimp.lagged(it.plusDays(1))!! }.sorted(), "위상 이동 값 다중집합 (8d)")
+            val shift = s * NULL_SHIFT_STEP
+            val shifted = regime.shifted(shift)
+            for ((a, b) in regime.all().zip(shifted.all())) {
+                assertEquals(a.firstDate to a.lastDate, b.firstDate to b.lastDate, "${a.name}: 위상 이동 달력 구간 (8d)")
+                assertEquals(a.size, b.size, "${a.name}: 위상 이동 값 개수 (8d)")
+                assertEquals(a.sortedValues(), b.sortedValues(), "${a.name}: 위상 이동 값 다중집합 (8d)")
+                val probe = a.firstDate.plusDays(400)
+                assertEquals(a.lagged(probe.plusDays(shift.toLong())), b.lagged(probe), "${a.name}: 이동량 ≠ ${shift}일 (8d)")
+            }
         }
 
         // ── 실행 ──
@@ -134,7 +153,7 @@ class ExternalRegimeGateTest {
 
         // ── 배관 단정 8a·8e ──
         for (level in levels) assertEquals(baseRuns.getValue(level.unit).byWindow, allPassRuns.getValue(level.unit).byWindow, "${level.unit}m ALL_PASS 거래가 기준과 다르다 (8a)")
-        if (P == 5) assertEquals(PRIOR_BASE_TRADES_5M, baseRuns.getValue(5).all.size, "5분봉 기준 거래수가 선행 사다리와 다르다 (8e)")
+        for (level in levels) assertEquals(PRIOR_BASE_TRADES.getValue(level.unit), baseRuns.getValue(level.unit).all.size, "${level.unit}분봉 기준 거래수가 선행 사다리와 다르다 (8e)")
 
         // ── 기여(진입일 단위) · 부트스트랩 ──
         fun contributions(level: Level, run: Run, filter: (WindowData) -> Boolean = { true }): DoubleArray {
@@ -174,8 +193,9 @@ class ExternalRegimeGateTest {
 
         // ── 진단: 보유일·노출·마켓 부호 ──
         fun heldDays(t: LiveSemanticsArm.Trade, w: WindowData): Int = maxOf(1, w.tradingDays.indexOf(t.exitDate) - w.tradingDays.indexOf(t.entryDate))
-        fun windowOf(level: Level, t: LiveSemanticsArm.Trade) = level.windows.first { w -> w.daily.containsKey(t.market) && t.entryDate in w.tradingDays }
-        fun exposure(level: Level, run: Run): Double { val ts = run.all; return if (ts.isEmpty()) 0.0 else ts.sumOf { it.netPnlPct } / ts.sumOf { heldDays(it, windowOf(level, it)) } }
+        fun windowOf(level: Level, dir: String) = level.windows.first { it.dir == dir }
+        fun sumHeld(level: Level, run: Run) = run.byWindow.entries.sumOf { (dir, ts) -> ts.sumOf { heldDays(it, windowOf(level, dir)) } }
+        fun exposure(level: Level, run: Run): Double { val ts = run.all; return if (ts.isEmpty()) 0.0 else ts.sumOf { it.netPnlPct } / sumHeld(level, run) }
         fun exposureGap(level: Level, run: Run) = exposure(level, run) - exposure(level, baseRuns.getValue(level.unit))
         fun marketSigns(run: Run): Pair<Int, Int> {
             val gap = HashMap<String, Double>()
@@ -222,7 +242,7 @@ class ExternalRegimeGateTest {
         out.appendLine("|---|---|---|---|---|---|---|")
         for (level in levels) {
             val b = baseRuns.getValue(level.unit)
-            out.appendLine("| %dm | %d | %+.2f | %d | 예 | %.3f | %.3f |".format(level.unit, b.all.size, b.all.sumOf { it.netPnlPct }, b.all.sumOf { heldDays(it, windowOf(level, it)) }, families.getValue(level.unit).q, family7.getValue(level.unit).q))
+            out.appendLine("| %dm | %d | %+.2f | %d | 예 | %.3f | %.3f |".format(level.unit, b.all.size, b.all.sumOf { it.netPnlPct }, sumHeld(level, b), families.getValue(level.unit).q, family7.getValue(level.unit).q))
         }
         out.appendLine()
         out.appendLine("## 1. 사다리 — 격차/기준거래 %p · 통과 · 수렴 · 후보 (9)")
@@ -249,7 +269,7 @@ class ExternalRegimeGateTest {
             val neg = interval("$P/neg/$i")
             val ref7 = REFERENCE_7.indexOf(c).let { if (it >= 0) (if (family7.getValue(P).cells[it].pass) "통과" else "—") else "해당 없음" }
             out.appendLine("| %s | %d | %d | %+.2f | %+.3f | %.2f | %.2f | %+.2f | %.4f | %s | %s | %d | %d | %+.4f | %+.3f [%+.3f, %+.3f] |".format(
-                c.label, run.all.size, run.all.sumOf { heldDays(it, windowOf(lvP, it)) }, p.g, p.g / baseCount(P), p.se, p.t, p.lowerBound, p.marginalP,
+                c.label, run.all.size, sumHeld(lvP, run), p.g, p.g / baseCount(P), p.se, p.t, p.lowerBound, p.marginalP,
                 if (p.pass) "**통과**" else "—", ref7, run.blocked, run.allowed, f.exposure, neg.g / nNeg, neg.ciLow / nNeg, neg.ciHigh / nNeg))
         }
         out.appendLine()
@@ -304,7 +324,7 @@ class ExternalRegimeGateTest {
         val BH_NEG = setOf("bull", "p2021h1", "p2021h2", "p2022h1")
         const val EXPECTED_DAYS_PER_WINDOW = 150
         const val EXPECTED_FRAME_DAYS = 1_500
-        /** 선행 사다리(`exit-resolution-ladder-2026-09`) 5분봉 기준 거래수 — 사전고정 8e. */
-        const val PRIOR_BASE_TRADES_5M = 1_767
+        /** 선행 사다리(`exit-resolution-ladder-2026-09`) rung 별 기준 거래수 — 사전고정 8e, rung 마다 핀. */
+        val PRIOR_BASE_TRADES = mapOf(240 to 1_058, 15 to 1_659, 5 to 1_767)
     }
 }
