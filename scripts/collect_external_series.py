@@ -206,7 +206,8 @@ def build(end: date) -> dict[str, dict]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true")
-    ap.add_argument("--end", type=date.fromisoformat, default=date.today() - timedelta(days=1))
+    # UTC 어제 — 로컬(KST) 달력으로 잡으면 새벽 실행에서 아직 안 끝난 UTC 일봉을 쓴다.
+    ap.add_argument("--end", type=date.fromisoformat, default=datetime.now(timezone.utc).date() - timedelta(days=1))
     args = ap.parse_args()
     series = build(args.end)
     for name, s in series.items():

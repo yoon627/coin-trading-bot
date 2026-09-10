@@ -45,17 +45,26 @@ class ExternalSeries private constructor(val name: String, private val byDate: T
     }
 
     /**
-     * 위상 이동 대조군 — 같은 날짜 집합 위에 값을 [shiftDays] 칸 순환 이동한다(날짜 집합 동일·값 다중집합 동일, 사전고정 8d).
-     * 상태 없는 순수 함수라 셀·seed 가 바뀌어도 대조군 정의가 흔들리지 않는다.
+     * 위상 이동 대조군 — **달력** 위에서 [shiftDays] 만큼 순환 이동한다: 새 값(d) = 원본 값(wrap(d + shift)), wrap 은 첫 날짜~마지막 날짜 구간 순환.
+     * 행 인덱스가 아니라 달력으로 옮겨야 결측이 있는 시계열(fng 1일)도 다른 시계열과 **같은 칸**으로 움직인다(사전고정 4·8d).
+     * 값 다중집합·날짜 개수는 보존되고, 결측 칸만 함께 이동한다. 상태 없는 순수 함수라 셀·seed 가 바뀌어도 대조군 정의가 흔들리지 않는다.
      */
     fun shifted(shiftDays: Int): ExternalSeries {
-        val keys = byDate.keys.toList()
-        val values = byDate.values.toList()
-        val n = keys.size
+        val first = byDate.firstKey()
+        val span = java.time.temporal.ChronoUnit.DAYS.between(first, byDate.lastKey()) + 1
         val out = TreeMap<LocalDate, Double>()
-        for (i in keys.indices) out[keys[i]] = values[Math.floorMod(i + shiftDays, n)]
+        for (i in 0 until span) {
+            val d = first.plusDays(i)
+            val src = first.plusDays(Math.floorMod(i + shiftDays, span))
+            byDate[src]?.let { out[d] = it }
+        }
         return ExternalSeries("$name+$shiftDays", out)
     }
+
+    /** 값 다중집합(정렬) — 위상 이동 불변식 검사용. */
+    fun sortedValues(): List<Double> = byDate.values.sorted()
+    val firstDate: LocalDate get() = byDate.firstKey()
+    val lastDate: LocalDate get() = byDate.lastKey()
 
     companion object {
         const val MAX_CARRY = 3
@@ -107,7 +116,9 @@ class ExternalRegime(
     }
 
     /** 모든 시계열이 [day] 에 값(이월 포함)과 롤링 통계를 가지는가 — 배관 단정 8b. */
-    fun complete(day: LocalDate): Boolean = runCatching { Cell.values().forEach { allows(it, day) } }.isSuccess
+    fun complete(day: LocalDate): Boolean = try { Cell.values().forEach { allows(it, day) }; true } catch (e: IllegalStateException) { false }
+
+    fun all() = listOf(kimp, funding, fng, ethbtc, taker)
 
     fun shifted(shiftDays: Int) = ExternalRegime(kimp.shifted(shiftDays), funding.shifted(shiftDays), fng.shifted(shiftDays), ethbtc.shifted(shiftDays), taker.shifted(shiftDays))
 

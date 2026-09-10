@@ -19,6 +19,7 @@ class ExternalSeriesTest {
     fun `gate value for a trading day is the previous data day`() {
         val day = LocalDate.parse("2021-05-20")
         assertEquals(fixture.dates.let { d -> d.first { it == day.minusDays(1) } }, day.minusDays(1))
+        assertEquals(23.0, fixture.lagged(day), "2021-05-19 의 F&G 값(fixture 리터럴) — D 가 아니라 D−1")
         assertEquals(fixture.lagged(day), fixture.laggedBy(day, 0))
         assertEquals(fixture.lagged(day.minusDays(5)), fixture.laggedBy(day, 5))
     }
@@ -35,10 +36,11 @@ class ExternalSeriesTest {
     @Test
     fun `phase shift keeps the date set and the value multiset`() {
         val shifted = fixture.shifted(17)
-        assertEquals(fixture.dates, shifted.dates)
-        val original = fixture.dates.map { fixture.lagged(it.plusDays(1))!! }.sorted()
-        val moved = shifted.dates.map { shifted.lagged(it.plusDays(1))!! }.sorted()
-        assertEquals(original, moved)
+        assertEquals(fixture.firstDate to fixture.lastDate, shifted.firstDate to shifted.lastDate)
+        assertEquals(fixture.size, shifted.size)
+        assertEquals(fixture.sortedValues(), shifted.sortedValues())
+        val probe = LocalDate.parse("2021-05-20")
+        assertEquals(fixture.lagged(probe.plusDays(17)), shifted.lagged(probe), "달력 17일 이동")
         assertFalse(fixture.dates.all { fixture.lagged(it.plusDays(1)) == shifted.lagged(it.plusDays(1)) }, "이동했는데 값이 그대로다")
     }
 

@@ -1,10 +1,10 @@
 ---
-title: 외부 레짐 게이트 — 김프·펀딩·공포탐욕·ETH/BTC·테이커 13셀은 5분봉에서 전부 양수지만 위상 이동 대조군도 같이 통과한다(N0 21 > 13) → 정보가 아니라 "덜 거래" 효과, 후보 0
+title: 외부 레짐 게이트 — 김프·펀딩·공포탐욕·ETH/BTC·테이커 13셀은 5분봉에서 전부 양수지만 위상 이동 대조군도 같이 통과한다(N0 20 > 13) → 정보가 아니라 "덜 거래" 효과, 후보 0
 category: query
 created: 2026-09-10
 updated: 2026-09-10
 claim_state: current
-verified: 2026-09-10 — `RUN_EXTERNAL_GATE=true BACKTEST_CACHE_DIR=~/.cache/coin-trading-bot/backtest-cache ./gradlew :bot:test --tests "*ExternalRegimeGateTest*" --rerun-tasks` (JDK jbr-21.0.9, 3분 42초). 사전고정 커밋 `ca3242e`(plan + 하네스 + fixture, 15·5분봉 결과 전). fixture 10창 D1 + `intraday240/` + `backtest-cache/intraday{15,5}/` + `backtest/external/` 5종(수집 2026-09-10)
+verified: 2026-09-10 — `RUN_EXTERNAL_GATE=true BACKTEST_CACHE_DIR=~/.cache/coin-trading-bot/backtest-cache ./gradlew :bot:test --tests "*ExternalRegimeGateTest*" --rerun-tasks` (JDK jbr-21.0.9, 약 4분). 사전고정 커밋 `ca3242e`(plan + 하네스 + fixture, 15·5분봉 결과 전); 리뷰가 잡은 배관 결함(위상 이동을 행 인덱스→달력 순환으로, 240·15분 rung 거래수 핀·봉/일·첫 봉 시가 단정 복원) 수정 후 같은 규칙으로 재실행 — 셀 수치 불변, N0 21→20. fixture 10창 D1 + `intraday240/` + `backtest-cache/intraday{15,5}/` + `backtest/external/` 5종(수집 2026-09-10)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/ExternalRegimeGateTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/ExternalSeries.kt
@@ -20,7 +20,7 @@ sources:
 진입을 걸러 거래당 손익을 올리는가. 계기는 [[exit-resolution-ladder-2026-09]] 와 동일(`LiveSemanticsArm` 5분봉 주 판정·10창·진입일 기여·paired maxT).
 
 **답**: **후보 0, 계기 무효.** 5분봉에서 13셀 전부 격차가 양수이고 `FNG_FEAR` 는 maxT 를 넘지만(+0.164%p/거래, T 2.80), 같은 규칙을 **날짜를
-순환 이동한 시계열**(정보가 0 인 대조군) 20벌에 적용해도 21건이 통과한다 — 사전고정 상한 13 을 넘어 계기 자체가 무효다. 게이트의 이득은 신호의 정보가
+순환 이동한 시계열**(정보가 0 인 대조군) 20벌에 적용해도 20건이 통과한다 — 사전고정 상한 13 을 넘어 계기 자체가 무효다. 게이트의 이득은 신호의 정보가
 아니라 **기준선이 음수인 구간(5분봉 Σpnl −219%p)에서 진입을 줄이면 무엇이든 이긴다**는 구조에서 나온다. 셀·대조군이 같은 크기의 이득을 내는 것이 그 서명이다.
 
 ## 사전고정 (15·5분봉 결과 보기 전 커밋 `ca3242e` — 240분봉은 smoke 로 먼저 관측)
@@ -58,9 +58,9 @@ sources:
 기준선: 240분 1,058건 +235.9%p / 15분 1,659건 −124.8 / 5분 1,767건 −219.4 (선행 사다리와 동일). 240분봉에서는 13셀 **전부 음수**, 5분봉에서는 **전부 양수** —
 셀의 부호가 신호와 무관하게 기준선의 부호를 거꾸로 따라간다.
 
-### null 게이트 — N0 = 21 / 260 (상한 13) → 무효
+### null 게이트 — N0 = 20 / 260 (상한 13) → 무효
 
-위상 이동 20 seed 중 11 seed 에서 1~4셀이 통과했다(최대 T 3.33, 최대 격차/거래 +0.161 — 실제 `FNG_FEAR` +0.164 와 같은 크기). 이동한 시계열은 시장 사이클과의
+위상 이동 20 seed 중 10 seed 에서 1~4셀이 통과했다(최대 T 3.33, 최대 격차/거래 +0.161 — 실제 `FNG_FEAR` +0.164 와 같은 크기). 이동한 시계열은 시장 사이클과의
 정렬이 깨져 정보가 0 인데도 실제 셀과 같은 분포의 이득을 낸다. 판정은 사전고정대로 **계기 무효 → 후보 0** 이고, 이것이 이 페이지의 주 관측이다.
 
 ### 왜 대조군까지 통과하나
@@ -81,7 +81,7 @@ sources:
 
 - 게이트가 진입 하나를 막으면 이후 포지션 상태가 달라져 셀 거래는 기준의 부분집합이 아니다. 기여는 진입일 차분이라 상쇄가 크지만 완전하지 않다.
 - 신호는 전부 BTC 기준 시장 전체 스칼라 — 마켓별 김프·펀딩은 재지 않았다(Binance 상장일·유동성 편차로 fixture 결측 증가).
-- 20 seed 는 분위수가 아니라 통과 건수 상한(13)으로만 쓴다. BTC 도미넌스·스테이블 유입은 무료 이력이 없어 ETH/BTC·테이커 비율로 대리했다(plan Decisions 5).
+- 20 seed 는 분위수가 아니라 통과 건수 상한(13)으로만 쓴다. 이동 방향은 앞(대조군이 s×17일 뒤의 값을 본다) — 뒤로 옮기면 fixture 시작(2019-10) 앞으로 나가 결측이 된다. 관측된 통과 기제(음수 기준선에서 진입 감소)는 방향과 무관하지만, 방향이 N0 를 키웠을 가능성은 0 이 아니다(리뷰 accepted-risk). BTC 도미넌스·스테이블 유입은 무료 이력이 없어 ETH/BTC·테이커 비율로 대리했다(plan Decisions 5).
 - 생존편향·단일 포지션·무슬리피지 등은 선행 사다리와 같다.
 
 ## 재현
