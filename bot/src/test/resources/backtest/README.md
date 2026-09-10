@@ -115,3 +115,18 @@ granularity 가 바꾸는 것은 후보 시각의 개수(240m → 6개)와 경�
 
 **왜 필요한가**: Upbit 일봉 경계가 곧 09:00 이라 **일봉 종가 ≡ 익일 일봉 시가**이고(KRW-BTC 364쌍 평균 |차| 0.012%),
 따라서 일봉에는 09:00 이외 시각에 대한 정보가 **0비트**다. 시각 축은 일중봉 없이 원리적으로 측정 불가다.
+
+## `external/` — 외부 레짐 시계열 (마켓 무관 일별 스칼라)
+
+| 항목 | 값 |
+|---|---|
+| 파일 | `kimp_btc`(김치프리미엄 %) · `funding_btcusdt`(BTC 펀딩레이트 일평균 %) · `fng`(공포·탐욕 0~100) · `ethbtc`(ETH/BTC 종가) · `taker_btcusdt`(BTC 현물 테이커 매수 비율) |
+| 구간 | 2019-10-01 ~ 수집 전날, 일별. 첫 창(p2020h1) 보다 앞서 시작해 롤링 90일 워밍업을 준다 |
+| 출처 | Upbit `candles/days`(KRW-BTC) · Binance spot `klines`(BTCUSDT·ETHBTC) · Binance futures `fundingRate` · Frankfurter(ECB USD/KRW) · alternative.me `fng` — 전부 무인증 |
+| 수집 | 2026-09-10, `python3 scripts/collect_external_series.py --write --end 2026-09-09` (산출 규칙의 단일 소스, `scripts/test_collect_external_series.py`) |
+| 형식 | `{"unit","rule","sources","collected","data":[{"date","value"}…]}`, `data` 는 날짜 오름차순 |
+| **look-ahead 규약** | `date` = **값을 만든 데이터의 UTC 날짜**. 거래일 D(KST 09:00 = UTC 00:00 D)의 게이트는 **D−1 값**을 쓴다(`ExternalSeries.lagged`). 펀딩은 UTC D−1 에 정산된 3건 평균이고 D 00:00 정산분은 경계와 같은 시각이라 제외. 환율은 ECB 영업일 값을 주말·휴일에 이월한 뒤 김프에 넣는다 |
+| 결측 | 채우지 않는다. 소비자가 이월 ≤ 3일까지 허용하고 초과면 실패(`ExternalRegimeGateTest` 8b) |
+| 소비자 | `ExternalRegimeGateTest` — `RUN_EXTERNAL_GATE=true`. plan `2026-09-10-external-regime-gate` |
+
+**왜 BTC 하나인가**: 다섯 신호는 "시장 전체 레짐" 가설이라 마켓별로 만들지 않는다. 알트 마켓별 김프·펀딩은 Binance 상장일·유동성이 제각각이라 fixture 결측이 커진다.
