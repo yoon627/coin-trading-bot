@@ -32,7 +32,8 @@ ETH/BTC 비율 추세, Binance BTC 테이커 매수 비율)이 현행 `combined`
 - 2026-09-10 구현: `scripts/collect_external_series.py`(+단위테스트 8건 통과) → fixture 5종 2,536행(2019-10-01~2026-09-09; Frankfurter 가 Python 기본 UA 를 403 으로 막아 UA 지정) → `ExternalSeries`·`ExternalRegime`·`DateGatedStrategy`·`ExternalRegimeGateTest` → `compileTestKotlin` 통과(JDK 는 `jbr-21.0.9` 지정 필요 — 기본 JDK 25 로는 Gradle 이 안 뜬다). 6(d)·6(f) 문구를 마켓 합집합·(market,day) 기준으로 정확히 고침(결과 보기 전).
 - 2026-09-10 smoke(`GATE_UNITS=240`): 배관 단정 8a(ALL_PASS = 기준)·8b(결측 0)·8d(위상 이동 불변) 통과, 240분 기준 거래 1,058 = 선행 사다리. ⚠️ 선행 관례대로 **240분봉 결과는 커밋 전에 관측됐다**(13셀 전부 격차 음수, 통과 0) — blind 인 것은 15·5분봉뿐이다. 마켓 이름 합집합은 35 라 6(d) 는 27/35 이상을 뜻한다.
 - **아래 `# Acceptance` 는 이 커밋 시점에 고정된다.**
-- 2026-09-10 본 실행(`ca3242e` 뒤, 3분 42초): 후보 0·null 무효(N0 21). wiki `query/external-signal-gate-2026-09` + index + log. 결과는 `# Acceptance` 아래 인용 블록.
+- 2026-09-10 본 실행(`ca3242e` 뒤, 3분 42초): 후보 0·null 무효(N0 21).
+- 2026-09-10 code-reviewer(+codex) Major 3 배관 수정(`# Review Disposition`) 후 같은 규칙 재실행: 셀 수치 불변, N0 20, 결론 불변. `./gradlew build`·wiki 3종 재통과. wiki `query/external-signal-gate-2026-09` + index + log. 결과는 `# Acceptance` 아래 인용 블록.
 
 # Next
 
@@ -105,10 +106,24 @@ Upbit 파생 데이터(존재하지 않음, 국내 파생 금지) · BTC 도미�
 11. `./gradlew build` 통과, `deploy/` diff 0, 라이브 코드(`bot/src/main`·`common/src/main`) diff 0.
 12. wiki `query/external-signal-gate-2026-09.md` + `wiki/index.md` 등재, 검증 3종 통과. 결과는 인용 블록으로 이 섹션 아래에 덧붙이고 원문은 안 고친다.
 
-> 실행 결과(2026-09-10, 사전고정 커밋 `ca3242e`, 문구는 위 그대로): 1·2·3·4 ✅ 계기·family·기여·통계량 그대로 실행(3분 42초). 5 **null N0 = 21 > 13 → 계기 무효**.
-> 6 5분봉 maxT 통과 1셀(`FNG_FEAR` +0.164/거래, T 2.80)이나 (d) 26/35 < 27·(f) 차단율 82%·(g) null 무효로 후보 아님 — **후보 0, 현행 유지**. 나머지 12셀 통과 0(전부 양수, 최대 COMBO/FUND_NEG +0.104).
-> 7 fixture 5종 2,536행 ✅. 8 (a) 세 rung ALL_PASS = 기준 ✅ (b) 결측 0 ✅ (c) 차단율 표 ✅ (d) 위상 이동 불변 ✅ (e) 5분 기준 1,767 ✅. 9·10 리포트 형식 고정 ✅.
+> 실행 결과(2026-09-10, 사전고정 커밋 `ca3242e`, 문구는 위 그대로): 1·2·3·4 ✅ 계기·family·기여·통계량 그대로 실행(3분 42초). 5 **null N0 = 20 > 13 → 계기 무효**(배관 수정 전 1차 실행 21).
+> 6 5분봉 maxT 통과 1셀(`FNG_FEAR` +0.164/거래, T 2.80)이나 (d) 26/35 < 27·(f) 차단율 82%·(g) null 무효로 후보 아님(1·2차 실행 셀 수치 동일) — **후보 0, 현행 유지**. 나머지 12셀 통과 0(전부 양수, 최대 COMBO/FUND_NEG +0.104).
+> 7 fixture 5종 2,536행 ✅. 8 (a) 세 rung ALL_PASS = 기준 ✅ (b) 결측 0 ✅ (c) 차단율 표 ✅ (d) 위상 이동 불변(다섯 시계열·달력 이동량) ✅ (e) 240/15/5분 기준 1,058/1,659/1,767 ✅ + 7d·7e ✅. 9·10 리포트 형식 고정 ✅.
 > 11·12 는 아래 Progress 의 검증 줄. 결론 = "외부 정보 5부류 발견 없음. 5분봉 기준선이 음수인 한 진입을 줄이는 모든 규칙이 대조군과 구분되지 않는다 — #189·#190 이 선행".
+
+# Review Disposition
+
+code-reviewer(+codex high, 2026-09-10) — look-ahead 는 실측으로 반증(Upbit 일봉 경계 = UTC 00:00, 펀딩 D 00:00 제외, `to` exclusive, kimp 2021-05-19 값 독립 재현). 배관 finding 처분:
+
+- Major 1 `ExternalSeries.shifted` 행 인덱스 회전(fng 결측 1일로 신호 간 위상 어긋남) — **fix**: 달력 순환 이동으로 교체, 8d 를 다섯 시계열 전부 + 이동량 = s×17일 로 확장. 규칙 불변, 재실행.
+- Major 2 240·15분 rung 무결성 단정 누락 — **fix**: rung 별 기준 거래수 핀(1,058/1,659/1,767) + 7d 봉/일 상한 + 7e rung 간 첫 봉 시가 동일 복원.
+- Major 3 `--end` 기본값이 로컬 달력 — **fix**: UTC 어제. 커밋된 fixture 는 `--end` 명시라 영향 없음.
+- Minor 위상 이동 방향(대조군이 미래 값을 본다) — **accepted-risk**: plan 은 방향을 고정하지 않았고 관측된 통과 기제("음수 기준선에서 진입 감소")는 방향 무관. 뒤로 이동은 START(2019-10) 앞으로 나가 결측이 되므로 앞 방향 유지. 결론이 뒤집힐 가능성은 낮으나 0 은 아님 — wiki 한계에 명시.
+- Minor `complete()` runCatching 과잉 — **fix**: IllegalStateException 만.
+- Minor 항등식 테스트 — **fix**: fixture 리터럴 핀(2021-05-19 F&G 23).
+- Minor `windowOf` 창 재탐색 — **fix**: dir 로 직접 조회.
+- Minor `heldDays` maxOf(1) — **false-positive**: 원본도 합산 시 `maxOf(1, …)` 를 쓴다(`ExitResolutionLadderTest` Σ보유일).
+- Minor 환율 이월 상한 없음 — **defer**: 실측 최대 4일, 소비자 8b 가 kimp 결측을 못 보는 것은 사실이나 fixture 는 정상. 재수집 시 상한 추가.
 
 # Key Files
 
