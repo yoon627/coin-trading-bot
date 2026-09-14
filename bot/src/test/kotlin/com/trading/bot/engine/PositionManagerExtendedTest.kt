@@ -1771,13 +1771,191 @@ class PositionManagerExtendedTest {
         assertEquals(FeeBasis.Unrecorded, result!!.fee)
     }
 
+    // --- 이 주문의 체결 대금 (#146) ---
+    // 엔진 매수의 volume/totalAmount 는 포지션 스냅샷이라 "이번 주문 금액"이 아니다. 주문 응답 trades[].funds 의 합이
+    // 유일한 실측이고, terminal(done/cancel) 응답에서만 믿는다.
+
+    private fun fill(market: String, funds: Double, volume: Double, side: String) =
+        OrderTrade(market = market, uuid = "t-$funds", price = (funds / volume).toString(), volume = volume.toString(), funds = funds.toString(), side = side)
+
     @Test
-    fun `engine sell estimates the fee because its amount is the sale proceeds`() = runTest {
-        // 매도의 totalAmount 는 가격×수량 = 이 매도의 대금이라 추정 기준이 맞다. 매수와 대칭이 아니다.
+    fun `engine buy on top of an existing holding records this order's funds, not the position snapshot`() = runTest {
+        // 거래소에 이미 0.02 BTC 가 있는 계좌(외부 입금·복원 전)에 50,000원어치 매수. completeBuy 는 실잔고로
+        // volume/totalAmount 를 채우므로 totalAmount 는 전체 원가 스냅샷(≈1,090,000)이지만 orderAmount 는 이번 주문의
+        // 체결 대금 50,000 이어야 한다 — 두 값이 크게 갈리는 것이 이 테스트의 핵심이다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.021", avgBuyPrice = "51900000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-funds")
+        coEvery { upbitClient.getOrder("buy-funds") } returns Order(
+            uuid = "buy-funds", state = "done", executedVolume = "0.001", paidFee = "25",
+            trades = listOf(fill("KRW-BTC", 30_000.0, 0.0006, "bid"), fill("KRW-BTC", 20_000.0, 0.0004, "bid")),
+        )
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")!!
+
+        assertEquals(50_000.0, result.orderAmount!!, 1e-9)
+        assertTrue(result.totalAmount > 1_000_000.0, "totalAmount 는 포지션 전체 원가 스냅샷: ${result.totalAmount}")
+    }
+
+    @Test
+    fun `partially filled buy that ends as cancel records the funds of the executed part`() = runTest {
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-cancel-funds")
+        coEvery { upbitClient.getOrder("buy-cancel-funds") } returns Order(
+            uuid = "buy-cancel-funds", state = "cancel", executedVolume = "0.0003",
+            trades = listOf(fill("KRW-BTC", 15_600.0, 0.0003, "bid")),
+        )
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
+
+        assertEquals(15_600.0, result!!.orderAmount!!, 1e-9)
+    }
+
+    @Test
+    fun `buy confirmed from a still-waiting response does not trust the running funds total`() = runTest {
+        // 폴링 소진 시 마지막 응답이 wait+부분체결이면 코인은 받았으니 매수 확정하지만, funds 는 아직 늘어날 수 있다.
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "200000")),
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-wait")
+        coEvery { upbitClient.getOrder("buy-wait") } returns Order(
+            uuid = "buy-wait", state = "wait", executedVolume = "0.0003",
+            trades = listOf(fill("KRW-BTC", 15_600.0, 0.0003, "bid")),
+        )
+
+        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
+
+        assertNotNull(result)
+        assertNull(result!!.orderAmount)
+    }
+
+    @Test
+    fun `engine sell records the funds actually received rather than the tick valuation`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-funds")
+        coEvery { upbitClient.getOrder("sell-funds") } returns Order(
+            uuid = "sell-funds", state = "done", executedVolume = "0.001",
+            trades = listOf(fill("KRW-BTC", 54_900.0, 0.001, "ask")),
+        )
+        val state = TradingState("KRW-BTC").apply {
+            markBought(50000000.0, 0.001, "combined", replace = true, now = LocalDateTime.now())
+        }
+
+        val result = manager.sell("KRW-BTC", state, 55000000.0, SellReason.TAKE_PROFIT)!!
+
+        assertEquals(54_900.0, result.orderAmount!!, 1e-9)
+        assertEquals(55_000.0, result.totalAmount, 1e-9) // 판단 tick 평가액은 그대로
+    }
+
+    @Test
+    fun `reconciled sell records funds and balance recovery records none`() = runTest {
+        coEvery { upbitClient.getOrder("s-funds") } returns Order(
+            uuid = "s-funds", state = "done", executedVolume = "0.001",
+            trades = listOf(fill("KRW-BTC", 51_800.0, 0.001, "ask")),
+        )
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+        val reconciled = manager.reconcilePendingSell(
+            "KRW-BTC",
+            TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+                pendingSellUuid = "s-funds", pendingSellReason = SellReason.TAKE_PROFIT),
+            52000000.0,
+        )
+        assertEquals(51_800.0, reconciled!!.orderAmount!!, 1e-9)
+
+        coEvery { upbitClient.getOrder("s-lost-funds") } throws RuntimeException("getOrder down")
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        val recovered = manager.reconcilePendingSell(
+            "KRW-BTC",
+            TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+                pendingSellUuid = "s-lost-funds", pendingSellVolume = 0.001, pendingSellReason = SellReason.TAKE_PROFIT),
+            52000000.0,
+        )
+        assertNull(recovered!!.orderAmount)
+    }
+
+    // --- 매도 수수료의 출처 (#148) ---
+    // 매도도 awaitFill/getOrder 응답을 쥐고 있으므로 paid_fee 가 있으면 매수와 같은 실측이다. 없으면 종전 추정 —
+    // 매도의 totalAmount 는 가격×수량 = 이 매도의 대금이라 추정 기준이 맞고, 0(미기록)으로 바꿀 이유가 없다.
+
+    @Test
+    fun `engine sell carries the exchange-charged fee when the fill reports it`() = runTest {
         coEvery { upbitClient.getAccounts() } returns
             listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-fee")
-        coEvery { upbitClient.getOrder("sell-fee") } returns Order(uuid = "sell-fee", state = "done")
+        coEvery { upbitClient.getOrder("sell-fee") } returns
+            Order(uuid = "sell-fee", state = "done", executedVolume = "0.001", paidFee = "27.5")
+
+        val state = TradingState("KRW-BTC").apply {
+            markBought(50000000.0, 0.001, "combined", replace = true, now = LocalDateTime.now())
+        }
+        val result = manager.sell("KRW-BTC", state, 55000000.0, SellReason.TAKE_PROFIT)
+
+        assertEquals(FeeBasis.Measured(27.5), result!!.fee)
+    }
+
+    @Test
+    fun `reconciled sell carries the exchange-charged fee too`() = runTest {
+        coEvery { upbitClient.getOrder("s-done-fee") } returns
+            Order(uuid = "s-done-fee", state = "done", executedVolume = "0.001", paidFee = "26.0")
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "1000000"))
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-done-fee", pendingSellReason = SellReason.TAKE_PROFIT,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals(FeeBasis.Measured(26.0), result!!.fee)
+    }
+
+    @Test
+    fun `partially filled sell that ends as cancel carries the charged fee for the executed part`() = runTest {
+        coEvery { upbitClient.getOrder("s-partial-fee") } returns
+            Order(uuid = "s-partial-fee", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004", paidFee = "15.6")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.0004", avgBuyPrice = "50000000")
+        )
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-partial-fee", pendingSellReason = SellReason.STOP_LOSS,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals(FeeBasis.Measured(15.6), result!!.fee)
+        assertEquals(0.0006, result.volume)
+        assertTrue(state.position) // 잔여 0.0004 는 다음 주문(새 uuid)으로 팔린다 — 같은 paid_fee 가 두 번 실리지 않는다
+    }
+
+    @Test
+    fun `sell recovered from balance without an order response estimates the fee`() = runTest {
+        // getOrder 장애 → 잔고 0 으로 청산 확정. 실측할 응답이 없으므로 매도 대금 기준 추정이다.
+        coEvery { upbitClient.getOrder("s-lost") } throws RuntimeException("getOrder down")
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001,
+            pendingSellUuid = "s-lost", pendingSellVolume = 0.001, pendingSellReason = SellReason.TAKE_PROFIT,
+        )
+
+        val result = manager.reconcilePendingSell("KRW-BTC", state, 52000000.0)
+
+        assertEquals(FeeBasis.Estimate, result!!.fee)
+    }
+
+    @Test
+    fun `engine sell without a usable paid_fee falls back to the estimate, not unrecorded`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns
+            listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-nofee")
+        coEvery { upbitClient.getOrder("sell-nofee") } returns
+            Order(uuid = "sell-nofee", state = "done", executedVolume = "0.001", paidFee = "not-a-number")
 
         val state = TradingState("KRW-BTC").apply {
             markBought(50000000.0, 0.001, "combined", replace = true, now = LocalDateTime.now())

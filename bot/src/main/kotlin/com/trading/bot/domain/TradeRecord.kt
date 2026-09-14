@@ -53,6 +53,18 @@ data class TradeRecord(
     val strategy: String?,
     /** 이 체결의 수수료를 sink 가 어떻게 다룰지. 경로마다 다르므로 기본값을 두지 않는다. */
     val fee: FeeBasis,
+    /**
+     * **이 주문**이 실제로 체결한 대금(KRW, 수수료 미포함) — 주문 응답의 `Σ trades[].funds`([Order.filledFunds]).
+     *
+     * [totalAmount] 와 다르다: 엔진 매수의 [totalAmount] 는 포지션 **전체 원가 스냅샷**(거래소 평단 × 실잔고,
+     * #20 재시작 정합 때문)이고, 매도의 [totalAmount] 는 판단 tick 가격 × 수량 **평가액**이다. 둘 다 "이번
+     * 주문에 오간 돈"이 아니라서 집계·알림이 그것을 읽으면 부풀려진다(#146). 이 필드가 그 답이다.
+     *
+     * terminal(done/cancel) 주문 응답에서만 값이고, 그 외(응답 없는 잔고복원·`wait` 확정·수동 경로)는 null —
+     * 추정하지 않는다. 기본값을 두지 않는 이유는 [fee] 와 같다: 배선을 빠뜨려도 컴파일이 통과하면 집계에서
+     * 조용히 빠져 이슈가 고쳐진 척 닫힌다.
+     */
+    val orderAmount: Double?,
     val reason: String? = null,
     // 거래소 주문 uuid — 재시작 후 reconcile 중복 기록을 막는 멱등 dedup 키(#20). null 이면 dedup 대상 아님.
     val exchangeOrderId: String? = null,

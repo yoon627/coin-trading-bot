@@ -76,19 +76,22 @@ jobs:
       - name: DB 통합테스트가 실제로 실행됐는지 확인
         run: |
           set -euo pipefail
-          XML=bot/build/test-results/test/TEST-com.trading.bot.persistence.TradingStateRoundTripTest.xml
-          if [ ! -f "$XML" ]; then
-            echo "::error::DB 통합테스트 결과가 없다 — 실행되지 않았다 ($XML)"
-            exit 1
-          fi
-          attrs="$(head -3 "$XML")"
-          ran="$(printf '%s' "$attrs" | grep -o 'tests="[0-9]*"' | head -1 | tr -dc '0-9')"
-          skipped="$(printf '%s' "$attrs" | grep -o 'skipped="[0-9]*"' | head -1 | tr -dc '0-9')"
-          echo "DB 통합테스트: 실행 ${ran:-?}건 / skip ${skipped:-?}건"
-          if [ "${ran:-0}" = "0" ] || [ "${skipped:-1}" != "0" ]; then
-            echo "::error::DB 통합테스트가 건너뛰어졌다 — services: postgres 와 TEST_DB_* 를 확인하라"
-            exit 1
-          fi
+          # scripts/run-db-tests.sh 의 DB_TEST_CLASSES 와 같은 목록을 유지한다.
+          for c in TradingStateRoundTripTest TradeRecordAggregateRoundTripTest; do
+            XML="bot/build/test-results/test/TEST-com.trading.bot.persistence.$c.xml"
+            if [ ! -f "$XML" ]; then
+              echo "::error::DB 통합테스트 결과가 없다 — 실행되지 않았다 ($XML)"
+              exit 1
+            fi
+            attrs="$(head -3 "$XML")"
+            ran="$(printf '%s' "$attrs" | grep -o 'tests="[0-9]*"' | head -1 | tr -dc '0-9')"
+            skipped="$(printf '%s' "$attrs" | grep -o 'skipped="[0-9]*"' | head -1 | tr -dc '0-9')"
+            echo "DB 통합테스트 $c: 실행 ${ran:-?}건 / skip ${skipped:-?}건"
+            if [ "${ran:-0}" = "0" ] || [ "${skipped:-1}" != "0" ]; then
+              echo "::error::DB 통합테스트가 건너뛰어졌다 — services: postgres 와 TEST_DB_* 를 확인하라"
+              exit 1
+            fi
+          done
 
   build-and-push:
     needs: test

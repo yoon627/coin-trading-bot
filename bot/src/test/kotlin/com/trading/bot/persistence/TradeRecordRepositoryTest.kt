@@ -39,10 +39,12 @@ class TradeRecordRepositoryTest {
                 reason = "TAKE_PROFIT",
                 userId = 1L,
                 fee = FeeBasis.Estimate,
+                orderAmount = 51_950.0,
             )
         )
 
         assertEquals(3.9, entity.captured.pnlPercent)
+        assertEquals(51_950.0, entity.captured.orderAmount) // #146 — 빠뜨리면 컬럼이 영원히 NULL 이다
         assertEquals(1950.0, entity.captured.pnlAmount)
         assertEquals("knee_reversal", entity.captured.strategy)
     }
