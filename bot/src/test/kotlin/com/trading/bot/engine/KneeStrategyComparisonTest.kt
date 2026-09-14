@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.Locale
 
 /**
  * 실제 Upbit 일봉으로 9개 전략을 비교한다.
@@ -89,17 +90,20 @@ class KneeStrategyComparisonTest {
 
     private fun render(title: String, rows: List<Row>): String = buildString {
         appendLine("--- $title")
-        appendLine(String.format("%-20s %7s %12s %9s %6s", "strategy", "trades", "avgNet%", "win%", "END"))
+        // Locale.ROOT — 이 표는 wiki 로 인용되는 숫자라 de_DE 같은 CI 로케일에서 "+0,306" 이 되면 안 된다(#111).
+        appendLine(String.format(Locale.ROOT, "%-20s %7s %12s %9s %6s", "strategy", "trades", "avgNet%", "win%", "END"))
         rows.sortedByDescending { if (it.avgNetPnl.isNaN()) Double.NEGATIVE_INFINITY else it.avgNetPnl }
             .forEach {
-                val avg = if (it.avgNetPnl.isNaN()) "N/A" else String.format("%+.3f", it.avgNetPnl)
-                val win = if (it.winRate.isNaN()) "N/A" else String.format("%.1f", it.winRate)
-                appendLine(String.format("%-20s %7d %12s %9s %6d", it.strategy, it.trades, avg, win, it.endTrades))
+                val avg = if (it.avgNetPnl.isNaN()) "N/A" else String.format(Locale.ROOT, "%+.3f", it.avgNetPnl)
+                val win = if (it.winRate.isNaN()) "N/A" else String.format(Locale.ROOT, "%.1f", it.winRate)
+                appendLine(String.format(Locale.ROOT, "%-20s %7d %12s %9s %6d", it.strategy, it.trades, avg, win, it.endTrades))
             }
     }
 
     @Test
     fun `compares all strategies across both regimes and prints the record`() = runTest {
+        // 리포트용 표를 단언에도 그대로 쓴다 — 같은 입력(BEAR·in·liveDefault)이라 재계산은 낭비다.
+        var inDefaultBear: List<Row>? = null
         val report = buildString {
             appendLine("무릎 전략 백테 관찰 기록 — pooled per-trade net pnl%")
             appendLine(BacktestFixtures.ORIGINAL_REGIMES.joinToString(" / ") { "$it ${it.label} ${BacktestFixtures.markets(it).size}마켓" })
@@ -107,7 +111,8 @@ class KneeStrategyComparisonTest {
             appendLine()
             for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
                 val all = BacktestFixtures.loadAll(regime)
-                appendLine(render("[$regime] IN / LIVE_DEFAULT", aggregate(all, BacktestFixtures::inSample, liveDefault)))
+                val inDefault = aggregate(all, BacktestFixtures::inSample, liveDefault).also { if (regime == Regime.BEAR) inDefaultBear = it }
+                appendLine(render("[$regime] IN / LIVE_DEFAULT", inDefault))
                 appendLine(render("[$regime] OUT / LIVE_DEFAULT", aggregate(all, BacktestFixtures::outOfSample, liveDefault)))
                 appendLine(render("[$regime] IN / SWING", aggregate(all, BacktestFixtures::inSample, swing)))
                 appendLine(render("[$regime] OUT / SWING", aggregate(all, BacktestFixtures::outOfSample, swing)))
@@ -115,7 +120,7 @@ class KneeStrategyComparisonTest {
         }
         println(report)
 
-        val inDefault = aggregate(BacktestFixtures.loadAll(Regime.BEAR), BacktestFixtures::inSample, liveDefault)
+        val inDefault = requireNotNull(inDefaultBear) { "ORIGINAL_REGIMES 에 BEAR 가 없다" }
         listOf("knee_reversal", "knee_pullback").forEach { name ->
             assertTrue(
                 inDefault.any { it.strategy == name && it.trades > 0 },
@@ -128,12 +133,14 @@ class KneeStrategyComparisonTest {
     fun `paired comparison isolates regime from market selection`() = runTest {
         // 같은 paired 마켓을 두 국면에서 돌린다. 마켓 구성이 동일하므로 차이는 국면에서만 온다 —
         // 서로 다른 마켓 집합을 비교하면 국면 효과와 종목 효과가 섞인다.
+        val outDefaultByRegime = mutableMapOf<Regime, List<Row>>()
         val report = buildString {
             appendLine("국면 paired 비교 — 같은 ${BacktestFixtures.PAIRED_MARKETS.size}마켓(${BacktestFixtures.PAIRED_MARKETS.joinToString(", ")})")
             appendLine()
             for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
                 val paired = BacktestFixtures.loadPaired(regime)
-                appendLine(render("[$regime] OUT / LIVE_DEFAULT", aggregate(paired, BacktestFixtures::outOfSample, liveDefault)))
+                val outDefault = aggregate(paired, BacktestFixtures::outOfSample, liveDefault).also { outDefaultByRegime[regime] = it }
+                appendLine(render("[$regime] OUT / LIVE_DEFAULT", outDefault))
                 appendLine(render("[$regime] OUT / SWING", aggregate(paired, BacktestFixtures::outOfSample, swing)))
             }
         }
@@ -142,7 +149,7 @@ class KneeStrategyComparisonTest {
         // aggregate 는 거래가 0건이어도 strategies.map 으로 늘 9행을 만든다. 행 수만 세면 fixture 로드가
         // 실패해 전부 N/A 가 돼도 통과하므로, 두 국면 모두에서 무릎 전략이 실제로 거래했는지까지 본다.
         for (regime in BacktestFixtures.ORIGINAL_REGIMES) {
-            val rows = aggregate(BacktestFixtures.loadPaired(regime), BacktestFixtures::outOfSample, liveDefault)
+            val rows = outDefaultByRegime.getValue(regime)
             listOf("knee_reversal", "knee_pullback").forEach { name ->
                 val row = rows.single { it.strategy == name }
                 assertTrue(row.trades > 0, "$regime/$name: paired 비교에 거래가 없다 — fixture 로드 실패 가능")

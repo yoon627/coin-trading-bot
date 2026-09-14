@@ -83,6 +83,36 @@ class BacktestFixturesTest {
         )
     }
 
+    /**
+     * 국면 라벨의 날짜 구간을 고정한다(#111). `to` 를 잘못 넣어 재수집하면 정렬·개수·가격 검사는 전부 통과한 채
+     * 라벨만 거짓이 된다 — "하락장 2026-01~08" 표가 다른 기간의 숫자를 싣는다.
+     * 기대값은 [Regime] KDoc 의 구간을 독립적으로 옮겨 적은 것이다(구현 상수를 참조하면 같이 바뀌어 통과한다).
+     */
+    @Test
+    fun `regime fixtures cover exactly the documented date ranges`() {
+        val expected = mapOf(
+            Regime.BEAR to ("2026-01-31" to "2026-08-18"),
+            Regime.BULL to ("2023-11-23" to "2024-06-09"),
+            Regime.P2024H2 to ("2024-06-10" to "2024-12-26"),
+            Regime.P2025H1 to ("2025-01-01" to "2025-07-19"),
+            Regime.P2020H1 to ("2020-01-23" to "2020-08-09"),
+            Regime.P2020H2 to ("2020-08-10" to "2021-02-25"),
+            Regime.P2021H1 to ("2021-02-26" to "2021-09-13"),
+            Regime.P2021H2 to ("2021-09-14" to "2022-04-01"),
+            Regime.P2022H1 to ("2022-04-02" to "2022-10-18"),
+            Regime.P2022H2 to ("2022-10-19" to "2023-05-06"),
+            Regime.P2023H1 to ("2023-05-07" to "2023-11-22"),
+        )
+        assertEquals(Regime.entries.toSet(), expected.keys, "국면을 추가했으면 여기 구간도 적어라")
+
+        for ((regime, range) in expected) for (market in BacktestFixtures.markets(regime)) {
+            val candles = BacktestFixtures.load(regime, market)
+            val (from, to) = range
+            assertEquals(from, candles.last().candleDateTimeKst.take(10), "$regime/$market: 시작일이 라벨과 다르다")
+            assertEquals(to, candles.first().candleDateTimeKst.take(10), "$regime/$market: 종료일이 라벨과 다르다")
+        }
+    }
+
     @Test
     fun `slice keeps chronological order and picks the intended window`() {
         val candles = BacktestFixtures.load(Regime.BEAR, "KRW-BTC")
