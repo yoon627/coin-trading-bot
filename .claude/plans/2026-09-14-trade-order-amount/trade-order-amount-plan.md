@@ -1,8 +1,8 @@
 ---
 title: trade-order-amount — "이 주문의 체결 금액"을 기록하고 스냅샷 소비처 3곳을 바꾼다 (#146)
-status: in_progress
+status: done
 started: 2026-09-14
-updated: 2026-09-14
+updated: 2026-09-15
 ---
 
 # Goal
@@ -14,13 +14,13 @@ updated: 2026-09-14
 # Progress
 
 - 2026-09-14 — worktree 생성(base 로컬 `main@225c906`). Explore: 기록 경로(TradeRecord→Repository.save→Entity), 소비처 3곳, 마이그레이션 관례(V25 nullable 컬럼, 추정 금지), 기존 테스트(OrderFilledVwapTest·PositionManagerExtendedTest·TradeRecordRepositoryTest·DiscordNotifierTest) 확인.
+- 2026-09-15 — PR #194(#131·#148 로컬 ff-merge 커밋 2건 동반). CI DB 통합테스트가 Acceptance 7 증거.
 - 2026-09-14 — 최종 검증 `:bot:test` 1060건 중 실패 1 = baseline #193, DB 통합 2건 로컬 skip(CI). 구현·테스트(단위 12건 신규/갱신, DB 통합 2건은 CI). arch(정밀)·code-reviewer(+codex) 지적 전부 처분(Disposition). wiki 3·PROJECT_ANALYSIS·README 동기화, JSX 파싱 실측.
 - 2026-09-14 — plan-reviewer(+codex)·architecture-reviewer 검토 → Decisions 2~6 정정(수동=null·terminal 한정·SELL 통일·집계 정의·DB 테스트 하네스 존재). researcher: Upbit `trades[].funds` = price×volume(수수료 미포함, ✅ 공식문서), Σfunds+paid_fee=총차감 등식은 문서 미명시(⚠️). Deferred 4건.
 
 # Next
 
-1. `/e merge` — PR CI 의 `TradeRecordAggregateRoundTripTest`(V26 매핑·집계 SQL) 통과가 Acceptance 7 의 증거. 통과 시 머지·#146 close.
-2. 배포 후 SPA 렌더 1회 확인(Acceptance 10) — 거래 목록 "금액" 열, 전략 성과 카드 "체결 … (미상 N건 제외)".
+없음 — PR #194 로 종결. 배포 후 SPA 렌더 1회 확인(Acceptance 10)은 운영 확인 사항으로 남긴다.
 
 # Intent
 
