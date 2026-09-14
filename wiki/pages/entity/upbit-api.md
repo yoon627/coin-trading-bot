@@ -2,7 +2,7 @@
 title: Upbit API — 이 봇이 의존하는 동작
 category: entity
 created: 2026-07-28
-updated: 2026-08-31
+updated: 2026-09-14
 claim_state: current
 verified: 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
 sources:
@@ -55,11 +55,12 @@ sources:
 
 ⚠️ 부분 체결 후 `cancel` 로 끝났을 때도 `paid_fee` 가 체결분의 최종 청구액인지는 **필드 정의상 그렇게
 읽힐 뿐 실제 응답 fixture 로 확인하지 못했다.** 공식 문서 샘플은 `done` 케이스뿐이다. 코드는 그 전제로
-동작하므로(`cancel` + `executed_volume>0` 도 매수 확정 경로) 반례가 나오면 여기부터 고쳐야 한다.
+동작하므로(`cancel` + `executed_volume>0` 은 매수 확정 경로이자 매도 reconcile 확정 경로다) 반례가 나오면 여기부터 고쳐야 한다.
 
 **이 값이 있으면 추정하지 않는다.** 엔진 매수는 `getOrder` 응답의 `paid_fee` 를 그대로 기록한다 —
-`trade_records.totalAmount` 가 엔진 경로에서는 그 주문의 체결 대금이 아니라 포지션 전체 원가라,
-요율로 추정하면 기존 보유분만큼 부풀려지기 때문이다(#133, [[trade-record-volume-semantics]]).
+`trade_records.totalAmount` 가 엔진 매수 경로에서는 그 주문의 체결 대금이 아니라 포지션 전체 원가라,
+요율로 추정하면 기존 보유분만큼 부풀려지기 때문이다(#133, [[trade-record-volume-semantics]]). 엔진 매도도
+같은 응답을 쥐고 있으므로 실측을 우선한다(#148) — 이쪽 이유는 과대계상이 아니라 매수·매도 기준 혼재 제거다.
 
 ⚠️ **얻는 시점이 중요하다.** `placeOrder` 의 즉시 응답에는 아직 체결이 안 잡혀 `paid_fee` 를 믿을 수 없다.
 `getOrder` 로 **체결 후 조회한** 응답에서만 실측으로 쓴다.

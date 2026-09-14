@@ -802,6 +802,7 @@ class PositionManager(
                         remaining = sellable - qty.volume,
                         // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 백테에 없는 항목이라 실물로만 얻는다.
                         executedVwap = filled.filledVwap(),
+                        feeBasis = sellFeeBasis(filled),
                     )
                 } else {
                     // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
@@ -838,7 +839,10 @@ class PositionManager(
                 // 취소된 미체결 잔량은 free 로 돌아오지만 반영이 늦을 수 있고, 반대로 남은 locked 가 우리
                 // 주문 것이 아닐 수도 있다(출금 대기 등). 둘 다 [heldVolume] 의 상한이 처리한다.
                 // buildSellRecord 는 평단이 필요하므로 전이 전에 만든다. 잔고 조회도 트랜잭션 밖에서 끝낸다(#52).
-                val record = buildSellRecord(ticker, state, currentPrice, executed, executedVwap = filled?.filledVwap())
+                val record = buildSellRecord(
+                    ticker, state, currentPrice, executed,
+                    executedVwap = filled?.filledVwap(), feeBasis = sellFeeBasis(filled),
+                )
                 val account = findAccount(ticker.substringAfter("-"))
                 val unfilled = (ourSellLockCeiling(state) - executed).coerceAtLeast(0.0)
                 val exchangeRemaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
@@ -893,7 +897,8 @@ class PositionManager(
                     log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept for manual review", ticker)
                     return null
                 }
-                val record = buildSellRecord(ticker, state, currentPrice, volume)
+                // 주문 응답이 없어 실측할 수 없다 — 매도 대금 기준 추정이 이 경로의 최선이다.
+                val record = buildSellRecord(ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate)
                 val now = LocalDateTime.now(TradingDay.KST)
                 // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패 시 pending 이 남아 다음 tick 이 재시도한다.
                 commitFillAndApply(state, record, sellTransition(state, volume, remaining = 0.0, recoveredAvg = 0.0, now = now))
@@ -924,9 +929,10 @@ class PositionManager(
         volume: Double,
         reason: SellReason?,
         remaining: Double,
-        executedVwap: Double? = null,
+        executedVwap: Double?,
+        feeBasis: FeeBasis,
     ): TradeRecord {
-        val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap)
+        val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap, feeBasis)
         val now = LocalDateTime.now(TradingDay.KST)
         commitFillAndApply(state, record, sellTransition(state, volume, remaining, state.avgBuyPrice, now))
         log.info(
@@ -949,6 +955,7 @@ class PositionManager(
         volume: Double,
         reason: SellReason? = state.pendingSellReason,
         executedVwap: Double? = null,
+        feeBasis: FeeBasis,
     ): TradeRecord {
         // 재시작 복원 경로에서는 avgBuyPrice 가 이미 0 으로 동기화돼 있으므로 주문 시점 평단을 쓴다.
         val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
@@ -967,13 +974,20 @@ class PositionManager(
             // 엉뚱한 전략 몫으로 잡힌다. markSold 가 clearEntryMeta 로 지우기 전이라 값이 살아 있다.
             // 적립 단 매도는 편입된 스윙 포지션이어도 적립 몫이다 — 그 규칙으로 팔았다.
             strategy = if (reason == SellReason.ACCUMULATE_STEP) AccumulateLadder.STRATEGY_NAME else state.entryStrategy,
-            // 매도의 totalAmount 는 이 매도의 대금(가격×수량)이라 추정 기준이 맞다 — 매수와 달리 스냅샷이 아니다.
-            fee = FeeBasis.Estimate,
+            fee = feeBasis,
             reason = reason?.name,
             // markSold 이전 호출이라 pendingSellUuid 가 살아있음 — 재시작 reconcile 중복 기록을 막는 dedup 키.
             exchangeOrderId = state.pendingSellUuid,
         )
     }
+
+    /**
+     * 매도 수수료 출처 — 주문 응답에 `paid_fee` 가 있으면 매수와 같은 실측(#148). 없으면 추정으로 떨어뜨린다:
+     * 매도의 totalAmount 는 이 체결의 대금(가격×수량)이라 추정 기준이 맞다 — 매수가 [FeeBasis.Unrecorded] 로 두는
+     * 이유(포지션 전체 원가 스냅샷, #133)가 여기엔 없다. 주문 응답이 없는 잔고복원 경로는 호출하지 않는다.
+     */
+    private fun sellFeeBasis(filled: Order?): FeeBasis =
+        filled?.feeBasis()?.takeIf { it is FeeBasis.Measured } ?: FeeBasis.Estimate
 
     /**
      * 매도 확정 전이 — 즉시경로·reconcile(부분·전량)·잔고복원 네 곳이 모두 이 하나를 쓴다. 갈라지면 어느 한 경로에서
