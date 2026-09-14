@@ -70,6 +70,11 @@ sources:
 개별 주문 조회(`GET /v1/order`)는 **최상위에 체결금액 합계 필드를 주지 않는다**(`executed_funds` 없음).
 주는 것은 `executed_volume`·`paid_fee`·`locked`, 그리고 **`trades` 배열**(`price`·`volume`·`funds`·`market`·`uuid`·`side`)이다.
 
+`funds` 는 공식 정의상 "체결된 총 가격"(global 문서: *Trade funds (price × volume)*) — 즉 **수수료 미포함** 체결 대금이고
+수수료는 주문 레벨 `paid_fee` 로 따로 온다(2026-09-14 확인, docs.upbit.com/kr/v1.5.9 개별 주문 조회). 시장가 매수에서
+`Σfunds + paid_fee` = 총 차감 KRW 라는 등식은 문서에 명시돼 있지 않다(⚠️ 스키마 구조상 추론). `Σfunds` 가
+`trade_records.order_amount`(V26, [[trade-record-volume-semantics]])의 유일한 입력이다(`Order.filledFunds()`).
+
 따라서 실체결 단가는 `Σfunds / Σvolume` 으로 만든다(`Order.filledVwap()`). `price × volume` 으로 재계산하면
 부분 체결이 여러 건일 때 반올림이 누적된다. **얻을 수 없으면 null 이고 추정하지 않는다** — `paid_fee` 와 같은 규율이며,
 0 을 채우면 "마찰 없음" 으로 오독된다. 주문 **접수 직후** 응답에는 `trades` 가 없다.
