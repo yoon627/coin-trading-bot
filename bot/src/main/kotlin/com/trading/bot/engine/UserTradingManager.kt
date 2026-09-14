@@ -387,7 +387,7 @@ class UserTradingManager(
                 tradeExecutionService.notifyTrade(record, client, user.username, user.discordWebhookUrl)
             },
         )
-        val dailyResetManager = DailyResetManager(tradingProperties)
+        val dailyResetManager = DailyResetManager(tradingProperties, userId = user.id!!)
 
         return TradingEngine(
             upbitClient = client,
