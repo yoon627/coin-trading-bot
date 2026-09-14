@@ -19,7 +19,14 @@ data class UserTradeStats(
     val totalPnl: Double = 0.0,
 )
 
-/** 전략별 성과 집계 (DB 측 GROUP BY 결과). 전략 미상 거래는 strategy=null 그룹으로 온다. */
+/**
+ * 전략별 성과 집계 행(DB 측 GROUP BY 결과). 전략 미상 거래는 strategy=null 그룹으로 온다.
+ *
+ * [totalAmount] 는 **실체결 대금(`order_amount`)이 있는 행의 합**이다(2026-09-14, #146). 이전엔 `total_amount`
+ * 의 합이었는데 엔진 BUY 행의 그 값은 포지션 원가 스냅샷이라 매수가 거듭될수록 앞선 매수가 되풀이 합산됐다.
+ * 미상 행(V26 이전·주문 응답 없는 경로·수동)은 합에서 빠지고 [amountUnknownTrades] 로 센다 — 합계만 보면
+ * "축소"로 오독되므로 API 는 둘을 같이 내리고 SPA 전략 성과 카드도 둘을 함께 그린다. 둘 다 BUY/SELL 을 합친 값이다.
+ */
 data class StrategyPerformance(
     val strategy: String? = null,
     val totalTrades: Long = 0,
@@ -28,6 +35,7 @@ data class StrategyPerformance(
     val totalPnlPct: Double = 0.0,
     val totalPnlAmount: Double = 0.0,
     val totalAmount: Double = 0.0,
+    val amountUnknownTrades: Long = 0,
 )
 
 interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> {
@@ -63,7 +71,8 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
                COUNT(*) FILTER (WHERE side = 'SELL' AND pnl_percent > 0) AS win_trades,
                COALESCE(SUM(pnl_percent) FILTER (WHERE side = 'SELL'), 0) AS total_pnl_pct,
                COALESCE(SUM(pnl_amount)  FILTER (WHERE side = 'SELL'), 0) AS total_pnl_amount,
-               COALESCE(SUM(total_amount), 0) AS total_amount
+               COALESCE(SUM(order_amount), 0) AS total_amount,
+               COUNT(*) FILTER (WHERE order_amount IS NULL) AS amount_unknown_trades
         FROM trade_records
         WHERE user_id = :userId
         GROUP BY strategy
@@ -77,6 +86,7 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
 class TradeRecordRepository(
     private val r2dbcRepository: TradeRecordR2dbcRepository,
 ) {
+    // 여기 없는 필드(fee·executedVwap·exchangeOrderId)는 trade_executions / shadow 관측으로 간다 — 의도된 투영.
     suspend fun save(record: TradeRecord): TradeRecordEntity {
         val entity = TradeRecordEntity(
             ticker = record.ticker,
@@ -84,6 +94,7 @@ class TradeRecordRepository(
             price = record.price,
             volume = record.volume,
             totalAmount = record.totalAmount,
+            orderAmount = record.orderAmount,
             pnlPercent = record.pnlPercent,
             pnlAmount = record.pnlAmount,
             reason = record.reason,

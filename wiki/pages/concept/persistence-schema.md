@@ -1,8 +1,8 @@
 ---
-title: DB 스키마 — Flyway V1~V25 와 Upbit·KIS 핵심 테이블
+title: DB 스키마 — Flyway V1~V26 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-09-02
+updated: 2026-09-14
 claim_state: current
 verified: 2026-09-05 — V24 는 신규 테이블 추가만이라 기존 경로에 영향이 없고 `./gradlew build` 통과로만 확인했다(실제 Postgres 적용은 미실행 — `scripts/run-db-tests.sh` 필요). 이전 확인분: 2026-09-02 — V23 을 scripts/run-db-tests.sh(실제 Postgres 17)로 적용해 TradingStateRoundTripTest 3건/skip 0 통과. 이전 확인분: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
 sources:
@@ -13,7 +13,7 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V25** 다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V26** 다.
 
 | 버전 | 내용 |
 |---|---|
@@ -32,6 +32,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구(아래) |
 | V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130). 값을 주문 시점 WAL 에 실어 reconcile 경합을 피한다([[kis-order-lifecycle]]) |
 | V25 | `shadow_exit_observation.live_exit_vwap` — 실체결 단가. V24 는 모델 과대추정폭만 쟀고 남은 절반인 **실행 슬리피지**(판단 tick 가격 vs 실체결)를 여기서 얻는다. nullable 이며 값이 없으면 그 관측은 슬리피지 분모에서 빠진다(0 을 넣으면 "마찰 없음" 오독) |
+| V26 | `trade_records.order_amount` — **이 주문의 실체결 대금**(`Σ trades[].funds`, 수수료 미포함). 엔진 BUY 행의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 그것을 주문 금액으로 읽어 부풀려졌다(#146). nullable·백필 없음·롤백 시 DROP 하지 않는다. 경로별 규칙은 [[trade-record-volume-semantics]] |
 | V24 | `shadow_exit_observation` — 후보 청산 파라미터의 **그림자 관측**. 라이브 매매에는 관여하지 않고(계산·기록 전용, 기본 off) 백테 모델 청산가 `peak × (1−trail/100)` 가 실제 10초 tick 에서 얼마나 낙관인지만 잰다([[trailing-arm-finding-2026-09]]). 되돌릴 때는 `trading.shadow-exit.enabled=false` 로 끈다(forward-off) |
 | V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`([[accumulate-ladder]]). 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
 
@@ -56,7 +57,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 
 ⚠️ **수동 매도는 여전히 귀속을 틀린다** — `executeSellAll`/`executeSellVolume` 이 `strategy="manual"` 을 하드코딩해서, 엔진이 잡은 포지션을 사람이 청산하면 진입 전략이 크레딧을 못 받는다(Upbit 경로). **KIS 경로는 V22 에서 해소됐다** — 주문 WAL 이 전략·사유를 싣고 `buildExecution` 이 그대로 옮긴다([[kis-order-lifecycle]]). 다만 "수동 매도가 엔진 포지션을 청산했을 때 진입 전략을 크레딧한다"는 문제는 양쪽 모두 미해결이다.
 
-⚠️ **`trade_executions.fee` 는 V21 부터만 채워진다.** 그 이전 행은 `0`(미기록)이다 — `saveAudit` 이 값을 넘기지 않았다. 소급하지 않은 이유는 수수료율이 `TRADING_ROUND_TRIP_FEE_RATE` 로 환경마다 다를 수 있어 SQL 에 상수로 박으면 기본값이 아닌 환경에서 과거와 현재가 다른 기준이 되기 때문이다. 총 수수료를 집계할 일이 생기면 V21 이전 행을 제외해야 한다. 채워지는 값도 **체결 응답의 실제 수수료가 아니라 설정값 기반 추정**이다(`Order` 가 Upbit `paid_fee` 를 파싱하지 않는다).
+⚠️ **`trade_executions.fee` 는 V21 부터만 채워진다.** 그 이전 행은 `0`(미기록)이다 — `saveAudit` 이 값을 넘기지 않았다. 소급하지 않은 이유는 수수료율이 `TRADING_ROUND_TRIP_FEE_RATE` 로 환경마다 다를 수 있어 SQL 에 상수로 박으면 기본값이 아닌 환경에서 과거와 현재가 다른 기준이 되기 때문이다. 총 수수료를 집계할 일이 생기면 V21 이전 행을 제외해야 한다. 채워지는 값의 출처는 경로가 정한다 — 엔진 매수(#133)·엔진 매도(#148, 2026-09-14)는 `getOrder` 응답의 `paid_fee` 실측, 수동 주문과 `paid_fee` 없는 매도는 설정값 추정([[trade-record-volume-semantics]] 수수료 절). `pnl_amount` 는 백테 정합용 요율 기준이라 `fee` 와 더하지 않는다.
 
 다음 마이그레이션 번호를 정하는 규칙은 [[migration-numbering]] 에 있다 — 미머지 브랜치가 번호를 선점하는 문제가 실제로 있었다.
 

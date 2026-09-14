@@ -72,6 +72,8 @@ class TradeExecutionService(
                 // totalAmount 가 이 주문의 금액이라 추정 기준이 맞다. placeOrder 응답은 체결 전이라
                 // paid_fee 를 신뢰할 수 없고, 확인하려면 getOrder 재조회가 필요하다(범위 밖 — #133).
                 fee = FeeBasis.Estimate,
+                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                orderAmount = null,
                 userId = userId,
             )
         }
@@ -122,6 +124,8 @@ class TradeExecutionService(
                 strategy = strategy,
                 // 매도의 totalAmount 는 이 매도의 대금이라 추정 기준이 맞다.
                 fee = FeeBasis.Estimate,
+                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                orderAmount = null,
                 userId = userId,
             )
         }
@@ -170,6 +174,8 @@ class TradeExecutionService(
                 strategy = strategy,
                 // 매도의 totalAmount 는 이 매도의 대금이라 추정 기준이 맞다.
                 fee = FeeBasis.Estimate,
+                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                orderAmount = null,
                 userId = userId,
             )
         }
@@ -203,9 +209,8 @@ class TradeExecutionService(
                 price = record.price,
                 volume = record.volume,
                 totalAmount = record.totalAmount,
-                // 수수료 출처는 경로가 정한다(#133) — totalAmount 가 그 체결의 대금이 아닌 경로가 있어서다.
-                // 추정끼리는 매수·매도 양쪽에서 편도로 잡혀 두 행을 합치면 왕복분이 되지만, 엔진
-                // 라운드트립은 매수=실측·매도=추정 혼합이라 그 등식이 정확히 성립하지 않는다.
+                // 수수료 출처는 경로가 정한다(#133·#148) — 엔진 매수·매도는 주문 응답 실측, 수동 주문과 paid_fee 가
+                // 없는 매도는 추정, 매수 잔고복원은 미기록. 한 행만 보고 실측인지 추정인지 구분할 마커는 없다.
                 fee = when (val basis = record.fee) {
                     // 파싱 단계에서 이미 거르지만 여기서 한 번 더 본다 — `Measured` 는 public 생성자라
                     // 다른 경로가 생기면 검증을 건너뛸 수 있고, NaN 이 컬럼에 들어가면 이후 SUM(fee) 이

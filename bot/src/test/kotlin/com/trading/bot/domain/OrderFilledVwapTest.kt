@@ -66,4 +66,33 @@ class OrderFilledVwapTest {
         )
         assertNull(zeroVolume.filledVwap())
     }
+
+    // --- filledFunds — 이 주문의 체결 대금 (#146) ---
+
+    @Test
+    fun `filledFunds sums the funds of every fill and shares the vwap discipline`() {
+        val order: Order = mapper.readValue(
+            """{"uuid":"u1","side":"bid","ord_type":"price","state":"done","market":"KRW-BTC",
+                "trades":[
+                  {"market":"KRW-BTC","uuid":"t1","price":"100000000","volume":"0.001","funds":"100000","side":"bid"},
+                  {"market":"KRW-BTC","uuid":"t2","price":"99000000","volume":"0.0005","funds":"49500","side":"bid"}]}""",
+        )
+        assertEquals(149_500.0, order.filledFunds()!!, 1e-9)
+
+        val noTrades: Order = mapper.readValue("""{"uuid":"u1","state":"wait","market":"KRW-BTC"}""")
+        assertNull(noTrades.filledFunds()) { "체결 내역이 없으면 추정하지 않는다" }
+
+        val zeroVolume: Order = mapper.readValue(
+            """{"uuid":"u1","market":"KRW-BTC","trades":[
+                 {"market":"KRW-BTC","uuid":"t1","price":"1","volume":"0","funds":"10","side":"bid"}]}""",
+        )
+        assertNull(zeroVolume.filledFunds()) { "funds 만 필요해도 volume 검증을 상속한다(fail-closed)" }
+        for (bad in listOf("NaN", "Infinity", "-100")) {
+            val order2: Order = mapper.readValue(
+                """{"uuid":"u1","market":"KRW-BTC","trades":[
+                     {"market":"KRW-BTC","uuid":"t1","price":"1","volume":"1","funds":"$bad","side":"bid"}]}""",
+            )
+            assertNull(order2.filledFunds()) { "funds=$bad 를 금액으로 받아들이면 SUM 이 오염된다" }
+        }
+    }
 }

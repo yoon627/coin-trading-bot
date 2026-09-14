@@ -8,7 +8,7 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V21) |
+| **마이그레이션** | Flyway (V1~V26) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
@@ -120,7 +120,7 @@ coin-trading-bot/
 
 ## 6. 데이터베이스 스키마
 
-### Flyway 마이그레이션 (V1~V23)
+### Flyway 마이그레이션 (V1~V26)
 
 | 버전 | 내용 |
 |------|------|
@@ -139,6 +139,8 @@ coin-trading-bot/
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구. `buildSellRecord` 가 `strategy` 를 안 넘겨 그때까지의 매도가 전부 `strategy=NULL` 이었다(전략별 손익이 통째로 `unknown` 으로 집계). 귀속은 포지션 구간 내 첫 번째 non-manual BUY 기준 — 수동 매수는 `TradingState` 를 세우지 않아 런타임 `entryStrategy` 후보가 아니다 |
 | V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130) |
 | V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`. 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
+| V24·V25 | `shadow_exit_observation` 신설 + `live_exit_vwap` — 후보 청산 파라미터 그림자 관측·실행 슬리피지 |
+| V26 | `trade_records.order_amount` — 이 주문의 실체결 대금(Σ`trades[].funds`, 수수료 미포함). 엔진 BUY 의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 부풀려 읽던 문제(#146). nullable·백필 없음·롤백 시 DROP 금지 |
 
 ### 핵심 테이블
 

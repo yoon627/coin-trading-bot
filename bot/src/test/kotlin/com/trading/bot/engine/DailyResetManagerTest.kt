@@ -161,6 +161,66 @@ class DailyResetManagerTest {
         assertTrue(m.shouldSellForDailyReset(boughtYesterday))
     }
 
+    // --- 보유상한 초과 감지 (#131) ---
+
+    private fun warningsWhileDeciding(block: () -> Unit): List<String> {
+        val logger = org.slf4j.LoggerFactory.getLogger(DailyResetManager::class.java) as ch.qos.logback.classic.Logger
+        val appender = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        return try {
+            block()
+            appender.list.filter { it.level == ch.qos.logback.classic.Level.WARN }.map { it.formattedMessage }
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+    }
+
+    @Test
+    fun `shouldSellForDailyReset warns once per position from the first overrun day`() {
+        // 2026-07 실측(#131): maxHoldDays=1 인데 3~4거래일 뒤 청산. 초과 첫날(경과 2일)부터 잡혀야 한다.
+        val m = DailyResetManager(TradingProperties(maxHoldDays = 1), fixedClock("2026-07-21T10:00:00"), userId = 4)
+        val overrun = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 7, 19))
+
+        val warnings = warningsWhileDeciding {
+            assertTrue(m.shouldSellForDailyReset(overrun))
+            assertTrue(m.shouldSellForDailyReset(overrun))
+        }
+
+        assertEquals(1, warnings.size)
+        assertTrue(warnings.single().contains("KRW-BTC held 2 trading days (limit 1"), warnings.single())
+        assertTrue(warnings.single().contains("user 4"), warnings.single())
+    }
+
+    @Test
+    fun `shouldSellForDailyReset warns again for a new position or another ticker`() {
+        val m = DailyResetManager(TradingProperties(maxHoldDays = 1), fixedClock("2026-07-24T10:00:00"))
+        val first = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 7, 17))
+        val rebought = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 7, 21))
+        val other = TradingState("KRW-ETH", position = true, buyDate = LocalDate.of(2026, 7, 19))
+
+        val warnings = warningsWhileDeciding {
+            m.shouldSellForDailyReset(first)
+            m.shouldSellForDailyReset(rebought)
+            m.shouldSellForDailyReset(other)
+            m.shouldSellForDailyReset(rebought)
+        }
+
+        assertEquals(3, warnings.size, warnings.toString())
+    }
+
+    @Test
+    fun `shouldSellForDailyReset does not warn when the hold limit fires on time`() {
+        val m = DailyResetManager(TradingProperties(maxHoldDays = 1), fixedClock("2026-07-21T10:00:00"))
+        val onTime = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 7, 20))
+
+        val warnings = warningsWhileDeciding {
+            assertTrue(m.shouldSellForDailyReset(onTime))
+        }
+
+        assertTrue(warnings.isEmpty(), warnings.toString())
+    }
+
     @Test
     fun `shouldSellForDailyReset returns false when buyDate is ahead of trading date`() {
         // 00:00~09:00 매수분: buyDate(달력일)=오늘 > tradingDate=어제 — 음수 경과는 미청산.
