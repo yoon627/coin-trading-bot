@@ -14,7 +14,9 @@ cd "$(dirname "$0")/.."
 # 이름·포트를 실행마다 다르게 잡는다 — 고정하면 동시 실행 시 서로의 컨테이너를 지우고 포트도 겹친다.
 CTR="coin-trading-bot-db-tests-$$"
 IMAGE="postgres:17-alpine"   # 운영과 같은 이미지
-XML="bot/build/test-results/test/TEST-com.trading.bot.persistence.TradingStateRoundTripTest.xml"
+# DB 통합테스트 클래스 목록 — 새 클래스를 추가하면 여기와 deploy.yml 의 같은 목록에 함께 올린다.
+DB_TEST_CLASSES=(TradingStateRoundTripTest TradeRecordAggregateRoundTripTest)
+xml_of() { echo "bot/build/test-results/test/TEST-com.trading.bot.persistence.$1.xml"; }
 
 # 내가 만든 컨테이너만 지운다(이름에 PID 가 있으므로 남의 것과 겹치지 않는다).
 cleanup() { [ -n "${CTR_STARTED:-}" ] && docker rm -f "$CTR" >/dev/null 2>&1 || true; }
@@ -37,10 +39,11 @@ docker exec "$CTR" pg_isready -U trading -d trading
 if [ "${1:-}" = "--all" ]; then
     TARGET=(test --parallel)
 else
-    TARGET=(:bot:test --tests "*TradingStateRoundTripTest*")
+    TARGET=(:bot:test)
+    for c in "${DB_TEST_CLASSES[@]}"; do TARGET+=(--tests "*$c*"); done
 fi
 
-rm -f "$XML"   # 이전 실행 결과를 그대로 통과시키지 않는다
+for c in "${DB_TEST_CLASSES[@]}"; do rm -f "$(xml_of "$c")"; done   # 이전 실행 결과를 그대로 통과시키지 않는다
 
 # --no-daemon 이 필요한 이유: Gradle daemon 은 환경변수를 기동 시점에 고정한다. TEST_DB_* 없이
 # ./gradlew test 를 돌린 적이 있으면 그 daemon 이 재사용되면서 여기서 세운 값이 테스트에 보이지
@@ -57,17 +60,18 @@ DB_TESTS_REQUIRED=true \
 
 # 마지막 방어선: 어떤 이유로든(daemon 환경 고정·오타·설정 누락) 건너뛰어졌으면 실패로 만든다.
 # gradle 이 성공으로 끝나도 검증이 안 됐으면 성공이 아니다.
-if [ ! -f "$XML" ]; then
-    echo "ERROR: 테스트 결과가 없다 — DB 통합테스트가 아예 실행되지 않았다 ($XML)" >&2
-    exit 1
-fi
-
-attrs="$(head -3 "$XML")"
-ran="$(printf '%s' "$attrs" | grep -o 'tests="[0-9]*"' | head -1 | tr -dc '0-9')"
-skipped="$(printf '%s' "$attrs" | grep -o 'skipped="[0-9]*"' | head -1 | tr -dc '0-9')"
-echo "== DB 통합테스트: 실행 ${ran:-?}건 / skip ${skipped:-?}건"
-
-if [ "${ran:-0}" = "0" ] || [ "${skipped:-1}" != "0" ]; then
-    echo "ERROR: DB 통합테스트가 건너뛰어졌다 — 접속 정보가 테스트 JVM 에 전달되지 않았다." >&2
-    exit 1
-fi
+for c in "${DB_TEST_CLASSES[@]}"; do
+    XML="$(xml_of "$c")"
+    if [ ! -f "$XML" ]; then
+        echo "ERROR: 테스트 결과가 없다 — DB 통합테스트가 아예 실행되지 않았다 ($XML)" >&2
+        exit 1
+    fi
+    attrs="$(head -3 "$XML")"
+    ran="$(printf '%s' "$attrs" | grep -o 'tests="[0-9]*"' | head -1 | tr -dc '0-9')"
+    skipped="$(printf '%s' "$attrs" | grep -o 'skipped="[0-9]*"' | head -1 | tr -dc '0-9')"
+    echo "== DB 통합테스트 $c: 실행 ${ran:-?}건 / skip ${skipped:-?}건"
+    if [ "${ran:-0}" = "0" ] || [ "${skipped:-1}" != "0" ]; then
+        echo "ERROR: DB 통합테스트가 건너뛰어졌다 — 접속 정보가 테스트 JVM 에 전달되지 않았다." >&2
+        exit 1
+    fi
+done

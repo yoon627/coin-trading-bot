@@ -66,11 +66,19 @@ class TradeExecutionServiceTest {
             volume = 0.002, totalAmount = 100000.0, userId = 1L,
         )
 
+        val saved = slot<TradeRecord>()
+        coEvery { tradeRecordRepository.save(capture(saved)) } returns TradeRecordEntity(
+            id = 1, ticker = "KRW-BTC", side = "BUY", price = 50000000.0,
+            volume = 0.002, totalAmount = 100000.0, userId = 1L,
+        )
+
         val result = service.executeBuy(client, "KRW-BTC", 100000.0, "volatility_breakout", 1L)
 
         assertTrue(result.success)
         assertEquals("order-123", result.orderUuid)
         coVerify { tradeRecordRepository.save(any()) }
+        // 수동 경로는 placeOrder 즉시 응답뿐이라 체결 대금을 모른다 — 요청액을 실측인 척 넣지 않는다(#146).
+        assertNull(saved.captured.orderAmount)
         coVerify { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) }
     }
 
@@ -277,6 +285,7 @@ class TradeExecutionServiceTest {
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
             exchangeOrderId = "dup-1", userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         service.saveAndNotify(record, client, null, null)
@@ -294,6 +303,7 @@ class TradeExecutionServiceTest {
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
             exchangeOrderId = "new-1", userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         service.saveAndNotify(record, client, null, null)
@@ -312,6 +322,7 @@ class TradeExecutionServiceTest {
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
             exchangeOrderId = "fill-1", userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         val recorded = service.commitFill(
@@ -371,6 +382,7 @@ class TradeExecutionServiceTest {
                 totalAmount = 100000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
                 exchangeOrderId = "fee-buy", userId = 1L,
                 fee = FeeBasis.Estimate,
+                orderAmount = null,
             )
         )
 
@@ -391,6 +403,7 @@ class TradeExecutionServiceTest {
                 ticker = "KRW-BTC", side = TradeSide.BUY, price = 52000000.0, volume = 0.02,
                 totalAmount = 1040000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
                 fee = FeeBasis.Measured(12.3),
+                orderAmount = null,
                 exchangeOrderId = "fee-measured", userId = 1L,
             )
         )
@@ -412,6 +425,7 @@ class TradeExecutionServiceTest {
                 ticker = "KRW-BTC", side = TradeSide.BUY, price = 52000000.0, volume = 0.02,
                 totalAmount = 1040000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
                 fee = FeeBasis.Unrecorded,
+                orderAmount = null,
                 exchangeOrderId = "fee-unknown", userId = 1L,
             )
         )
@@ -433,6 +447,7 @@ class TradeExecutionServiceTest {
                 ticker = "KRW-BTC", side = TradeSide.BUY, price = 52000000.0, volume = 0.02,
                 totalAmount = 1040000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
                 fee = FeeBasis.Measured(Double.NaN),
+                orderAmount = null,
                 exchangeOrderId = "fee-nan", userId = 1L,
             )
         )
@@ -454,6 +469,7 @@ class TradeExecutionServiceTest {
                 totalAmount = 104000.0, pnlPercent = 3.9, pnlAmount = 3900.0, strategy = "knee_reversal",
                 exchangeOrderId = "audit-sell", userId = 1L,
                 fee = FeeBasis.Estimate,
+                orderAmount = null,
             )
         )
 

@@ -18,6 +18,19 @@ class DiscordNotifier(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    /**
+     * 이 주문의 실체결 대금이 있으면 "체결금액", 없으면 totalAmount 를 **출처 중립 라벨**로 보여준다(#146).
+     * 엔진 매수의 totalAmount 는 포지션 전체 원가, 매도는 tick 평가액, 수동 매수는 요청액 — 경로마다 달라
+     * 한 단어로 이름 붙이면 어느 한 경로에서는 거짓이 된다. "금액"이라 부르면 5만원 추가매수가 100만원으로 읽힌다.
+     */
+    private fun amountField(record: TradeRecord): Map<String, Any> {
+        val (label, amount) = when (val known = record.orderAmount) {
+            null -> "기록 금액(체결 미상)" to record.totalAmount
+            else -> "체결금액" to known
+        }
+        return mapOf("name" to label, "value" to "%,.0f원".format(amount), "inline" to true)
+    }
+
     fun sendTradeEmbed(
         record: TradeRecord,
         krwBalance: Double? = null,
@@ -32,7 +45,7 @@ class DiscordNotifier(
         val fields = mutableListOf(
             mapOf("name" to "티커", "value" to record.ticker, "inline" to true),
             mapOf("name" to "가격", "value" to "%,.0f원".format(record.price), "inline" to true),
-            mapOf("name" to "금액", "value" to "%,.0f원".format(record.totalAmount), "inline" to true),
+            amountField(record),
         )
 
         if (!isBuy) {
