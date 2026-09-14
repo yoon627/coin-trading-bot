@@ -1,6 +1,6 @@
 ---
 title: hold-limit-overrun-warn — 보유상한 초과 청산을 WARN 으로 드러낸다 (#131)
-status: in_progress
+status: done
 started: 2026-09-14
 updated: 2026-09-14
 ---
@@ -14,10 +14,11 @@ updated: 2026-09-14
 
 - 2026-09-14 — worktree 생성(base `main@bd91317`). 이슈 판정 세션에서 첫 착수 항목으로 선택.
 - 2026-09-14 — TDD Red→Green, code-reviewer(+codex high) Major 1·Minor 5 전부 반영(아래 Disposition), `exit-gates` wiki 동기화 + 검증 3종 통과.
+- 2026-09-14 — 최종 검증 `:bot:test` 1047건 중 실패 1 = baseline(#193, 줄끝) 분리. 커밋 후 main 에 ff-merge.
 
 # Next
 
-1. 최종 검증(runner `:bot:test` 전체) 통과 확인 → 커밋 → 로컬 ff-merge → #131 에 코멘트(감지 추가, 원인 조사는 로그 보존 밖이라 미실시).
+없음 — 로컬 ff-merge 로 닫혔다. #131 은 감지 추가 코멘트 후 열어 둔다(원인 조사 미실시).
 
 # Decisions
 
