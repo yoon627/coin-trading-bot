@@ -483,6 +483,10 @@ function BacktestPage({ user, setActive }) {
   const [ticker, setTicker] = React.useState('KRW-BTC');
   const [days, setDays] = React.useState(180);
   const [chartExitEnabled, setChartExitEnabled] = React.useState(false);
+  // 빈 값은 키를 빼서 서버 폴백(라이브 설정, #27 정합)을 그대로 탄다 — 0 을 보내면 의미가 바뀐다(#32).
+  const [maxHoldDays, setMaxHoldDays] = React.useState('');
+  const [trailingArmPct, setTrailingArmPct] = React.useState('');
+  const [useMarketFilter, setUseMarketFilter] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState(null);
   const [ranWith, setRanWith] = React.useState(null);
@@ -494,9 +498,21 @@ function BacktestPage({ user, setActive }) {
     try {
       // Backend uses Jackson SNAKE_CASE — multi-word fields must be snake_case
       // or they're silently dropped (unsent BacktestRequest fields fall back to live trading settings).
-      const r = await TideAPI.backtest({ strategy: strategy || undefined, ticker, days: parseInt(days), chart_exit_enabled: chartExitEnabled });
+      // 전송값과 헤더 표시값은 같은 정규화 결과를 쓴다 — 서버가 보유상한을 [1,365] 로 조용히 clamp 하므로
+      // 원문을 표시하면 "실행 조건"이 거짓이 된다. arm 은 서버가 범위 밖을 400 으로 돌려 토스트로 드러난다.
+      const holdDays = maxHoldDays === '' ? undefined : Math.min(365, Math.max(1, Math.round(Number(maxHoldDays))));
+      const armPct = trailingArmPct === '' ? undefined : Number(trailingArmPct);
+      const r = await TideAPI.backtest({
+        strategy: strategy || undefined, ticker, days: parseInt(days), chart_exit_enabled: chartExitEnabled,
+        max_hold_days: holdDays, trailing_arm_pct: armPct, use_market_filter: useMarketFilter,
+      });
       setResult(r);
-      setRanWith({ strategy: strategy || '전체 비교', ticker, days: parseInt(days), chartExit: chartExitEnabled });
+      setRanWith({
+        strategy: strategy || '전체 비교', ticker, days: parseInt(days), chartExit: chartExitEnabled,
+        maxHoldDays: holdDays === undefined ? '라이브' : `${holdDays}일`,
+        trailingArmPct: armPct === undefined ? '라이브' : `${armPct}%`,
+        marketFilter: useMarketFilter,
+      });
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusy(false); }
   };
@@ -518,10 +534,27 @@ function BacktestPage({ user, setActive }) {
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>거래쌍</div>
             <input className="tide-input" value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}/>
           </div>
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>기간 (일)</div>
             <input className="tide-input" type="number" value={days} onChange={e => setDays(e.target.value)} min="30" max="200"/>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>보유상한 (일)</div>
+              <input className="tide-input" type="number" placeholder="라이브 설정" value={maxHoldDays} onChange={e => setMaxHoldDays(e.target.value)} min="1" max="365"/>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>트레일링 arm (%)</div>
+              <input className="tide-input" type="number" placeholder="라이브 설정" value={trailingArmPct} onChange={e => setTrailingArmPct(e.target.value)} min="0" max="100" step="0.1"/>
+            </div>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, cursor: 'pointer' }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>마켓 필터 (MA50)</div>
+              <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 2 }}>장기 추세 아래에서는 매수하지 않음 — 라이브에는 없는 규칙</div>
+            </div>
+            <input type="checkbox" checked={useMarketFilter} onChange={e => setUseMarketFilter(e.target.checked)} style={{ width: 18, height: 18 }}/>
+          </label>
           <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, cursor: 'pointer' }}>
             <div>
               <div style={{ fontSize: 12, fontWeight: 600 }}>차트 청산</div>
@@ -539,7 +572,7 @@ function BacktestPage({ user, setActive }) {
           {!result ? <Empty icon="backtest" title="결과 없음" message="설정 후 실행해보세요"/> :
             <>
               {ranWith && <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginBottom: 10 }}>
-                {ranWith.strategy} · {ranWith.ticker} · {ranWith.days}일 · 차트청산 <strong style={{ color: ranWith.chartExit ? 'var(--up)' : 'var(--ink-500)' }}>{ranWith.chartExit ? 'ON' : 'OFF'}</strong>
+                {ranWith.strategy} · {ranWith.ticker} · {ranWith.days}일 · 보유상한 {ranWith.maxHoldDays} · arm {ranWith.trailingArmPct} · 마켓필터 <strong style={{ color: ranWith.marketFilter ? 'var(--up)' : 'var(--ink-500)' }}>{ranWith.marketFilter ? 'ON' : 'OFF'}</strong> · 차트청산 <strong style={{ color: ranWith.chartExit ? 'var(--up)' : 'var(--ink-500)' }}>{ranWith.chartExit ? 'ON' : 'OFF'}</strong>
               </div>}
               <pre className="mono tide-scroll" style={{ fontSize: 11.5, background: 'var(--ink-50)', padding: 16, borderRadius: 10, maxHeight: 500, overflow: 'auto' }}>
                 {JSON.stringify(result, null, 2)}
