@@ -12,10 +12,12 @@ import java.time.temporal.ChronoUnit
 class DailyResetManager(
     private val tradingProperties: TradingProperties,
     private val clock: Clock = Clock.system(TradingDay.KST),
+    private val userId: Long? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     private var lastResetDate: LocalDate? = null
+    private val overrunWarnedBuyDate = mutableMapOf<String, LocalDate>()
 
     fun getTradingDate(): LocalDate = TradingDay.of(clock)
 
@@ -40,6 +42,19 @@ class DailyResetManager(
         val buyDate = state.buyDate ?: return false
         val configured = state.exitParams?.maxHoldDays ?: tradingProperties.maxHoldDays
         val holdLimit = ExitGates.effectiveMaxHoldDays(configured)
-        return ChronoUnit.DAYS.between(buyDate, getTradingDate()) >= holdLimit
+        val heldDays = ChronoUnit.DAYS.between(buyDate, getTradingDate())
+        if (heldDays > holdLimit) warnOverrunOnce(state.ticker, buyDate, heldDays, holdLimit)
+        return heldDays >= holdLimit
+    }
+
+    // 매도 주문이 나갈 때까지(앞선 게이트가 먼저 걸리지 않는 동안) 매 tick 재판정되므로
+    // 같은 포지션(buyDate)에는 프로세스 수명 동안 한 번만 남긴다. 원인은 여기서 알 수 없어 관측값만 적는다.
+    private fun warnOverrunOnce(ticker: String, buyDate: LocalDate, heldDays: Long, holdLimit: Int) {
+        if (overrunWarnedBuyDate[ticker] == buyDate) return
+        overrunWarnedBuyDate[ticker] = buyDate
+        log.warn(
+            "Hold limit overrun: {} held {} trading days (limit {}, buyDate={}, tradingDate={}, user {}) — daily reset fired late (#131)",
+            ticker, heldDays, holdLimit, buyDate, getTradingDate(), userId,
+        )
     }
 }
