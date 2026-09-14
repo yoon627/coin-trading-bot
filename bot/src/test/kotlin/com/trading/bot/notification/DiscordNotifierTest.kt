@@ -52,6 +52,7 @@ class DiscordNotifierTest {
             strategy = "volatility_breakout",
             userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         notifier.sendTradeEmbed(record, krwBalance = 900000.0, username = "testuser")
@@ -62,6 +63,32 @@ class DiscordNotifierTest {
             val embeds = payload["embeds"] as? List<*>
             embeds != null && embeds.isNotEmpty()
         }) }
+    }
+
+    // --- 금액 필드의 의미 (#146) ---
+    // 엔진 매수의 totalAmount 는 포지션 전체 원가라 "금액"으로 보여주면 추가매수가 총보유 원가로 읽힌다.
+
+    private fun amountField(record: TradeRecord): Pair<String, String> {
+        val payload = slot<Map<String, Any>>()
+        every { requestBodySpec.bodyValue(capture(payload)) } returns requestBodySpec
+        notifier.sendTradeEmbed(record, krwBalance = null, username = "u")
+        val embed = (payload.captured["embeds"] as List<*>).single() as Map<*, *>
+        val fields = embed["fields"] as List<*>
+        val field = fields.map { it as Map<*, *> }.single { it["name"] in setOf("체결금액", "기록 금액(체결 미상)", "금액") }
+        return field["name"] as String to field["value"] as String
+    }
+
+    private fun record(side: TradeSide, orderAmount: Double?) = TradeRecord(
+        ticker = "KRW-BTC", side = side, price = 50000000.0, volume = 0.02, totalAmount = 1_000_000.0,
+        pnlPercent = if (side == TradeSide.SELL) 1.0 else null, pnlAmount = null, strategy = "combined",
+        userId = 1L, fee = FeeBasis.Estimate, orderAmount = orderAmount,
+    )
+
+    @Test
+    fun `amount field shows this order's funds when known and a source-neutral label otherwise`() {
+        assertEquals("체결금액" to "50,000원", amountField(record(TradeSide.BUY, orderAmount = 50_000.0)))
+        assertEquals("기록 금액(체결 미상)" to "1,000,000원", amountField(record(TradeSide.BUY, orderAmount = null)))
+        assertEquals("기록 금액(체결 미상)" to "1,000,000원", amountField(record(TradeSide.SELL, orderAmount = null)))
     }
 
     @Test
@@ -78,6 +105,7 @@ class DiscordNotifierTest {
             strategy = "rsi_bounce",
             userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         notifier.sendTradeEmbed(record, krwBalance = 1004000.0, username = "testuser")
@@ -98,6 +126,7 @@ class DiscordNotifierTest {
             strategy = null, // 전략 미상 분기(수동 매수 포지션)도 embed 를 만들 수 있어야 한다
             userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         val customUrl = "https://discord.com/api/webhooks/456/def"
@@ -122,6 +151,7 @@ class DiscordNotifierTest {
             strategy = "combined",
             userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         notifierNoUrl.sendTradeEmbed(record)
@@ -142,6 +172,7 @@ class DiscordNotifierTest {
             strategy = "combined",
             userId = 1L,
             fee = FeeBasis.Estimate,
+            orderAmount = null,
         )
 
         notifier.sendTradeEmbed(record, webhookUrl = "http://evil.com/steal")

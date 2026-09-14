@@ -33,17 +33,6 @@ data class Order(
     val trades: List<OrderTrade> = emptyList(),
 ) {
     /**
-     * 이 주문 응답에서 얻을 수 있는 수수료 출처.
-     *
-     * 수수료로 쓸 수 있는 **유한한 0 이상의 수**일 때만 [FeeBasis.Measured] 다. 그 외는 전부
-     * [FeeBasis.Unrecorded] — **추정으로 떨어뜨리지 않는다.** 엔진 매수의 `totalAmount` 는 포지션
-     * 전체 원가라, 추정하면 고치려던 과대계상이 그대로 재발한다(#133).
-     *
-     * `isFinite()` 가 필요한 이유: `toDoubleOrNull()` 은 `"NaN"`·`"Infinity"` 를 **정상 파싱한다**(실측 확인).
-     * 그 값이 `double precision` 컬럼에 들어가면 이후 `SUM(fee)` 이 영구히 `NaN` 이 된다 — 0 이 섞이는 것과
-     * 달리 되돌릴 수 없다.
-     */
-    /**
      * 실제 체결 단가(VWAP) — `Σfunds / Σvolume`. 얻을 수 없으면 **null 이고 추정하지 않는다**.
      *
      * 왜 필요한가: 이 봇은 시장가로 팔고 거래 기록에는 **판단 시점 tick 가격**을 쓴다. 그 둘의 차이가
@@ -53,6 +42,24 @@ data class Order(
      * [feeBasis] 와 같은 규율 — 유한한 양수일 때만 값이고, 아니면 null 로 떨어뜨려 소비자가 "모른다"를 보게 한다.
      */
     fun filledVwap(): Double? {
+        val (funds, volume) = filledTotals() ?: return null
+        return (funds / volume).takeIf { it.isFinite() && it > 0.0 }
+    }
+
+    /**
+     * 이 주문이 실제로 체결한 대금 — `Σ trades[].funds`. Upbit 정의상 `funds` 는 체결가 × 체결량이라
+     * **수수료 미포함**이다(수수료는 [paidFee] 별도). 엔진 매수 기록의 `totalAmount` 가 포지션 전체 원가라
+     * "이번 주문 금액"을 알 수 없던 문제(#146)의 유일한 실측 입력이다.
+     *
+     * [filledVwap] 과 같은 규율 — 얻을 수 없으면 null 이고 추정하지 않는다. funds 만 필요해도 volume 검증을
+     * 그대로 상속한다(fail-closed): 반쪽만 통과한 체결 내역을 금액으로 믿지 않는다.
+     */
+    fun filledFunds(): Double? {
+        val funds = filledTotals()?.first ?: return null
+        return funds.takeIf { it.isFinite() && it > 0.0 }
+    }
+
+    private fun filledTotals(): Pair<Double, Double>? {
         if (trades.isEmpty()) return null
         var funds = 0.0
         var volume = 0.0
@@ -64,9 +71,23 @@ data class Order(
             volume += v
         }
         if (volume <= 0.0) return null
-        return (funds / volume).takeIf { it.isFinite() && it > 0.0 }
+        return funds to volume
     }
 
+    /** 거래소가 더 바꾸지 않는 최종 상태. wait/watch 는 체결이 진행 중이라 수량·금액·수수료가 늘 수 있다. */
+    fun isTerminal(): Boolean = state == "done" || state == "cancel"
+
+    /**
+     * 이 주문 응답에서 얻을 수 있는 수수료 출처.
+     *
+     * 수수료로 쓸 수 있는 **유한한 0 이상의 수**일 때만 [FeeBasis.Measured] 다. 그 외는 전부
+     * [FeeBasis.Unrecorded] — **추정으로 떨어뜨리지 않는다.** 엔진 매수의 `totalAmount` 는 포지션
+     * 전체 원가라, 추정하면 고치려던 과대계상이 그대로 재발한다(#133).
+     *
+     * `isFinite()` 가 필요한 이유: `toDoubleOrNull()` 은 `"NaN"`·`"Infinity"` 를 **정상 파싱한다**(실측 확인).
+     * 그 값이 `double precision` 컬럼에 들어가면 이후 `SUM(fee)` 이 영구히 `NaN` 이 된다 — 0 이 섞이는 것과
+     * 달리 되돌릴 수 없다.
+     */
     fun feeBasis(): FeeBasis =
         paidFee?.toDoubleOrNull()
             ?.takeIf { it.isFinite() && it >= 0.0 }

@@ -229,6 +229,8 @@ function BotPage({ user, setActive }) {
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 4 }}>
                     {s.total_trades}건 · 승률 {(s.win_rate || 0).toFixed(1)}%
+                    {/* total_amount 는 실체결 대금이 기록된 행의 합(#146) — 미상 행 수를 같이 보여 축소로 읽히지 않게 한다 */}
+                    {' · 체결 '}{fmtKRW(s.total_amount || 0)}{s.amount_unknown_trades ? ` (미상 ${s.amount_unknown_trades}건 제외)` : ''}
                   </div>
                 </div>
               ))
@@ -447,7 +449,7 @@ function OrdersPage({ user, setActive }) {
           <div style={{ display: 'grid', gridTemplateColumns: '160px 110px 70px 1fr 1fr 1fr 110px',
                         padding: '14px 24px', fontSize: 11, color: 'var(--ink-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
             <span>시간</span><span>거래쌍</span><span>방향</span>
-            <span style={{ textAlign: 'right' }}>가격</span><span style={{ textAlign: 'right' }}>수량</span><span style={{ textAlign: 'right' }}>총액</span><span>전략</span>
+            <span style={{ textAlign: 'right' }}>가격</span><span style={{ textAlign: 'right' }}>수량</span><span style={{ textAlign: 'right' }}>금액</span><span>전략</span>
           </div>
           {list.slice(0, 100).map((o, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: '160px 110px 70px 1fr 1fr 1fr 110px', padding: '14px 24px', fontSize: 13, alignItems: 'center', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
@@ -456,7 +458,15 @@ function OrdersPage({ user, setActive }) {
               <span style={{ color: (o.side || '').toUpperCase() === 'BUY' ? 'var(--up)' : 'var(--down)', fontWeight: 600, fontSize: 12 }}>{(o.side || '').toUpperCase() === 'BUY' ? '매수' : '매도'}</span>
               <span className="num" style={{ textAlign: 'right' }}>{fmtKRW(o.price)}</span>
               <span className="num" style={{ textAlign: 'right' }}>{fmtNum(o.volume, 6)}</span>
-              <span className="num" style={{ textAlign: 'right', fontWeight: 600 }}>{fmtKRW(o.totalAmount || o.total_amount)}</span>
+              {(() => {
+                // order_amount = 이 주문의 실체결 대금. 없으면(V26 이전 행·주문 응답 없는 경로·수동) total_amount 인데,
+                // 그 값의 의미가 경로마다 달라(엔진 매수=원가 스냅샷, 매도=평가액, 수동=요청액) 흐리게 + 설명을 붙인다. `||` 는 0 을 삼키므로 `??`.
+                const orderAmount = o.orderAmount ?? o.order_amount;
+                const known = orderAmount !== null && orderAmount !== undefined;
+                return known
+                  ? <span className="num" style={{ textAlign: 'right', fontWeight: 600 }}>{fmtKRW(orderAmount)}</span>
+                  : <span className="num" title="체결금액 미상 — 기록 시점 금액(엔진 매수는 보유 원가, 매도는 평가액)" style={{ textAlign: 'right', fontWeight: 600, color: 'var(--ink-500)' }}>{fmtKRW(o.totalAmount ?? o.total_amount)}</span>;
+              })()}
               <span><Badge tone="primary">{o.strategy || '—'}</Badge></span>
             </div>
           ))}

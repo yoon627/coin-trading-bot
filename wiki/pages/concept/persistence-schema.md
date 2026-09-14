@@ -1,5 +1,5 @@
 ---
-title: DB 스키마 — Flyway V1~V25 와 Upbit·KIS 핵심 테이블
+title: DB 스키마 — Flyway V1~V26 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
 updated: 2026-09-14
@@ -13,7 +13,7 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V25** 다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V26** 다.
 
 | 버전 | 내용 |
 |---|---|
@@ -32,6 +32,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구(아래) |
 | V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130). 값을 주문 시점 WAL 에 실어 reconcile 경합을 피한다([[kis-order-lifecycle]]) |
 | V25 | `shadow_exit_observation.live_exit_vwap` — 실체결 단가. V24 는 모델 과대추정폭만 쟀고 남은 절반인 **실행 슬리피지**(판단 tick 가격 vs 실체결)를 여기서 얻는다. nullable 이며 값이 없으면 그 관측은 슬리피지 분모에서 빠진다(0 을 넣으면 "마찰 없음" 오독) |
+| V26 | `trade_records.order_amount` — **이 주문의 실체결 대금**(`Σ trades[].funds`, 수수료 미포함). 엔진 BUY 행의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 그것을 주문 금액으로 읽어 부풀려졌다(#146). nullable·백필 없음·롤백 시 DROP 하지 않는다. 경로별 규칙은 [[trade-record-volume-semantics]] |
 | V24 | `shadow_exit_observation` — 후보 청산 파라미터의 **그림자 관측**. 라이브 매매에는 관여하지 않고(계산·기록 전용, 기본 off) 백테 모델 청산가 `peak × (1−trail/100)` 가 실제 10초 tick 에서 얼마나 낙관인지만 잰다([[trailing-arm-finding-2026-09]]). 되돌릴 때는 `trading.shadow-exit.enabled=false` 로 끈다(forward-off) |
 | V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`([[accumulate-ladder]]). 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
 

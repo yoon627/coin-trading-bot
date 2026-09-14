@@ -51,7 +51,9 @@ class StrategyController(
                 "total_pnl_pct" to row.totalPnlPct,
                 "avg_pnl_pct" to if (row.sellTrades > 0) row.totalPnlPct / row.sellTrades else 0.0,
                 "total_pnl_amount" to row.totalPnlAmount,
+                // 실체결 대금(order_amount) 합 — 미상 행은 빠지므로 건수를 같이 내려 "일부 미상"을 알 수 있게 한다(#146).
                 "total_amount" to row.totalAmount,
+                "amount_unknown_trades" to row.amountUnknownTrades,
             )
         }
 

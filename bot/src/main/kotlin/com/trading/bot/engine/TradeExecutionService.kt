@@ -72,6 +72,8 @@ class TradeExecutionService(
                 // totalAmount 가 이 주문의 금액이라 추정 기준이 맞다. placeOrder 응답은 체결 전이라
                 // paid_fee 를 신뢰할 수 없고, 확인하려면 getOrder 재조회가 필요하다(범위 밖 — #133).
                 fee = FeeBasis.Estimate,
+                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                orderAmount = null,
                 userId = userId,
             )
         }
@@ -122,6 +124,8 @@ class TradeExecutionService(
                 strategy = strategy,
                 // 매도의 totalAmount 는 이 매도의 대금이라 추정 기준이 맞다.
                 fee = FeeBasis.Estimate,
+                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                orderAmount = null,
                 userId = userId,
             )
         }
@@ -170,6 +174,8 @@ class TradeExecutionService(
                 strategy = strategy,
                 // 매도의 totalAmount 는 이 매도의 대금이라 추정 기준이 맞다.
                 fee = FeeBasis.Estimate,
+                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                orderAmount = null,
                 userId = userId,
             )
         }
