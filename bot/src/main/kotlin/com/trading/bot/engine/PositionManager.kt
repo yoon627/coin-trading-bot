@@ -360,7 +360,9 @@ class PositionManager(
             filled != null && executed > 0.0 -> {
                 // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
                 val account = findAccount(ticker.substringAfter("-"))
-                completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis())
+                // wait(폴링 소진)로 여기 왔으면 funds 는 아직 진행 중인 값이고, completeBuy 가 pending 을 해소해
+                // 뒤에 갱신할 길이 없다 — terminal 응답의 합만 이 주문의 금액으로 믿는다(#146).
+                completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis(), terminalFunds(filled))
             }
             filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
             else -> {
@@ -403,7 +405,8 @@ class PositionManager(
                 // 주문 응답이 없어 실제 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거이지
                 // 수수료 복원의 근거가 아니므로, 틀린 추정 대신 미기록으로 남긴다(#133).
                 BalanceRecovery.Filled(
-                    completeBuy(ticker, state, currentPrice, executed, account, FeeBasis.Unrecorded)
+                    // 주문 응답이 없다 — 수수료도 이 주문의 금액도 실측 불가.
+                    completeBuy(ticker, state, currentPrice, executed, account, FeeBasis.Unrecorded, orderAmount = null)
                 )
             } else {
                 log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
@@ -430,6 +433,7 @@ class PositionManager(
         executedVolume: Double,
         account: Account?,
         feeBasis: FeeBasis,
+        orderAmount: Double?,
     ): TradeRecord {
         // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
         // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
@@ -465,6 +469,8 @@ class PositionManager(
             strategy = strategy,
             // totalAmount 가 포지션 전체 원가라 추정 기준으로 쓸 수 없다(#133). 호출자가 실측/미기록을 정한다.
             fee = feeBasis,
+            // 이번 주문에 실제로 오간 돈은 totalAmount(스냅샷)가 아니라 이것이다(#146).
+            orderAmount = orderAmount,
             exchangeOrderId = orderUuid,
         )
         // #52: 전이를 한 곳에 모아 사본과 원본에 각각 적용한다. `now` 를 고정해 두 적용이 동일한 결과를 낸다.
@@ -802,6 +808,8 @@ class PositionManager(
                         remaining = sellable - qty.volume,
                         // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 백테에 없는 항목이라 실물로만 얻는다.
                         executedVwap = filled.filledVwap(),
+                        feeBasis = sellFeeBasis(filled),
+                        orderAmount = terminalFunds(filled),
                     )
                 } else {
                     // 미확정(wait/cancel) 또는 부분체결(cancel+executed>0) — pending 유지, 다음 tick reconcilePendingSell.
@@ -838,7 +846,10 @@ class PositionManager(
                 // 취소된 미체결 잔량은 free 로 돌아오지만 반영이 늦을 수 있고, 반대로 남은 locked 가 우리
                 // 주문 것이 아닐 수도 있다(출금 대기 등). 둘 다 [heldVolume] 의 상한이 처리한다.
                 // buildSellRecord 는 평단이 필요하므로 전이 전에 만든다. 잔고 조회도 트랜잭션 밖에서 끝낸다(#52).
-                val record = buildSellRecord(ticker, state, currentPrice, executed, executedVwap = filled?.filledVwap())
+                val record = buildSellRecord(
+                    ticker, state, currentPrice, executed,
+                    executedVwap = filled?.filledVwap(), feeBasis = sellFeeBasis(filled), orderAmount = terminalFunds(filled),
+                )
                 val account = findAccount(ticker.substringAfter("-"))
                 val unfilled = (ourSellLockCeiling(state) - executed).coerceAtLeast(0.0)
                 val exchangeRemaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
@@ -893,7 +904,8 @@ class PositionManager(
                     log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept for manual review", ticker)
                     return null
                 }
-                val record = buildSellRecord(ticker, state, currentPrice, volume)
+                // 주문 응답이 없어 실측할 수 없다 — 매도 대금 기준 추정이 이 경로의 최선이다.
+                val record = buildSellRecord(ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate, orderAmount = null)
                 val now = LocalDateTime.now(TradingDay.KST)
                 // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패 시 pending 이 남아 다음 tick 이 재시도한다.
                 commitFillAndApply(state, record, sellTransition(state, volume, remaining = 0.0, recoveredAvg = 0.0, now = now))
@@ -924,9 +936,11 @@ class PositionManager(
         volume: Double,
         reason: SellReason?,
         remaining: Double,
-        executedVwap: Double? = null,
+        executedVwap: Double?,
+        feeBasis: FeeBasis,
+        orderAmount: Double?,
     ): TradeRecord {
-        val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap)
+        val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap, feeBasis, orderAmount)
         val now = LocalDateTime.now(TradingDay.KST)
         commitFillAndApply(state, record, sellTransition(state, volume, remaining, state.avgBuyPrice, now))
         log.info(
@@ -949,6 +963,8 @@ class PositionManager(
         volume: Double,
         reason: SellReason? = state.pendingSellReason,
         executedVwap: Double? = null,
+        feeBasis: FeeBasis,
+        orderAmount: Double?,
     ): TradeRecord {
         // 재시작 복원 경로에서는 avgBuyPrice 가 이미 0 으로 동기화돼 있으므로 주문 시점 평단을 쓴다.
         val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
@@ -967,13 +983,26 @@ class PositionManager(
             // 엉뚱한 전략 몫으로 잡힌다. markSold 가 clearEntryMeta 로 지우기 전이라 값이 살아 있다.
             // 적립 단 매도는 편입된 스윙 포지션이어도 적립 몫이다 — 그 규칙으로 팔았다.
             strategy = if (reason == SellReason.ACCUMULATE_STEP) AccumulateLadder.STRATEGY_NAME else state.entryStrategy,
-            // 매도의 totalAmount 는 이 매도의 대금(가격×수량)이라 추정 기준이 맞다 — 매수와 달리 스냅샷이 아니다.
-            fee = FeeBasis.Estimate,
+            fee = feeBasis,
+            // totalAmount 는 판단 tick 평가액이고 이것이 실제 체결 대금이다(#146).
+            orderAmount = orderAmount,
             reason = reason?.name,
             // markSold 이전 호출이라 pendingSellUuid 가 살아있음 — 재시작 reconcile 중복 기록을 막는 dedup 키.
             exchangeOrderId = state.pendingSellUuid,
         )
     }
+
+    /**
+     * 매도 수수료 출처 — 주문 응답에 `paid_fee` 가 있으면 매수와 같은 실측(#148). 없으면 추정으로 떨어뜨린다:
+     * 매도의 totalAmount 는 이 체결의 대금(가격×수량)이라 추정 기준이 맞다 — 매수가 [FeeBasis.Unrecorded] 로 두는
+     * 이유(포지션 전체 원가 스냅샷, #133)가 여기엔 없다. 주문 응답이 없는 잔고복원 경로는 호출하지 않는다.
+     */
+    private fun sellFeeBasis(filled: Order?): FeeBasis =
+        filled?.feeBasis()?.takeIf { it is FeeBasis.Measured } ?: FeeBasis.Estimate
+
+    /** 이 주문의 체결 대금 — terminal(done/cancel) 응답의 Σfunds 만. 진행 중(wait) 합은 최종값이 아니라 버린다(#146). */
+    private fun terminalFunds(filled: Order?): Double? =
+        filled?.takeIf { it.isTerminal() }?.filledFunds()
 
     /**
      * 매도 확정 전이 — 즉시경로·reconcile(부분·전량)·잔고복원 네 곳이 모두 이 하나를 쓴다. 갈라지면 어느 한 경로에서
@@ -1018,9 +1047,7 @@ class PositionManager(
         var last: Order? = null
         repeat(FILL_POLL_ATTEMPTS) {
             last = upbitClient.getOrder(uuid)
-            when (last?.state) {
-                "done", "cancel" -> return last
-            }
+            if (last?.isTerminal() == true) return last
             delay(FILL_POLL_DELAY_MS)
         }
         return last
