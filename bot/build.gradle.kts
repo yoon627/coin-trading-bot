@@ -51,6 +51,10 @@ tasks.test {
     // 기본 512m 로는 파라미터 스윕(좌표 5만 × 마켓 8의 지표 집계)이 힙을 넘긴다 — env 게이트를 켠 실행에서만 쓰이지만
     // 태스크 단위로만 걸어 다른 서브프로젝트 테스트까지 예약하지 않는다.
     maxHeapSize = "2g"
+    // 백테 리포트·골든 비교가 Kotlin `.format`(기본 로케일)으로 숫자를 찍는다 — 소수점이 `,` 인 로케일에서는
+    // 골든 문자열 동치가 깨지고 wiki 인용 표가 "+0,306" 이 된다. 137곳을 고치는 대신 테스트 JVM 로케일을 고정한다(#111).
+    systemProperty("user.language", "en")
+    systemProperty("user.country", "US")
 }
 
 tasks.jacocoTestReport {
