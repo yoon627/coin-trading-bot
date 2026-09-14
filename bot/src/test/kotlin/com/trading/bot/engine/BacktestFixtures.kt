@@ -3,6 +3,7 @@ package com.trading.bot.engine
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.trading.common.domain.Candle
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 실제 Upbit 일봉으로 백테를 돌리기 위한 fixture 로더.
@@ -171,11 +172,15 @@ internal object BacktestFixtures {
 
     fun markets(regime: Regime): List<String> = MARKETS_BY_REGIME.getValue(regime)
 
+    // Candle 은 불변 data class 라 파싱 결과를 스위트 전체가 공유해도 안전하다. Jackson 이 주는 ArrayList 는
+    // 가변이라 읽기 전용 사본으로 담는다 — 누가 캐스팅해 변형하면 테스트 간 오염이 실행 순서 의존 버그가 된다.
+    private val cache = ConcurrentHashMap<Pair<Regime, String>, List<Candle>>()
+
     /** 최신순 200봉. */
-    fun load(regime: Regime, market: String): List<Candle> {
+    fun load(regime: Regime, market: String): List<Candle> = cache.getOrPut(regime to market) {
         val path = "/backtest/${regime.dir}/$market.json"
         val stream = requireNotNull(javaClass.getResourceAsStream(path)) { "fixture 없음: $path" }
-        return stream.use { mapper.readValue(it) }
+        stream.use { mapper.readValue<List<Candle>>(it) }.toList()
     }
 
     fun loadAll(regime: Regime): Map<String, List<Candle>> =
