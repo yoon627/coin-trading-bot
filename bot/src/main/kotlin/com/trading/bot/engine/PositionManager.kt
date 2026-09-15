@@ -995,8 +995,7 @@ class PositionManager(
      * 매도의 totalAmount 는 이 체결의 대금(가격×수량)이라 추정 기준이 맞다 — 매수가 [FeeBasis.Unrecorded] 로 두는
      * 이유(포지션 전체 원가 스냅샷, #133)가 여기엔 없다. 주문 응답이 없는 잔고복원 경로는 호출하지 않는다.
      */
-    private fun sellFeeBasis(filled: Order?): FeeBasis =
-        filled?.feeBasis()?.takeIf { it is FeeBasis.Measured } ?: FeeBasis.Estimate
+    private fun sellFeeBasis(filled: Order?): FeeBasis = filled?.sellFeeBasis() ?: FeeBasis.Estimate
 
     /** 이 주문의 체결 대금 — terminal(done/cancel) 응답의 Σfunds 만. 진행 중(wait) 합은 최종값이 아니라 버린다(#146). */
     private fun terminalFunds(filled: Order?): Double? =
