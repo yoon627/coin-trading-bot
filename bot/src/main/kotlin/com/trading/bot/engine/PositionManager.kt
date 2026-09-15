@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.awaitFill
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.FeeBasis
@@ -27,7 +28,6 @@ import java.time.LocalDateTime
 import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
@@ -53,8 +53,6 @@ class PositionManager(
 
     companion object {
         private const val MIN_ORDER_AMOUNT_KRW = 5000.0
-        private const val FILL_POLL_ATTEMPTS = 10
-        private const val FILL_POLL_DELAY_MS = 300L
         // 적립 단 매도는 요청 대비 이 비율 이상 체결됐을 때만 rung 을 소모한다 — 10% 체결로 한 단을 지우면 사다리가 어긋난다.
         // 원가 정합(LadderStateMapper)의 허용치와 짝이라 common 에 둔다.
         private const val RUNG_FILL_RATIO = AccumulateLadder.SELL_FILL_RATIO
@@ -293,7 +291,7 @@ class PositionManager(
                 // #20: pending 을 durable 로 먼저 기록해야 이 시점 크래시/재시작에도 reconcile 이 이어진다.
                 // placeOrder↔기록 사이를 취소가 끊지 못하게 NonCancellable 안·awaitFill 이전에 수행.
                 persistPending(state)
-                val filled = awaitFill(order.uuid)
+                val filled = upbitClient.awaitFill(order.uuid)
                 applyFillOutcome(ticker, state, currentPrice, filled)
             }
         } catch (e: CancellationException) {
@@ -799,7 +797,7 @@ class PositionManager(
             withContext(NonCancellable) {
                 // 매도 pending 을 durable 로 먼저 기록(취소·크래시가 placeOrder 와 기록 사이를 끊지 못하게).
                 persistPending(state)
-                val filled = awaitFill(order.uuid)
+                val filled = upbitClient.awaitFill(order.uuid)
                 if (filled?.state == "done") {
                     // 즉시 체결 — 주문량으로 기록. done 은 upbit 시장가 매도의 정상 종결.
                     // #52: 상태 전이 저장과 감사 기록을 원자 커밋하고, 성공 후에만 메모리 전이를 적용한다.
@@ -1039,18 +1037,6 @@ class PositionManager(
             }
             if (rungConsumed && triggerPrice != null) s.lastActionPrice = triggerPrice
         }
-    }
-
-    /** 주문 체결 폴링. state 가 done/cancel 이면 즉시 반환, 아니면 최대 FILL_POLL_ATTEMPTS 회 폴링. */
-    private suspend fun awaitFill(uuid: String): Order? {
-        if (uuid.isBlank()) return null
-        var last: Order? = null
-        repeat(FILL_POLL_ATTEMPTS) {
-            last = upbitClient.getOrder(uuid)
-            if (last?.isTerminal() == true) return last
-            delay(FILL_POLL_DELAY_MS)
-        }
-        return last
     }
 
     fun checkTakeProfit(state: TradingState, currentPrice: Double): Boolean {
