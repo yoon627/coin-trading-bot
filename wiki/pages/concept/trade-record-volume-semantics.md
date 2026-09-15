@@ -2,9 +2,9 @@
 title: trade_records.volume 의 두 의미 — 엔진은 스냅샷, 수동은 증분
 category: concept
 created: 2026-08-24
-updated: 2026-09-14
+updated: 2026-09-15
 claim_state: current
-verified: 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/persistence/TradeRecordRepository.kt
@@ -56,7 +56,8 @@ sources:
 - 수동 `executeSellVolume` — 주문 **요청 수량**. 주문 후 체결을 확인하지 않아 부분 체결이면 실제와 어긋난다(이슈 #105)
 
 그래서 수동 매수(추정) → `sellAll`(실측) 조합에서는 이전 포지션이 없어도 매도 수량이 매수보다 많게
-기록될 수 있다. 조회 측은 이 경우 초과분의 원가를 알 수 없어 손익을 비운다.
+기록될 수 있다. 조회 측은 이 경우 초과분의 원가를 알 수 없어 gross 손익(`pnl_amount_gross`)을 비운다 — 매도 행의
+실현 손익 합(`pnl_amount_net`, #115)은 기록 시점 평단으로 계산돼 매수 조립과 무관하므로 그대로 낸다.
 
 ### 추정 오차의 부호는 정해져 있지 않다
 
