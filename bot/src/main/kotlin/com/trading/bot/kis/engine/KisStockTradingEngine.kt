@@ -43,11 +43,15 @@ class KisStockTradingEngine(
     private val marketCalendar: KisMarketCalendar,
     private val liveEnabled: Boolean,
     private val positionStateService: StockPositionStateService? = null,
+    /** live 신규 진입 게이트 — 사유를 돌려주면 매수를 보내지 않는다(reconcile 미해소, #67). dry-run 은 보지 않는다. */
+    private val entryGate: () -> String? = { null },
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val positions = ConcurrentHashMap<String, StockPosition>()
     // 캔들 부족 경고 억제(심볼:전략:경로 + 60초) — tick 마다 반복되면 로그가 묻힌다.
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
+    @Volatile
+    private var entryBlockWarn: Pair<String, Long>? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     // REST 폴백 전용 로컬 캐시(M-D). store 는 @Scheduled 폴러가 단독 writer 로 유지한다.
@@ -134,9 +138,7 @@ class KisStockTradingEngine(
                     positionManager.submitSell(pos, reason, liveEnabled)
                 }
             } else if (!pos.boughtToday) {
-                if (shouldBuy(symbol, price)) {
-                    positionManager.submitBuy(pos, price, activeStrategy.name, liveEnabled)
-                }
+                tryEnter(symbol, pos, price)
             }
         } finally {
             flushDurable(pos)
@@ -181,6 +183,30 @@ class KisStockTradingEngine(
 
     /** 전략 요구와 엔진 하한 중 큰 쪽 — Upbit 엔진과 같은 계약을 쓴다(두 거래소가 전략 목록을 공유). */
     private fun effectiveMinCandles(): Int = max(MIN_CANDLES, activeStrategy.minCandles)
+
+    /**
+     * 신규 진입. live 는 신호가 난 뒤 **송신 직전**에 reconcile 게이트를 읽는다 — 지표 계산·REST 폴백 앞에서 읽으면
+     * 그 사이 패스 결과가 바뀔 창이 수초로 벌어진다. 매도 경로는 이 게이트와 무관하다(보유 포지션 청산 정지 금지).
+     */
+    internal suspend fun tryEnter(symbol: String, pos: StockPosition, price: Long) {
+        if (!shouldBuy(symbol, price)) return
+        if (liveEnabled) {
+            entryGate()?.let { reason ->
+                warnEntryBlocked(symbol, reason)
+                return
+            }
+        }
+        positionManager.submitBuy(pos, price, activeStrategy.name, liveEnabled)
+    }
+
+    /** 차단은 며칠 이어질 수 있다 — 사유가 바뀌거나 시간창이 지나면 다시 알린다(candleWarnAtMs 와 같은 방식). */
+    private fun warnEntryBlocked(symbol: String, reason: String) {
+        val now = System.currentTimeMillis()
+        val last = entryBlockWarn
+        if (last != null && last.first == reason && now - last.second < ENTRY_BLOCK_WARN_INTERVAL_MS) return
+        entryBlockWarn = reason to now
+        log.warn("KIS engine user={}: live 신규 진입 차단({} 신호 무시) — {}", userId, symbol, reason)
+    }
 
     /** 캔들이 모자라 신호를 못 내는 상황을 알린다 — 기존엔 무로그라 원인을 코드로만 알 수 있었다. */
     private fun warnInsufficientCandles(symbol: String, path: String, actual: Int) {
@@ -276,6 +302,7 @@ class KisStockTradingEngine(
         // 전략이 더 긴 lookback 을 요구하면 그쪽이 이긴다(effectiveMinCandles). 이 값은 하한이다.
         const val MIN_CANDLES = 20
         private const val CANDLE_WARN_INTERVAL_MS = 60_000L
+        private const val ENTRY_BLOCK_WARN_INTERVAL_MS = 300_000L
         const val CANDLE_LOOKBACK = 60
         const val CANDLE_BACKFILL_DAYS = 100L
 

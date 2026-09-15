@@ -16,6 +16,7 @@ import com.trading.common.strategy.TradingStrategy
 import jakarta.annotation.PostConstruct
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -52,11 +53,8 @@ class StockUserTradingManager(
     fun restoreOnStartup() {
         scope.launch {
             // 엔진 기동 전 부팅 reconcile 완료 보장(D21/M1) — 재시작 갭의 미해소 주문을 먼저 확정.
-            try {
-                stockOrderReconciler.reconcileNow()
-            } catch (e: Exception) {
-                log.error("stock boot reconcile failed: {}", e.message)
-            }
+            // 실패해도 기동은 한다(보유 포지션의 청산 평가를 멈추지 않기 위해). live 는 엔진의 진입 게이트가 신규 매수만 막는다.
+            reconcileOrWarn("boot")
             if (!tradingProperties.autoStart) {
                 log.info("KIS auto-start disabled. Skipping stock bot restoration.")
                 return@launch
@@ -94,11 +92,7 @@ class StockUserTradingManager(
             return@withLock mapOf("error" to "Unknown strategy: $strategyName")
         }
         // 엔진 기동 전 미확정 WAL 주문 확정(M1/M-C) — reconcileMutex 가 부팅 패스와 직렬화.
-        try {
-            stockOrderReconciler.reconcileNow()
-        } catch (e: Exception) {
-            log.warn("pre-start reconcile failed: {}", e.message)
-        }
+        reconcileOrWarn("pre-start user=$userId")
 
         val engine = engines.computeIfAbsent(userId) { createEngine(user) }
         strategyName?.let { engine.setStrategy(it) }
@@ -116,11 +110,13 @@ class StockUserTradingManager(
         mapOf("status" to "stopped")
     }
 
-    fun getStatus(userId: Long): Map<String, Any> {
+    fun getStatus(userId: Long): Map<String, Any?> {
         val engine = engines[userId]
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
             "live" to kisProperties.liveEnabled,
+            // live 에서 reconcile 미해소면 신규 매수가 막혀 있다는 사실과 사유(#67). dry-run 은 게이트가 없다.
+            "entry_blocked_reason" to if (kisProperties.liveEnabled) stockOrderReconciler.entryBlockReason(userId) else null,
             "trading_now" to marketCalendar.isTradingNow(),
             "strategy" to (engine?.getActiveStrategyName() ?: tradingProperties.strategy),
             "symbols" to (engine?.getActiveSymbols() ?: emptyList<String>()),
@@ -160,6 +156,23 @@ class StockUserTradingManager(
         if (wasRunning) replacement.start(symbols)
     }
 
+    private suspend fun reconcileOrWarn(phase: String) {
+        val result = try {
+            stockOrderReconciler.reconcileNow()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("stock {} reconcile failed: {}", phase, e.message)
+            return
+        }
+        if (result.passError != null || result.truncated || result.unresolvedUsers.isNotEmpty()) {
+            log.warn(
+                "stock {} reconcile unresolved — live 신규 진입 차단 대상: error={} truncated={} users={}",
+                phase, result.passError, result.truncated, result.unresolvedUsers,
+            )
+        }
+    }
+
     private fun createEngine(user: UserEntity): KisStockTradingEngine {
         val client = kisClientFactory.forUser(user)
         val positionManager = StockPositionManager(
@@ -180,6 +193,7 @@ class StockUserTradingManager(
             marketCalendar = marketCalendar,
             liveEnabled = kisProperties.liveEnabled,
             positionStateService = stockPositionStateService,
+            entryGate = { stockOrderReconciler.entryBlockReason(user.id) },
         )
     }
 

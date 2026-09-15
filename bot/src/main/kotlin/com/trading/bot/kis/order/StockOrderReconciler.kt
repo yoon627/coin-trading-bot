@@ -8,6 +8,7 @@ import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.StockOrderIntentEntity
 import com.trading.bot.persistence.entity.TradeExecutionEntity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -72,45 +73,82 @@ class StockOrderReconciler(
         }
     }
 
-    /** 완료까지 대기하는 reconcile 1패스 — 부팅/엔진기동 전 호출(진행중이면 끝날 때까지 대기 후 자기 패스 실행). */
-    suspend fun reconcileNow() = reconcileMutex.withLock { runPass() }
+    /**
+     * 마지막으로 **완료된** 패스의 결과. 한 번도 완료되지 않았으면 null — 진입 게이트는 이를 미해소로 본다.
+     * 완료 시각·TTL 은 없다: 패스가 취소되거나 오래 물리면 그동안 이전 결과가 남는다(KIS 호출은 responseTimeout 으로 유계).
+     */
+    @Volatile
+    private var lastResult: StockReconcileResult? = null
 
-    private suspend fun runPass() {
-        try {
-            val active = repository.findActive(StockOrderStatus.NON_TERMINAL_NAMES, BATCH_LIMIT)
-                .collectList().awaitSingle()
-            if (active.isEmpty()) return
-            log.info("stock reconcile: {} active order(s)", active.size)
-            active.groupBy { it.userId }.forEach { (userId, rows) -> reconcileUser(userId, rows) }
-        } catch (e: Exception) {
-            log.error("stock reconcile pass failed", e)
-        }
+    /** 완료까지 대기하는 reconcile 1패스 — 부팅/엔진기동 전 호출(진행중이면 끝날 때까지 대기 후 자기 패스 실행). */
+    suspend fun reconcileNow(): StockReconcileResult = reconcileMutex.withLock { runPass() }
+
+    /**
+     * live 신규 진입 게이트 — 마지막 완료 패스에서 이 사용자의 활성 주문이 확정되지 않았으면 사유를 돌려준다.
+     * 주기 패스가 skip 된 경우(tryLock 실패)는 결과를 갱신하지 않는다 — 판정은 언제나 완료된 패스 기준이다.
+     */
+    fun entryBlockReason(userId: Long): String? {
+        val r = lastResult ?: return "reconcile 미실행"
+        return r.blockReason(userId)
     }
 
-    private suspend fun reconcileUser(userId: Long, rows: List<StockOrderIntentEntity>) {
+    private suspend fun runPass(): StockReconcileResult {
+        val result = try {
+            val active = repository.findActive(StockOrderStatus.NON_TERMINAL_NAMES, BATCH_LIMIT)
+                .collectList().awaitSingle()
+            if (active.isEmpty()) {
+                StockReconcileResult.CLEAN
+            } else {
+                log.info("stock reconcile: {} active order(s)", active.size)
+                val unresolved = LinkedHashMap<Long, String>()
+                active.groupBy { it.userId }.forEach { (userId, rows) ->
+                    reconcileUser(userId, rows)?.let { unresolved[userId] = it }
+                }
+                // 상한만큼 왔으면 조회되지 않은 행(사용자)이 있을 수 있다 — 누구도 확정됐다고 말할 수 없다.
+                StockReconcileResult(truncated = active.size >= BATCH_LIMIT, unresolvedUsers = unresolved)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("stock reconcile pass failed", e)
+            // 원시 예외 메시지(드라이버·SQL 조각)는 status 응답으로 나가므로 싣지 않는다 — 상세는 위 로그.
+            StockReconcileResult(passError = "활성 주문 조회 실패(${e.javaClass.simpleName})")
+        }
+        lastResult = result
+        return result
+    }
+
+    /** 사용자 한 명의 활성 주문을 확정한다. 미해소로 남긴 사유를 돌려주고, 전부 처리했으면 null. */
+    private suspend fun reconcileUser(userId: Long, rows: List<StockOrderIntentEntity>): String? = try {
         val user = userRepository.findById(userId).awaitSingleOrNull()
         if (user == null) {
-            log.error("stock reconcile: user {} not found for {} active order(s)", userId, rows.size)
-            return
-        }
-        val client = try {
-            clientFactory.forUser(user)
-        } catch (e: Exception) {
-            log.error("stock reconcile: cannot build KIS client for user {} — {}", userId, e.message)
-            return
-        }
-        rows.groupBy { it.orderDate }.forEach { (date, dateRows) ->
-            val conclusions = try {
-                client.inquireDailyConclusions(date)
-            } catch (e: Exception) {
-                log.warn("stock reconcile: inquiry failed user={} date={} — {} (keep pending)", userId, date, e.message)
-                return@forEach
+            log.error("stock reconcile: user {} missing for {} active order(s)", userId, rows.size)
+            "사용자 조회 불가"
+        } else {
+            val client = clientFactory.forUser(user)
+            val failedDates = ArrayList<String>()
+            rows.groupBy { it.orderDate }.forEach { (date, dateRows) ->
+                val conclusions = try {
+                    client.inquireDailyConclusions(date)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.warn("stock reconcile: inquiry failed user={} date={} — {} (keep pending)", userId, date, e.message)
+                    failedDates += date
+                    return@forEach
+                }
+                val byOdno = conclusions.filter { it.odno.isNotBlank() }.associateBy { it.odno }
+                // 이미 우리 WAL 의 다른 행에 링크된 ODNO 는 no-odno 매칭에서 제외(동일수량 반복매매 오매칭 방지 — C3/D20).
+                val knownOdnos = repository.findKnownOdnos(userId, date).collectList().awaitSingle().toSet()
+                dateRows.forEach { reconcileRow(it, conclusions, byOdno, knownOdnos) }
             }
-            val byOdno = conclusions.filter { it.odno.isNotBlank() }.associateBy { it.odno }
-            // 이미 우리 WAL 의 다른 행에 링크된 ODNO 는 no-odno 매칭에서 제외(동일수량 반복매매 오매칭 방지 — C3/D20).
-            val knownOdnos = repository.findKnownOdnos(userId, date).collectList().awaitSingle().toSet()
-            dateRows.forEach { reconcileRow(it, conclusions, byOdno, knownOdnos) }
+            if (failedDates.isEmpty()) null else "체결 조회 실패(${failedDates.joinToString()})"
         }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.error("stock reconcile: user {} pass failed — {}", userId, e.message)
+        "처리 실패(${e.javaClass.simpleName})"
     }
 
     private suspend fun reconcileRow(
@@ -252,6 +290,32 @@ class StockOrderReconciler(
     }
 
     companion object {
-        private const val BATCH_LIMIT = 200
+        internal const val BATCH_LIMIT = 200
+    }
+}
+
+/**
+ * reconcile 1패스의 결과. 판정 단위는 사용자 — [isCleanFor] 가 false 면 live 엔진은 그 사용자의 신규 매수를 보내지 않는다
+ * (매도·잔고 동기화는 계속). 잔존 NEEDS_REVIEW·grace 내 UNKNOWN 은 활성 슬롯이 주문을 막아 fail-safe 이므로 clean 이다(#69).
+ */
+data class StockReconcileResult(
+    /** 활성 주문 조회 자체가 실패 — 전원 미해소. */
+    val passError: String? = null,
+    /** 배치 상한만큼 잘려 조회되지 않은 사용자가 있을 수 있음 — 전원 미해소. */
+    val truncated: Boolean = false,
+    /** 처리 중 실패한 사용자 → 사유. 로그·status 용이며 HTTP 오류 응답에는 싣지 않는다. */
+    val unresolvedUsers: Map<Long, String> = emptyMap(),
+) {
+    fun isCleanFor(userId: Long): Boolean = blockReason(userId) == null
+
+    fun blockReason(userId: Long): String? = when {
+        passError != null -> "reconcile 실패: $passError"
+        unresolvedUsers[userId] != null -> unresolvedUsers[userId]
+        truncated -> "활성 주문이 배치 상한을 넘어 미확정"
+        else -> null
+    }
+
+    companion object {
+        val CLEAN = StockReconcileResult()
     }
 }
