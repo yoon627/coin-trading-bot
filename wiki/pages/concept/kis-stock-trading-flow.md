@@ -2,9 +2,9 @@
 title: KIS 주식 자동매매 흐름 — 시장데이터·신호·포지션 사이클
 category: concept
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-09-15
 claim_state: current
-verified: 2026-08-02 — StockBotController.kt, StockUserTradingManager.kt, KisStockTradingEngine.kt, StockPositionManager.kt, KisMarketDataService.kt, application.yml 실측
+verified: 2026-09-15 — live 진입 게이트는 `KisStockTradingEngineTest` 4건(#67 절)으로 확인 · 2026-08-02 — StockBotController.kt, StockUserTradingManager.kt, KisStockTradingEngine.kt, StockPositionManager.kt, KisMarketDataService.kt, application.yml 실측
 sources:
   - bot/src/main/kotlin/com/trading/bot/api/StockBotController.kt
   - bot/src/main/kotlin/com/trading/bot/kis/engine/StockUserTradingManager.kt
@@ -47,9 +47,11 @@ StockBotController
 2. **현재가 획득** — `MarketDataStore`의 신선한 KIS ticker를 먼저 사용한다. 없거나 TTL(5초)을 넘으면 엔진 전용 REST 폴백 캐시를 거쳐 `getCurrentPrice()`를 호출한다.
 3. **일봉 획득** — store에 충분한 D1 캔들이 없으면 최근 100일을 KIS REST로 가져와 엔진 로컬 캐시에 둔다. 폴백 결과를 전역 store에 다시 쓰지 않아 수집기의 단일 writer 원칙을 유지한다.
 4. **보유 중이면 매도 판정** — 손절 → 트레일링 스탑 → 익절 → `chartExitEnabled`일 때 차트 기반 청산 순서로 검사한다. 자세한 게이트 의미는 [[exit-gates]]를 참조한다.
-5. **미보유이면 매수 판정** — `boughtToday`가 false인 경우에만 공용 `TradingStrategy.shouldBuyNormalized()`를 호출한다. 캔들이 부족하면 신호는 false다.
+5. **미보유이면 매수 판정** — `boughtToday`가 false인 경우에만 진입한다. 공용 `TradingStrategy.shouldBuyNormalized()`를 호출하고(캔들이 부족하면 신호는 false), 신호가 나면 `liveEnabled=true`에 한해 송신 직전에 reconcile 진입 게이트를 본다 — 마지막 완료 reconcile 패스에서 이 사용자의 활성 주문이 확정되지 않았으면(조회 실패·배치 절단·미실행) 매수를 보내지 않고 사유가 바뀌거나 5분이 지나면 WARN 을 남긴다([[kis-order-lifecycle]] "reconcile 결과와 live 진입 게이트"). 매도 판정(4)은 이 게이트와 무관하다.
 
-`liveEnabled=false`인 동안에도 엔진은 이 루프와 신호 판정을 수행하지만, 포지션은 메모리에서 시뮬레이션하고 주문은 KIS로 보내지 않는다. 이 설정은 [[kis-order-lifecycle]]의 `DRY_RUN` 경로로 이어진다.
+`liveEnabled=false`인 동안에도 엔진은 이 루프와 신호 판정을 수행하지만, 포지션은 메모리에서 시뮬레이션하고 주문은 KIS로 보내지 않는다. 이 설정은 [[kis-order-lifecycle]]의 `DRY_RUN` 경로로 이어진다. 진입 게이트도 보지 않는다.
+
+`GET /api/stock/bot/status`는 `entry_blocked_reason`을 함께 낸다 — live 이고 게이트가 걸려 있으면 그 사유, 아니면 null.
 
 ## 시세 수집 경로
 

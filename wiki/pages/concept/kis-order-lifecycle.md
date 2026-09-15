@@ -2,9 +2,9 @@
 title: KIS 주문 수명주기 — 검증·WAL·송신·체결 reconcile
 category: concept
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-09-15
 claim_state: current
-verified: 2026-08-02 — KisTradeController.kt, StockOrderService.kt, KisClientImpl.kt, KisTokenProvider.kt, StockOrderReconciler.kt, V15~V18 migration 실측
+verified: 2026-09-15 — reconcile 결과·clean 계약은 `StockOrderReconcilerTest` 5건(#67 절)으로 확인 · 2026-08-02 — KisTradeController.kt, StockOrderService.kt, KisClientImpl.kt, KisTokenProvider.kt, StockOrderReconciler.kt, V15~V18 migration 실측
 sources:
   - bot/src/main/kotlin/com/trading/bot/api/KisTradeController.kt
   - bot/src/main/kotlin/com/trading/bot/kis/order/StockOrderService.kt
@@ -89,5 +89,11 @@ Upbit 경로는 같은 문제를 겪고 V21에서 소급 복구했다([[persiste
 - 기본 grace 120초 또는 ODNO 누락 stale 1,800초가 지나면 `NEEDS_REVIEW`로 올리고 오류 로그를 남긴다
 
 `FILLED`·`CANCELLED` 같은 terminal 전이는 체결 audit 기록과 함께 트랜잭션으로 처리하고, `trade_executions.exchange_order_id`의 unique 제약으로 같은 체결의 audit 중복 기록을 막는다([[persistence-schema]]). 이후 자동 엔진의 보유수량·평단은 다음 KIS holdings 조회로 확정한다.
+
+### reconcile 결과와 live 진입 게이트 (#67)
+
+한 패스는 `StockReconcileResult`를 남긴다 — 활성 주문 조회 자체의 실패(`passError`), 배치 상한(200건)에 걸려 조회되지 않은 사용자가 있을 수 있는 절단(`truncated`), 그리고 처리 중 실패한 사용자별 사유(`unresolvedUsers`). 판정 단위는 **사용자**다: 한 사용자의 체결 조회·클라이언트 생성·DB 오류는 그 사용자만 미해소로 남기고 다른 사용자는 clean 이다. 전체 실패와 절단만 전원 미해소다. 잔존 `NEEDS_REVIEW`와 grace 안의 `UNKNOWN`은 clean 으로 본다 — 활성 슬롯이 그 종목·side의 새 주문을 이미 막고 있어 fail-safe 이고, 해소는 별도 작업(#69)이다.
+
+마지막으로 **완료된** 패스의 결과만 보관한다. 주기 패스가 진행 중이라 건너뛴 경우는 결과를 갱신하지 않는다. 완료 시각·TTL 은 없어 패스가 취소되거나 오래 물리면 그동안 이전 결과가 남는다(KIS 호출은 응답 타임아웃으로 유계). `liveEnabled=true` 엔진은 매수 신호가 난 뒤 송신 직전에 `entryBlockReason(userId)`를 읽어 사유가 있으면 매수를 보내지 않는다 — 기동·매도·잔고 동기화는 그대로 돈다([[kis-stock-trading-flow]]). 엔진 기동 자체를 막지 않는 이유는 보유 포지션의 손절·트레일링까지 멈추기 때문이다. dry-run 은 주문이 나가지 않으므로 게이트를 보지 않고, 기동 시점의 미해소는 WARN 만 남긴다.
 
 이 구조의 운영 목적은 주문을 자동 재전송하는 것이 아니라, **송신 여부가 불명확한 주문을 잃지 않고 수동 검토 가능한 상태로 보존하는 것**이다. 전체 시스템에서 이 주문 경계가 어디에 놓이는지는 [[architecture-overview]]에서, 엔진이 어떤 조건으로 BUY/SELL을 호출하는지는 [[kis-stock-trading-flow]]에서 확인한다.
