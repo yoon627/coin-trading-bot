@@ -238,12 +238,25 @@ function BotPage({ user, setActive }) {
           </Card>
         </div>
       </div>
-      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
 
 // ── TRADE (manual buy/sell) ───────────────────────────────
+// recorded=false: 주문은 접수됐지만 기록/알림 후처리가 실패했거나(행 유무 불명) 체결을 확인하지 못해 행을 남기지
+// 않았다(fill=unconfirmed). 어느 쪽이든 "완료"로 보이면 사용자가 거래소와 대조할 기회를 잃는다.
+function orderToast(res, okMsg, okTone) {
+  if (res && res.recorded === false) {
+    const why = res.fill === 'not_filled' ? '체결 없이 종료(취소) — 기록 없음, 보유량 그대로'
+      : res.fill === 'unconfirmed' ? '체결 미확인 — 기록하지 않음'
+      : '기록/알림 실패';
+    // 3초 토스트는 uuid 를 옮겨 적기 전에 사라진다 — 닫을 때까지 남긴다.
+    return { msg: `주문은 접수됐으나 ${why}. 거래소에서 확인하세요 (uuid ${res.order_uuid || '-'})`, tone: 'warn', sticky: true };
+  }
+  return { msg: okMsg, tone: okTone };
+}
+
 function TradePage({ user, setActive }) {
   const [market, setMarket] = React.useState('KRW-BTC');
   const [amount, setAmount] = React.useState('10000');
@@ -256,8 +269,8 @@ function TradePage({ user, setActive }) {
   const buy = async () => {
     setBusy(true);
     try {
-      await TideAPI.buy(market, parseFloat(amount));
-      setToast({ msg: `${market} 매수 주문 완료`, tone: 'up' });
+      const res = await TideAPI.buy(market, parseFloat(amount));
+      setToast(orderToast(res, `${market} 매수 주문 완료`, 'up'));
       portfolio.reload();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusy(false); }
@@ -265,8 +278,8 @@ function TradePage({ user, setActive }) {
   const sell = async (sellAll) => {
     setBusy(true);
     try {
-      await TideAPI.sell(market, sellAll ? { sell_all: true } : { volume });
-      setToast({ msg: `${market} 매도 주문 완료`, tone: 'down' });
+      const res = await TideAPI.sell(market, sellAll ? { sell_all: true } : { volume });
+      setToast(orderToast(res, `${market} 매도 주문 완료`, 'down'));
       portfolio.reload();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusy(false); }
@@ -322,7 +335,7 @@ function TradePage({ user, setActive }) {
           </div>
         </Card>
       </div>
-      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
@@ -585,7 +598,7 @@ function BacktestPage({ user, setActive }) {
             </>}
         </Card>
       </div>
-      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
@@ -796,7 +809,7 @@ function SettingsPage({ user, setActive, refreshUser }) {
         <div style={{ marginTop: 16, fontSize: 11.5, color: 'var(--ink-500)' }}>discord.com 도메인의 HTTPS 웹훅 URL만 허용됩니다.</div>
       </Card>
 
-      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
@@ -915,7 +928,7 @@ function StockScreen({ user, setActive }) {
           </div>
         )}
       </Card>
-      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
