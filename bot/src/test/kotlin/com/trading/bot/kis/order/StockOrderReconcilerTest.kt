@@ -17,6 +17,9 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Flux
@@ -69,10 +72,13 @@ class StockOrderReconcilerTest {
         side: String = "BUY",
         strategy: String? = null,
         reason: String? = null,
+        userId: Long = 1,
+        orderDate: String = "20260614",
+        id: Long = 100,
     ) = StockOrderIntentEntity(
-        id = 100, userId = 1, clientRef = "r", accountNo = "12345678-01", symbol = "005930",
+        id = id, userId = userId, clientRef = "r", accountNo = "12345678-01", symbol = "005930",
         side = side, orderType = "LIMIT", qty = qty, price = BigDecimal(70_000),
-        status = status.name, odno = odno, orderDate = "20260614", createdAt = createdAt, updatedAt = createdAt,
+        status = status.name, odno = odno, orderDate = orderDate, createdAt = createdAt, updatedAt = createdAt,
         strategy = strategy, reason = reason,
     )
 
@@ -206,5 +212,91 @@ class StockOrderReconcilerTest {
 
         assertEquals("combined", exec.captured.strategy)
         assertEquals("STOP_LOSS", exec.captured.reason)
+    }
+
+    // --- reconcile 결과: 진입 게이트가 "이 사용자의 활성 주문이 확정됐는가"를 읽는다 (#67) ---
+    // 부분 실패의 단위는 사용자. 전체 실패·절단은 전원 미해소.
+
+    @Test
+    fun `활성 주문이 없으면 clean 이다`() = runTest {
+        every { repository.findActive(any(), any()) } returns Flux.empty()
+
+        val result = reconciler.reconcileNow()
+
+        assertTrue(result.isCleanFor(1L))
+        assertTrue(result.isCleanFor(2L))
+    }
+
+    @Test
+    fun `조회 실패는 그 사용자만 미해소로 남기고 다른 사용자는 clean 이다`() = runTest {
+        every { userRepository.findById(2L) } returns Mono.just(UserEntity(id = 2L, username = "v", password = "p"))
+        every { repository.findActive(any(), any()) } returns Flux.just(
+            row(StockOrderStatus.UNKNOWN, userId = 1, orderDate = "20260614", id = 1),
+            row(StockOrderStatus.UNKNOWN, userId = 2, orderDate = "20260615", id = 2),
+        )
+        coEvery { client.inquireDailyConclusions("20260614") } throws RuntimeException("KIS 500")
+        coEvery { client.inquireDailyConclusions("20260615") } returns emptyList()
+
+        val result = reconciler.reconcileNow()
+
+        assertFalse(result.isCleanFor(1L))
+        assertTrue(result.isCleanFor(2L))
+        assertNotNull(result.unresolvedUsers[1L])
+    }
+
+    @Test
+    fun `활성 주문 조회 자체가 실패하면 전원 미해소다`() = runTest {
+        every { repository.findActive(any(), any()) } returns Flux.error(RuntimeException("db down"))
+
+        val result = reconciler.reconcileNow()
+
+        assertNotNull(result.passError)
+        assertFalse(result.isCleanFor(1L))
+        assertFalse(result.isCleanFor(2L))
+    }
+
+    @Test
+    fun `배치 상한만큼 잘리면 조회되지 않은 사용자가 있을 수 있어 전원 미해소다`() = runTest {
+        val rows = (1..StockOrderReconciler.BATCH_LIMIT).map { row(StockOrderStatus.UNKNOWN, id = it.toLong()) }
+        every { repository.findActive(any(), any()) } returns Flux.fromIterable(rows)
+        coEvery { client.inquireDailyConclusions("20260614") } returns emptyList()
+
+        val result = reconciler.reconcileNow()
+
+        assertTrue(result.truncated)
+        assertFalse(result.isCleanFor(1L))
+        assertFalse(result.isCleanFor(2L))
+    }
+
+    @Test
+    fun `진입 게이트는 마지막 완료 패스를 따른다 — 미실행이면 차단, 실패 뒤 성공하면 해제`() = runTest {
+        assertNotNull(reconciler.entryBlockReason(1L), "패스가 한 번도 완료되지 않았으면 차단")
+
+        every { repository.findActive(any(), any()) } returns Flux.just(row(StockOrderStatus.UNKNOWN))
+        coEvery { client.inquireDailyConclusions("20260614") } throws RuntimeException("KIS 500")
+        reconciler.reconcileNow()
+        assertNotNull(reconciler.entryBlockReason(1L))
+        assertEquals(null, reconciler.entryBlockReason(2L), "다른 사용자는 차단되지 않는다")
+
+        coEvery { client.inquireDailyConclusions("20260614") } returns emptyList()
+        reconciler.reconcileNow()
+        assertEquals(null, reconciler.entryBlockReason(1L), "성공 패스가 차단을 푼다")
+    }
+
+    @Test
+    fun `사용자 처리 중 DB 오류도 그 사용자만 미해소로 격리한다`() = runTest {
+        every { userRepository.findById(2L) } returns Mono.just(UserEntity(id = 2L, username = "v", password = "p"))
+        every { repository.findActive(any(), any()) } returns Flux.just(
+            row(StockOrderStatus.UNKNOWN, userId = 1, orderDate = "20260614", id = 1),
+            row(StockOrderStatus.UNKNOWN, userId = 2, orderDate = "20260615", id = 2),
+        )
+        coEvery { client.inquireDailyConclusions(any()) } returns emptyList()
+        every { repository.findKnownOdnos(1L, any()) } returns Flux.error(RuntimeException("db timeout"))
+        every { repository.findKnownOdnos(2L, any()) } returns Flux.empty()
+
+        val result = reconciler.reconcileNow()
+
+        assertFalse(result.isCleanFor(1L))
+        assertTrue(result.isCleanFor(2L))
     }
 }
