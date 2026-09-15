@@ -377,6 +377,11 @@ function OrdersPage({ user, setActive }) {
       </div>
       {rtList.map((r, i) => {
         const tone = r.pnl_percent == null ? 'var(--ink-500)' : (r.pnl_percent > 0 ? 'var(--up)' : 'var(--down)');
+        // 실현 손익(net) 우선, 없으면 옛 기록의 gross 근사(≈). 색은 표시하는 금액 자체의 부호를 따른다.
+        const isNet = r.pnl_amount_net != null;
+        const amount = isNet ? r.pnl_amount_net : r.pnl_amount_gross;
+        const won = amount == null ? null : Math.round(amount);
+        const amountTone = !won ? 'var(--ink-500)' : (won > 0 ? 'var(--up)' : 'var(--down)');
         return (
           <div key={i} style={{ display: 'grid', gridTemplateColumns: RT_GRID, padding: '14px 24px', fontSize: 13, alignItems: 'center', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
             <span style={{ fontWeight: 600 }}>
@@ -411,8 +416,8 @@ function OrdersPage({ user, setActive }) {
             <span className="num" style={{ textAlign: 'right', fontWeight: 700, color: tone }}>
               {r.pnl_percent == null ? '—' : `${r.pnl_percent > 0 ? '+' : ''}${fmtNum(r.pnl_percent, 2)}%`}
             </span>
-            <span className="num" style={{ textAlign: 'right', color: r.pnl_amount_gross == null ? 'var(--ink-500)' : tone }}>
-              {r.pnl_amount_gross == null ? '—' : fmtKRW(Math.round(r.pnl_amount_gross))}
+            <span className="num" style={{ textAlign: 'right', color: amountTone }}>
+              {won == null ? '—' : `${isNet ? '' : '≈ '}${fmtKRW(won)}`}
             </span>
             <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>{fmtHolding(r.holding_seconds)}</span>
             <span>{r.reason ? <Badge tone="primary">{SELL_REASON_LABEL[r.reason] || r.reason}</Badge> : '—'}</span>
@@ -420,7 +425,7 @@ function OrdersPage({ user, setActive }) {
         );
       })}
       <div style={{ padding: '12px 24px', fontSize: 11, color: 'var(--ink-500)', borderTop: '1px solid var(--ink-100)', lineHeight: 1.6 }}>
-        손익(원)은 매도액에서 <b>판 만큼의 매수 원가</b>를 뺀 값이라 일부만 팔았어도 왜곡되지 않습니다. 다만 <b>수수료가 빠지지 않아</b> 왕복 수수료를 차감한 수익률(%)과 부호가 다를 수 있습니다.
+        손익(원)은 매도 기록의 <b>실현 손익</b>(설정 수수료율 차감, 기록 시점 평단·가격 기준) 합입니다. <b>≈</b> 는 손익 기록이 없는 옛 매도의 근사(매도액 − 판 만큼의 매수 원가, <b>수수료 미차감</b>)라 수익률(%)과 부호가 다를 수 있습니다. 오래된 기록은 수수료가 반영되지 않았을 수 있습니다.
       </div>
     </>
   );
