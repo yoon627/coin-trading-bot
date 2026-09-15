@@ -21,6 +21,7 @@ class TradeRoundTripTest {
         volume: Double,
         at: String,
         pnlPercent: Double? = null,
+        pnlAmount: Double? = null,
         reason: String? = null,
         strategy: String? = null,
     ) = TradeRecordEntity(
@@ -30,6 +31,7 @@ class TradeRoundTripTest {
         volume = volume,
         totalAmount = price * volume,
         pnlPercent = pnlPercent,
+        pnlAmount = pnlAmount,
         reason = reason,
         strategy = strategy,
         userId = 1L,
@@ -320,6 +322,83 @@ class TradeRoundTripTest {
         assertEquals(30.0, rts.first().pnlAmountGross)
     }
 
+    // --- 실현 손익(net)은 매도 행의 pnl_amount 합이다 (#115) ---
+    // 부분합은 전체 손익을 보장하지 못하므로(누락 SELL 이 손실이면 과대) 모든 SELL 에 값이 있을 때만 더한다.
+
+    @Test
+    fun `모든 매도에 실현 손익이 있으면 합산한 net 을 낸다`() {
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 120.0, 1.0, "2026-08-01T12:00", pnlPercent = 19.8, pnlAmount = 19.8),
+                rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T14:00", pnlPercent = 9.8, pnlAmount = -3.0),
+            )
+        ).single()
+
+        assertEquals(16.8, rt.pnlAmountNet!!, 1e-9)
+        assertEquals(30.0, rt.pnlAmountGross!!, 1e-9, "gross 는 종전대로 함께 낸다")
+    }
+
+    @Test
+    fun `매도 중 하나라도 실현 손익이 없으면 net 은 비우고 gross 만 남긴다`() {
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 120.0, 1.0, "2026-08-01T12:00", pnlPercent = 19.8, pnlAmount = 19.8),
+                rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T14:00", pnlPercent = 9.8),
+            )
+        ).single()
+
+        assertNull(rt.pnlAmountNet)
+        assertEquals(30.0, rt.pnlAmountGross!!, 1e-9)
+    }
+
+    @Test
+    fun `매수 기록을 믿을 수 없어도 매도 행의 실현 손익은 낸다`() {
+        val rt = assembleRoundTrips(
+            listOf(rec("KRW-BTC", "SELL", 120.0, 1.0, "2026-08-01T14:00", pnlPercent = 5.0, pnlAmount = 5.7))
+        ).single()
+
+        assertTrue(rt.partial)
+        assertNull(rt.pnlAmountGross)
+        assertEquals(5.7, rt.pnlAmountNet!!, 1e-9)
+    }
+
+    @Test
+    fun `수수료 때문에 net 과 gross 의 부호가 갈릴 수 있다`() {
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 100.05, 1.0, "2026-08-01T12:00", pnlPercent = -0.05, pnlAmount = -0.05),
+            )
+        ).single()
+
+        assertTrue(rt.pnlAmountGross!! > 0, "gross 는 매도액 − 원가라 양수")
+        assertTrue(rt.pnlAmountNet!! < 0, "net 은 수수료가 빠져 음수")
+    }
+
+    @Test
+    fun `실현 손익 0 은 결측이 아니라 유효한 값이다`() {
+        val rt = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 100.0, 1.0, "2026-08-01T12:00", pnlPercent = 0.0, pnlAmount = 0.0),
+                rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T14:00", pnlPercent = 9.8, pnlAmount = 9.8),
+            )
+        ).single()
+
+        assertEquals(9.8, rt.pnlAmountNet!!, 1e-9)
+    }
+
+    @Test
+    fun `매도가 없으면 net 도 비운다`() {
+        val rt = assembleRoundTrips(
+            listOf(rec("KRW-BTC", "BUY", 100.0, 2.0, "2026-08-01T10:00", strategy = "combined"))
+        ).single()
+
+        assertNull(rt.pnlAmountNet, "빈 매도의 합 0.0 을 손익으로 내면 안 된다")
+    }
+
     /**
      * 프론트(`screens.jsx` OrdersPage)가 읽는 키와 실제 와이어 포맷이 어긋나면 화면이 조용히 빈다.
      * 앱은 Jackson SNAKE_CASE 전략(`application.yml`)을 쓰므로 그 변환 결과를 계약으로 고정한다.
@@ -341,7 +420,7 @@ class TradeRoundTripTest {
         listOf(
             "ticker", "entry_at", "entry_price", "buy_count", "buy_amount", "buy_volume",
             "sell_count", "exit_at", "exit_price", "sell_amount", "sell_volume",
-            "pnl_percent", "pnl_amount_gross", "holding_seconds", "reason", "strategy",
+            "pnl_percent", "pnl_amount_net", "pnl_amount_gross", "holding_seconds", "reason", "strategy",
             "open", "partially_closed", "partial",
         ).forEach { key ->
             assertTrue(json.contains("\"$key\""), "직렬화 JSON 에 키가 없다: $key — $json")
