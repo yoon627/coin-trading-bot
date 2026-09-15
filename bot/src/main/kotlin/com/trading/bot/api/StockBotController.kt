@@ -48,7 +48,7 @@ class StockBotController(
     suspend fun stop(): Map<String, Any> = stockUserTradingManager.stopBot(currentUserId())
 
     @GetMapping("/bot/status")
-    suspend fun status(): Map<String, Any> = stockUserTradingManager.getStatus(currentUserId())
+    suspend fun status(): Map<String, Any?> = stockUserTradingManager.getStatus(currentUserId())
 
     @PostMapping("/bot/strategy")
     suspend fun strategy(@RequestBody req: StrategyRequest): Map<String, Any> {
