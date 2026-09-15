@@ -2,10 +2,11 @@
 title: Upbit API — 이 봇이 의존하는 동작
 category: entity
 created: 2026-07-28
-updated: 2026-09-14
+updated: 2026-09-16
 claim_state: current
-verified: 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
+verified: 2026-09-16 — 수동 매도의 `awaitFill` 재조회는 `TradeExecutionServiceTest`(#105 절)로 확인 · 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
 sources:
+  - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
   - bot/src/main/kotlin/com/trading/bot/client/UpbitClient.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt
@@ -80,11 +81,13 @@ sources:
 0 을 채우면 "마찰 없음" 으로 오독된다. 주문 **접수 직후** 응답에는 `trades` 가 없다.
 
 이 값이 필요한 이유: 이 봇은 시장가로 팔고 거래 기록에는 **판단 시점 tick 가격**을 쓴다. 둘의 차이가
-**실행 슬리피지**이고 백테에는 아예 없는 항목이다([[exit-resolution-verdict-2026-09]]). 그래서 수동 주문 경로(재조회 없음)와
-`getOrder` 장애 복구 경로는 실측을 얻지 못한다.
+**실행 슬리피지**이고 백테에는 아예 없는 항목이다([[exit-resolution-verdict-2026-09]]). 수동 **매수**(재조회 없음)와
+`getOrder` 장애 복구 경로는 실측을 얻지 못한다. 수동 매도는 엔진과 같은 `awaitFill` 폴링으로 재조회한다(#105) — 따라서
+수동 경로도 API 키에 **주문조회** 권한이 필요하다(엔진이 이미 요구하던 것과 같다).
 
-응답의 수량·금액 필드는 전부 문자열이라 숫자 변환이 필요하고, 변환 실패는 "미기록"으로 다뤄야 한다 —
-추정으로 떨어뜨리면 고치려던 과대계상이 그대로 재발한다.
+응답의 수량·금액 필드는 전부 문자열이라 숫자 변환이 필요하고, 변환 실패는 필드별로 "모른다"로 떨어진다 — 수수료는
+`Unrecorded`(엔진 매수)·추정(매도), `trades` 는 null, 수동 매도의 `executed_volume` 은 행 자체를 남기지 않는다(#105).
+어느 경우도 추정으로 떨어뜨리지 않는다 — 그러면 고치려던 과대계상이 그대로 재발한다.
 
 ## 시세
 
