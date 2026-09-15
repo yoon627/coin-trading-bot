@@ -38,12 +38,6 @@
 - 작업 아이디어·버그·후속 작업은 이슈로 생성하고, PR/커밋에서 `Closes #N` 으로 연결.
 - `docs/superpowers/specs/` 의 설계 스펙과 `~/.claude/CLAUDE.md` §10 의 plan 은 **진행 중 작업의 설계·상태 기록 전용** — 백로그 저장소가 아니다.
 
-## plan 버전관리 (이 repo 고유)
-
-- `~/.claude/CLAUDE.md` §10 의 `.claude/plans/` 를 이 repo 는 **git 추적**한다 (`.gitignore` 의 `!.claude/plans/` — `.claude/tasks/` 와 동일 negation 패턴). worktree 삭제 시 plan 소실 방지가 목적.
-- ⚠️ 글로벌 `/e`·`/c`·`/wt` skill 은 plans/ 가 **gitignored 라고 전제**한다 (예: `/e` 의 "plan 이 worktree 내부면 삭제 제안 생략", worktree 삭제 전 main 백업). 이 repo 에선 그 전제가 어긋난다 — plan 이 git 에 보존되므로 worktree 삭제 전 별도 백업이 불필요하다.
-- 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`) 하거나 작업 커밋에 포함한다.
-
 ## 머지 후 main 동기화 (이 repo 고유)
 
 머지·worktree 정리 후 세션이 main worktree 로 복귀할 때, **아래 안전 조건을 모두 만족하면** `git pull origin main --rebase` 로 로컬 main 을 최신화한다. 하나라도 어긋나면 **건너뛰고 사용자에게 알린다** (자동 rebase 금지 — 예상외 히스토리 재작성·충돌 방지).

@@ -135,7 +135,7 @@ coin-trading-bot/
 └── docker-compose.yml            # 로컬/단일 호스트용 app, postgres, redis
 ```
 
-> **KIS 주식 봇 (Phase 1 — 기반)**: 한국투자증권 OpenAPI 연동의 기반(브로커 클라이언트 + 주문유실 방지 WAL/reconcile)이 `bot/kis/` 에 추가됐다. 전략 루프·시세수집·UI 는 아직 미배선(후속). 안전상 기본 **dry-run**(`KIS_LIVE_ENABLED=false`) — 실주문은 `KIS_LIVE_ENABLED=true` + 사용자 계좌 `kis_paper=false` 둘 다 명시해야 송신된다. 설계 기록: `.claude/plans/2026-06-14-stock-bot-kis/`.
+> **KIS 주식 봇 (Phase 1 — 기반)**: 한국투자증권 OpenAPI 연동의 기반(브로커 클라이언트 + 주문유실 방지 WAL/reconcile)이 `bot/kis/` 에 추가됐다. 전략 루프·시세수집·UI 는 아직 미배선(후속). 안전상 기본 **dry-run**(`KIS_LIVE_ENABLED=false`) — 실주문은 `KIS_LIVE_ENABLED=true` + 사용자 계좌 `kis_paper=false` 둘 다 명시해야 송신된다. 설계 기록: git 이력의 `.claude/plans/2026-06-14-stock-bot-kis/`(plans 는 2026-09-15 부터 미추적 — `git log --all -- .claude/plans/`).
 
 ## 트레이딩 전략
 

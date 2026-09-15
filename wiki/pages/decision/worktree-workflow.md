@@ -32,7 +32,7 @@ sources:
 ## 삭제 시 주의
 
 - `git worktree remove` 는 **gitignored 파일(`.env` 등)을 경고 없이 함께 지운다.** 삭제 전 `git status --porcelain --ignored` 로 확인한다.
-- `.claude/plans/` 는 tracked 라 미커밋 plan 이 있으면 remove 가 거부한다 — 안전장치다([[plan-git-tracking]]).
+- `.claude/plans/` 도 gitignored 라 remove 가 거부하지 않고 함께 지운다 — 삭제 전 `/e` 의 main 백업 절차를 거친다([[plan-git-tracking]]).
 
 ## 머지 후 정리 (이 repo 규칙)
 

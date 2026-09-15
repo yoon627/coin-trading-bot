@@ -1,34 +1,33 @@
 ---
-title: .claude/plans/ 를 git 추적한다 (이 repo 고유)
+title: .claude/plans/ 는 git 추적하지 않는다 (2026-09-15 되돌림)
 category: decision
 created: 2026-07-28
-updated: 2026-09-03
+updated: 2026-09-15
 claim_state: current
-verified: 2026-07-28 — .gitignore:62-71 의 `.claude/*` + `!.claude/tasks/` + `!.claude/plans/` 실측, git check-ignore .claude/plans = not ignored
+verified: 2026-09-15 — .gitignore 의 `.claude/*` + `!.claude/tasks/` 만 남고 `!.claude/plans/` 제거, git check-ignore .claude/plans = ignored
 sources:
   - .gitignore
   - CLAUDE.md
 ---
 
-# `.claude/plans/` 는 tracked 다
+# `.claude/plans/` 는 gitignored 다
 
-대부분의 repo 에서 `.claude/` 는 통째로 ignored 지만, 이 repo 는 `.gitignore` 에서 `.claude/*` 를 무시하되 **`!.claude/plans/` 와 `!.claude/tasks/` 를 negation** 으로 되살린다.
+`.gitignore` 는 `.claude/*` 를 무시하고 `!.claude/tasks/` 만 negation 으로 되살린다. `.claude/plans/` 는 글로벌 규약(`~/.claude/CLAUDE.md` §10, `/e`·`/c`·`/wt` 스킬)의 기본 전제대로 **추적하지 않는다**.
 
-## 왜
+## 이력
 
-작업 plan 이 worktree 안에 있는데 gitignored 면, **worktree 를 지우는 순간 plan 이 함께 사라진다**. `git worktree remove` 는 ignored 파일을 경고 없이 지운다. plan 은 세션·도구를 잇는 핸드오프 채널이라 유실되면 다음 세션이 맥락을 처음부터 복원해야 한다.
+2026-07-28 ~ 2026-09-15 사이에는 `!.claude/plans/` 로 tracked 였다. 목적은 (1) `git worktree remove` 가 ignored 파일을 경고 없이 지우므로 plan 소실 방지, (2) 브랜치와 함께 push 해 다른 머신에서 이어받기.
 
-tracked 로 두면 부수 효과가 하나 더 있다: plan 을 브랜치와 함께 push 하면 **다른 머신·다른 세션이 pull 로 이어받는다**. "단일 진실 소스"가 머신 경계를 넘는다.
+2026-09-15 에 되돌렸다. 이유: plan 갱신(`chore(plan)`·`docs(plan): close …`)이 코드와 무관한 커밋으로 main 히스토리·PR diff 에 계속 쌓이는 것이 실익보다 컸다. 검토했다가 기각한 대안 — squash-merge 로 전환(코드 커밋 단위까지 뭉개짐), orphan `plans` 브랜치(worktree 마다 배선 필요), `~/.claude` repo 에 보관(스킬 경로 규약 변경 필요). 사용자는 "다른 머신에서 이어받기"를 포기하는 대신 글로벌 기본값을 택했다.
 
 ## 실무상 함의
 
-- 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`)하거나 작업 커밋에 포함한다.
-- **미커밋 plan 변경이 있으면 `git worktree remove` 가 거부한다** — tracked 라서 `git status` 에 뜨기 때문이다. 이건 안전장치다([[worktree-workflow]]).
-- 글로벌 `/e`·`/c`·`/wt` skill 은 plans 가 gitignored 라고 전제하고 만들어졌다(worktree 삭제 전 main 에 백업하는 절차 등). 이 repo 에선 그 전제가 어긋나며, **plan 이 git 에 있으므로 별도 백업이 불필요**하다.
-- plan 에 raw token·credential·PII 를 붙여넣지 않는다. tracked 라 그대로 원격에 올라간다. **이 clone 엔 pre-commit hook 이 설치돼 있지 않다**(2026-09-03 확인 — `~/.claude` 의 `pre-commit-check` 는 그 repo 에만 설치) — 스캔에 기대지 말 것.
+- **worktree 삭제 전 plan 백업이 다시 필요하다.** 글로벌 `/e` 가 삭제 전 main 으로 백업하는 절차를 그대로 따른다. `git worktree remove` 는 미커밋 plan 을 거부하지 않으니 `git status --porcelain --ignored` 로 확인한다([[worktree-workflow]]).
+- 다른 머신에서 이어가려면 plan 파일을 직접 옮기거나 PR·이슈·코드로 맥락을 복원한다.
+- 되돌리기 이전에 커밋된 plan 들은 git 이력에 남아 있다(`git log --all -- .claude/plans/`). README·PROJECT_ANALYSIS 가 가리키는 `.claude/plans/2026-06-14-stock-bot-kis/` 같은 설계 기록도 이력에서 본다.
 
 ## plan 과 wiki 의 역할 분리
 
 plan 은 **진행 중 작업 하나의 상태**를 소유하고 작업이 끝나면 닫힌다. 재사용 가능한 결정·교훈은 여기 wiki 로 승격한다 — 자세한 경계는 `wiki/WIKI.md` §1 과 [[docs-code-sync]] 참조.
 
-plan 이 tracked 라고 해서 plan 만 보면 진행 상황을 다 아는 것은 아니다. 중단된 작업은 stash·태그·미push 커밋에도 남으므로 [[lesson-resume-state-sources]] 의 6곳을 함께 확인한다.
+plan 만 보면 진행 상황을 다 아는 것은 아니다. 중단된 작업은 stash·태그·미push 커밋에도 남으므로 [[lesson-resume-state-sources]] 의 6곳을 함께 확인한다.

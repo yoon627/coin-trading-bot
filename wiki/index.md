@@ -22,7 +22,7 @@
 
 - [[rightsizing-history]] — collector·Kafka·ML 을 왜 제거했나
 - [[migration-numbering]] — 미머지 브랜치의 Flyway 번호 선점 문제
-- [[plan-git-tracking]] — `.claude/plans/` 를 git 추적하는 이유
+- [[plan-git-tracking]] — `.claude/plans/` 는 gitignored (2026-09-15 추적 해제 — 이유·기각 대안·삭제 전 백업)
 - [[worktree-workflow]] — 분기·병렬 제약·머지 후 자동 정리
 - [[prepush-codex-review]] — pre-push 는 `deploy.yml` paths-ignore 자기제외 가드만(fail-closed inline); codex 리뷰 게이트는 2026-09-03 제거 — 이유·되돌리는 법·설치본 드리프트
 - [[db-integration-test-harness]] — DB 통합테스트는 Testcontainers 가 아니라 외부 제공 Postgres 를 쓴다 (Docker 29 비호환)
