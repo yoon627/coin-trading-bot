@@ -76,12 +76,12 @@ internal object LiveSemanticsArm {
         keepWinnersUntilDays: Int = 0,
         pessimisticTrailing: Boolean = false,
     ): List<Trade> {
+        require(warmup >= 1) { "warmup 은 1 이상 — 창은 부분봉 1개 + 완결 봉 warmup-1 개다" }
         val signalProps = props.copy(kValue = config.kValue)
         val feePct = config.feeRate * 2 * 100
         val holdLimit = ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
         // 거래일 = UTC 날짜(= KST 09:00 경계). 일봉 fixture 의 kst 날짜와 같은 라벨이 된다.
         val byDay = intradayChronological.groupBy { it.candleDateTimeUtc.substring(0, 10) }
-        val dailyByDate = dailyChronological.associateBy { it.candleDateTimeKst.substring(0, 10) }
         val days = dailyChronological.map { it.candleDateTimeKst.substring(0, 10) }
 
         val trades = ArrayList<Trade>()
@@ -95,9 +95,11 @@ internal object LiveSemanticsArm {
         for (dayIndex in warmup until days.size) {
             val day = days[dayIndex]
             val bars = byDay[day] ?: continue
-            // 완결 일봉은 어제까지. 오늘은 부분봉으로 별도 공급한다.
-            val completed = (0 until dayIndex).mapNotNull { dailyByDate[days[it]] }
-            if (completed.size < warmup) continue
+            // 완결 일봉은 어제까지(뷰 — 복사하지 않는다). 오늘은 부분봉으로 별도 공급한다. dayIndex ≥ warmup 이라 항상 충분하다.
+            // 전제: 일봉 KST 날짜가 유일하다(픽스처 실측) — 중복이 있으면 날짜 키 조회와 위치 조회가 갈린다.
+            val completed = dailyChronological.subList(0, dayIndex)
+            // 창에 들어가는 완결 봉은 최근 warmup-1 개로 고정.
+            val recentCompleted = completed.subList(completed.size - (warmup - 1), completed.size)
             var boughtToday = false
 
             val dayOpen = bars.first().openingPrice
@@ -106,15 +108,18 @@ internal object LiveSemanticsArm {
             var pClose = dayOpen
             var pVolume = 0.0
 
-            // 이 봉 **시작 시점**의 부분봉 — 직전 봉까지의 누적이다(look-ahead 방지).
+            // 이 봉 **시작 시점**의 부분봉 — 직전 봉까지의 누적이다(look-ahead 방지). 부분봉이 봉마다 바뀌므로
+            // 창의 내용도 봉마다 다르다 — 캐시할 수 없고, 만드는 비용만 O(warmup) 으로 고정한다. newest-first.
             fun partialWindow(): List<Candle> {
-                val partial = Candle(
+                val window = ArrayList<Candle>(warmup)
+                window += Candle(
                     market = market,
                     candleDateTimeKst = "${day}T09:00:00",
                     openingPrice = dayOpen, highPrice = pHigh, lowPrice = pLow,
                     tradePrice = pClose, candleAccTradeVolume = pVolume,
                 )
-                return (completed + partial).takeLast(warmup).reversed()
+                for (i in recentCompleted.indices.reversed()) window += recentCompleted[i]
+                return window
             }
             // 돌파선 = 당일시가 + 전일 레인지 × k — 하루 안에서 상수라 봉마다 window 를 만들지 않는다(5분봉에서 20배 가까이 절약).
             val target = com.trading.common.strategy.Indicators.calculateTargetPrice(partialWindow(), config.kValue)
