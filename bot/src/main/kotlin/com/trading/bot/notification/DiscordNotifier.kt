@@ -2,6 +2,7 @@ package com.trading.bot.notification
 
 import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
+import com.trading.bot.domain.FillOutcome
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import org.slf4j.LoggerFactory
@@ -72,6 +73,47 @@ class DiscordNotifier(
             embed["footer"] = mapOf("text" to username)
         }
 
+        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
+    }
+
+    /**
+     * 수동 주문이 접수됐지만 체결을 확정하지 못해 거래 기록을 남기지 않았을 때. 사용자가 거래소에서 uuid 로
+     * 대조해야 하므로 uuid·요청 수량·마지막으로 본 상태를 그대로 싣는다(#105).
+     */
+    fun sendOrderUnrecorded(
+        outcome: FillOutcome,
+        market: String,
+        orderUuid: String,
+        requestedVolume: String,
+        lastState: String?,
+        executedVolume: String?,
+        webhookUrl: String? = null,
+        username: String? = null,
+    ) {
+        // Discord embed field value 는 비면 400, 1024자 초과도 400 — 알림이 통째로 유실된다(sendErrorAlert 와 같은 가드).
+        fun field(name: String, value: String, inline: Boolean) =
+            mapOf("name" to name, "value" to value.ifBlank { "-" }.take(1000), "inline" to inline)
+        val fields = listOf(
+            field("티커", market, true),
+            field("요청 수량", requestedVolume, true),
+            field("마지막 상태", "${lastState ?: "조회 실패"} / 체결 ${executedVolume ?: "-"}", true),
+            field("주문 uuid", orderUuid, false),
+        )
+        val (title, description) = when (outcome) {
+            FillOutcome.NOT_FILLED ->
+                "⚠️ 매도 주문이 체결 없이 종료됨 — 기록하지 않음" to "주문이 취소로 끝나 거래가 없습니다. 보유량은 그대로입니다."
+            else ->
+                "⚠️ 매도 주문 체결 미확인 — 기록하지 않음" to "거래소에서 주문 상태를 확인하세요. 체결분이 있다면 거래 기록에 없습니다."
+        }
+        val embed = mutableMapOf<String, Any>(
+            "title" to title,
+            "description" to description,
+            "color" to 0xF59E0B,
+            "fields" to fields,
+        )
+        if (username != null) {
+            embed["footer"] = mapOf("text" to username)
+        }
         sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
     }
 

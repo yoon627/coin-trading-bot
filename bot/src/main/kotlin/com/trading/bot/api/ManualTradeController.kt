@@ -52,7 +52,7 @@ class ManualTradeController(
     }
 
     @PostMapping("/sell")
-    suspend fun manualSell(@RequestBody req: ManualSellRequest): Map<String, Any> {
+    suspend fun manualSell(@RequestBody req: ManualSellRequest): Map<String, Any?> {
         val userId = currentUserId()
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND)
@@ -95,7 +95,13 @@ class ManualTradeController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, result.error)
         }
         // 주문 접수 성공. recorded=false 면 주문은 나갔으나 기록/알림 후처리가 실패한 상태 — 재주문 대신 경고로 노출.
-        return mapOf("status" to "success", "order_uuid" to (result.orderUuid ?: ""), "recorded" to result.recorded)
+        // fill=not_filled/unconfirmed 는 체결이 없거나 확인하지 못해 행을 남기지 않은 경우(#105). 매수 응답엔 이 키가 없다.
+        return mapOf(
+            "status" to "success",
+            "order_uuid" to (result.orderUuid ?: ""),
+            "recorded" to result.recorded,
+            "fill" to result.fill?.name?.lowercase(),
+        )
     }
 }
 

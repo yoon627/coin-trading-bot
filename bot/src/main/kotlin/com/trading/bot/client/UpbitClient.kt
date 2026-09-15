@@ -30,10 +30,10 @@ const val FILL_POLL_DELAY_MS = 300L
 suspend fun UpbitClient.awaitFill(uuid: String): Order? {
     if (uuid.isBlank()) return null
     var last: Order? = null
-    repeat(FILL_POLL_ATTEMPTS) {
+    repeat(FILL_POLL_ATTEMPTS) { attempt ->
         last = getOrder(uuid)
         if (last?.isTerminal() == true) return last
-        delay(FILL_POLL_DELAY_MS)
+        if (attempt < FILL_POLL_ATTEMPTS - 1) delay(FILL_POLL_DELAY_MS)
     }
     return last
 }

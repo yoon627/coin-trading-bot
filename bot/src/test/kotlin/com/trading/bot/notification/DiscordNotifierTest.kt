@@ -4,6 +4,7 @@ import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
+import com.trading.bot.domain.FillOutcome
 import com.trading.bot.domain.TradeSide
 import io.mockk.*
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -215,5 +216,32 @@ class DiscordNotifierTest {
         (embed["fields"] as List<*>).map { it as Map<*, *> }.forEach {
             assertTrue((it["value"] as String).length <= 1024, "field ${it["name"]} exceeds 1024")
         }
+    }
+
+    @Test
+    fun `sendOrderUnrecorded names the order so the user can reconcile it on the exchange`() {
+        val payload = slot<Map<String, Any>>()
+        every { requestBodySpec.bodyValue(capture(payload)) } returns requestBodySpec
+
+        notifier.sendOrderUnrecorded(FillOutcome.UNCONFIRMED, "KRW-BTC", "uuid-1", "0.3", "wait", "0.1", webhookUrl = null, username = "u")
+
+        val embed = (payload.captured["embeds"] as List<*>).single() as Map<*, *>
+        val fields = (embed["fields"] as List<*>).map { it as Map<*, *> }
+        assertTrue(fields.any { it["value"] == "uuid-1" }, "주문 uuid 가 있어야 거래소에서 대조할 수 있다: $fields")
+        assertTrue(fields.any { it["value"].toString().contains("wait") }, "마지막 주문 상태: $fields")
+        assertTrue(fields.any { it["value"].toString().contains("0.3") }, "요청 수량: $fields")
+    }
+
+    @Test
+    fun `sendOrderUnrecorded never sends a blank field value`() {
+        // 빈 value 는 Discord 400 → 경고 전체가 유실된다. placeOrder 응답 uuid 가 빈 문자열인 경우가 그 예다.
+        val payload = slot<Map<String, Any>>()
+        every { requestBodySpec.bodyValue(capture(payload)) } returns requestBodySpec
+
+        notifier.sendOrderUnrecorded(FillOutcome.UNCONFIRMED, "KRW-BTC", "", "0.3", null, null, webhookUrl = null, username = null)
+
+        val embed = (payload.captured["embeds"] as List<*>).single() as Map<*, *>
+        val fields = (embed["fields"] as List<*>).map { it as Map<*, *> }
+        assertTrue(fields.none { it["value"].toString().isBlank() }, fields.toString())
     }
 }

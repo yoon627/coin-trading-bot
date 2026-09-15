@@ -176,20 +176,23 @@ function Empty({ icon = 'wallet', title, message, action }) {
   );
 }
 
-function Toast({ message, tone = 'primary', onClose }) {
+function Toast({ message, tone = 'primary', sticky = false, onClose }) {
   React.useEffect(() => {
-    if (!message) return;
+    if (!message || sticky) return;
     const t = setTimeout(onClose, 3000);
     return () => clearTimeout(t);
-  }, [message, onClose]);
+  }, [message, sticky, onClose]);
   if (!message) return null;
   const tones = { primary: 'var(--ink-900)', up: 'var(--up)', down: 'var(--down)', warn: '#A35E00' };
   return (
     <div style={{
       position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
       background: tones[tone], color: '#fff', padding: '12px 20px', borderRadius: 10,
-      fontSize: 13, fontWeight: 600, boxShadow: 'var(--shadow-lg)', zIndex: 1000,
-    }}>{message}</div>
+      fontSize: 13, fontWeight: 600, boxShadow: 'var(--shadow-lg)', zIndex: 1000, userSelect: 'text',
+    }}>{message}{sticky && (
+      // 닫기는 ✕ 에만 — 본문 클릭으로 닫으면 uuid 를 드래그 선택하는 순간 사라진다.
+      <span onClick={onClose} title="닫기" style={{ marginLeft: 12, cursor: 'pointer', opacity: 0.8 }}>✕</span>
+    )}</div>
   );
 }
 

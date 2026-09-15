@@ -78,6 +78,12 @@ data class Order(
     fun isTerminal(): Boolean = state == "done" || state == "cancel"
 
     /**
+     * 매도 기록의 수수료 출처 — `paid_fee` 가 있으면 실측, 없으면 **추정**. 매도의 `totalAmount` 는 이 체결의
+     * 대금이라 추정이 정당하다(매수와 달리 스냅샷 과대계상이 없다). 엔진·수동 매도가 같은 규칙을 쓴다.
+     */
+    fun sellFeeBasis(): FeeBasis = feeBasis().takeIf { it is FeeBasis.Measured } ?: FeeBasis.Estimate
+
+    /**
      * 이 주문 응답에서 얻을 수 있는 수수료 출처.
      *
      * 수수료로 쓸 수 있는 **유한한 0 이상의 수**일 때만 [FeeBasis.Measured] 다. 그 외는 전부

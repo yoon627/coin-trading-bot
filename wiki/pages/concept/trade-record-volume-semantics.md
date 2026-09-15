@@ -2,9 +2,9 @@
 title: trade_records.volume 의 두 의미 — 엔진은 스냅샷, 수동은 증분
 category: concept
 created: 2026-08-24
-updated: 2026-09-15
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-09-16 — 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/persistence/TradeRecordRepository.kt
@@ -50,10 +50,13 @@ sources:
 
 ## 매도 쪽의 비대칭
 
-매도는 반대다.
+매도는 반대다 — 전부 거래소 실측이다.
 
-- 엔진 청산·수동 `sellAll` — **실제 잔고** 기준
-- 수동 `executeSellVolume` — 주문 **요청 수량**. 주문 후 체결을 확인하지 않아 부분 체결이면 실제와 어긋난다(이슈 #105)
+- 엔진 청산 — 즉시 `done` 은 주문량, reconcile 은 terminal 응답의 `executed_volume`
+- 수동 `executeSellAll`·`executeSellVolume` — 주문 접수 후 `awaitFill`(엔진과 같은 폴링)로 **terminal(done/cancel) 응답의
+  `executed_volume`** 만 기록한다(#105). `wait` 로 남거나 체결 0·조회 실패면 **행을 남기지 않고** `fill=unconfirmed` 로
+  SPA 토스트·Discord 경고를 보낸다 — 요청 수량으로 폴백하지 않는다. 미확정 주문의 이후 체결분은 수동 경로에 reconcile 이
+  없어 기록되지 않으며, 사용자가 uuid 로 거래소에서 대조한다(알려진 한계).
 
 그래서 수동 매수(추정) → `sellAll`(실측) 조합에서는 이전 포지션이 없어도 매도 수량이 매수보다 많게
 기록될 수 있다. 조회 측은 이 경우 초과분의 원가를 알 수 없어 gross 손익(`pnl_amount_gross`)을 비운다 — 매도 행의
@@ -94,7 +97,8 @@ sources:
 - **부작용**: 허용 오차 안에서 조기 청산된 뒤 그 dust 를 실제로 팔면, 매수 없는 고아 SELL 행이
   목록에 하나 더 생긴다(`partial=true`, 진입 정보 없음).
 
-근본 해결은 수동 주문도 실제 체결 수량을 기록하는 것이다(이슈 #105). 그때 이 허용 오차는 사라져야 한다.
+수동 **매도**는 실제 체결 수량을 기록하게 됐다(#105). 허용 오차가 남는 이유는 수동 **매수**가 여전히 추정이기 때문이고,
+그쪽까지 실측이 되면 이 허용 오차는 사라져야 한다.
 
 ## 이 주문의 체결 금액 — `order_amount` (V26, #146)
 
@@ -142,8 +146,10 @@ sources:
 
 매도 쪽 유보 두 가지:
 
-- 수동 `executeSellVolume` 은 **요청 수량**과 주문 후 조회한 틱 가격으로 `totalAmount` 를 만든다.
-  부분 체결이면 "그 체결의 대금"이 아니다 — 위 매수 절과 같은 #105 오차를 공유한다.
+- 수동 매도는 terminal 응답의 체결량으로 `totalAmount`(틱 가격 × 체결량, 틱을 못 읽으면 실측 Σ`funds`)를 만들고,
+  `paid_fee` 가 있으면 실측·없으면 추정, `order_amount` 는 Σ`funds` 다 — 엔진 매도와 같은 규칙(#105). 틱도 `trades` 도
+  없으면 0 을 적지 않고 미확정으로 알린다(0 은 라운드트립에서 전액 손실로 읽힌다). `executed_vwap` 은 `TradeRecord` 에 실리지만
+  `trade_records` 투영 밖이라 영속되지 않는다(엔진과 동일).
 - 엔진 매도는 `paid_fee` 가 없으면 **미기록이 아니라 추정**으로 떨어진다(`PositionManager.sellFeeBasis`). 매도의
   `totalAmount` 는 이 체결의 대금이라 추정이 정당하고, 매수처럼 스냅샷 과대계상이 없기 때문이다. 즉시 done 과
   reconcile terminal 은 `paid_fee` 가 있을 때 실측·없으면 추정이고, 주문 응답이 없는 잔고복원은 언제나 추정이다.
@@ -157,6 +163,6 @@ sources:
 `KRW-BTC` 의 매수 7건·매도 6건을 `78일 보유중` 한 줄로 뭉쳤고 손익도 `−9,276원` 으로 나왔다.
 합성 테스트 12종은 그 전제를 그대로 반영했으므로 전부 통과했다.
 
-근본 개선은 이슈 #105(수동 매도가 실제 체결량을 기록하도록)에서 다룬다.
+매도 쪽은 #105 로 실측이 됐고, 남은 추정은 수동 매수뿐이다.
 
 관련: [[persistence-schema]] · [[trading-engine-loop]]
