@@ -1,7 +1,10 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.awaitFill
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FillOutcome
+import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradePnl
@@ -13,8 +16,10 @@ import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.common.config.TradingProperties
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.reactive.TransactionalOperator
@@ -57,30 +62,33 @@ class TradeExecutionService(
             )
         )
 
-        return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
-            val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-            val volume = if (currentPrice > 0) amount / currentPrice else 0.0
-            TradeRecord(
-                ticker = market,
-                side = TradeSide.BUY,
-                price = currentPrice,
-                volume = volume,
-                totalAmount = amount,
-                pnlPercent = null, // 진입 — 실현 손익 없음
-                pnlAmount = null,
-                strategy = strategy,
-                // totalAmount 가 이 주문의 금액이라 추정 기준이 맞다. placeOrder 응답은 체결 전이라
-                // paid_fee 를 신뢰할 수 없고, 확인하려면 getOrder 재조회가 필요하다(범위 밖 — #133).
-                fee = FeeBasis.Estimate,
-                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
-                orderAmount = null,
-                userId = userId,
-            )
+        // 주문은 나갔으므로 기록·알림은 요청 취소에도 완주한다(매도 recordSellFill 과 같은 이유).
+        return withContext(NonCancellable) {
+            recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
+                val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
+                val volume = if (currentPrice > 0) amount / currentPrice else 0.0
+                TradeRecord(
+                    ticker = market,
+                    side = TradeSide.BUY,
+                    price = currentPrice,
+                    volume = volume,
+                    totalAmount = amount,
+                    pnlPercent = null, // 진입 — 실현 손익 없음
+                    pnlAmount = null,
+                    strategy = strategy,
+                    // totalAmount 가 이 주문의 금액이라 추정 기준이 맞다. placeOrder 응답은 체결 전이라
+                    // paid_fee 를 신뢰할 수 없고, 확인하려면 getOrder 재조회가 필요하다(범위 밖 — #133).
+                    fee = FeeBasis.Estimate,
+                    // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
+                    orderAmount = null,
+                    userId = userId,
+                )
+            }
         }
     }
 
     /**
-     * 전량 매도 주문 실행 + 기록 저장 + Discord 알림
+     * 전량 매도 주문 실행 + 체결 확정 + 기록 저장 + Discord 알림
      */
     suspend fun executeSellAll(
         client: UpbitClient,
@@ -107,32 +115,15 @@ class TradeExecutionService(
             )
         )
 
-        return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
-            val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-            val vol = account.balanceDouble()
-            val avgBuyPrice = account.avgBuyPriceDouble()
-            val pnl = netPnlPercent(currentPrice, avgBuyPrice)
-            TradeRecord(
-                ticker = market,
-                side = TradeSide.SELL,
-                price = currentPrice,
-                volume = vol,
-                totalAmount = currentPrice * vol,
-                pnlPercent = pnl,
-                pnlAmount = TradePnl.amount(pnl, avgBuyPrice, vol),
-                reason = SellReason.MANUAL.name,
-                strategy = strategy,
-                // 매도의 totalAmount 는 이 매도의 대금이라 추정 기준이 맞다.
-                fee = FeeBasis.Estimate,
-                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
-                orderAmount = null,
-                userId = userId,
-            )
-        }
+        // 평단은 주문 전 계좌값 — 전량 매도 뒤엔 통화 잔고가 사라져 다시 읽을 수 없다.
+        return recordSellFill(
+            client, order, market, requestedVolume = account.balance, avgBuyPrice = account.avgBuyPriceDouble(),
+            strategy = strategy, userId = userId, username = username, discordWebhookUrl = discordWebhookUrl,
+        )
     }
 
     /**
-     * 지정 수량 매도 주문 실행 + 기록 저장 + Discord 알림
+     * 지정 수량 매도 주문 실행 + 체결 확정 + 기록 저장 + Discord 알림
      */
     suspend fun executeSellVolume(
         client: UpbitClient,
@@ -158,26 +149,120 @@ class TradeExecutionService(
             )
         )
 
-        return recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
-            val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-            val vol = sellVolume.toDoubleOrNull() ?: 0.0
+        return recordSellFill(
+            client, order, market, requestedVolume = sellVolume, avgBuyPrice = avgBuyPrice,
+            strategy = strategy, userId = userId, username = username, discordWebhookUrl = discordWebhookUrl,
+        )
+    }
+
+    /**
+     * 접수된 매도의 체결을 확정해 기록한다. terminal(done/cancel) 응답의 체결량만 기록하고, 확인하지 못하면
+     * 요청 수량으로 폴백하지 않는다 — 틀린 수량은 라운드트립 조회가 보유 포지션을 청산으로 오판하게 한다(#105).
+     * `wait` 는 executed>0 이어도 확정하지 않는다: 열린 주문의 잔여 체결분이 더 올 수 있고 수동 경로엔 이를
+     * 다시 잡을 reconcile 이 없다. 미확정은 행 없이 사용자에게 알린다(uuid 로 거래소에서 대조).
+     *
+     * 주문은 이미 나갔으므로 여기서부터는 요청 취소에도 완주한다(엔진 `placeSell` 과 같은 이유 — 브라우저 이탈이 감사 유실이 되지 않게).
+     */
+    private suspend fun recordSellFill(
+        client: UpbitClient,
+        order: Order,
+        market: String,
+        requestedVolume: String,
+        avgBuyPrice: Double,
+        strategy: String,
+        userId: Long,
+        username: String?,
+        discordWebhookUrl: String?,
+    ): TradeExecutionResult = withContext(NonCancellable) {
+        val filled = try {
+            client.awaitFill(order.uuid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Manual sell fill lookup failed: userId={}, market={}, orderUuid={}: {}", userId, market, order.uuid, e.message)
+            null
+        }
+        val terminal = filled?.takeIf { it.isTerminal() }
+        val executed = terminal?.executedVolume?.toDoubleOrNull()?.takeIf { it.isFinite() }
+        if (terminal == null || executed == null || executed <= 0.0) {
+            // terminal 이고 체결이 0 이하면 확정된 미체결(취소). 그 외는 모른다 — 둘을 같은 경고로 묶으면 오경보가 된다.
+            val outcome = if (terminal != null && executed != null) FillOutcome.NOT_FILLED else FillOutcome.UNCONFIRMED
+            return@withContext skipRecord(outcome, order, market, requestedVolume, filled, userId, username, discordWebhookUrl)
+        }
+        val currentPrice = tickPriceOrZero(client, market)
+        val filledFunds = terminal.filledFunds()
+        if (currentPrice <= 0.0 && filledFunds == null) {
+            // 체결은 알아도 대금을 전혀 못 구하면 totalAmount=0 행이 되어 라운드트립이 전액 손실로 계산한다 — 적지 않는다.
+            return@withContext skipRecord(FillOutcome.UNCONFIRMED, order, market, requestedVolume, filled, userId, username, discordWebhookUrl)
+        }
+
+        recordOrder(client, order.uuid, market, username, discordWebhookUrl, fill = FillOutcome.CONFIRMED) {
             val pnl = netPnlPercent(currentPrice, avgBuyPrice)
             TradeRecord(
                 ticker = market,
                 side = TradeSide.SELL,
                 price = currentPrice,
-                volume = vol,
-                totalAmount = currentPrice * vol,
+                volume = executed,
+                // tick 을 못 읽으면 평가액 대신 실측 대금 — 0 을 적으면 라운드트립이 전액 손실로 계산한다. 추정이 아니라 실측이다.
+                totalAmount = if (currentPrice > 0) currentPrice * executed else filledFunds ?: 0.0,
                 pnlPercent = pnl,
-                pnlAmount = TradePnl.amount(pnl, avgBuyPrice, vol),
+                pnlAmount = TradePnl.amount(pnl, avgBuyPrice, executed),
                 reason = SellReason.MANUAL.name,
                 strategy = strategy,
-                // 매도의 totalAmount 는 이 매도의 대금이라 추정 기준이 맞다.
-                fee = FeeBasis.Estimate,
-                // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
-                orderAmount = null,
+                fee = terminal.sellFeeBasis(),
+                orderAmount = filledFunds,
+                executedVwap = terminal.filledVwap(),
+                exchangeOrderId = order.uuid,
                 userId = userId,
             )
+        }
+    }
+
+    /** 행을 남기지 않는 결말 — WARN 로그(사후 대조용 uuid·수량·상태)와 사용자 알림. */
+    private fun skipRecord(
+        outcome: FillOutcome,
+        order: Order,
+        market: String,
+        requestedVolume: String,
+        filled: Order?,
+        userId: Long,
+        username: String?,
+        discordWebhookUrl: String?,
+    ): TradeExecutionResult {
+        log.warn(
+            "Manual sell {} — not recorded: userId={}, market={}, orderUuid={}, requested={}, state={}, executed={}",
+            outcome, userId, market, order.uuid, requestedVolume, filled?.state, filled?.executedVolume,
+        )
+        notifyUnrecorded(outcome, market, order.uuid, requestedVolume, filled, discordWebhookUrl, username)
+        return TradeExecutionResult.unrecorded(order.uuid, outcome)
+    }
+
+    /** 판단 시점 tick 가격. 조회 실패는 0 으로 두고 호출자가 실측 대금 폴백 여부를 정한다. */
+    private suspend fun tickPriceOrZero(client: UpbitClient, market: String): Double =
+        try {
+            client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Ticker lookup failed after manual sell: market={}: {}", market, e.message)
+            0.0
+        }
+
+    private fun notifyUnrecorded(
+        outcome: FillOutcome,
+        market: String,
+        orderUuid: String,
+        requestedVolume: String,
+        filled: Order?,
+        discordWebhookUrl: String?,
+        username: String?,
+    ) {
+        try {
+            discordNotifier.sendOrderUnrecorded(
+                outcome, market, orderUuid, requestedVolume, filled?.state, filled?.executedVolume, discordWebhookUrl, username,
+            )
+        } catch (e: Exception) {
+            log.error("Unconfirmed-order alert failed: market={}, orderUuid={}", market, orderUuid, e)
         }
     }
 
@@ -209,8 +294,9 @@ class TradeExecutionService(
                 price = record.price,
                 volume = record.volume,
                 totalAmount = record.totalAmount,
-                // 수수료 출처는 경로가 정한다(#133·#148) — 엔진 매수·매도는 주문 응답 실측, 수동 주문과 paid_fee 가
-                // 없는 매도는 추정, 매수 잔고복원은 미기록. 한 행만 보고 실측인지 추정인지 구분할 마커는 없다.
+                // 수수료 출처는 경로가 정한다(#133·#148·#105) — 엔진 매수와 모든 매도는 terminal 응답에 paid_fee 가
+                // 있으면 실측, 매도는 없으면 추정, 수동 매수는 추정, 매수 잔고복원은 미기록. 한 행만 보고 실측인지
+                // 추정인지 구분할 마커는 없다.
                 fee = when (val basis = record.fee) {
                     // 파싱 단계에서 이미 거르지만 여기서 한 번 더 본다 — `Measured` 는 public 생성자라
                     // 다른 경로가 생기면 검증을 건너뛸 수 있고, NaN 이 컬럼에 들어가면 이후 SUM(fee) 이
@@ -321,14 +407,19 @@ class TradeExecutionService(
         market: String,
         username: String?,
         discordWebhookUrl: String?,
+        fill: FillOutcome? = null,
         buildRecord: suspend () -> TradeRecord,
     ): TradeExecutionResult {
         return try {
             saveAndNotify(buildRecord(), client, username, discordWebhookUrl)
-            TradeExecutionResult.success(orderUuid)
+            TradeExecutionResult.success(orderUuid, fill = fill)
+        } catch (e: CancellationException) {
+            // 취소를 "후처리 실패"로 위장하면 호출자가 기록 여부를 오판한다 — 전파하되 경보(ERROR → Discord)는 남긴다.
+            log.error("Order placed but recording was cancelled: orderUuid={}, market={}", orderUuid, market, e)
+            throw e
         } catch (e: Exception) {
             log.error("Order placed but not recorded: orderUuid={}, market={}", orderUuid, market, e)
-            TradeExecutionResult.success(orderUuid, recorded = false)
+            TradeExecutionResult.success(orderUuid, recorded = false, fill = fill)
         }
     }
 }
@@ -338,11 +429,15 @@ data class TradeExecutionResult(
     val orderUuid: String? = null,
     val error: String? = null,
     // 주문은 접수됐으나(success) 기록/알림 후처리가 실패한 경우 false — 호출자가 재시도 대신 경고를 노출하도록.
+    // 행이 있을 수도(알림만 실패) 없을 수도 있다 — 행이 확실히 없는 경우는 fill=NOT_FILLED/UNCONFIRMED 가 함께 온다.
     val recorded: Boolean = true,
+    val fill: FillOutcome? = null,
 ) {
     companion object {
-        fun success(orderUuid: String, recorded: Boolean = true) =
-            TradeExecutionResult(success = true, orderUuid = orderUuid, recorded = recorded)
+        fun success(orderUuid: String, recorded: Boolean = true, fill: FillOutcome? = null) =
+            TradeExecutionResult(success = true, orderUuid = orderUuid, recorded = recorded, fill = fill)
+        fun unrecorded(orderUuid: String, fill: FillOutcome) =
+            TradeExecutionResult(success = true, orderUuid = orderUuid, recorded = false, fill = fill)
         fun failure(error: String) = TradeExecutionResult(success = false, error = error)
     }
 }
