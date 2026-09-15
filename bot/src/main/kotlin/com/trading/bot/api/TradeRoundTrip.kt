@@ -25,7 +25,15 @@ data class TradeRoundTrip(
     val sellVolume: Double?,
     /** 매도 시점 기록된 수익률의 수량가중 평균. 왕복 수수료가 차감된 net. */
     val pnlPercent: Double?,
-    /** 매도총액 − 매수총액. 수수료 미차감 gross 라 [pnlPercent] 와 부호가 어긋날 수 있다. */
+    /**
+     * 이 그룹 매도 행들의 실현 손익(`pnl_amount`, 설정 수수료율 차감) 합. 모든 매도에 값이 있을 때만 — 부분합은
+     * 전체 손익을 보장하지 못한다([pnlPercent] 가 값 있는 매도만으로 가중평균하는 것과 규칙이 다르다).
+     * 매도 행이 기록 시점 평단으로 계산한 값이라 매수 조립과 무관하게 [partial] 이어도 낸다. 포지션 전체의
+     * 정확한 손익이 아니라 **기록 기준** 합이다 — V21 백필분은 마지막 BUY 단가를 원금으로 쓰고, `pnl_percent` 가
+     * gross 이던 시기(2026-06-11 이전)의 백필분은 수수료가 빠져 있지 않다.
+     */
+    val pnlAmountNet: Double?,
+    /** 매도총액 − 매수총액. 수수료 미차감 gross 라 [pnlPercent] 와 부호가 어긋날 수 있다. [pnlAmountNet] 이 없을 때의 근사. */
     val pnlAmountGross: Double?,
     val holdingSeconds: Long?,
     val reason: String?,
@@ -220,6 +228,7 @@ private fun roundTrip(
         sellAmount = if (hasSells) sellAmount else null,
         sellVolume = if (hasSells) sellVolume else null,
         pnlPercent = if (hasSells) weightedPnlPercent(sells) else null,
+        pnlAmountNet = if (hasSells) netPnlAmount(sells) else null,
         // 판 만큼의 원가만 차감한다 — 전체 매수액을 빼면 아직 팔지 않은 매수분이 손실로 잡힌다.
         // 매수액을 모르면 0 으로 채우지 않는다: 매도액 전체가 이익인 것처럼 보이는 가짜 손익이 된다.
         pnlAmountGross = if (hasSells && !untrustedBuys && entryPrice != null) {
@@ -245,6 +254,10 @@ private fun roundTrip(
         partial = untrustedBuys,
     )
 }
+
+/** 매도 행의 실현 손익 합. 하나라도 값이 없으면 null — 부분합은 전체 손익을 보장하지 못한다. 0.0 은 유효한 값이다. */
+private fun netPnlAmount(sells: List<TradeRecordEntity>): Double? =
+    if (sells.all { it.pnlAmount != null }) sells.sumOf { it.pnlAmount!! } else null
 
 /** 분할 매도면 각 매도의 수익률을 수량으로 가중평균한다. 단일 매도면 그 값 그대로다. */
 private fun weightedPnlPercent(sells: List<TradeRecordEntity>): Double? {
