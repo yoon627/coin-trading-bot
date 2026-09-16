@@ -2,9 +2,9 @@
 title: 청산 해상도 사다리 — 익절·손절·9시 정책의 240분봉 우위는 15분·5분봉에서 단조로 사라지고, 기준선 자체가 5분봉에서 음수로 뒤집힌다
 category: query
 created: 2026-09-09
-updated: 2026-09-09
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-09 — `RUN_EXIT_LADDER=true ./gradlew :bot:test --tests "*ExitResolutionLadderTest*" --rerun-tasks` (JDK 21.0.9), 리뷰 반영 후 재실행(비관 브래킷 익절 우선·§5 갭 오버슛 정정 — 주 family 수치·판정 불변, 1차 대비 diff 확인). 규칙·하네스는 15·5분봉 결과 전에 커밋(`daf16c1`; 240분봉은 smoke 로 먼저 관측). fixture 10창 D1 + `intraday240/` + `backtest-cache/intraday{15,5}/`(각 80 파일, 수집 2026-09-09)
+verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `RUN_EXIT_LADDER=true ./gradlew :bot:test --tests "*ExitResolutionLadderTest*" --rerun-tasks` (JDK 21.0.9), 리뷰 반영 후 재실행(비관 브래킷 익절 우선·§5 갭 오버슛 정정 — 주 family 수치·판정 불변, 1차 대비 diff 확인). 규칙·하네스는 15·5분봉 결과 전에 커밋(`daf16c1`; 240분봉은 smoke 로 먼저 관측). fixture 10창 D1 + `intraday240/` + `backtest-cache/intraday{15,5}/`(각 80 파일, 수집 2026-09-09)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/ExitResolutionLadderTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt

@@ -161,3 +161,9 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 - [[architecture-overview]]·[[exit-gates]]·[[marketdata-pipeline]]·[[trading-engine-loop]]·[[persistence-schema]]·[[plan-git-tracking]]·[[rightsizing-history]] 에서 KIS 서술을 제거·정정하고 V27 행을 추가.
 - 근거: 삭제 diff, `./gradlew build` 통과. 진행 상태는 plan 소유.
 
+## [2026-09-16] ingest | shared-balance-2026-09 — 공유 잔고 재판정 (#180)
+
+- [[shared-balance-2026-09]] 신설: `LiveSemanticsArm` 결과 위에 한 계좌 현금 장부(`SharedBalanceSim`, 후처리)를 얹어 현행 라이브 vs 후보 E 를 yearly·7국면에서 재판정. 라이브 사이징 규칙(taper·복리)과 슬롯 규칙(동시 보유 상한, 마켓 순서 200 치환)의 두 축, 주 통계량 셀은 결과 전 사전고정.
+- `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각 필드 추가(동작 불변) → 그 파일을 sources 로 가진 query 페이지들의 `verified` 갱신. [[exit-resolution-verdict-2026-09]]·[[trailing-arm-finding-2026-09]] 한계 절에 포인터.
+- 근거: `RUN_SHARED_BALANCE=true` 리포트, `SharedBalanceSimTest` 10건, 전체 `:bot:test` 통과. 진행 상태는 plan 소유.
+

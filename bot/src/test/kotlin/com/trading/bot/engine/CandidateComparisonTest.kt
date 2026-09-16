@@ -64,7 +64,7 @@ class CandidateComparisonTest {
         report.appendLine("# 라이브 현행 vs 생존 후보 — 절대 수익과 보유상한 민감도")
         report.appendLine()
         report.appendLine("고정 노셔널 ${"%,.0f".format(notionalKrw)}원/마켓 기준. 수익률은 `Σ 거래별 net pnl%`(왕복 수수료 차감), 금액은 그 값 × 노셔널.")
-        report.appendLine("**8마켓 합계는 8종을 동시에 굴렸을 때의 합**이고, 실제 계좌 수익률은 그 합을 총 투입 자본으로 나눈 값이다.")
+        report.appendLine("**8마켓 합계는 8종을 동시에 굴렸을 때의 합**이고, 실제 계좌 수익률은 그 합을 총 투입 자본으로 나눈 값이다. 한 계좌의 현금 제약을 반영한 재판정은 `SharedBalanceVerdictTest`(wiki `query/shared-balance-2026-09`).")
         report.appendLine()
 
         for ((windowName, spec) in windows) {

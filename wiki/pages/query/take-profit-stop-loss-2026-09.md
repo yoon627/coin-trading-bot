@@ -2,9 +2,9 @@
 title: 익절×손절 격자 사전명세 비교 — 익절 5% 가 상방을 자른다는 신호는 10창 전부에서 나오지만 계기 편향과 같은 방향이고, 손절 축은 진입봉 손절의 처리에 결과가 좌우된다
 category: query
 created: 2026-09-09
-updated: 2026-09-09
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-09 — `LiveSemanticsArm` 에 `keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산이 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` md5 동일, [[exit-resolution-ladder-2026-09]] 7b 가 이 페이지의 240분봉 5셀 격차를 ±0.01 로 재현). 실행분: `RUN_TP_SL_GRID=true ./gradlew :bot:test --tests "*TakeProfitStopLossIntradayTest*" --rerun-tasks` (JDK 21.0.9). 규칙·하네스는 결과를 보기 전에 커밋(`a04ab34`). fixture 10창 D1 + `intraday240/`
+verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `LiveSemanticsArm` 에 `keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산이 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` md5 동일, [[exit-resolution-ladder-2026-09]] 7b 가 이 페이지의 240분봉 5셀 격차를 ±0.01 로 재현). 실행분: `RUN_TP_SL_GRID=true ./gradlew :bot:test --tests "*TakeProfitStopLossIntradayTest*" --rerun-tasks` (JDK 21.0.9). 규칙·하네스는 결과를 보기 전에 커밋(`a04ab34`). fixture 10창 D1 + `intraday240/`
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/TakeProfitStopLossIntradayTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/PairedMaxTBootstrap.kt

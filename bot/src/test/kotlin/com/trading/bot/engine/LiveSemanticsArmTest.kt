@@ -60,6 +60,22 @@ class LiveSemanticsArmTest {
         assertEquals(first.entryPrice, after.first().entryPrice, 1e-9, "미래 봉을 흔들자 첫 체결가가 바뀌었다")
     }
 
+    /** 공유 잔고 후처리([SharedBalanceSim])는 마켓 간 진입·청산 순서를 봉 시각으로 정한다 — 거래일만으로는 같은 날 순서를 알 수 없다. */
+    @Test
+    fun `trades carry the entry and exit bar timestamps`() = runBlocking {
+        val market = "KRW-BTC"
+        val trades = LiveSemanticsArm.run(
+            market, strategy, YearlyFixtures.load(market).reversed(), IntradayFixtures.load("yearly", market).reversed(),
+            live().toConfig(), props,
+        )
+        assertTrue(trades.isNotEmpty())
+        for (t in trades) {
+            assertTrue(t.entryBarUtc.startsWith(t.entryDate), "진입 봉 시각 ${t.entryBarUtc} 이 진입일 ${t.entryDate} 과 다르다")
+            assertTrue(t.exitBarUtc.startsWith(t.exitDate), "청산 봉 시각 ${t.exitBarUtc} 이 청산일 ${t.exitDate} 과 다르다")
+            assertTrue(t.entryBarUtc <= t.exitBarUtc, "청산이 진입보다 앞선다: $t")
+        }
+    }
+
     @Test
     @EnabledIfEnvironmentVariable(named = "RUN_LIVE_SEMANTICS", matches = "true")
     fun `re-adjudicate the candidates under live entry semantics`() = runBlocking {
