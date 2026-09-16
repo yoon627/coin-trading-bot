@@ -2,7 +2,7 @@
 title: DB 스키마 — Flyway V1~V26 와 Upbit·KIS 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-09-14
+updated: 2026-09-16
 claim_state: current
 verified: 2026-09-05 — V24 는 신규 테이블 추가만이라 기존 경로에 영향이 없고 `./gradlew build` 통과로만 확인했다(실제 Postgres 적용은 미실행 — `scripts/run-db-tests.sh` 필요). 이전 확인분: 2026-09-02 — V23 을 scripts/run-db-tests.sh(실제 Postgres 17)로 적용해 TradingStateRoundTripTest 3건/skip 0 통과. 이전 확인분: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
 sources:
@@ -47,7 +47,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 
 **왜 첫 번째인가** — `markBought` 의 실제 분기는 `entryStrategy = if (resuming) entryStrategy ?: strategy else strategy` 이고 `resuming` 은 진입 시점의 `position` 이다. `completeBuy` 가 `replace=true` 로 부르므로 "추가매수 시 유지" 가지(`position && !replace`)는 타지 않지만, **else 안에서 `resuming` 이 참이면 기존 값이 그대로 살아남는다**. 재시작 후 `syncPosition` 이 `position=true` 로 만든 뒤 `reconcilePendingBuy`·`BalanceRecovery` 가 `completeBuy` 를 부르는 경로가 그렇다. 즉 한 포지션에 엔진 BUY 가 여럿이면 **먼저 찍힌 전략**이 남는다.
 
-**왜 `manual` 을 빼는가** — 수동 매수(`TradeExecutionService.executeBuy`)는 `TradingState` 를 아예 건드리지 않고 `syncPosition` 도 `entryStrategy` 를 세우지 않는다. 그래서 수동 매수 위에 엔진이 매수하면 `resuming=false` 로 엔진 전략이 들어간다 — `manual` 은 애초에 `entryStrategy` 후보가 아니다.
+**왜 `manual` 을 빼는가**(V21 시점 서술 — 수동 매수는 2026-09-16 에 제거됐다, #129) — 당시 수동 매수(`executeBuy`)는 `TradingState` 를 아예 건드리지 않고 `syncPosition` 도 `entryStrategy` 를 세우지 않는다. 그래서 수동 매수 위에 엔진이 매수하면 `resuming=false` 로 엔진 전략이 들어간다 — `manual` 은 애초에 `entryStrategy` 후보가 아니다.
 
 ⚠️ **원금은 반대로 마지막 BUY 를 본다.** 전략은 최초 진입값이 유지되는 반면 `avgBuyPrice` 는 `markBought` 가 매번 덮어쓰기 때문이다. 두 기준이 다른 것은 런타임을 미러한 결과다.
 
@@ -55,7 +55,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 
 대상에 `id`·시각 상한을 두지 **않는다**. 마이그레이션이 도는 시점은 새 앱 기동 시이고 그때 `strategy` 가 빈 매도 행은 정의상 전부 구버전 코드가 쓴 것이다. 측정 시점의 max id 로 고정하면 측정과 배포 사이에 체결된 거래가 영구 미보정으로 남는다 — 봇은 그 사이에도 돈다. 다만 **페어링 순서와 tie-break 은 `created_at` 이 아니라 `id`** 로 한다: 두 테이블이 서로 다른 시각을 담고 타입도 다르며(`TIMESTAMP` vs `TIMESTAMPTZ`, 같은 리터럴이 세션 TimeZone 에 따라 다르게 해석된다) 마이크로초 동률도 가능하기 때문이다.
 
-⚠️ **수동 매도는 여전히 귀속을 틀린다** — `executeSellAll`/`executeSellVolume` 이 `strategy="manual"` 을 하드코딩해서, 엔진이 잡은 포지션을 사람이 청산하면 진입 전략이 크레딧을 못 받는다(Upbit 경로). **KIS 경로는 V22 에서 해소됐다** — 주문 WAL 이 전략·사유를 싣고 `buildExecution` 이 그대로 옮긴다([[kis-order-lifecycle]]). 다만 "수동 매도가 엔진 포지션을 청산했을 때 진입 전략을 크레딧한다"는 문제는 양쪽 모두 미해결이다.
+**수동 매도의 귀속(Upbit)은 2026-09-16 에 해소됐다**(#129) — `ManualTradeController` 가 `UserTradingManager.resolveEntryStrategy`(엔진 메모리 → durable 행)로 진입 전략을 찾아 `strategy` 에 넣고, 모를 때만 `"manual"`. 전량 청산이 확인되면 durable 행의 진입 메타를 비운다([[trade-record-volume-semantics]] 구분 키 절). **KIS 경로는 V22 에서 해소됐다** — 주문 WAL 이 전략·사유를 싣고 `buildExecution` 이 그대로 옮긴다([[kis-order-lifecycle]]).
 
 ⚠️ **`trade_executions.fee` 는 V21 부터만 채워진다.** 그 이전 행은 `0`(미기록)이다 — `saveAudit` 이 값을 넘기지 않았다. 소급하지 않은 이유는 수수료율이 `TRADING_ROUND_TRIP_FEE_RATE` 로 환경마다 다를 수 있어 SQL 에 상수로 박으면 기본값이 아닌 환경에서 과거와 현재가 다른 기준이 되기 때문이다. 총 수수료를 집계할 일이 생기면 V21 이전 행을 제외해야 한다. 채워지는 값의 출처는 경로가 정한다 — 엔진 매수(#133)·엔진 매도(#148, 2026-09-14)는 `getOrder` 응답의 `paid_fee` 실측, 수동 주문과 `paid_fee` 없는 매도는 설정값 추정([[trade-record-volume-semantics]] 수수료 절). `pnl_amount` 는 백테 정합용 요율 기준이라 `fee` 와 더하지 않는다.
 
