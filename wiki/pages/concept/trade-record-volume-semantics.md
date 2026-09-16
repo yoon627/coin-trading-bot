@@ -4,9 +4,10 @@ category: concept
 created: 2026-08-24
 updated: 2026-09-16
 claim_state: current
-verified: 2026-09-16 — 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
+  - bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt
   - bot/src/main/kotlin/com/trading/bot/persistence/TradeRecordRepository.kt
   - bot/src/main/kotlin/com/trading/bot/notification/DiscordNotifier.kt
   - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
@@ -21,15 +22,20 @@ sources:
 | 기록 경로 | `volume` | `price` |
 |---|---|---|
 | 엔진 매수 `PositionManager.completeBuy` | 거래소 **실잔고** = 그 시점 **총 보유량 스냅샷** | 거래소 **평단** |
-| 수동 매수 `TradeExecutionService.executeBuy` | `주문금액 / 조회시점 가격` = **증분**(추정치) | 조회 시점 현재가 |
+| 과거 수동 매수(`executeBuy`, **2026-09-16 제거** — #129) | `주문금액 / 조회시점 가격` = **증분**(추정치) | 조회 시점 현재가 |
+
+수동 매수 경로는 사라졌지만 그 행들은 남아 있어 아래 규칙은 그대로 필요하다. 이제 매수는 엔진만 한다.
 
 엔진이 실잔고를 적는 것은 의도된 설계다 — 재시작 시 `syncPosition` 이 거래소 잔고에서 복원한 분과
 이중계상되지 않게 하려는 것이다(#20).
 
 ## 구분 키
 
-`strategy` 컬럼. `ManualTradeController` 가 수동 주문에 `"manual"` 을 하드코딩한다.
-값이 비어 있으면 출처를 알 수 없으므로 합산하는 쪽(보수적)으로 둔다.
+`strategy` 컬럼. 과거 수동 매수 행은 `"manual"` 이다. **수동 매도**는 2026-09-16 부터 포지션의 진입 전략
+(`UserTradingManager.resolveEntryStrategy` — 엔진 메모리 상태 우선, 없으면 durable `trading_states` 행)으로 귀속하고,
+모르면 `"manual"` 이다(#129). 사유는 별도로 `reason=MANUAL`. 값이 비어 있으면 출처를 알 수 없으므로 합산하는 쪽(보수적)으로 둔다.
+전량 청산이 확인되면 durable 행의 진입 메타를 비워 다음 포지션이 옛 전략에 귀속되지 않게 한다. 적립 포지션의 수동 매도는
+`accumulate` 로 귀속돼 리더보드 집계(`strategy <> 'accumulate'`)에서 빠진다 — 엔진 청산과 같은 규칙.
 
 ## 보유량 산출 규칙
 
@@ -66,8 +72,8 @@ sources:
 
 이 문서는 한때 그 어긋남을 **과소추정 한 방향**으로만 서술했으나, 코드상 근거가 없다(2026-08-26 정정).
 
-`executeBuy` 는 `volume = amount / currentPrice` 를 적는데(`TradeExecutionService.kt:61-62`),
-`currentPrice` 는 **주문 접수 이후** 읽는 틱이다. 실제 취득 수량은 `(amount − 수수료) / 체결가` 이므로:
+과거 `executeBuy`(2026-09-16 제거)는 `volume = amount / currentPrice` 를 적었는데,
+`currentPrice` 는 **주문 접수 이후** 읽은 틱이었다. 실제 취득 수량은 `(amount − 수수료) / 체결가` 이므로:
 
 ```
 기록 > 실제  ⟺  체결가 / 조회시점가격  >  1 − 수수료율(≈0.0005)
@@ -110,7 +116,8 @@ sources:
 | 엔진 매수·매도, 응답 terminal | Σfunds |
 | 엔진 매수, `wait`+부분체결로 확정(폴링 소진) | NULL — 진행 중 합은 최종값이 아니고 `completeBuy` 뒤에 갱신할 길이 없다 |
 | 엔진 잔고복원(매수·매도) | NULL — 주문 응답 없음 |
-| 수동 매수·매도 | NULL — 요청액·tick×요청수량은 실측이 아니다. 출처 마커 없는 컬럼에 섞으면 수수료에서 겪은 "구분 불가"가 재발한다 |
+| 수동 매도, 응답 terminal | Σfunds (#105) |
+| 과거 수동 매수 | NULL — 요청액은 실측이 아니다 |
 | V26 이전 행 | NULL — 소급 불가 |
 
 **소비처 규칙** — 스냅샷을 "이번 주문 금액"으로 읽던 3곳이 이것을 우선 읽는다:
@@ -134,7 +141,7 @@ sources:
 | 출처 | 경로 | 저장값 |
 |---|---|---|
 | 실측 | 엔진 매수·매도 정상 — `getOrder` 응답의 `paid_fee` (매도는 2026-09-14, #148) | 그 값 |
-| 추정 | 수동 매수·매도, 그리고 `paid_fee` 가 없는 엔진 매도(잔고복원 포함) — `totalAmount` 가 그 체결의 대금이다 | `대금 × 요율 / 2` |
+| 추정 | 과거 수동 매수, 그리고 `paid_fee` 가 없는 매도(엔진 잔고복원·수동 포함) — `totalAmount` 가 그 체결의 대금이다 | `대금 × 요율 / 2` |
 | 미기록 | 엔진 **매수** 복구(`recoverFromBalance`) · 매수의 `paid_fee` 부재·파싱 실패 | `0` |
 
 **`0 = 미기록`** 은 V21 이 세운 규약이다("fee 는 소급하지 않는다. 이전 행은 0(미기록)으로 남는다").
@@ -163,6 +170,6 @@ sources:
 `KRW-BTC` 의 매수 7건·매도 6건을 `78일 보유중` 한 줄로 뭉쳤고 손익도 `−9,276원` 으로 나왔다.
 합성 테스트 12종은 그 전제를 그대로 반영했으므로 전부 통과했다.
 
-매도 쪽은 #105 로 실측이 됐고, 남은 추정은 수동 매수뿐이다.
+매도 쪽은 #105 로 실측이 됐고, 수동 매수는 #129 로 제거됐다 — 추정 행은 과거분만 남는다.
 
 관련: [[persistence-schema]] · [[trading-engine-loop]]

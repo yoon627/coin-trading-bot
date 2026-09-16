@@ -63,7 +63,6 @@ const TideAPI = {
   backtest: (req) => TideAPI._fetch('/api/strategies/backtest', { method: 'POST', body: JSON.stringify(req) }),
 
   // Manual trade
-  buy: (market, amount) => TideAPI._fetch('/api/trade/buy', { method: 'POST', body: JSON.stringify({ market, amount }) }),
   sell: (market, opts) => TideAPI._fetch('/api/trade/sell', { method: 'POST', body: JSON.stringify({ market, ...opts }) }),
 
   // Settings
