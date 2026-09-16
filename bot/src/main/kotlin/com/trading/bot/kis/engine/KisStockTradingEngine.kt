@@ -24,9 +24,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 
 /**
@@ -72,8 +75,16 @@ class KisStockTradingEngine(
         log.info("KIS engine started user={} symbols={} strategy={} live={}", userId, symbols, activeStrategy.name, liveEnabled)
     }
 
-    fun stop() {
-        loopJob?.cancel()
+    private val stopMutex = Mutex()
+
+    /**
+     * 취소 후 완료까지 대기(join). 키 교체(reload)는 정지 직후 새 계좌의 엔진을 띄우므로, cancel 만 하고 반환하면
+     * 구 루프의 in-flight 주문과 새 엔진이 겹쳐 두 계좌에 동시 주문된다 — WAL 중복 가드는 accountNo 별이라 막지 못한다.
+     * Upbit `TradingEngine.stop()` 과 같은 계약. scope 는 재시작을 위해 유지한다.
+     */
+    suspend fun stop() = stopMutex.withLock {
+        val job = loopJob ?: return@withLock
+        job.cancelAndJoin()
         loopJob = null
     }
 
@@ -90,20 +101,29 @@ class KisStockTradingEngine(
 
     private var lastTradingDay: LocalDate? = null
 
+    private suspend fun fetchHoldingsOrNull(): List<KisHolding>? = try {
+        client.getHoldings()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
     private suspend fun runLoop() {
         while (scope.isActive) {
             try {
                 if (marketCalendar.isTradingNow()) {
                     resetDailyIfNeeded()
                     // live: 잔고조회 실패면 빈 holdings 로 sync 하지 말고 패스 skip(손절 누락 방지).
-                    val holdings: List<KisHolding>? =
-                        if (liveEnabled) runCatching { client.getHoldings() }.getOrNull() else emptyList()
+                    val holdings: List<KisHolding>? = if (liveEnabled) fetchHoldingsOrNull() else emptyList()
                     if (holdings == null) {
                         log.warn("KIS engine user={}: holdings fetch failed — skip pass", userId)
                     } else {
                         for (symbol in activeSymbols) processSymbol(symbol, holdings)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e // 정지(stop)의 취소를 루프 오류로 기록하면 키 교체마다 ERROR 알림이 난다.
             } catch (e: Exception) {
                 log.error("KIS engine loop error user={}: {}", userId, e.message, e)
             }

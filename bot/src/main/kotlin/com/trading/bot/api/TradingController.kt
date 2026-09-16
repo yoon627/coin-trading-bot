@@ -4,7 +4,7 @@ import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.reloadFailureMessage
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.kis.client.KisClientFactory
+import com.trading.bot.kis.engine.StockUserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingle
@@ -24,7 +24,7 @@ class TradingController(
     private val userRepository: UserRepository,
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
-    private val kisClientFactory: KisClientFactory,
+    private val stockUserTradingManager: StockUserTradingManager,
 ) {
 
     @PostMapping("/bot/start")
@@ -122,8 +122,13 @@ class TradingController(
                 kisPaper = req.paper,
             ),
         ).awaitSingle()
-        // 키 변경 시 캐시된 KisClient(옛 키) 무효화 — 다음 호출에서 재생성.
-        kisClientFactory.invalidate(userId)
+        // 실행 중 엔진은 자체 client 참조를 쥐고 있어 캐시 무효화만으론 옛 계좌로 계속 주문한다(#91) —
+        // 매니저가 캐시 무효화 + 엔진 교체까지 한다. 실패는 Upbit 키와 같은 503 계약.
+        try {
+            stockUserTradingManager.reloadUserRuntime(userId)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
         return mapOf("status" to "saved")
     }
 

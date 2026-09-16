@@ -1,5 +1,6 @@
 package com.trading.bot.kis.engine
 
+import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.kis.config.KisProperties
 import com.trading.bot.kis.marketdata.KisMarketCalendar
@@ -19,11 +20,13 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
@@ -65,7 +68,7 @@ class StockUserTradingManager(
                     try {
                         val user = userRepository.findById(state.userId).awaitSingleOrNull() ?: continue
                         if (!hasKisKeys(user)) continue
-                        val symbols = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                        val symbols = parseTickers(state.tickers)
                         val engine = engines.computeIfAbsent(state.userId) { createEngine(user) }
                         engine.setStrategy(state.strategy)
                         engine.restorePositionState(symbols)
@@ -141,20 +144,71 @@ class StockUserTradingManager(
         true
     }
 
-    /** KIS 키 변경 시 — 캐시 client 무효화 + 엔진 재생성. */
+    /**
+     * KIS 키 변경 시 — 캐시 client 무효화 + 엔진을 새 키로 교체(#91). Upbit `UserTradingManager.reloadUserRuntime`(#51)과
+     * 같은 계약: 옛 엔진을 **완전히 멈춘 뒤**(join — 구 루프의 in-flight 주문과 새 엔진이 두 계좌에 겹치지 않게) durable
+     * 포지션을 복원한 새 엔진을 기동하고, 그 뒤에야 등록한다. 교체가 실패하면 옛 엔진을 되살려
+     * [RuntimeReloadFailedException]`(engineRestored=true)`, 되살리기도 실패하면 정지 엔진을 맵에서 지우고
+     * `engineRestored=false` — 조용히 성공을 돌려주면 사용자는 이전 계좌로 계속 주문되는 것을 모른다.
+     *
+     * 새 엔진은 `start` 성공 뒤에 등록한다: `restorePositionState` 가 새 엔진의 메서드라 등록 후 실패하면 Upbit 식
+     * 조건부 `remove(userId, existing)` 가 무효가 된다.
+     */
     suspend fun reloadUserRuntime(userId: Long) = lockFor(userId).withLock {
         kisClientFactory.invalidate(userId)
         val existing = engines[userId] ?: return@withLock
         val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock
         val wasRunning = existing.isRunning()
-        val symbols = existing.getActiveSymbols()
         val strategy = existing.getActiveStrategyName()
-        existing.stop()
-        val replacement = createEngine(user)
-        replacement.setStrategy(strategy)
-        engines[userId] = replacement
-        if (wasRunning) replacement.start(symbols)
+        val symbols = if (wasRunning) existing.getActiveSymbols().ifEmpty { savedSymbols(userId) } else emptyList()
+        // 호출자(HTTP 요청)가 join 중 취소되면 정지된 옛 키 엔진이 맵에 남아 다음 startBot 이 그대로 재기동한다.
+        withContext(NonCancellable) { existing.stop() }
+        // 옛 엔진도 종목 없이 되살리면 유령 running 이 된다 — 성공 경로와 같은 가드.
+        suspend fun restoreExisting() { if (wasRunning && symbols.isNotEmpty()) existing.start(symbols) }
+        try {
+            val replacement = createEngine(user)
+            replacement.setStrategy(strategy)
+            if (wasRunning) {
+                // stop() 이 join 하므로 옛 엔진의 마지막 tick 이 flush 한 durable 까지 잡힌다.
+                replacement.restorePositionState(symbols)
+                if (symbols.isEmpty()) {
+                    log.warn("reload: user {} 활성 종목이 없어 새 엔진을 기동하지 않는다(유령 running 방지)", userId)
+                } else {
+                    replacement.start(symbols)
+                }
+            }
+            engines[userId] = replacement
+        } catch (e: CancellationException) {
+            // 취소여도 stop() 은 이미 일어났다 — 복구를 건너뛰면 정지된 엔진이 남아 손절이 무기한 멈춘다.
+            withContext(NonCancellable) {
+                runCatching { restoreExisting() }
+                    .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
+            }
+            throw e
+        } catch (e: Exception) {
+            log.error("reload: user {} 엔진 교체 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
+            try {
+                restoreExisting()
+            } catch (restoreFailure: CancellationException) {
+                throw restoreFailure
+            } catch (restoreFailure: Exception) {
+                log.error("reload: user {} 기존 엔진 복귀 실패 — 엔진이 정지 상태로 남는다", userId, restoreFailure)
+                // 정지 엔진을 남기면 다음 startBot 이 그 엔진(옛 키)을 재사용한다 — 지워 두면 새 설정으로 만든다.
+                engines.remove(userId, existing)
+                restoreFailure.addSuppressed(e)
+                throw RuntimeReloadFailedException(userId, restoreFailure, engineRestored = false)
+            }
+            // 되살린 엔진은 옛 키의 클라이언트를 그대로 쥐고 있다 — 조용히 반환하면 키 교체가 성공으로 보인다.
+            throw RuntimeReloadFailedException(userId, e, engineRestored = true)
+        }
     }
+
+    /** 실행 중인데 엔진이 종목을 모르면(활성 목록 비어 있음) `bot_state` 의 저장 목록으로 폴백한다. */
+    private suspend fun savedSymbols(userId: Long): List<String> =
+        botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
+            ?.tickers?.let(::parseTickers) ?: emptyList()
+
+    private fun parseTickers(raw: String): List<String> = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
     private suspend fun reconcileOrWarn(phase: String) {
         val result = try {
@@ -173,7 +227,7 @@ class StockUserTradingManager(
         }
     }
 
-    private fun createEngine(user: UserEntity): KisStockTradingEngine {
+    internal fun createEngine(user: UserEntity): KisStockTradingEngine {
         val client = kisClientFactory.forUser(user)
         val positionManager = StockPositionManager(
             userId = user.id!!,

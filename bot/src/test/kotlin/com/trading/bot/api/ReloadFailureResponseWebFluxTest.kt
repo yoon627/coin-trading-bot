@@ -2,7 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.kis.client.KisClientFactory
+import com.trading.bot.kis.engine.StockUserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
@@ -27,7 +27,7 @@ class ReloadFailureResponseWebFluxTest {
     private val userRepository: UserRepository = mockk()
     private val userSecretsService: UserSecretsService = mockk()
     private val requestValidators = RequestValidators()
-    private val kisClientFactory: KisClientFactory = mockk(relaxed = true)
+    private val stockUserTradingManager: StockUserTradingManager = mockk(relaxed = true)
 
     private fun user() = UserEntity(id = 1L, username = "u", password = "p")
 
@@ -42,7 +42,7 @@ class ReloadFailureResponseWebFluxTest {
 
     private fun keysClient(): WebTestClient = WebTestClient
         .bindToController(
-            TradingController(userTradingManager, userRepository, requestValidators, userSecretsService, kisClientFactory),
+            TradingController(userTradingManager, userRepository, requestValidators, userSecretsService, stockUserTradingManager),
         )
         .webFilter<WebTestClient.ControllerSpec>(authFilter())
         .build()
@@ -63,6 +63,26 @@ class ReloadFailureResponseWebFluxTest {
         // 이 reason 이 응답 body 의 message 로 노출되는 것은 SafeErrorAttributesTest
         // (`ResponseStatusException reason is exposed as message`)가 보장한다.
         // 여기서는 예외가 WebFlux 파이프라인을 거쳐 503 이 되는지만 확인한다.
+    }
+
+    @Test
+    fun `KIS 키 저장 후 엔진 교체가 실패해도 같은 503 계약이다`() {
+        every { userRepository.findById(1L) } returns Mono.just(user())
+        every { userRepository.save(any()) } returns Mono.just(user())
+        every { userSecretsService.encryptKisKeys(any(), any()) } returns ("enc-a" to "enc-s")
+        coEvery { stockUserTradingManager.reloadUserRuntime(1L) } throws
+            RuntimeReloadFailedException(1L, RuntimeException("kis down"), engineRestored = false)
+
+        keysClient().post().uri("/api/user/kis-keys")
+            .header("Content-Type", "application/json")
+            .bodyValue(
+                mapOf(
+                    "appKey" to "PSAPPKEY1234567890ABCDEF", "appSecret" to "SECRET1234567890ABCDEFGHIJKLMNOPQRSTUVWX",
+                    "cano" to "12345678", "acntPrdtCd" to "01", "paper" to true,
+                ),
+            )
+            .exchange()
+            .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
     }
 
     @Test

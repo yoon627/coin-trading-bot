@@ -1,15 +1,18 @@
 package com.trading.bot.api
 
 import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.kis.client.KisClientFactory
+import com.trading.bot.engine.RELOAD_FAILED_ENGINE_STOPPED_MESSAGE
+import com.trading.bot.engine.RELOAD_FAILED_MESSAGE
+import com.trading.bot.engine.RuntimeReloadFailedException
+import com.trading.bot.kis.engine.StockUserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
-import io.mockk.verify
 import kotlinx.coroutines.reactor.mono
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -32,8 +35,8 @@ class TradingControllerTest {
     private val userRepo = mockk<UserRepository>()
     private val validators = RequestValidators()
     private val secrets = mockk<UserSecretsService>()
-    private val kisClientFactory = mockk<KisClientFactory>(relaxed = true)
-    private val controller = TradingController(manager, userRepo, validators, secrets, kisClientFactory)
+    private val stockManager = mockk<StockUserTradingManager>(relaxed = true)
+    private val controller = TradingController(manager, userRepo, validators, secrets, stockManager)
 
     private fun <T : Any> authed(block: suspend () -> T): T =
         mono { block() }.contextWrite(authContext).block()!!
@@ -90,7 +93,7 @@ class TradingControllerTest {
     }
 
     @Test
-    fun `setKisKeys encrypts, saves and invalidates client cache`() {
+    fun `setKisKeys encrypts, saves and reloads the running stock engine`() {
         every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
         every { secrets.encryptKisKeys(any(), any()) } returns ("enc:ak" to "enc:sk")
         val saved = slot<UserEntity>()
@@ -112,7 +115,40 @@ class TradingControllerTest {
         assertEquals("enc:sk", saved.captured.kisAppSecret)
         assertEquals("12345678", saved.captured.kisCano)
         assertTrue(saved.captured.kisPaper)
-        verify { kisClientFactory.invalidate(userId) }
+        // 캐시 무효화·엔진 교체는 매니저 몫 — 호출하지 않으면 실행 중 봇이 옛 계좌로 계속 주문한다(#91).
+        coVerify(exactly = 1) { stockManager.reloadUserRuntime(userId) }
+    }
+
+    @Test
+    fun `setKisKeys reports 503 with the restored-engine message when reload fails but the old engine came back`() {
+        every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
+        every { secrets.encryptKisKeys(any(), any()) } returns ("enc:ak" to "enc:sk")
+        every { userRepo.save(any()) } answers { Mono.just(firstArg()) }
+        coEvery { stockManager.reloadUserRuntime(userId) } throws
+            RuntimeReloadFailedException(userId, IllegalStateException("db down"), engineRestored = true)
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.setKisKeys(validKisKeys()) }
+        }
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.statusCode)
+        assertEquals(RELOAD_FAILED_MESSAGE, ex.reason)
+    }
+
+    @Test
+    fun `setKisKeys reports 503 with the engine-stopped message when the old engine could not be restored`() {
+        every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
+        every { secrets.encryptKisKeys(any(), any()) } returns ("enc:ak" to "enc:sk")
+        every { userRepo.save(any()) } answers { Mono.just(firstArg()) }
+        coEvery { stockManager.reloadUserRuntime(userId) } throws
+            RuntimeReloadFailedException(userId, IllegalStateException("cannot restart"), engineRestored = false)
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.setKisKeys(validKisKeys()) }
+        }
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.statusCode)
+        assertEquals(RELOAD_FAILED_ENGINE_STOPPED_MESSAGE, ex.reason)
     }
 
     @Test
@@ -132,4 +168,10 @@ class TradingControllerTest {
         }
         assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
     }
+
+    private fun validKisKeys() = KisKeysRequest(
+        appKey = "PSAPPKEY1234567890ABCDEF",
+        appSecret = "SECRET1234567890ABCDEFGHIJKLMNOPQRSTUVWX",
+        cano = "12345678", acntPrdtCd = "01", paper = true,
+    )
 }

@@ -14,11 +14,22 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 
 class KisStockTradingEngineTest {
     private lateinit var pm: StockPositionManager
@@ -136,5 +147,48 @@ class KisStockTradingEngineTest {
         e.processSymbol("005930", listOf(holding))
 
         coVerify(exactly = 1) { pm.submitSell(any(), SellReason.STOP_LOSS, true) }
+    }
+
+    // --- stop() 은 drain 을 보장한다 (#91) ---
+    // 키 교체는 옛 엔진을 멈추고 새 엔진을 곧바로 띄운다. cancel 만 하고 반환하면 구 루프의 in-flight 주문과 새 엔진이
+    // 겹쳐 두 계좌에 동시 주문된다(WAL 중복 가드는 accountNo 별). Upbit TradingEngine.stop() 과 같은 cancelAndJoin.
+
+    @Test
+    @Timeout(10) // 막으려는 실패 모드가 hang 이라 타임아웃 없이는 실패 대신 CI 가 멈춘다.
+    fun `stop waits for the in-flight tick to drain and is not logged as a loop failure`() = runBlocking {
+        val calendar = mockk<KisMarketCalendar>()
+        every { calendar.isTradingNow() } returns true
+        val entered = CompletableDeferred<Unit>()
+        val drained = AtomicBoolean(false)
+        coEvery { client.getHoldings() } coAnswers {
+            entered.complete(Unit)
+            withContext(NonCancellable) { delay(150) }
+            drained.set(true)
+            currentCoroutineContext().ensureActive() // stop() 의 취소가 잔고 조회에서 CancellationException 으로 드러난다
+            emptyList()
+        }
+        val logger = org.slf4j.LoggerFactory.getLogger(KisStockTradingEngine::class.java) as ch.qos.logback.classic.Logger
+        val appender = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        val live = KisStockTradingEngine(
+            userId = 1L, positionManager = pm, client = client,
+            strategies = listOf(strategy), tradingProperties = TradingProperties(),
+            marketDataStore = store, marketCalendar = calendar, liveEnabled = true,
+        )
+
+        try {
+            live.start(listOf("005930"))
+            entered.await()
+            live.stop()
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+
+        assertTrue(drained.get(), "stop() 은 진행 중 tick(잔고 조회·주문 후처리)이 끝난 뒤에 반환해야 한다")
+        assertFalse(live.isRunning())
+        // 정지의 취소를 loop error(ERROR → Discord 알림)나 잔고 조회 장애(WARN)로 기록하면 키 교체마다 오알림이 난다.
+        val noise = appender.list.filter { it.level.isGreaterOrEqual(ch.qos.logback.classic.Level.WARN) }.map { it.formattedMessage }
+        assertTrue(noise.isEmpty(), "stop() 취소가 오류로 기록됐다: $noise")
     }
 }

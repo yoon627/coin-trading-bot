@@ -2,9 +2,9 @@
 title: KIS 주식 자동매매 흐름 — 시장데이터·신호·포지션 사이클
 category: concept
 created: 2026-08-02
-updated: 2026-09-15
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-15 — live 진입 게이트는 `KisStockTradingEngineTest` 4건(#67 절)으로 확인 · 2026-08-02 — StockBotController.kt, StockUserTradingManager.kt, KisStockTradingEngine.kt, StockPositionManager.kt, KisMarketDataService.kt, application.yml 실측
+verified: 2026-09-16 — 키 변경 시 엔진 교체·실패 복귀 계약은 `StockUserTradingManagerTest` 9건·`TradingControllerTest` 503 2건, `stop()` drain 은 `KisStockTradingEngineTest`(#91)로 확인 · 2026-09-15 — live 진입 게이트는 `KisStockTradingEngineTest` 4건(#67 절)으로 확인 · 2026-08-02 — StockBotController.kt, StockUserTradingManager.kt, KisStockTradingEngine.kt, StockPositionManager.kt, KisMarketDataService.kt, application.yml 실측
 sources:
   - bot/src/main/kotlin/com/trading/bot/api/StockBotController.kt
   - bot/src/main/kotlin/com/trading/bot/kis/engine/StockUserTradingManager.kt
@@ -38,6 +38,8 @@ StockBotController
 ```
 
 사용자별 엔진은 `KisClientFactory`가 만든 KIS 클라이언트와 `StockPositionManager`를 소유한다. 서버 재시작 시 `TRADING_AUTO_START=true`일 때만 `bot_state(exchange=KIS)`의 실행 상태를 복원한다. 기본값은 false이므로, 상태가 DB에 남아 있어도 자동 재기동은 기본으로 일어나지 않는다.
+
+**키 변경(`POST /api/user/kis-keys`)은 실행 중 엔진을 교체한다**(2026-09-16, #91). 엔진은 자체 클라이언트 참조를 쥐고 있어 캐시 무효화만으로는 옛 계좌로 계속 주문하므로, `StockUserTradingManager.reloadUserRuntime` 이 옛 엔진을 **완전히 멈춘 뒤**(`stop()` 은 `cancelAndJoin` — 구 루프의 in-flight 주문과 새 엔진이 두 계좌에 겹치지 않게) 새 키의 엔진을 만들고 durable 포지션 메타를 복원해 기동한 다음에야 등록한다. 교체가 실패하면 옛 엔진을 되살리고 503(저장은 됐지만 이전 설정으로 거래 중), 되살리기도 실패하면 엔진을 지우고 503(봇 정지 상태) — Upbit 키 변경(#51)과 같은 계약. 옛 계좌에 남은 활성 WAL 주문은 새 키로 조회되지 않아 `NEEDS_REVIEW` 로 남는다(알려진 한계, [[kis-order-lifecycle]]). dry-run 의 시뮬 보유 포지션은 durable 이 아니라 교체·재시작에 사라진다.
 
 ## 한 번의 엔진 패스
 
