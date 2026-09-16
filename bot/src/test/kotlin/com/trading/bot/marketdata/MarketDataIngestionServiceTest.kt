@@ -12,6 +12,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import io.mockk.verifyOrder
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -94,8 +95,8 @@ class MarketDataIngestionServiceTest {
 
         service.seedDailyCandles(listOf("BTC/KRW"))
 
-        verify(exactly = 1) { persistence.primeAggregate(todayCandle) }
-        verify(exactly = 0) { persistence.primeAggregate(yesterday) }
+        verify(exactly = 1) { persistence.primeAggregate(todayCandle, any()) }
+        verify(exactly = 0) { persistence.primeAggregate(yesterday, any()) }
     }
 
     @Test
@@ -106,7 +107,21 @@ class MarketDataIngestionServiceTest {
         service.seedDailyCandles(listOf("BTC/KRW"))
 
         verify(exactly = 1) { store.addCandle(yesterday) }
-        verify(exactly = 0) { persistence.primeAggregate(any()) }
+        verify(exactly = 0) { persistence.primeAggregate(any(), any()) }
+    }
+
+    // 첫 라운드 꼬리(count>1)가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 store 의 seed 를 덮는다 —
+    // 바닥은 prime(오늘 행이 있을 때만) 이 아니라 seed 시점에 항상, fetch 가 실패해도 건다.
+    @Test
+    fun `seedDailyCandles raises the aggregation floor even without today's row and even when the fetch fails`() = runBlocking {
+        val yesterday = candle.copy(openTime = Instant.now().truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(yesterday)
+        coEvery { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) } throws RuntimeException("rate limit")
+
+        service.seedDailyCandles(listOf("BTC/KRW", "ETH/KRW"))
+
+        verify(exactly = 1) { persistence.startAggregationFrom("BTC/KRW", any()) }
+        verify(exactly = 1) { persistence.startAggregationFrom("ETH/KRW", any()) }
     }
 
     @Test
@@ -170,6 +185,34 @@ class MarketDataIngestionServiceTest {
 
         // 재시도가 성공해 store 에 반영된다.
         verify { store.addCandle(candle) }
+    }
+
+    // Upbit 은 최신순으로 돌려주지만 집계기는 "더 새 분봉이 오면 이전 분봉을 확정" 하므로 오름차순으로 넣어야 한다 —
+    // 내림차순이면 부분 봉이 확정되고 완결본은 오래된 봉으로 무시된다.
+    @Test
+    fun `collectCandlesRound ingests polled M1 candles oldest first and asks for the fetch count on both paths`() = runTest {
+        val t = Instant.parse("2024-01-01T00:13:00Z")
+        val newest = candle.copy(openTime = t, closeTime = t.plusSeconds(60))
+        val middle = candle.copy(openTime = t.minusSeconds(60), closeTime = t)
+        val oldest = candle.copy(openTime = t.minusSeconds(120), closeTime = t.minusSeconds(60))
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.M1, MarketDataIngestionService.M1_FETCH_COUNT) }
+            .throws(RuntimeException("429 Too Many Requests"))
+            .andThen(listOf(newest, middle, oldest))
+
+        service.collectCandlesRound(listOf("BTC/KRW"))
+
+        verifyOrder {
+            store.addCandle(oldest)
+            store.addCandle(middle)
+            store.addCandle(newest)
+        }
+        coVerify(exactly = 2) { feed.getCandles("BTC/KRW", CandleInterval.M1, MarketDataIngestionService.M1_FETCH_COUNT) }
+    }
+
+    // 상수 단정 — 1 로 되돌리면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(상위봉 volume ≈ 절반). 동작 테스트가 아니라 회귀 표지.
+    @Test
+    fun `M1 fetch count exceeds one so completed minutes arrive in the tail`() {
+        assertTrue(MarketDataIngestionService.M1_FETCH_COUNT > 1)
     }
 
     // 429 가 아닌 오류는 재시도하지 않는다 — 원인이 사라지지 않으므로 낭비다.

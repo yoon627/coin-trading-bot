@@ -3,8 +3,10 @@ package com.trading.bot.stream
 import com.trading.bot.persistence.MarketCandleRepository
 import com.trading.bot.persistence.MarketTickerRepository
 import com.trading.bot.persistence.entity.MarketTickerEntity
+import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
+import java.time.Instant
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.util.concurrent.ConcurrentHashMap
@@ -70,8 +72,13 @@ class MarketDataPersistenceService(
         candleAggregator.onMinuteCandle(candle)
     }
 
-    /** 부팅 seed 의 오늘 D1 을 집계기의 진행 중 봉으로 등록한다 — [CandleAggregator.prime]. */
-    fun primeAggregate(candle: NormalizedCandle) {
-        candleAggregator.prime(candle)
+    /** 부팅 seed 시점 이전 period 의 분봉을 집계에서 제외한다 — [CandleAggregator.startFrom]. */
+    fun startAggregationFrom(market: String, now: Instant) {
+        candleAggregator.startFrom(Exchange.UPBIT, market, now)
+    }
+
+    /** 부팅 seed 의 오늘 D1 을 집계기의 확정 봉으로 등록한다 — [CandleAggregator.prime]. [fetchedAt] 은 seed 응답 시각(그 분까지가 seed 에 들어 있다). */
+    fun primeAggregate(candle: NormalizedCandle, fetchedAt: Instant) {
+        candleAggregator.prime(candle, fetchedAt)
     }
 }
