@@ -167,3 +167,9 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 - `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각 필드 추가(동작 불변) → 그 파일을 sources 로 가진 query 페이지들의 `verified` 갱신. [[exit-resolution-verdict-2026-09]]·[[trailing-arm-finding-2026-09]] 한계 절에 포인터.
 - 근거: `RUN_SHARED_BALANCE=true` 리포트, `SharedBalanceSimTest` 10건, 전체 `:bot:test` 통과. 진행 상태는 plan 소유.
 
+## [2026-09-16] ingest | trailing-resolution-2026-09 · entry-set-decomposition-2026-09 — 240분봉 계기 판정의 해상도 재검토 (#189, #190)
+
+- [[trailing-resolution-2026-09]] 신설: 트레일링 1.5/arm0 승격 근거를 240→15→5분봉 사다리로 재판정(규칙은 결과 전 커밋, 240분 배관 +110.37/758 정확 재현). 주 셀 격차/거래 +0.124 → +0.004 → −0.027, 5분 미통과·비관 브래킷 −173 → 사전고정 해석 (c): 승격 근거 미지지, 되돌릴 근거 아님.
+- [[entry-set-decomposition-2026-09]] 신설: 5분봉 기준선 부호 반전(−455%p)의 분해 — 공통 진입 1,058건은 5분에서 +427 좋아지고(체결가 +819·청산 −392), 격차는 전부 5분 전용 진입 709건(−882)에서 온다. 240분 전용 0건(⊆ 실측).
+- [[trailing-arm-finding-2026-09]]·[[exit-resolution-ladder-2026-09]] 한계 절에 포인터. 근거: 두 드라이버 리포트, 항등식·배관 단정, 전체 `:bot:test`. 진행 상태는 plan 소유.
+
