@@ -4,7 +4,6 @@ import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.reloadFailureMessage
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingle
@@ -24,7 +23,6 @@ class TradingController(
     private val userRepository: UserRepository,
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
-    private val kisClientFactory: KisClientFactory,
 ) {
 
     @PostMapping("/bot/start")
@@ -103,30 +101,6 @@ class TradingController(
         return mapOf("status" to "saved")
     }
 
-    @PostMapping("/user/kis-keys")
-    suspend fun setKisKeys(@RequestBody req: KisKeysRequest): Map<String, String> {
-        val userId = currentUserId()
-        val user = userRepository.findById(userId).awaitSingleOrNull()
-            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found")
-        val appKey = requestValidators.normalizeKisAppKey(req.appKey)
-        val appSecret = requestValidators.normalizeKisAppSecret(req.appSecret)
-        val cano = requestValidators.normalizeKisCano(req.cano)
-        val acntPrdtCd = requestValidators.normalizeKisAcntPrdtCd(req.acntPrdtCd)
-        val (encAppKey, encAppSecret) = userSecretsService.encryptKisKeys(appKey, appSecret)
-        userRepository.save(
-            user.copy(
-                kisAppKey = encAppKey,
-                kisAppSecret = encAppSecret,
-                kisCano = cano,
-                kisAcntPrdtCd = acntPrdtCd,
-                kisPaper = req.paper,
-            ),
-        ).awaitSingle()
-        // 키 변경 시 캐시된 KisClient(옛 키) 무효화 — 다음 호출에서 재생성.
-        kisClientFactory.invalidate(userId)
-        return mapOf("status" to "saved")
-    }
-
     @GetMapping("/user/me")
     suspend fun getMe(): Map<String, Any?> {
         val userId = currentUserId()
@@ -136,11 +110,6 @@ class TradingController(
             "id" to user.id,
             "username" to user.username,
             "has_upbit_keys" to (!user.upbitAccessKey.isNullOrBlank()),
-            "has_kis_keys" to (
-                !user.kisAppKey.isNullOrBlank() && !user.kisAppSecret.isNullOrBlank() &&
-                    !user.kisCano.isNullOrBlank() && !user.kisAcntPrdtCd.isNullOrBlank()
-                ),
-            "kis_paper" to user.kisPaper,
             "public_profile" to user.publicProfile,
             "public_strategy" to user.publicStrategy,
             "has_discord_webhook" to (!user.discordWebhookUrl.isNullOrBlank()),
@@ -152,10 +121,3 @@ data class StartBotRequest(val tickers: List<String>? = null, val strategy: Stri
 data class StrategyRequest(val strategy: String)
 data class ClearHaltRequest(val ticker: String)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)
-data class KisKeysRequest(
-    val appKey: String,
-    val appSecret: String,
-    val cano: String,
-    val acntPrdtCd: String,
-    val paper: Boolean = true,
-)
