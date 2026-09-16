@@ -2,9 +2,9 @@
 title: 적립 프로파일 — 메이저 코인 사다리 매매와 알트 유니버스 자동 선정
 category: concept
 created: 2026-09-02
-updated: 2026-09-02
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-02 — AccumulateLadder.kt·AccumulateBacktest.kt·TradingEngine.kt(runAccumulate/applyTickers)·PositionManager.kt(buyRung/sellVolume/sellTransition)·LadderStateMapper.kt·UniverseSelector.kt 전문, V23 을 실제 Postgres 에 적용(scripts/run-db-tests.sh 3건/skip 0), AccumulateBacktestTest 격자 출력
+verified: 2026-09-16 — 귀속 불명 락 시 `releaseHoldings` 가 사다리 장부를 남기는 것은 `PositionManagerExtendedTest`(#122)로, `unsynced` 중 `runAccumulate` skip 은 `TradingEngine.kt:528` 코드로 확인 · 2026-09-02 — AccumulateLadder.kt·AccumulateBacktest.kt·TradingEngine.kt(runAccumulate/applyTickers)·PositionManager.kt(buyRung/sellVolume/sellTransition)·LadderStateMapper.kt·UniverseSelector.kt 전문, V23 을 실제 Postgres 에 적용(scripts/run-db-tests.sh 3건/skip 0), AccumulateBacktestTest 격자 출력
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/AccumulateLadder.kt
   - common/src/main/kotlin/com/trading/common/config/AccumulateProperties.kt
@@ -38,6 +38,7 @@ sources:
 - **`lastActionPrice` 는 체결가가 아니라 트리거가**(판정 tick 의 현재가)다. 거래소는 누적 평단만 주고 `Order` DTO 에 VWAP 이 없다. 평단을 기준으로 쓰면 단이 쌓일수록 간격이 압축돼 백테(트리거가)와 다른 사다리가 된다.
 - **예산 상한은 rung 수가 아니라 실측 원가**(`avg × hold`)다. `buyRung` 은 주문 직전 거래소 계좌를 다시 읽어 판정한다 — 수동 매매로 장부가 낡아도 상한이 뚫리지 않는다. 이때 수량은 매도 가능분이 아니라 **계좌 총보유(locked 포함)** 다 — 수동 지정가·출금 대기로 잠긴 코인도 이 예산으로 산 것이고, 빼고 재면 손절 없는 프로파일의 유일한 상한이 뚫린다. rung 은 매도 분할 단위만 담당한다.
 - **`flatPeak`** 이 없으면 전량 매도 후 상승장에서 영영 재진입 못 한다(직전 매도가 대비 눌림이 안 온다). 0 일 때만 현재가로 초기화한다 — 재기동마다 깎이면 첫 진입이 계속 미뤄진다.
+- **귀속 불명 락(출금 대기·사용자 직접 주문)으로 free 가 0 이 되면** 단 매도의 phantom 경로가 보유만 내리고(`releaseHoldings`, 사다리 장부·진입 메타 유지) `unsynced` 를 켠다(#122, 2026-09-16). `unsynced` 동안 `runAccumulate` 는 통째로 쉬므로 락이 걸린 채로는 추가 단이 들어가지 않고, 락이 풀려 코인이 돌아오면 재동기화가 재편입한다 — 장부가 남아 있어 기준가(`lastActionPrice`)도 그대로다.
 - **장부와 잔고가 어긋나면 거래하지 않는다**(`hasBalance != hasRungs` → Hold). 정합은 아래 매퍼의 몫이다. 잔고 입력 자체는 **60초마다 `syncPosition(clearWhenEmpty = true)` 으로 다시 읽는다** — 수동 매매(`/api/trade`)는 `TradingState` 를 건드리지 않아 그 사이 장부가 낡는다. 확인된 무잔고는 포지션 해제로 반영한다. 동기화 시각은 성공했을 때만 기록한다 — 실패를 완료로 적으면 preamble 의 일반 재시도(clearWhenEmpty=false)가 차단만 풀고 옛 보유가 남는다(스윙 기본 경로는 감사 기록 없는 청산을 피하려 phantom 정리를 `sell()` 에 맡기지만, 적립은 "보유"로 남으면 다음 하락에 단을 사 수동 청산을 되돌린다).
 - **추가 단 체결 뒤 계좌를 못 읽으면** 체결분에 주문 전 보유량(`pending_buy_prior_volume`)을 더해 반영한다 — 체결분만으로 `replace` 하면 기존 단이 장부에서 사라진다.
 

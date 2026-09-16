@@ -2,6 +2,7 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.*
+import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -29,12 +30,14 @@ class PositionManagerExtendedTest {
         trailingStopPct = 2.0,
         maxInvestAmount = 100000.0,
     )
+    private lateinit var tradingStateService: TradingStateService
     private lateinit var manager: PositionManager
 
     @BeforeEach
     fun setup() {
         upbitClient = mockk(relaxed = true)
-        manager = PositionManager(upbitClient, properties, mockk(relaxed = true), 1L)
+        tradingStateService = mockk(relaxed = true)
+        manager = PositionManager(upbitClient, properties, tradingStateService, 1L)
     }
 
     // --- syncPosition tests ---
@@ -304,6 +307,7 @@ class PositionManagerExtendedTest {
 
         assertNull(result)
         assertFalse(state.position) // phantom 청산
+        assertFalse(state.unsynced, "잔고가 확인된 진짜 청산은 재동기화 대상이 아니다 — 매수 차단이 걸리면 안 된다")
         coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
@@ -336,20 +340,48 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `sell keeps position when free balance zero but locked remains`() = runTest {
-        // M4: balance=0 이지만 locked>0 (매도 주문 진행 중 잔고가 locked 로 이동) → phantom 아님.
-        // markSold 로 상태를 지우면 진행 중 매도가 체결돼도 봇이 추적 불가 → 보류(유지)해야 한다.
+    fun `sell clears the phantom and asks for a re-sync when the only balance is an unattributable lock`() = runTest {
+        // M4(#122): 여기 도달했다는 것은 pendingSellUuid 가 없다는 뜻이라 locked 는 우리 매도 주문의 것이 아니다(출금 대기·
+        // 사용자 직접 주문) — #56 의 heldVolume 상한 규칙과 같은 판정. 보류하면 syncPosition 과 서로 미뤄 유령 포지션이 영구히 남는다.
+        // unsynced 를 켜 두면 다음 tick 재동기화가 락이 풀려 돌아온 코인을 다시 편입하고, 여전히 불명이면 매수만 막는다.
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000")
+        )
+
+        val state = TradingState("KRW-BTC")
+        state.markBought(50000000.0, 0.001, strategy = "combined")
+        val buyDate = state.buyDate
+
+        val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.STOP_LOSS)
+
+        assertNull(result)
+        assertFalse(state.position, "귀속 불명 locked 만 남은 포지션은 phantom 이다")
+        assertTrue(state.unsynced, "락이 풀려 코인이 돌아오면 재편입해야 하므로 재동기화를 요청한다")
+        // 재편입은 position·평단·수량만 복원한다 — 메타를 지우면 돌아온 포지션이 보유상한·트레일링을 영영 잃는다.
+        assertEquals(buyDate, state.buyDate)
+        assertEquals("combined", state.entryStrategy)
+        assertEquals(50000000.0, state.peakPrice)
+        coVerify(exactly = 1) { tradingStateService.upsert(1L, state) } // 재시작 뒤에도 정리가 유지돼야 한다
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+    }
+
+    @Test
+    fun `sell is skipped before the phantom check while our own sell order is pending`() = runTest {
+        // 우리 주문이 떠 있는 동안의 locked 는 M4 가 아니라 이 가드가 다룬다 — reconcile 이 확정할 때까지 상태를 건드리지 않는다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000")
         )
 
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
+        state.pendingSellUuid = "sell-in-flight"
 
         val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.STOP_LOSS)
 
         assertNull(result)
-        assertTrue(state.position) // locked>0 이면 보류, 상태 유지
+        assertTrue(state.position)
+        assertFalse(state.unsynced)
+        coVerify(exactly = 0) { upbitClient.getAccounts() }
         coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
@@ -1358,7 +1390,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `reconcilePendingSell clears the position when only unattributable lock remains`() = runTest {
         // 전량 체결됐는데 타 사유로 잠긴 잔고가 남은 경우. 잔여 포지션으로 세면 free=0 이라 sell() 이
-        // 영영 주문하지 못하고 매 tick "Sell deferred" 만 반복하는 유령 포지션이 된다.
+        // 영영 주문하지 못하는 유령 포지션이 된다(#122 이전에는 매 tick "Sell deferred" 만 반복했다).
         coEvery { upbitClient.getOrder("s-done") } returns
             Order(uuid = "s-done", state = "done", executedVolume = "0.001")
         coEvery { upbitClient.getAccounts() } returns listOf(
