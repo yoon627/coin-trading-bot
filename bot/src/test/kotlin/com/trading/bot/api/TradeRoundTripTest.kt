@@ -430,7 +430,7 @@ class TradeRoundTripTest {
     // --- 엔진 매수 기록은 증분이 아니라 누적 스냅샷이다 ---
     // PositionManager.completeBuy 는 거래소 전체 잔고·평단을 그대로 적는다(#20 — syncPosition 복원분과
     // 이중계상되지 않게). 그래서 한 포지션의 엔진 BUY 행을 합산하면 수량이 부풀고 잔량이 0 이 되지 않는다.
-    // 반면 수동 매수(executeBuy)는 그 주문의 증분을 적으므로 합산이 맞다.
+    // 반면 과거 수동 매수 행(2026-09-16 제거 전 executeBuy)은 그 주문의 증분을 적었으므로 합산이 맞다.
 
     @Test
     fun `수동 매수 위에 엔진이 매수하면 엔진 기록이 포지션 전체를 담는다`() {
@@ -694,7 +694,7 @@ class TradeRoundTripTest {
 
     @Test
     fun `수량 0 인데 금액만 있는 수동 행은 평단을 오염시키지 않는다`() {
-        // `executeBuy` 는 시세 조회가 빈 응답이면 volume=0 · totalAmount=주문 전액으로 남긴다.
+        // 과거 `executeBuy`(2026-09-16 제거)는 시세 조회가 빈 응답이면 volume=0 · totalAmount=주문 전액으로 남겼다.
         // 금액만 더하면 entryPrice 가 부풀려져 이익 거래가 손실로 보인다.
         val rts = assembleRoundTrips(
             listOf(

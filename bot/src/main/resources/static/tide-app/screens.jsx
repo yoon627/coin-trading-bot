@@ -243,7 +243,7 @@ function BotPage({ user, setActive }) {
   );
 }
 
-// ── TRADE (manual buy/sell) ───────────────────────────────
+// ── TRADE (manual sell; buying is the bot's job) ──────────
 // recorded=false: 주문은 접수됐지만 기록/알림 후처리가 실패했거나(행 유무 불명) 체결을 확인하지 못해 행을 남기지
 // 않았다(fill=unconfirmed). 어느 쪽이든 "완료"로 보이면 사용자가 거래소와 대조할 기회를 잃는다.
 function orderToast(res, okMsg, okTone) {
@@ -259,22 +259,12 @@ function orderToast(res, okMsg, okTone) {
 
 function TradePage({ user, setActive }) {
   const [market, setMarket] = React.useState('KRW-BTC');
-  const [amount, setAmount] = React.useState('10000');
   const [volume, setVolume] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
   const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const prices = useAPI(() => TideAPI.pricesLatest().catch(() => null), [], 3000);
 
-  const buy = async () => {
-    setBusy(true);
-    try {
-      const res = await TideAPI.buy(market, parseFloat(amount));
-      setToast(orderToast(res, `${market} 매수 주문 완료`, 'up'));
-      portfolio.reload();
-    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
-    finally { setBusy(false); }
-  };
   const sell = async (sellAll) => {
     setBusy(true);
     try {
@@ -287,7 +277,7 @@ function TradePage({ user, setActive }) {
 
   return (
     <Shell active="trade" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
-           title="차트 매매" subtitle="수동 매수·매도">
+           title="차트 매매" subtitle="수동 매도 — 매수는 봇이 한다">
       {!user?.has_upbit_keys && <div style={{ marginBottom: 16 }}><ApiKeyWarning go={() => setActive('settings')}/></div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 16 }}>
@@ -315,13 +305,6 @@ function TradePage({ user, setActive }) {
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 6 }}>거래쌍</div>
             <input className="tide-input" value={market} onChange={e => setMarket(e.target.value.toUpperCase())}/>
-          </div>
-
-          <div style={{ marginBottom: 14, padding: 14, background: 'var(--ink-50)', borderRadius: 10 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--up)', marginBottom: 8 }}>매수</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-500)', marginBottom: 6 }}>주문 금액 (KRW)</div>
-            <input className="tide-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} style={{ marginBottom: 8 }}/>
-            <Button full size="md" disabled={busy || !user?.has_upbit_keys} onClick={buy} style={{ background: 'var(--up)' }}>매수</Button>
           </div>
 
           <div style={{ padding: 14, background: 'var(--ink-50)', borderRadius: 10 }}>

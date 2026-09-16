@@ -217,6 +217,42 @@ class UserTradingManager(
 
     fun getEngine(userId: Long): TradingEngine? = engines[userId]
 
+    /**
+     * 수동 매도가 손익을 귀속할 진입 전략(#129). 엔진이 그 티커를 들고 있으면 메모리 상태가 진실이고 durable 은 그 사본이라
+     * 메모리 값을 그대로 쓴다(null 이어도 — `markSold` 뒤 persist 가 실패해 durable 에 옛 전략이 남은 경우를 그쪽으로
+     * 폴백하면 오귀속이다). 들고 있지 않으면(엔진 정지·재기동 직후 미적재 티커) durable 행. 조회 실패는 삼킨다 —
+     * 귀속을 몰라도 매도 주문은 나가야 하고, 지금도 매도는 DB 없이 나간다.
+     */
+    suspend fun resolveEntryStrategy(userId: Long, ticker: String): String? {
+        engines[userId]?.let { if (it.tracks(ticker)) return it.entryStrategyOf(ticker) }
+        return try {
+            tradingStateService.loadState(userId, ticker)?.entryStrategy
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Entry strategy lookup failed for user {} {} — attributing to manual: {}", userId, ticker, e.message)
+            null
+        }
+    }
+
+    /**
+     * 수동 전량 청산 뒤 durable 행의 진입 메타를 비운다(#129). `entryStrategy` 를 지우는 경로는 `markSold` 와 신규 진입
+     * 주문뿐이라, 엔진이 꺼진 채 사람이 다 팔면 옛 전략이 남아 그 위에 거래소에서 직접 산 새 포지션의 수동 매도가
+     * 옛 전략에 귀속된다.
+     *
+     * 엔진이 그 티커를 들고 있으면 **아무것도 하지 않는다**: durable 행은 엔진 메모리의 사본이라 여기서 read-modify-write
+     * 하면 그 사이 엔진이 쓴 `pendingSell*`(크래시 복구 근거)을 되돌리는 lost update 가 된다. 그 경우 정리는 엔진 몫이다 —
+     * 다음 청산 평가에서 phantom 판정이 `markSold` 하고 persist 가 durable 을 덮는다(유니버스에서 빠진 티커는 지연될 수 있다).
+     * @return 실제로 비웠으면 true
+     */
+    suspend fun clearDurableEntryMeta(userId: Long, ticker: String): Boolean {
+        if (engines[userId]?.tracks(ticker) == true) return false
+        val row = tradingStateService.loadState(userId, ticker) ?: return false
+        row.clearEntryMeta()
+        tradingStateService.upsert(userId, row)
+        return true
+    }
+
     suspend fun startBot(userId: Long, tickers: List<String>?, strategyName: String?): Map<String, Any> = lockFor(userId).withLock {
         if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down") // 종료 중 신규 엔진 기동 차단(M5 일관)
         val user = userRepository.findById(userId).awaitSingleOrNull()
