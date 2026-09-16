@@ -52,7 +52,28 @@ internal object LiveSemanticsArm {
          */
         val entryBarUtc: String = "",
         val exitBarUtc: String = "",
+        /** [EntryFilter] 진단 — 돌파 봉 B 에서 체결 봉까지의 봉 수, 그 사이 `shouldBuy` 거부로 밀린 후보 봉 수. 기존 경로(NONE)는 0. */
+        val entryDelayBars: Int = 0,
+        val entrySignalDeferrals: Int = 0,
     )
+
+    /**
+     * 진입 조건 필터(#208). 기본 [NONE] 은 기존 코드 경로 그대로다(`high > target`, `max(target, open)` 체결 — 다른 측정의 핀이 그 위에 서 있다).
+     * 필터가 하나라도 켜지면 **시가 규칙**: 돌파선' = 돌파선 × (1 + [marginPct]/100), 돌파 봉 B = 그날 시가 > 돌파선' 인 첫 봉,
+     * 후보 = B 뒤 `ceil(confirmDelayMinutes / 봉길이)` 봉 이후에 시가 > 돌파선' 이고 봉 시작(00:00 UTC 기준 분) < [entryCutoffMinutes] 인 봉,
+     * 후보마다 기준과 같이 `shouldBuy(부분봉, 시가)` 를 재평가하고 체결은 **시가**. [abandonOnPullback] 이면 B 이후 진입 전에 시가 ≤ 돌파선' 봉이 나오면 그날 포기.
+     * 봉 시작에 알려진 값만 쓴다 — 봉 안 경로 가정이 없다. `combined` 는 시가 ≤ 돌파선 봉을 거부하므로 중립 필터(전부 기본값)의 진입 집합은 NONE 과 같다.
+     */
+    data class EntryFilter(
+        val confirmDelayMinutes: Int = 0,
+        val abandonOnPullback: Boolean = false,
+        val marginPct: Double = 0.0,
+        val entryCutoffMinutes: Int = 24 * 60,
+        /** false 면 기존 코드 경로([NONE] 전용). `EntryFilter()` 는 모든 축이 중립인 **시가 규칙** 필터라 NONE 과 다르다 — 그 둘의 진입 집합 등가가 배관 단정이다. */
+        val openRule: Boolean = true,
+    ) {
+        companion object { val NONE = EntryFilter(openRule = false) }
+    }
 
     /**
      * @param dailyChronological 시간순 일봉(워밍업·완결 봉 공급용). 앞 [warmup] 개는 신호에 쓰이고 거래는 그 뒤부터.
@@ -81,8 +102,15 @@ internal object LiveSemanticsArm {
         entryBarStopOnClose: Boolean = false,
         keepWinnersUntilDays: Int = 0,
         pessimisticTrailing: Boolean = false,
+        entryFilter: EntryFilter = EntryFilter.NONE,
     ): List<Trade> {
         require(warmup >= 1) { "warmup 은 1 이상 — 창은 부분봉 1개 + 완결 봉 warmup-1 개다" }
+        val useFilter = entryFilter.openRule
+        // 봉 길이(분) = 연속 봉 시각의 최소 간격 — 결측이 있어도 최소값은 격자 단위다. 지연 봉 수 = ceil(분/봉길이).
+        val barMinutes = if (!useFilter) 0 else intradayChronological.zipWithNext { a, b ->
+            java.time.Duration.between(java.time.LocalDateTime.parse(a.candleDateTimeUtc), java.time.LocalDateTime.parse(b.candleDateTimeUtc)).toMinutes().toInt()
+        }.filter { it > 0 }.minOrNull() ?: 1
+        val delayBars = if (!useFilter || entryFilter.confirmDelayMinutes <= 0) 0 else (entryFilter.confirmDelayMinutes + barMinutes - 1) / barMinutes
         val signalProps = props.copy(kValue = config.kValue)
         val feePct = config.feeRate * 2 * 100
         val holdLimit = ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
@@ -98,6 +126,8 @@ internal object LiveSemanticsArm {
         var entryBarUtc = ""
         var peak = 0.0
         var keptPast = false
+        var entryDelayBars = 0
+        var entryDeferrals = 0
 
         for (dayIndex in warmup until days.size) {
             val day = days[dayIndex]
@@ -108,6 +138,9 @@ internal object LiveSemanticsArm {
             // 창에 들어가는 완결 봉은 최근 warmup-1 개로 고정.
             val recentCompleted = completed.subList(completed.size - (warmup - 1), completed.size)
             var boughtToday = false
+            var breakoutIdx = -1
+            var abandoned = false
+            var deferrals = 0
 
             val dayOpen = bars.first().openingPrice
             var pHigh = dayOpen
@@ -131,7 +164,35 @@ internal object LiveSemanticsArm {
             // 돌파선 = 당일시가 + 전일 레인지 × k — 하루 안에서 상수라 봉마다 window 를 만들지 않는다(5분봉에서 20배 가까이 절약).
             val target = com.trading.common.strategy.Indicators.calculateTargetPrice(partialWindow(), config.kValue)
 
-            for (bar in bars) {
+            // 체결 공통부 — 두 진입 경로(기존·필터)가 같은 포지션 상태·진입 봉 게이트를 쓴다.
+            fun enter(bar: Candle, fill: Double, delayBarsUsed: Int, deferralsUsed: Int) {
+                position = true
+                boughtToday = true
+                entryPrice = fill
+                entryDayIndex = dayIndex
+                entryDate = day
+                entryBarUtc = bar.candleDateTimeUtc
+                entryDelayBars = delayBarsUsed
+                entryDeferrals = deferralsUsed
+                peak = fill
+                keptPast = false
+                // 진입 봉의 intrabar 게이트도 받는다 — 빼면 진입 당일만 손절·익절 보호가 없어 편향된다.
+                val armPeak = peak
+                peak = IntrabarExitModel.updatedPeak(peak, bar, false)
+                val entryBar = if (entryBarStopOnClose) bar.copy(lowPrice = bar.tradePrice) else bar
+                IntrabarExitModel.evaluate(entryBar, entryPrice, armPeak, false, config, chartExitSignal = false)?.let { d ->
+                    trades += Trade(
+                        market, entryDate, day, entryPrice, d.sellPrice,
+                        (d.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, d.reason,
+                        exitOnEntryBar = true, exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice,
+                        entryBarUtc = entryBarUtc, exitBarUtc = bar.candleDateTimeUtc,
+                        entryDelayBars = entryDelayBars, entrySignalDeferrals = entryDeferrals,
+                    )
+                    position = false
+                }
+            }
+
+            for ((barIdx, bar) in bars.withIndex()) {
                 if (position) {
                     val daysHeld = dayIndex - entryDayIndex
                     // 잠긴 이익 = 트레일링 손절선이 진입가 위 → 어떤 청산도 이익이다. 그런 포지션만 보유상한을 넘긴다.
@@ -154,6 +215,7 @@ internal object LiveSemanticsArm {
                             (decision.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, decision.reason,
                             exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice, keptPastLimit = keptPast,
                             entryBarUtc = entryBarUtc, exitBarUtc = bar.candleDateTimeUtc,
+                            entryDelayBars = entryDelayBars, entrySignalDeferrals = entryDeferrals,
                         )
                         position = false
                         keptPast = false
@@ -162,31 +224,23 @@ internal object LiveSemanticsArm {
 
                 // 라이브는 청산과 같은 tick 에서 곧바로 매수를 평가한다(09:00 리셋 직후 재매수가 그래서 가능하다).
                 if (!position && !boughtToday) {
-                    // 돌파를 이 봉 안에서 실제로 했는가. 라이브는 그 순간의 현재가에 사므로 하한이 target 이다(`combined` 는 시가 ≤ target 이면 거부해 시가 체결만 남는다).
-                    if (target > 0 && bar.highPrice > target) {
-                        val fill = max(target, bar.openingPrice)
-                        if (strategy.shouldBuy(partialWindow(), fill, signalProps)) {
-                            position = true
-                            boughtToday = true
-                            entryPrice = fill
-                            entryDayIndex = dayIndex
-                            entryDate = day
-                            entryBarUtc = bar.candleDateTimeUtc
-                            peak = fill
-                            keptPast = false
-                            // 진입 봉의 intrabar 게이트도 받는다 — 빼면 진입 당일만 손절·익절 보호가 없어 편향된다.
-                            val armPeak = peak
-                            peak = IntrabarExitModel.updatedPeak(peak, bar, false)
-                            val entryBar = if (entryBarStopOnClose) bar.copy(lowPrice = bar.tradePrice) else bar
-                            IntrabarExitModel.evaluate(entryBar, entryPrice, armPeak, false, config, chartExitSignal = false)?.let { d ->
-                                trades += Trade(
-                                    market, entryDate, day, entryPrice, d.sellPrice,
-                                    (d.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, d.reason,
-                                    exitOnEntryBar = true, exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice,
-                                    entryBarUtc = entryBarUtc, exitBarUtc = bar.candleDateTimeUtc,
-                                )
-                                position = false
+                    // 기존 경로: 돌파를 이 봉 안에서 실제로 했는가. 라이브는 그 순간의 현재가에 사므로 하한이 target 이다(`combined` 는 시가 ≤ target 이면 거부해 시가 체결만 남는다).
+                    // 필터 경로(시가 규칙, [EntryFilter] 참조): 돌파선' 위에서 여는 봉만 후보, 체결은 시가. 두 경로 모두 `partialWindow()` 는 가격 가드 뒤에서만 만든다(5분 rung 비용).
+                    if (!useFilter) {
+                        if (target > 0 && bar.highPrice > target) {
+                            val fill = max(target, bar.openingPrice)
+                            if (strategy.shouldBuy(partialWindow(), fill, signalProps)) enter(bar, fill, 0, 0)
+                        }
+                    } else if (target > 0 && !abandoned) {
+                        val line = target * (1 + entryFilter.marginPct / 100.0)
+                        if (bar.openingPrice > line) {
+                            if (breakoutIdx < 0) breakoutIdx = barIdx
+                            val minuteOfDay = bar.candleDateTimeUtc.substring(11, 13).toInt() * 60 + bar.candleDateTimeUtc.substring(14, 16).toInt()
+                            if (barIdx - breakoutIdx >= delayBars && minuteOfDay < entryFilter.entryCutoffMinutes) {
+                                if (strategy.shouldBuy(partialWindow(), bar.openingPrice, signalProps)) enter(bar, bar.openingPrice, barIdx - breakoutIdx, deferrals) else deferrals++
                             }
+                        } else if (breakoutIdx >= 0 && entryFilter.abandonOnPullback) {
+                            abandoned = true
                         }
                     }
                 }
@@ -204,6 +258,7 @@ internal object LiveSemanticsArm {
                 market, entryDate, last.candleDateTimeUtc.substring(0, 10), entryPrice, last.tradePrice,
                 (last.tradePrice - entryPrice) / entryPrice * 100.0 - feePct, "END", keptPastLimit = keptPast,
                 entryBarUtc = entryBarUtc, exitBarUtc = last.candleDateTimeUtc,
+                entryDelayBars = entryDelayBars, entrySignalDeferrals = entryDeferrals,
             )
         }
         return trades
