@@ -76,6 +76,11 @@ class MarketDataIngestionService(
         // 초당 약 6.7회로 유지한다. 마켓 13개면 한 사이클이 약 2초로, 수집 주기(60s)에 영향이 없다.
         internal const val CANDLE_REQUEST_SPACING_MS = 150L
 
+        // 한 라운드에 받는 M1 개수. 1 이면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(집계 volume ≈ 절반).
+        // 5 면 라운드가 연속 3회(≈4분) 실패해도 그 사이 분의 완결본이 꼬리에 들어온다. Upbit 은 무거래 분을 생략하므로
+        // 꼬리가 수 시간 전 분봉을 실을 수 있다 — 그 재유입은 count 가 아니라 CandleAggregator 의 period 바닥이 막는다.
+        internal const val M1_FETCH_COUNT = 5
+
         // spacing 을 둬도 다른 호출과 겹치거나 순간 제한이 좁아지면 429 가 날 수 있다. 그때 1분봉을
         // 그냥 버리지 않고 한 번만 되찾는다. 다음 사이클이 60초 뒤 다시 오므로 길게 물고 있지 않는다.
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
@@ -144,7 +149,7 @@ class MarketDataIngestionService(
 
     private suspend fun fetchM1WithRateLimitRetry(market: String) {
         try {
-            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, 1))
+            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, M1_FETCH_COUNT))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -152,12 +157,13 @@ class MarketDataIngestionService(
             if (!isRateLimited(e)) throw e
             log.debug("Rate limited on {}; retrying in {}ms", market, RATE_LIMIT_RETRY_DELAY_MS)
             delay(RATE_LIMIT_RETRY_DELAY_MS)
-            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, 1))
+            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, M1_FETCH_COUNT))
         }
     }
 
+    // Upbit 은 최신순 — 집계기는 "더 새 분봉이 오면 이전 분봉을 확정" 하므로 오래된 것부터 넣는다.
     private fun ingest(candles: List<NormalizedCandle>) {
-        for (candle in candles) ingestCandle(candle)
+        for (candle in candles.sortedBy { it.openTime }) ingestCandle(candle)
     }
 
     // WebClient 는 429 를 WebClientResponseException.TooManyRequests 로 던지지만, 래핑되어 올 수도 있어
@@ -227,8 +233,8 @@ class MarketDataIngestionService(
         }
     }
 
-    private fun primeTodayAggregate(market: String, today: NormalizedCandle): Boolean = try {
-        persistenceService.primeAggregate(today)
+    private fun primeTodayAggregate(market: String, today: NormalizedCandle, fetchedAt: Instant): Boolean = try {
+        persistenceService.primeAggregate(today, fetchedAt)
         true
     } catch (e: IllegalArgumentException) {
         // seed 는 이미 store 에 들어갔다 — 실패는 등록만이라 "seed 실패" 와 구분해 남긴다(D1 경계가 UTC 자정이 아니게 바뀐 경우).
@@ -245,13 +251,17 @@ class MarketDataIngestionService(
             // seed 는 부팅 시 마켓 수만큼 연속 호출돼 429 를 유발하던 두 경로 중 하나다
             // (그 직후 collectCandlesRound 가 또 도므로 겹친다). 같은 간격으로 벌린다.
             if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            // 첫 라운드 꼬리(M1_FETCH_COUNT)가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 seed 를 덮는다 —
+            // seed 성공·오늘 행 유무와 무관하게 지금 이전 period 는 집계하지 않는다.
+            persistenceService.startAggregationFrom(market, Instant.now())
             try {
                 val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
+                val fetchedAt = Instant.now()
                 candles.forEach { marketDataStore.addCandle(it) }
                 // 오늘(UTC) 봉만 집계기에 등록한다 — 이후 M1 이 이어서 집계할 period 라 등록이 없으면 첫 M1 이 seed 를 대체한다.
                 // 어제 이전 봉은 M1 이 다시 오지 않아 seed 그대로다. 오늘 행이 아직 없으면(경계 직후 무거래) 등록하지 않는다.
-                val today = Instant.now().truncatedTo(ChronoUnit.DAYS)
-                val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it) } ?: false
+                val today = fetchedAt.truncatedTo(ChronoUnit.DAYS)
+                val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it, fetchedAt) } ?: false
                 log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)
             } catch (e: CancellationException) {
                 throw e
