@@ -193,3 +193,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[reentry-premium-2026-09]] 신설: 5분봉 10창 재진입 300쌍 프리미엄 중앙값 +2.16% vs 대조군 +2.77%(돌파선 성분 1.86 vs 2.29, 오버슈트 0.20 vs 0.26, 10/10 창 부호 일치) — 리셋 고유의 가격 불이익 없음, #128 헤드라인은 돌파 진입 프리미엄. 단 왕복 비용(재진입 다리)은 남고 D1 반사실은 0 으로 그린다(≈0.8%p/TIME_EXIT). 기간정합 계기(2026-07~09) 10쌍 +1.68 vs 54건 +1.76. 라이브 12쌍 중앙값 +2.84% — #209 B 오염은 갭을 낮추는 방향이라 원인이 아니고 소표본으로 미해석. 지표 결과 전 커밋 `e0506ae`, 리뷰 반영(분위·경계·B 서명) 후속 커밋.
 - [[reset-churn-measurement]] 미측정 성분 1 에 포인터. #143 M1 fixture 기각. 진행 상태는 plan 소유.
+
+## [2026-09-17] update | marketdata-pipeline — M1 폴링 count=5 + 집계기 분 단위 멱등 (#27 C3 잔여)
+
+- [[marketdata-pipeline]] `candleBuffers` 절에 결손의 실제 크기(`count=1` 은 진행 중 분봉만 → 각 분의 완결본을 영영 못 받아 상위봉 volume 평균 절반·레인지 좁음, 부팅일 무관 상시)와 수정(`M1_FETCH_COUNT=5` 오름차순, `CandleAggregator` base/provisional/lastFolded, `prime(candle, fetchedAt)` 로 seed 겹침 1분 고정, seed 시점 `startFrom` 으로 모든 interval 에 period 바닥) 추가. 잔여: 4분 넘는 폴링 공백.
+- [[lesson-seed-vs-stream-overwrite]] 재발 감지 절에 상시판 포인터. 진행 상태는 plan 소유.

@@ -59,7 +59,7 @@ class CandleAggregatorTest {
             exchange = Exchange.UPBIT, market = MARKET, openPrice = 100.0, highPrice = 130.0, lowPrice = 80.0, closePrice = 105.0,
             volume = 50.0, quoteVolume = 500.0, interval = CandleInterval.D1, openTime = day, closeTime = day.plusSeconds(86_400),
         )
-        aggregator.prime(seeded)
+        aggregator.prime(seeded, now = inst("2024-01-01T13:00:20Z"))
 
         aggregator.onMinuteCandle(m1("2024-01-01T13:00:00Z", open = 106.0, high = 108.0, low = 104.0, close = 107.0, volume = 2.0, quoteVolume = 20.0))
         val first = capturedFor(CandleInterval.D1).last()
@@ -79,13 +79,122 @@ class CandleAggregatorTest {
         assertEquals(106.0, capturedFor(CandleInterval.H1).first().openPrice)
     }
 
+    // 폴링은 진행 중 분봉을 돌려주고, 다음 라운드(count>1)가 같은 분의 완결본을 다시 보낸다 — 두 번째는 합산이 아니라 대체여야 한다.
+    @Test
+    fun `re-sent M1 of the same minute replaces its contribution instead of adding`() {
+        aggregator.onMinuteCandle(m1("2024-01-01T00:00:00Z", open = 100.0, high = 105.0, low = 99.0, close = 104.0, volume = 1.0, quoteVolume = 10.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T00:00:00Z", open = 100.0, high = 110.0, low = 98.0, close = 108.0, volume = 3.0, quoteVolume = 30.0))
+
+        val d1 = capturedFor(CandleInterval.D1).last()
+        assertEquals(3.0, d1.volume, "같은 분의 재수신은 대체")
+        assertEquals(30.0, d1.quoteVolume)
+        assertEquals(110.0, d1.highPrice)
+        assertEquals(98.0, d1.lowPrice)
+        assertEquals(108.0, d1.closePrice)
+    }
+
+    // 한 라운드가 [완결 11, 완결 12, 진행 13] 을 오름차순으로 넘기면 건너뛴 12 가 복원되고,
+    // 이미 접힌 분(다음 라운드 꼬리의 재전송)은 무시된다.
+    @Test
+    fun `older completed minutes in a round are folded once and re-sent folded minutes are ignored`() {
+        aggregator.onMinuteCandle(m1("2024-01-01T00:11:00Z", open = 1.0, high = 2.0, low = 1.0, close = 1.5, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T00:12:00Z", open = 1.5, high = 9.0, low = 0.5, close = 2.0, volume = 2.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T00:13:00Z", open = 2.0, high = 3.0, low = 1.8, close = 2.5, volume = 4.0))
+        // 다음 라운드 꼬리 — 11·12 는 이미 접혔으므로 무시, 13 은 완결본으로 대체, 14 는 새 provisional.
+        aggregator.onMinuteCandle(m1("2024-01-01T00:11:00Z", open = 1.0, high = 2.0, low = 1.0, close = 1.5, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T00:12:00Z", open = 1.5, high = 9.0, low = 0.5, close = 2.0, volume = 2.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T00:13:00Z", open = 2.0, high = 3.5, low = 1.8, close = 2.6, volume = 5.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T00:14:00Z", open = 2.6, high = 2.7, low = 2.5, close = 2.6, volume = 1.0))
+
+        val d1 = capturedFor(CandleInterval.D1).last()
+        assertEquals(9.0, d1.highPrice, "건너뛴 12 의 고가 포함")
+        assertEquals(0.5, d1.lowPrice)
+        assertEquals(1.0 + 2.0 + 5.0 + 1.0, d1.volume, "11·12 는 한 번만, 13 은 완결본으로")
+        assertEquals(2.6, d1.closePrice)
+    }
+
+    // 라운드 꼬리가 자정을 넘으면 전날 봉은 완결값으로 닫히고 다음 날 키가 새로 열린다.
+    @Test
+    fun `a round spanning midnight closes the previous day with its final minute and opens the next`() {
+        aggregator.onMinuteCandle(m1("2024-01-01T23:58:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T23:59:00Z", open = 1.0, high = 4.0, low = 1.0, close = 3.0, volume = 2.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T23:59:00Z", open = 1.0, high = 6.0, low = 1.0, close = 5.0, volume = 3.0))
+        aggregator.onMinuteCandle(m1("2024-01-02T00:00:00Z", open = 5.0, high = 5.0, low = 5.0, close = 5.0, volume = 7.0))
+
+        val byPeriod = capturedFor(CandleInterval.D1).groupBy { it.openTime }
+        val day1 = byPeriod.getValue(inst("2024-01-01T00:00:00Z")).last()
+        assertEquals(6.0, day1.highPrice, "전날 마지막 분의 완결본")
+        assertEquals(4.0, day1.volume)
+        assertEquals(7.0, byPeriod.getValue(inst("2024-01-02T00:00:00Z")).last().volume)
+        val m5 = capturedFor(CandleInterval.M5).groupBy { it.openTime }
+        assertEquals(6.0, m5.getValue(inst("2024-01-01T23:55:00Z")).last().highPrice, "전날 마지막 M5 도 완결본으로 닫힌다")
+        assertEquals(7.0, m5.getValue(inst("2024-01-02T00:00:00Z")).last().volume)
+    }
+
+    // seed 는 prime 시각까지의 완전한 봉이라 그 이전 분의 M1(count>1 꼬리)은 이미 포함돼 있다 — 겹침은 prime 시각의 분 하나로 고정.
+    @Test
+    fun `M1 candles older than the prime minute are ignored so seed overlap stays within one minute`() {
+        val day = inst("2024-01-01T00:00:00Z")
+        val seeded = NormalizedCandle(
+            exchange = Exchange.UPBIT, market = MARKET, openPrice = 100.0, highPrice = 130.0, lowPrice = 80.0, closePrice = 105.0,
+            volume = 50.0, quoteVolume = 500.0, interval = CandleInterval.D1, openTime = day, closeTime = day.plusSeconds(86_400),
+        )
+        aggregator.prime(seeded, now = inst("2024-01-01T13:02:40Z"))
+
+        aggregator.onMinuteCandle(m1("2024-01-01T13:00:00Z", open = 1.0, high = 200.0, low = 1.0, close = 1.0, volume = 10.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T13:01:00Z", open = 1.0, high = 200.0, low = 1.0, close = 1.0, volume = 10.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T13:02:00Z", open = 105.0, high = 106.0, low = 104.0, close = 106.0, volume = 2.0))
+
+        val d1 = capturedFor(CandleInterval.D1).last()
+        assertEquals(130.0, d1.highPrice, "prime 이전 분은 무시")
+        assertEquals(52.0, d1.volume)
+        assertEquals(106.0, d1.closePrice)
+    }
+
+    // 자정 직후 부팅: seed 는 어제·오늘 D1 을 store 에 넣고 오늘만 prime 한다. 첫 라운드 꼬리의 어제 분봉이 상태 없는 어제 period 를
+    // 부분봉으로 새로 만들어 publish 하면 store 의 완전한 어제 D1 이 2분짜리로 덮인다 — 앞부분을 모르는 과거 period 는 publish 하지 않는다.
+    @Test
+    fun `tail candles of a past period without state are ignored instead of overwriting the seeded candle`() {
+        val today = inst("2024-01-02T00:00:00Z")
+        val seeded = NormalizedCandle(
+            exchange = Exchange.UPBIT, market = MARKET, openPrice = 5.0, highPrice = 5.0, lowPrice = 5.0, closePrice = 5.0,
+            volume = 1.0, interval = CandleInterval.D1, openTime = today, closeTime = today.plusSeconds(86_400),
+        )
+        aggregator.prime(seeded, now = inst("2024-01-02T00:02:30Z"))
+
+        aggregator.onMinuteCandle(m1("2024-01-01T23:58:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T23:59:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-02T00:02:00Z", open = 5.0, high = 6.0, low = 5.0, close = 6.0, volume = 2.0))
+
+        assertEquals(emptyList<Instant>(), capturedFor(CandleInterval.D1).map { it.openTime }.filter { it < today }, "어제 D1 을 publish 하지 않는다")
+        assertEquals(6.0, capturedFor(CandleInterval.D1).last().highPrice)
+    }
+
+    // 같은 창인데 오늘 D1 행이 없어 prime 이 스킵된 경우(자정 직후엔 흔하다) — 바닥은 seed 시점에 모든 interval 에 걸린다.
+    @Test
+    fun `startFrom at seed time keeps past periods of every interval from being created by the first round's tail`() {
+        aggregator.startFrom(Exchange.UPBIT, MARKET, now = inst("2024-01-02T00:02:30Z"))
+
+        aggregator.onMinuteCandle(m1("2024-01-01T23:58:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-01T23:59:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
+        aggregator.onMinuteCandle(m1("2024-01-02T00:00:00Z", open = 5.0, high = 6.0, low = 5.0, close = 6.0, volume = 2.0))
+        aggregator.onMinuteCandle(m1("2024-01-02T00:02:00Z", open = 6.0, high = 7.0, low = 6.0, close = 7.0, volume = 2.0))
+
+        // W1/MO1 은 2024-01-01(월요일·월초)이 seed 시각의 period 라 제외 — 일 이하 interval 은 어제 period 를 만들지 않는다.
+        val subDay = captured.filter { it.interval.minutes <= CandleInterval.D1.minutes }
+        assertEquals(emptyList<Instant>(), subDay.map { it.openTime }.filter { it < inst("2024-01-02T00:00:00Z") }, "어제 period 는 publish 하지 않는다")
+        val today = capturedFor(CandleInterval.D1).last()
+        assertEquals(5.0, today.openPrice, "오늘 D1 은 00:00 분봉부터 새로 시작")
+        assertEquals(4.0, today.volume)
+    }
+
     @Test
     fun `prime rejects a candle whose openTime is not aligned to its period`() {
         val misaligned = NormalizedCandle(
             exchange = Exchange.UPBIT, market = MARKET, openPrice = 1.0, highPrice = 1.0, lowPrice = 1.0, closePrice = 1.0, volume = 1.0,
             interval = CandleInterval.D1, openTime = inst("2024-01-01T09:00:00Z"), closeTime = inst("2024-01-02T09:00:00Z"),
         )
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) { aggregator.prime(misaligned) }
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) { aggregator.prime(misaligned, now = inst("2024-01-01T09:00:00Z")) }
     }
 
     @Test
@@ -121,15 +230,15 @@ class CandleAggregatorTest {
     }
 
     @Test
-    fun `evicts D1 periods older than 3 intervals so a re-fed candle starts fresh`() {
+    fun `evicts D1 periods older than 3 intervals and does not republish a re-fed evicted period`() {
         aggregator.onMinuteCandle(m1("2024-01-01T00:00:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 5.0))
         // Jan 5 진입 → cutoff=Jan2, Jan1 D1 key 축출.
         aggregator.onMinuteCandle(m1("2024-01-05T00:00:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
-        // Jan1 재유입 — 축출됐으므로 새 집계로 시작(cleanup 없으면 5+7=12).
+        // Jan1 재유입(무거래 마켓의 긴 꼬리) — 앞부분을 잃은 과거 period 라 부분봉으로 store 를 덮지 않는다(cleanup 없으면 5+7=12 로 publish).
         aggregator.onMinuteCandle(m1("2024-01-01T06:00:00Z", open = 9.0, high = 9.0, low = 9.0, close = 9.0, volume = 7.0))
 
         val jan1 = capturedFor(CandleInterval.D1).filter { it.openTime == inst("2024-01-01T00:00:00Z") }
-        assertEquals(7.0, jan1.last().volume)
+        assertEquals(listOf(5.0), jan1.map { it.volume })
     }
 
     private fun capturedFor(interval: CandleInterval) = captured.filter { it.interval == interval }
