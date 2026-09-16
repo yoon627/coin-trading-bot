@@ -109,29 +109,42 @@ object Indicators {
 
     data class MacdResult(val macd: Double, val signal: Double, val histogram: Double)
 
+    /**
+     * MACD(fast, slow, signal) — TA-Lib(`ta_MACD.c`) 규칙. 받은 히스토리 **전체**를 누적하고, 각 EMA 는 첫 period 개의 SMA 로
+     * seed 하되 fast 창은 slow 창의 꼬리(`bars[slow-fast .. slow-1]`)에서 시작한다. 시그널은 slow EMA 가 정의되는 시점부터의
+     * MACD 선 전체에 EMA(signal). 최신순 입력(index 0 = 최신), 최소 `slow + signal` 봉(TA-Lib 최소 34 보다 1봉 보수적).
+     *
+     * 값은 **넘긴 히스토리 길이에 의존**한다 — seed 오차가 `(1-k)^n` 로만 감쇠하므로 백테(50봉)·라이브(60봉)·차트(count)가
+     * 서로 조금 다른 값을 본다(수백 봉이면 수렴). 히스토리를 35봉으로 잘라 첫 값으로 seed 하던 이전 구현은 slow EMA 가
+     * 아예 수렴하지 못해 표준값과 크게 어긋났다(#27).
+     */
     fun calculateMacd(
         candles: List<Ohlc>,
         fastPeriod: Int = 12,
         slowPeriod: Int = 26,
         signalPeriod: Int = 9,
     ): MacdResult? {
-        val needed = slowPeriod + signalPeriod
-        if (candles.size < needed) return null
-        val closes = candles.take(needed).map { it.close }.reversed()
+        require(fastPeriod in 1 until slowPeriod && signalPeriod >= 1) { "periods must satisfy 1 <= fast < slow, signal >= 1" }
+        if (candles.size < slowPeriod + signalPeriod) return null
+        val closes = candles.map { it.close }.reversed()
 
-        fun ema(data: List<Double>, period: Int): List<Double> {
+        fun emaSeries(data: List<Double>, period: Int): List<Double> {
             val k = 2.0 / (period + 1)
-            val result = mutableListOf(data.first())
-            for (i in 1 until data.size) {
-                result.add(data[i] * k + result.last() * (1 - k))
+            val out = ArrayList<Double>(data.size - period + 1)
+            var value = data.take(period).average()
+            out.add(value)
+            for (i in period until data.size) {
+                value = data[i] * k + value * (1 - k)
+                out.add(value)
             }
-            return result
+            return out
         }
 
-        val fastEma = ema(closes, fastPeriod)
-        val slowEma = ema(closes, slowPeriod)
-        val macdLine = fastEma.zip(slowEma).map { (f, s) -> f - s }
-        val signalLine = ema(macdLine.takeLast(signalPeriod + 5), signalPeriod)
+        // fast 창을 slow 창의 꼬리에서 시작해야 두 EMA 가 같은 봉(slow-1)부터 정렬되고 seed 도 TA-Lib 과 같다.
+        val fastEma = emaSeries(closes.drop(slowPeriod - fastPeriod), fastPeriod)
+        val slowEma = emaSeries(closes, slowPeriod)
+        val macdLine = fastEma.zip(slowEma) { f, s -> f - s }
+        val signalLine = emaSeries(macdLine, signalPeriod)
 
         val macd = macdLine.last()
         val signal = signalLine.last()
