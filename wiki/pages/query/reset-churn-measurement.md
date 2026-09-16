@@ -76,7 +76,7 @@ buy if currentPrice > target
 
 ## 미측정 성분 (결론과 반드시 함께 읽을 것)
 
-1. 재진입 슬리피지 — D1 에서 구조적으로 0.
+1. 재진입 슬리피지 — D1 에서 구조적으로 0. → [[reentry-premium-2026-09]] 가 5분봉으로 쟀다: 재진입 프리미엄(+2.16%)은 대조군(+2.77%)보다 낮아 리셋 고유의 가격 불이익은 없다(돌파 진입 프리미엄). 다만 그 프리미엄이 리셋 왕복의 재진입 다리 값이고 이 D1 반사실은 그것을 0 으로 그렸다 — 크기 ≈ +0.8%p/TIME_EXIT(가법 아님) 만큼 리셋에 유리한 편향.
 2. `volatility_breakout` 트리거 divergence — 위 참조.
 3. 라이브 신호의 당일 부분 봉 — `MarketDataStore` 가 분봉마다 당일 D1 을 upsert 하므로 09:00:10 신호 window 에 이미 들어 있다([[marketdata-pipeline]]). 백테가 흉내내면 look-ahead 라 불가.
 4. fixture 밖 티커 — #128 대표사례 4건 중 AVAX·ADA 2건이 fixture 에 없다(SOL 은 시점 중립 유니버스에 들어왔다).
