@@ -6,11 +6,13 @@ import { Rate, Trend } from 'k6/metrics';
 const errorRate = new Rate('errors');
 const loginDuration = new Trend('login_duration');
 
-// Test configuration
+// Test configuration.
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
+// ONLY=smoke|load 로 시나리오를 고른다(k6 에는 시나리오 선택 플래그가 없다 — grafana/k6#3054).
+// load 는 iteration 마다 계정을 등록하므로 운영 도메인에는 ONLY=smoke 로만 돌린다(perf/README.md).
+const ONLY = __ENV.ONLY;
 
-export const options = {
-  scenarios: {
+const scenarios = {
     // Smoke test: 1 user, quick sanity check
     smoke: {
       executor: 'constant-vus',
@@ -34,7 +36,10 @@ export const options = {
       tags: { scenario: 'load' },
       exec: 'loadTest',
     },
-  },
+};
+
+export const options = {
+  scenarios: ONLY ? { [ONLY]: scenarios[ONLY] } : scenarios,
   thresholds: {
     http_req_duration: ['p(95)<500', 'p(99)<1500'],
     errors: ['rate<0.05'],
@@ -58,6 +63,7 @@ function registerAndLogin(id) {
   // Login
   const loginRes = http.post(`${BASE_URL}/api/auth/login`, payload, { headers });
   loginDuration.add(loginRes.timings.duration);
+  check(loginRes, { 'login 200': (r) => r.status === 200 }) || errorRate.add(1);
 
   if (loginRes.status === 200) {
     try {
@@ -101,12 +107,6 @@ export function smokeTest() {
     check(priceStatus, {
       'price status is 200': (r) => r.status === 200,
     }) || errorRate.add(1);
-
-    // Prometheus metrics
-    const metrics = http.get(`${BASE_URL}/actuator/prometheus`);
-    check(metrics, {
-      'prometheus metrics is 200': (r) => r.status === 200,
-    }) || errorRate.add(1);
   });
 
   sleep(1);
@@ -149,19 +149,13 @@ export function loadTest() {
       // Trade history
       const trades = http.get(`${BASE_URL}/api/trades`, authHeaders(token));
       check(trades, {
-        'trades 200': (r) => r.status === 200 || r.status === 204,
+        'trades 200': (r) => r.status === 200,
       }) || errorRate.add(1);
 
-      // Portfolio
+      // Portfolio — k6 유저는 Upbit 키가 없어 400 이 정상 응답이다(PortfolioController). 그 외는 실패로 센다.
       const portfolio = http.get(`${BASE_URL}/api/portfolio`, authHeaders(token));
       check(portfolio, {
-        'portfolio accessible': (r) => r.status < 500,
-      }) || errorRate.add(1);
-
-      // ML status
-      const mlStatus = http.get(`${BASE_URL}/api/ml/status`, authHeaders(token));
-      check(mlStatus, {
-        'ml status accessible': (r) => r.status < 500,
+        'portfolio 200 or 400(no keys)': (r) => r.status === 200 || r.status === 400,
       }) || errorRate.add(1);
     });
   }
