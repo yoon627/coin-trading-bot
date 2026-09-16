@@ -46,6 +46,12 @@ internal object LiveSemanticsArm {
         val exitBarLow: Double = Double.NaN,
         /** `keepWinnersUntilDays` 로 보유상한 봉을 **넘겨서 유지된** 포지션인가 — 사유·날짜 재구성(한도봉 갭 TP/SL 과 혼동)이 아니라 플래그로 센다. */
         val keptPastLimit: Boolean = false,
+        /**
+         * 진입·청산 봉의 `candle_date_time_utc`(봉 **시작** 시각). 거래일만으로는 같은 날 마켓 간 순서를 정할 수 없어
+         * 공유 잔고 후처리([SharedBalanceSim])가 이 시각으로 이벤트를 정렬한다. 기본 "" 은 옛 출력과의 호환용 — 후처리는 비어 있으면 거부한다.
+         */
+        val entryBarUtc: String = "",
+        val exitBarUtc: String = "",
     )
 
     /**
@@ -89,6 +95,7 @@ internal object LiveSemanticsArm {
         var entryPrice = 0.0
         var entryDayIndex = -1
         var entryDate = ""
+        var entryBarUtc = ""
         var peak = 0.0
         var keptPast = false
 
@@ -146,6 +153,7 @@ internal object LiveSemanticsArm {
                             market, entryDate, day, entryPrice, decision.sellPrice,
                             (decision.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, decision.reason,
                             exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice, keptPastLimit = keptPast,
+                            entryBarUtc = entryBarUtc, exitBarUtc = bar.candleDateTimeUtc,
                         )
                         position = false
                         keptPast = false
@@ -163,6 +171,7 @@ internal object LiveSemanticsArm {
                             entryPrice = fill
                             entryDayIndex = dayIndex
                             entryDate = day
+                            entryBarUtc = bar.candleDateTimeUtc
                             peak = fill
                             keptPast = false
                             // 진입 봉의 intrabar 게이트도 받는다 — 빼면 진입 당일만 손절·익절 보호가 없어 편향된다.
@@ -174,6 +183,7 @@ internal object LiveSemanticsArm {
                                     market, entryDate, day, entryPrice, d.sellPrice,
                                     (d.sellPrice - entryPrice) / entryPrice * 100.0 - feePct, d.reason,
                                     exitOnEntryBar = true, exitBarOpen = bar.openingPrice, exitBarLow = bar.lowPrice,
+                                    entryBarUtc = entryBarUtc, exitBarUtc = bar.candleDateTimeUtc,
                                 )
                                 position = false
                             }
@@ -193,6 +203,7 @@ internal object LiveSemanticsArm {
             trades += Trade(
                 market, entryDate, last.candleDateTimeUtc.substring(0, 10), entryPrice, last.tradePrice,
                 (last.tradePrice - entryPrice) / entryPrice * 100.0 - feePct, "END", keptPastLimit = keptPast,
+                entryBarUtc = entryBarUtc, exitBarUtc = last.candleDateTimeUtc,
             )
         }
         return trades

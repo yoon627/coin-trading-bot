@@ -2,9 +2,9 @@
 title: 일봉 백테가 만든 우위 — 청산 해상도를 올리면 combined 를 이기는 설정이 남지 않는다
 category: query
 created: 2026-09-05
-updated: 2026-09-09
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 §9 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_CANDIDATE_ANATOMY=true ./gradlew :bot:test --tests "*CandidateAnatomyTest*" --rerun-tasks` 와 `RUN_EXIT_HOUR=true ./gradlew :bot:test --tests "*ExitHourSweepTest*" --rerun-tasks` (JDK 21.0.9), fixture `yearly/`·`bull/`·`p2024h2/`·`p2025h1/`·`bear/` + `intraday240/`(240분봉 55,912봉, 수집 2026-09-05)
+verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 §9 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_CANDIDATE_ANATOMY=true ./gradlew :bot:test --tests "*CandidateAnatomyTest*" --rerun-tasks` 와 `RUN_EXIT_HOUR=true ./gradlew :bot:test --tests "*ExitHourSweepTest*" --rerun-tasks` (JDK 21.0.9), fixture `yearly/`·`bull/`·`p2024h2/`·`p2025h1/`·`bear/` + `intraday240/`(240분봉 55,912봉, 수집 2026-09-05)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/CandidateAnatomyTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/ExitHourSweepTest.kt
@@ -299,6 +299,7 @@ yearly 단독의 개선(+21.0 → +31.2, MDD 20.8 → 17.2)은 **8마켓 전부 
 - **재판정 자체가 사후(post-hoc)** 다 — 홀드아웃 요약을 본 뒤 통계량을 바꿨다. 확증은 값을 아무도 보지 않은
   신규 국면 fixture 위에서만 가능하다.
 - 생존편향은 그대로다([[backtest-engine]]).
+- 마켓별 예산이 독립이라고 가정한다 — 한 계좌의 현금 장부로 다시 세면 후보 E 의 yearly 열세는 커지고 7국면 우위는 19~36% 줄되 부호는 유지된다([[shared-balance-2026-09]]). "2일 집중" 은 그 계기·기준선(현행 라이브 대비)에서는 성립하지 않는다.
 
 ## 재현
 
