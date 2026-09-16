@@ -142,11 +142,21 @@ data class TradingState(
     }
 
     fun markSold(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
+        releaseHoldings(now)
+        rungsFilled = 0
+        clearEntryMeta()
+    }
+
+    /**
+     * 거래소 보유가 0 으로 관측됐지만 귀속 불명 락이 풀리면 코인이 돌아올 수 있을 때(#122). 진입 메타(buyDate·peakPrice·
+     * entryStrategy·exitParams)와 사다리 장부는 남긴다 — 재편입(`syncPosition`)은 position·평단·수량만 복원하므로 여기서
+     * 지우면 되돌아온 포지션이 보유상한·트레일링·진입 전략 기준을 영영 잃는다. 코인이 정말 사라졌다면 잔재는 무해하다:
+     * 다음 신규 진입의 [markBought] 가 `resuming=false` 로 전부 덮어쓴다.
+     */
+    fun releaseHoldings(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
         position = false
         avgBuyPrice = 0.0
         holdVolume = 0.0
-        rungsFilled = 0
-        clearEntryMeta()
         lastTradeTime = now
         // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
         pendingBuyUuid = null
