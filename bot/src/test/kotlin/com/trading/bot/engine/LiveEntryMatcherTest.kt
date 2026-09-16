@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 
 class LiveEntryMatcherTest {
 
-    private fun arm(market: String, day: String, bar: String = "${day}T00:05:00", price: Double = 100.0) = ArmEntry(market, day, bar, price, day)
+    private fun arm(market: String, day: String, bar: String = "${day}T00:05:00", price: Double = 100.0) = ArmEntry(market, day, bar, price, "${day}T23:55:00")
 
     @Test
     fun `trading day is the UTC date even past 15 UTC`() {
@@ -27,6 +27,7 @@ class LiveEntryMatcherTest {
         val r = LiveEntryMatcher.match(5, listOf(b, a), listOf(arm("KRW-BTC", "2026-07-20")))
         assertEquals(listOf(1L), r.matched.map { it.live.id })
         assertEquals(listOf(2L), r.liveOnly.map { it.id })
+        assertEquals(listOf(2L), r.duplicateSameDay.map { it.id })
         assertThrows(IllegalArgumentException::class.java) { LiveEntryMatcher.match(5, emptyList(), listOf(arm("KRW-BTC", "2026-07-20"), arm("KRW-BTC", "2026-07-20"))) }
     }
 
@@ -67,6 +68,15 @@ class LiveEntryMatcherTest {
         val disagree = listOf(LiveEntryMatcher.match(240, buys, cheaper240.drop(3)), LiveEntryMatcher.match(5, buys, full))
         val d = LiveEntryMatcher.verdict(disagree)
         assertEquals(5, d.f1Best); assertEquals(240, d.fillBest); assertNull(d.closest)
+    }
+
+    @Test
+    fun `verdict withholds when the price axis is tied within MIN_FILL_LEAD`() {
+        val buys = (1..25).map { LiveBuy(it.toLong(), "M$it", "2026-07-20T01:00:00", 101.0) }
+        val a = buys.map { arm(it.market, "2026-07-20", price = 100.0) }
+        val b = buys.map { arm(it.market, "2026-07-20", price = 100.01) }.drop(8) // F1 은 뒤지지만 가격 오차는 0.01%p 차이 — 동률
+        val v = LiveEntryMatcher.verdict(listOf(LiveEntryMatcher.match(240, buys, a), LiveEntryMatcher.match(5, buys, b)))
+        assertEquals(240, v.f1Best); assertNull(v.fillBest); assertNull(v.closest)
     }
 
     @Test
