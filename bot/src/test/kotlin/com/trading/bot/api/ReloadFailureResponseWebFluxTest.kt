@@ -2,7 +2,6 @@ package com.trading.bot.api
 
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.kis.client.KisClientFactory
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
@@ -27,7 +26,6 @@ class ReloadFailureResponseWebFluxTest {
     private val userRepository: UserRepository = mockk()
     private val userSecretsService: UserSecretsService = mockk()
     private val requestValidators = RequestValidators()
-    private val kisClientFactory: KisClientFactory = mockk(relaxed = true)
 
     private fun user() = UserEntity(id = 1L, username = "u", password = "p")
 
@@ -42,7 +40,7 @@ class ReloadFailureResponseWebFluxTest {
 
     private fun keysClient(): WebTestClient = WebTestClient
         .bindToController(
-            TradingController(userTradingManager, userRepository, requestValidators, userSecretsService, kisClientFactory),
+            TradingController(userTradingManager, userRepository, requestValidators, userSecretsService),
         )
         .webFilter<WebTestClient.ControllerSpec>(authFilter())
         .build()

@@ -2,7 +2,7 @@
 title: 시세 수집 파이프라인 — WS ticker + REST 캔들, 무수신 워치독
 category: concept
 created: 2026-07-28
-updated: 2026-08-23
+updated: 2026-09-16
 claim_state: current
 verified: 2026-08-23 — seedDailyCandles 200봉·실패 시 무재시도 확인, 전략별 minCandles 반영
 sources:
@@ -14,7 +14,7 @@ sources:
 
 # 시세 수집 파이프라인
 
-이 페이지는 Upbit WS/REST 수집 경로다. KIS 국내주식은 별도 `KisMarketDataService`의 3초 현재가·300초 일봉 폴링과 엔진별 REST 폴백을 사용하며, 그 매매 연결은 [[kis-stock-trading-flow]]에 기록한다.
+이 페이지는 Upbit WS/REST 수집 경로다(KIS 주식 시세 폴링은 2026-09-16 경로 제거로 없어졌다).
 
 구 collector 모듈(Kafka 발행)을 흡수한 **in-process** 수집기다([[rightsizing-history]]). 단일 JVM 이므로 메시지 버스 없이 직접 fan-out 한다.
 
