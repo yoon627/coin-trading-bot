@@ -56,6 +56,8 @@ data class TradingState(
     // 귀속 불명 locked 로 이미 경고했는지. unsynced 는 조회 실패로도 켜지므로 그걸 dedup 키로 쓰면
     // "조회 실패 → 다음 tick 성공했으나 귀속 불명" 순서에서 원인이 로그에 한 번도 안 남는다(비영속).
     var unattributableLockWarned: Boolean = false,
+    // wait 중 부분체결 관측 로그의 직전 값(executed/remaining) — 값이 바뀔 때만 찍는다(비영속, #120).
+    var partialSellFillLogged: String? = null,
     // 신고점 flush 가 실패하면 true — 갱신 tick 에만 flush 하므로 그대로 두면 재시도 기회가
     // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서 재기록한다(비영속).
     // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
