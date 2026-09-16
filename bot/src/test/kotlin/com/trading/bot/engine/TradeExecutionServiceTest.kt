@@ -52,7 +52,7 @@ class TradeExecutionServiceTest {
         tradeExecutionRepository = mockk(relaxed = true)
         discordNotifier = mockk(relaxed = true)
         client = mockk()
-        // manual trade (executeBuy/SellAll/SellVolume) 가 통합 saveAndNotify 를 거치도록 변경되어
+        // manual trade (executeSellAll/SellVolume) 가 통합 saveAndNotify 를 거치도록 변경되어
         // tradeExecutionRepository.save 도 호출됨. 명시 stub 이 없으면 relaxed mockk 의 Mono 가
         // emit 안 해 awaitSingle 가 무한 대기 → UncompletedCoroutinesError.
         every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
@@ -65,32 +65,6 @@ class TradeExecutionServiceTest {
             tradeRecordRepository, tradeExecutionRepository, discordNotifier, transactionalOperator,
             TradingProperties(),
         )
-    }
-
-    @Test
-    fun `executeBuy places order and saves record`() = runTest {
-        coEvery { client.placeOrder(any()) } returns Order(uuid = "order-123")
-        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
-        coEvery { client.getAccounts() } returns listOf(Account(currency = "KRW", balance = "5000000"))
-        coEvery { tradeRecordRepository.save(any()) } returns TradeRecordEntity(
-            id = 1, ticker = "KRW-BTC", side = "BUY", price = 50000000.0,
-            volume = 0.002, totalAmount = 100000.0, userId = 1L,
-        )
-
-        val saved = slot<TradeRecord>()
-        coEvery { tradeRecordRepository.save(capture(saved)) } returns TradeRecordEntity(
-            id = 1, ticker = "KRW-BTC", side = "BUY", price = 50000000.0,
-            volume = 0.002, totalAmount = 100000.0, userId = 1L,
-        )
-
-        val result = service.executeBuy(client, "KRW-BTC", 100000.0, "volatility_breakout", 1L)
-
-        assertTrue(result.success)
-        assertEquals("order-123", result.orderUuid)
-        coVerify { tradeRecordRepository.save(any()) }
-        // 수동 경로는 placeOrder 즉시 응답뿐이라 체결 대금을 모른다 — 요청액을 실측인 척 넣지 않는다(#146).
-        assertNull(saved.captured.orderAmount)
-        coVerify { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) }
     }
 
     @Test
@@ -163,32 +137,6 @@ class TradeExecutionServiceTest {
     }
 
     // --- 수동주문 unknown-state: placeOrder 성공 후 후처리 실패는 2xx+uuid(recorded=false), placeOrder 실패만 failure ---
-
-    @Test
-    fun `executeBuy returns success recorded false when persistence fails`() = runTest {
-        // placeOrder 접수 성공했으나 DB 저장 실패 — 주문은 나갔으므로 failure(재시도 유발) 대신 success+uuid+recorded=false.
-        coEvery { client.placeOrder(any()) } returns Order(uuid = "order-x")
-        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
-        coEvery { client.getAccounts() } returns listOf(Account(currency = "KRW", balance = "5000000"))
-        coEvery { tradeRecordRepository.save(any()) } throws RuntimeException("db down")
-
-        val result = service.executeBuy(client, "KRW-BTC", 100000.0, "manual", 1L)
-
-        assertTrue(result.success)
-        assertEquals("order-x", result.orderUuid)
-        assertFalse(result.recorded)
-        coVerify(exactly = 1) { client.placeOrder(any()) } // 재시도 없음(단일 접수)
-    }
-
-    @Test
-    fun `executeBuy propagates placeOrder exception to advice`() = runTest {
-        // placeOrder 실패는 삼키지 않고 전파 → UpbitErrorHandlerAdvice 가 429/error_name 을 매핑. 삼키면 그 매핑 우회 + rawBody 노출.
-        coEvery { client.placeOrder(any()) } throws UpbitApiException(429, "too_many_requests", "rate", "raw")
-
-        val ex = runCatching { service.executeBuy(client, "KRW-BTC", 100000.0, "manual", 1L) }.exceptionOrNull()
-
-        assertTrue(ex is UpbitApiException)
-    }
 
     @Test
     fun `executeSellAll returns success recorded false when persistence fails`() = runTest {
@@ -356,26 +304,17 @@ class TradeExecutionServiceTest {
 
     @Test
     fun `manual order reports recorded false when notification fails`() = runTest {
-        coEvery { client.placeOrder(any()) } returns Order(uuid = "notify-fail")
-        coEvery { client.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 50000000.0))
-        coEvery { client.getAccounts() } returns emptyList()
-        coEvery { tradeRecordRepository.save(any()) } returns TradeRecordEntity(
-            id = 10, ticker = "KRW-BTC", side = "BUY", price = 50000000.0,
-            volume = 0.002, totalAmount = 100000.0, userId = 1L,
-        )
+        stubSellVolumeContext("notify-fail")
+        coEvery { client.getOrder("notify-fail") } returns Order(uuid = "notify-fail", state = "done", executedVolume = "0.3")
+        coEvery { tradeRecordRepository.save(any()) } returns sellRecordEntity()
         every { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) } throws IllegalStateException("discord down")
 
-        val result = service.executeBuy(
-            client = client,
-            market = "KRW-BTC",
-            amount = 100000.0,
-            strategy = "manual",
-            userId = 1L,
-        )
+        val result = service.executeSellVolume(client, "KRW-BTC", "0.3", "manual", 1L)
 
         assertTrue(result.success)
         assertEquals("notify-fail", result.orderUuid)
         assertFalse(result.recorded, "주문은 접수됐지만 알림 실패는 수동 후처리 실패로 노출돼야 한다")
+        assertEquals(FillOutcome.CONFIRMED, result.fill, "행은 저장됐다 — 미확정(행 없음)과 구분")
         coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
     }
 

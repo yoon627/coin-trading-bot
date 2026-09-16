@@ -109,15 +109,6 @@ class RequestValidators {
         return normalized
     }
 
-    fun validateOrderAmount(amount: Double) {
-        if (!amount.isFinite() || amount < 5_000) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Minimum order: 5,000 KRW")
-        }
-        if (amount > MAX_ORDER_AMOUNT) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Maximum order: ${"%,.0f".format(MAX_ORDER_AMOUNT)} KRW")
-        }
-    }
-
     fun normalizeSellVolume(volume: String): String {
         val normalized = volume.trim()
         val numeric = normalized.toDoubleOrNull()
@@ -165,7 +156,6 @@ class RequestValidators {
         private val KIS_SYMBOL_REGEX = Regex("^\\d{6}$")
         private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
-        private const val MAX_ORDER_AMOUNT = 10_000_000.0  // 1000만원
         private const val MIN_PASSWORD_LENGTH = 10
         private const val MAX_PASSWORD_LENGTH = 72  // bcrypt 입력 한계
         private const val MAX_SELL_VOLUME = 1_000_000_000.0

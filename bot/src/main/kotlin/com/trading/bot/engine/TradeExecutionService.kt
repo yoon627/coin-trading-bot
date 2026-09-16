@@ -23,7 +23,6 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.transaction.reactive.TransactionalOperator
-import kotlin.math.floor
 
 @Service
 class TradeExecutionService(
@@ -37,55 +36,6 @@ class TradeExecutionService(
 
     private fun netPnlPercent(currentPrice: Double, avgBuyPrice: Double): Double? =
         TradePnl.netPercent(currentPrice, avgBuyPrice, tradingProperties.roundTripFeeRate)
-
-    /**
-     * 매수 주문 실행 + 기록 저장 + Discord 알림
-     */
-    suspend fun executeBuy(
-        client: UpbitClient,
-        market: String,
-        amount: Double,
-        strategy: String,
-        userId: Long,
-        username: String? = null,
-        discordWebhookUrl: String? = null,
-    ): TradeExecutionResult {
-        // placeOrder 실패(UpbitApiException 등)는 잡지 않고 전파 — UpbitErrorHandlerAdvice 가 429/418/insufficient_funds/
-        // error_name 을 정교하게 매핑한다. 여기서 잡으면 그 매핑을 우회하고 rawBody(e.message)를 노출한다.
-        // 성공 이후 조회/기록 실패만 recordOrder 가 recorded=false 로 흡수(주문은 접수됐으므로 재시도 유발 금지).
-        val order = client.placeOrder(
-            OrderRequest(
-                market = market,
-                side = "bid",
-                ordType = "price",
-                price = floor(amount).toLong().toString(),
-            )
-        )
-
-        // 주문은 나갔으므로 기록·알림은 요청 취소에도 완주한다(매도 recordSellFill 과 같은 이유).
-        return withContext(NonCancellable) {
-            recordOrder(client, order.uuid, market, username, discordWebhookUrl) {
-                val currentPrice = client.getTicker(market).firstOrNull()?.tradePrice ?: 0.0
-                val volume = if (currentPrice > 0) amount / currentPrice else 0.0
-                TradeRecord(
-                    ticker = market,
-                    side = TradeSide.BUY,
-                    price = currentPrice,
-                    volume = volume,
-                    totalAmount = amount,
-                    pnlPercent = null, // 진입 — 실현 손익 없음
-                    pnlAmount = null,
-                    strategy = strategy,
-                    // totalAmount 가 이 주문의 금액이라 추정 기준이 맞다. placeOrder 응답은 체결 전이라
-                    // paid_fee 를 신뢰할 수 없고, 확인하려면 getOrder 재조회가 필요하다(범위 밖 — #133).
-                    fee = FeeBasis.Estimate,
-                    // placeOrder 즉시 응답뿐이라 실체결 대금을 모른다 — 요청액을 넣지 않는다(#146).
-                    orderAmount = null,
-                    userId = userId,
-                )
-            }
-        }
-    }
 
     /**
      * 전량 매도 주문 실행 + 체결 확정 + 기록 저장 + Discord 알림
@@ -105,7 +55,8 @@ class TradeExecutionService(
             return TradeExecutionResult.failure("no balance for $currency")
         }
 
-        // placeOrder 실패는 전파(UpbitErrorHandlerAdvice 처리) — executeBuy 와 동일 이유.
+        // placeOrder 실패는 잡지 않고 전파 — UpbitErrorHandlerAdvice 가 429/418/insufficient_funds/error_name 을 정교하게
+        // 매핑한다. 여기서 잡으면 그 매핑을 우회하고 rawBody 를 노출한다. 접수 이후 실패만 recordOrder 가 recorded=false 로 흡수.
         val order = client.placeOrder(
             OrderRequest(
                 market = market,
@@ -139,7 +90,8 @@ class TradeExecutionService(
         // pnl 기준가(평단)는 매도 전에 확보 — 전량 매도면 체결 후 통화 잔고가 사라져 avgBuyPrice 를 잃고 pnl 이 null 이 된다(codex P2).
         val avgBuyPrice = client.getAccounts().find { it.currency == currency }?.avgBuyPriceDouble() ?: 0.0
 
-        // placeOrder 실패는 전파(UpbitErrorHandlerAdvice 처리) — executeBuy 와 동일 이유.
+        // placeOrder 실패는 잡지 않고 전파 — UpbitErrorHandlerAdvice 가 429/418/insufficient_funds/error_name 을 정교하게
+        // 매핑한다. 여기서 잡으면 그 매핑을 우회하고 rawBody 를 노출한다. 접수 이후 실패만 recordOrder 가 recorded=false 로 흡수.
         val order = client.placeOrder(
             OrderRequest(
                 market = market,
@@ -295,8 +247,8 @@ class TradeExecutionService(
                 volume = record.volume,
                 totalAmount = record.totalAmount,
                 // 수수료 출처는 경로가 정한다(#133·#148·#105) — 엔진 매수와 모든 매도는 terminal 응답에 paid_fee 가
-                // 있으면 실측, 매도는 없으면 추정, 수동 매수는 추정, 매수 잔고복원은 미기록. 한 행만 보고 실측인지
-                // 추정인지 구분할 마커는 없다.
+                // 있으면 실측, 매도는 없으면 추정, 매수 잔고복원은 미기록(과거 수동 매수 행은 추정). 한 행만 보고
+                // 실측인지 추정인지 구분할 마커는 없다.
                 fee = when (val basis = record.fee) {
                     // 파싱 단계에서 이미 거르지만 여기서 한 번 더 본다 — `Measured` 는 public 생성자라
                     // 다른 경로가 생기면 검증을 건너뛸 수 있고, NaN 이 컬럼에 들어가면 이후 SUM(fee) 이
