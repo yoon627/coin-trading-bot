@@ -73,21 +73,27 @@ class EntrySetDecompositionTest {
             val bTrades = ArrayList<LiveSemanticsArm.Trade>(); val cTrades = ArrayList<LiveSemanticsArm.Trade>()
             val aHi = ArrayList<LiveSemanticsArm.Trade>(); val a240 = ArrayList<LiveSemanticsArm.Trade>()
             var fillHigher = 0; var fillLower = 0
+            data class WinRow(var bCount: Int = 0, var bSum: Double = 0.0, var hCount: Int = 0, var hSum: Double = 0.0, var fill: Double = 0.0, var exit: Double = 0.0, var bOnly: Int = 0, var bOnlySum: Double = 0.0, var cOnly: Int = 0, var cOnlySum: Double = 0.0)
+            val perWindow = LinkedHashMap<String, WinRow>()
             for ((dir, hiTrades) in hi) {
+                val row = perWindow.getOrPut(dir) { WinRow() }
+                row.bCount = base.getValue(dir).size; row.bSum = base.getValue(dir).sumOf { it.netPnlPct }
+                row.hCount = hiTrades.size; row.hSum = hiTrades.sumOf { it.netPnlPct }
                 val b = base.getValue(dir).associateBy { Key(it.market, it.entryDate) }
                 val h = hiTrades.associateBy { Key(it.market, it.entryDate) }
                 assertEquals(hiTrades.size, h.size, "$unit m $dir: (마켓, 진입일) 이 유일하지 않다")
                 for ((k, t) in h) {
                     val bt = b[k]
-                    if (bt == null) { bTrades += t; continue }
+                    if (bt == null) { bTrades += t; row.bOnly++; row.bOnlySum += t.netPnlPct; continue }
                     aCount++; aHi += t; a240 += bt
                     val fillOnly = pnl(t.entryPrice, bt.exitPrice)
                     aFill += fillOnly - bt.netPnlPct
                     aExit += t.netPnlPct - fillOnly
+                    row.fill += fillOnly - bt.netPnlPct; row.exit += t.netPnlPct - fillOnly
                     aPnlHi += t.netPnlPct; aPnl240 += bt.netPnlPct
                     if (t.entryPrice > bt.entryPrice + 1e-9) fillHigher++ else if (t.entryPrice < bt.entryPrice - 1e-9) fillLower++
                 }
-                for ((k, bt) in b) if (k !in h) cTrades += bt
+                for ((k, bt) in b) if (k !in h) { cTrades += bt; row.cOnly++; row.cOnlySum += bt.netPnlPct }
             }
             val sumHi = hi.values.flatten().sumOf { it.netPnlPct }; val sum240 = base.values.flatten().sumOf { it.netPnlPct }
             val bSum = bTrades.sumOf { it.netPnlPct }; val cSum = cTrades.sumOf { it.netPnlPct }
@@ -114,22 +120,21 @@ class EntrySetDecompositionTest {
             out.appendLine("| 청산 사유 | (a) 240분 | (a) ${unit}분 | (b) ${unit}분 전용 | (c) 240분 전용 |")
             out.appendLine("|---|---|---|---|---|")
             for (r in REASONS) {
-                fun cell(ts: List<LiveSemanticsArm.Trade>) = ts.filter { it.reason == r }.let { "%d건 %+.1f".format(it.size, it.sumOf { x -> x.netPnlPct }) }
+                // 건수·합·손실 건수 — 합만 적으면 "65% 가 손실" 같은 개별 일반화를 부른다(합 ≠ 승패 비율).
+                fun cell(ts: List<LiveSemanticsArm.Trade>) = ts.filter { it.reason == r }.let { "%d건 %+.1f (손실 %d건)".format(it.size, it.sumOf { x -> x.netPnlPct }, it.count { x -> x.netPnlPct < 0 }) }
                 out.appendLine("| $r | ${cell(a240)} | ${cell(aHi)} | ${cell(bTrades)} | ${cell(cTrades)} |")
             }
+            out.appendLine()
+            out.appendLine("(b) 전용 진입의 손실 건수: %d / %d (%.1f%%).".format(bTrades.count { it.netPnlPct < 0 }, bTrades.size, if (bTrades.isEmpty()) 0.0 else 100.0 * bTrades.count { it.netPnlPct < 0 } / bTrades.size))
             out.appendLine()
             out.appendLine("### 창별 (b) ${unit}분 전용 진입")
             out.appendLine()
             out.appendLine("| 창 | 240분 기준 (건 · Σ) | ${unit}분 기준 (건 · Σ) | (a) 체결가 | (a) 청산 | (b) 건 · Σ | (c) 건 · Σ |")
             out.appendLine("|---|---|---|---|---|---|---|")
             for (w in levels.first().windows) {
-                val b = base.getValue(w.dir); val h = hi.getValue(w.dir)
-                val bk = b.associateBy { Key(it.market, it.entryDate) }; val hk = h.associateBy { Key(it.market, it.entryDate) }
-                var f = 0.0; var e = 0.0
-                for ((k, t) in hk) { val bt = bk[k] ?: continue; val fo = pnl(t.entryPrice, bt.exitPrice); f += fo - bt.netPnlPct; e += t.netPnlPct - fo }
-                val bo = hk.filterKeys { it !in bk }.values; val co = bk.filterKeys { it !in hk }.values
+                val r = perWindow.getValue(w.dir)
                 out.appendLine("| %s | %d · %+.1f | %d · %+.1f | %+.1f | %+.1f | %d · %+.1f | %d · %+.1f |".format(
-                    w.label, b.size, b.sumOf { it.netPnlPct }, h.size, h.sumOf { it.netPnlPct }, f, e, bo.size, bo.sumOf { it.netPnlPct }, co.size, co.sumOf { it.netPnlPct }))
+                    w.label, r.bCount, r.bSum, r.hCount, r.hSum, r.fill, r.exit, r.bOnly, r.bOnlySum, r.cOnly, r.cOnlySum))
             }
             out.appendLine()
         }
