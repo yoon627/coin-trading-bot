@@ -26,9 +26,8 @@ class StrategyConfigTest {
 
     @Test
     fun `keeps volatility_breakout as the first strategy`() {
-        // KisStockTradingEngine.kt:57 과 TradingEngine.kt:66 이 strategies.firstOrNull() 을
-        // 기본·폴백 전략으로 쓴다. 새 전략을 목록 앞에 끼워 넣으면 KIS 국내주식 봇의 기본 전략이
-        // 조용히 바뀌므로, 첫 자리를 고정한다.
+        // TradingEngine 이 strategies.firstOrNull() 을 기본·폴백 전략으로 쓴다.
+        // 새 전략을 목록 앞에 끼워 넣으면 기본 전략이 조용히 바뀌므로, 첫 자리를 고정한다.
         assertEquals("volatility_breakout", registeredStrategyNames().first())
     }
 }
