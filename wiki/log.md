@@ -188,3 +188,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[lesson-seed-vs-stream-overwrite]] 신설: `CandleAggregator` 가 period 를 처음 볼 때 M1 하나로 새 봉을 만들어 upsert → 부팅 seed 의 완전한 D1 이 재시작 이후 구간만 남은 봉으로 대체 → 다음날 돌파선 붕괴(라이브 00h 매수 17건 중 7건). `seedDailyCandles` 가 오늘(UTC) D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 이어받게 수정(store 읽기 없음, 재현 테스트 Red→Green). #27 C3 원안(D1 집계 제외+재폴링)은 재폴링 실패 시 store D1 정지·`evaluateChartExit` current-day 가드 부재 때문에 기각; "집계기가 store 를 읽어 병합" 안은 축출 period 재유입 시 이중 계상으로 기각.
 - [[marketdata-pipeline]] `candleBuffers` 절에 병합 규칙·volume 겹침 한계 추가, sources 에 CandleAggregator. 진행 상태는 plan 소유.
+
+## [2026-09-16] ingest | reentry-premium-2026-09 — 리셋 뒤 재진입 프리미엄 분해·대조 (#143 대체, #144 입력)
+
+- [[reentry-premium-2026-09]] 신설: 5분봉 10창 재진입 300쌍 프리미엄 중앙값 +2.16% vs 대조군 +2.77%(돌파선 성분 1.86 vs 2.29, 오버슈트 0.20 vs 0.26, 10/10 창 부호 일치) — 리셋 고유의 가격 불이익 없음, #128 헤드라인은 돌파 진입 프리미엄. 단 왕복 비용(재진입 다리)은 남고 D1 반사실은 0 으로 그린다(≈0.8%p/TIME_EXIT). 기간정합 계기(2026-07~09) 10쌍 +1.68 vs 54건 +1.76. 라이브 12쌍 중앙값 +2.84% — #209 B 오염은 갭을 낮추는 방향이라 원인이 아니고 소표본으로 미해석. 지표 결과 전 커밋 `e0506ae`, 리뷰 반영(분위·경계·B 서명) 후속 커밋.
+- [[reset-churn-measurement]] 미측정 성분 1 에 포인터. #143 M1 fixture 기각. 진행 상태는 plan 소유.
