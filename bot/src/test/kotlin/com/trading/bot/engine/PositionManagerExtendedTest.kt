@@ -122,6 +122,47 @@ class PositionManagerExtendedTest {
         coVerify(exactly = 0) { upbitClient.placeOrder(any()) } // 미동기화 시 신규매수 금지(이중포지션 방지)
     }
 
+    // #121: 기동 뒤 런타임에 생긴 귀속 불명 lock(출금 대기·수동 주문)은 syncPosition 이 안 돌아 못 봤다 —
+    // buy 가 사이징을 위해 이미 조회하는 잔고에서 같은 판정을 한다(추가 호출 없음). 차단 + unsynced 로 재동기화 위임.
+    @Test
+    fun `buy is blocked and marks unsynced when the coin has a lock our orders do not explain`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "KRW", balance = "200000"),
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
+        )
+        val state = TradingState("KRW-BTC", position = false)
+
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNull(result)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+        assertTrue(state.unsynced)
+        assertTrue(state.unattributableLockWarned)
+        assertFalse(state.position) // 판정만, 포지션은 건드리지 않는다(정리는 sell 의 phantom 경로)
+        coVerify(exactly = 1) { upbitClient.getAccounts() } // 사이징 조회를 재사용 — 추가 호출 없음
+    }
+
+    // 현재 프로덕션 경로에서는 도달하지 않는다(processTicker 가 pendingSellUuid 면 buy 전에 return) — syncPosition 과 같은
+    // 판정식(우리 주문 상한)을 buy 도 쓴다는 정책 일관성을 고정한다.
+    @Test
+    fun `buy is not blocked by a lock that our own pending sell explains`() = runTest {
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(
+                Account(currency = "KRW", balance = "200000"),
+                Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
+            ),
+            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")),
+        )
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-123")
+        coEvery { upbitClient.getOrder("buy-123") } returns Order(uuid = "buy-123", state = "done", executedVolume = "0.00038")
+        val state = TradingState("KRW-BTC", position = false, pendingSellUuid = "sell-1", pendingSellVolume = 0.001)
+
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+
+        assertNotNull(result)
+        assertFalse(state.unsynced)
+    }
+
     // --- buy tests ---
 
     @Test
