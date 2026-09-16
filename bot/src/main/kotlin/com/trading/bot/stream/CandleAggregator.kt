@@ -32,6 +32,17 @@ class CandleAggregator(
         }
     }
 
+    /**
+     * 이미 완전한 봉(부팅 seed 의 오늘 D1)을 그 period 의 진행 중 집계로 등록한다. 등록이 없으면 첫 M1 이 이 period 를 M1 하나로
+     * **새로** 시작해 [MarketDataStore.addCandle] upsert 로 seed 를 대체한다. 등록 뒤 M1 은 병합 분기로 이어진다 — seed(부팅 시각까지)와
+     * 첫 M1(그 직후 분)의 volume 이 부팅당 최대 1분 겹칠 수 있고 누적되진 않는다(다음 부팅의 seed 가 원본으로 덮는다).
+     */
+    fun prime(candle: NormalizedCandle) {
+        val periodStart = alignToPeriodStart(candle.openTime, candle.interval)
+        require(periodStart == candle.openTime) { "prime 봉의 openTime 이 ${candle.interval.label} period 시작과 다르다: ${candle.openTime}" }
+        activeCandles["${candle.exchange}:${candle.market}:${candle.interval.label}:$periodStart"] = candle
+    }
+
     private fun aggregateCandle(minuteCandle: NormalizedCandle, interval: CandleInterval) {
         val periodStart = alignToPeriodStart(minuteCandle.openTime, interval)
         val periodEnd = periodStart.plusSeconds(interval.minutes * 60L)
