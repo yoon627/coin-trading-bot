@@ -204,6 +204,15 @@ class TradingEngine(
     /** #19: halt 된 ticker 목록(status 노출용). */
     fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
 
+    /** 이 엔진이 그 티커의 상태를 메모리에 들고 있는가 — 그러면 durable 행은 이 엔진의 사본이라 밖에서 쓰면 안 된다(#129). */
+    fun tracks(ticker: String): Boolean = states.containsKey(ticker)
+
+    /**
+     * 메모리 상태의 진입 전략(수동 매도 귀속용, #129). 상태가 없으면 null — [tracks] 로 "없음"과 "메타 없음"을 구분한다.
+     * 무락 읽기다: 최악이 직전 전략명 하나이고 주문 경로엔 영향이 없어 tick 루프와의 경합을 허용한다.
+     */
+    fun entryStrategyOf(ticker: String): String? = states[ticker]?.entryStrategy
+
     /**
      * #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false.
      * durable 기록이 실패하면 메모리 해제를 되돌리고 예외를 올린다 — 성공으로 응답하면 사용자는 풀린 줄 알지만

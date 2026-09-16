@@ -49,11 +49,14 @@ data class TradeRoundTrip(
 /** 코인 수량은 소수라 잔량 0 을 정확히 비교할 수 없다. 이 이하면 청산된 것으로 본다. */
 private const val VOLUME_EPSILON = 1e-8
 
-/** 수동 주문의 `strategy` 값 — `ManualTradeController` 가 넣는다. */
+/**
+ * 진입 전략을 모르는 수동 주문의 `strategy` 값. 과거 수동 매수 행(2026-09-16 제거 전)은 전부 이 값이고, 수동 매도는
+ * 진입 전략을 알면 그 전략명을 쓴다(#129) — 여기서는 BUY 행의 스냅샷/증분 판정에만 쓴다.
+ */
 private const val MANUAL_STRATEGY = "manual"
 
 /**
- * 수동 매수 수량은 `주문금액 / 조회시점가격` 추정이라(`TradeExecutionService.executeBuy`) 실측 매도와
+ * 과거 수동 매수 행(2026-09-16 제거 전 `executeBuy`)의 수량은 `주문금액 / 조회시점가격` 추정이라 실측 매도와
  * 정확히 상쇄되지 않는다. 오차 **부호는 정해져 있지 않다** — 기록 수량이 실제보다 큰지 작은지는
  * `체결가 / 조회시점가격` 이 `1 - 수수료율(≈0.0005)` 보다 큰지에 달렸고, 체결과 틱 조회 사이의 가격
  * 변동이 그 폭을 양방향으로 넘나든다. 그래서 단방향이 아니라 대칭 비율로 흡수한다.
@@ -67,7 +70,8 @@ private const val MANUAL_STRATEGY = "manual"
  *
  * 이 비율 이내의 잔량은 청산으로 본다. 대가로 실제 잔여분이 이 비율 미만이면 청산으로 표시되고,
  * 나중에 그 dust 를 실제로 팔면 매수 없는 고아 SELL 행이 목록에 하나 더 생긴다.
- * 수동 매도는 실제 체결 수량을 기록한다(#105) — 남은 추정은 수동 매수뿐이고, 그것까지 실측이 되면 이 허용 오차는 없어져야 한다.
+ * 수동 매도는 실제 체결 수량을 기록하고(#105) 수동 매수는 제거됐다(#129) — 추정 행은 더 생기지 않으며, 이 허용 오차는
+ * 과거 행만을 위한 것이다.
  */
 private const val ESTIMATE_TOLERANCE_RATIO = 0.0025
 
@@ -85,7 +89,7 @@ private fun TradeRecordEntity.isSnapshotBuy(): Boolean =
  * `PositionManager.completeBuy` 는 거래소 **전체 잔고와 평단**을 그대로 적는다(#20 — 재시작 시
  * `syncPosition` 이 복원한 분과 이중계상되지 않게 하려는 의도다). 그래서 엔진 매수 기록은 증분 체결이
  * 아니라 **그 시점 포지션 전체의 스냅샷**이고, 여러 건을 더하면 앞선 매수가 중복으로 들어간다.
- * 반면 수동 매수(`TradeExecutionService.executeBuy`)는 그 주문의 금액·수량만 적으므로 합산이 맞다.
+ * 반면 과거 수동 매수 행(2026-09-16 제거 전 `executeBuy`)은 그 주문의 금액·수량만 적었으므로 합산이 맞다.
  *
  * 그래서 규칙은 **마지막 엔진 스냅샷 + 그 이후의 수동 증분들** 이다. 스냅샷은 그 시점까지의 보유분을
  * 이미 담고 있으므로 앞선 수동 매수를 다시 더하면 이중계상이고, 뒤따르는 수동 매수를 빠뜨리면 누락이다.
@@ -121,7 +125,7 @@ private data class BuySide(
             // 스냅샷이 없으면(-1) 전부가 증분이고, 있으면 그 뒤만 증분이다.
             val lastSnapshot = buys.indexOfLast { it.isSnapshotBuy() }
             val snapshot = buys.getOrNull(lastSnapshot)
-            // 수량 0 인데 금액만 있는 행은 제외한다 — `executeBuy` 가 시세 조회 실패 시 그렇게 남긴다
+            // 수량 0 인데 금액만 있는 행은 제외한다 — 과거 `executeBuy` 가 시세 조회 실패 시 그렇게 남겼다
             // (`currentPrice=0` → `volume=0`, `totalAmount`=주문 전액). 금액만 더하면 평단이 부풀려진다.
             val increments = buys.drop(lastSnapshot + 1).filter { it.volume > 0.0 }
             val incrementVolume = increments.sumOf { it.volume }
@@ -206,10 +210,10 @@ private fun roundTrip(
     // 이 그룹의 매수보다 많이 팔렸다면 이전 포지션에서 넘어온 잔여분까지 팔린 것이다(수동 sellAll 은
     // 거래소 잔고 전체를 판다). 그 잔여분의 원가는 이 그룹에 없어 알 수 없다.
     //
-    // 수동 매수는 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남기는데(#105) `sellAll` 은 실제
-    // 잔고를 판다. 그래서 이전 포지션이 없는 정상 매매도 초과로 잡힐 수 있다. 추정분에 비례하는 허용
-    // 오차까지는 그 오차로 보고 흡수하고, 넘으면 원가 미상으로 보아 손익을 비운다 — 틀린 손익을
-    // 보여주느니 비우는 편이다. 매도는 #105 로 실측이 됐고, 남은 추정은 수동 매수다.
+    // 과거 수동 매수 행(2026-09-16 제거 전)은 `주문금액 / 조회시점 가격` 으로 **추정**한 수량을 남겼는데
+    // `sellAll` 은 실제 잔고를 판다. 그래서 이전 포지션이 없는 정상 매매도 초과로 잡힐 수 있다. 추정분에
+    // 비례하는 허용 오차까지는 그 오차로 보고 흡수하고, 넘으면 원가 미상으로 보아 손익을 비운다 — 틀린
+    // 손익을 보여주느니 비우는 편이다. 매도는 #105 로 실측이 됐고 수동 매수는 #129 로 사라져 추정 행은 과거분뿐이다.
     //
     // 청산 판정과 같은 허용 오차를 쓴다. 기준이 다르면 "청산됐는데 매수 기록을 못 믿는다" 는 모순이 생긴다.
     val oversold = buys.isNotEmpty() && sellVolume > buyVolume + buySide.closureTolerance
@@ -243,8 +247,8 @@ private fun roundTrip(
             null
         },
         reason = sells.lastOrNull()?.reason,
-        // 수동 매수 위에 엔진이 매수하면 런타임 entryStrategy 는 엔진 전략이 된다(수동 매수는 TradingState 를
-        // 건드리지 않는다). 첫 BUY 를 그대로 쓰면 'manual' 이 나와서, 같은 포지션의 SELL 기록·V21 백필과
+        // 과거 수동 매수 위에 엔진이 매수한 포지션은 런타임 entryStrategy 가 엔진 전략이었다(수동 매수는 TradingState 를
+        // 건드리지 않았다). 첫 BUY 를 그대로 쓰면 'manual' 이 나와서, 같은 포지션의 SELL 기록·V21 백필과
         // 전략 귀속이 갈린다. 엔진 기록이 있으면 그 중 **첫 번째**를 쓴다 — 여럿이면 먼저 찍힌 쪽이 남는다.
         strategy = buys.firstOrNull { it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
             ?.strategy
