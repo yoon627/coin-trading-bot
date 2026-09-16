@@ -69,4 +69,9 @@ class MarketDataPersistenceService(
         // Trigger aggregation for higher timeframes
         candleAggregator.onMinuteCandle(candle)
     }
+
+    /** 부팅 seed 의 오늘 D1 을 집계기의 진행 중 봉으로 등록한다 — [CandleAggregator.prime]. */
+    fun primeAggregate(candle: NormalizedCandle) {
+        candleAggregator.prime(candle)
+    }
 }
