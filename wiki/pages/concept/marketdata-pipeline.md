@@ -2,9 +2,9 @@
 title: 시세 수집 파이프라인 — WS ticker + REST 캔들, 무수신 워치독
 category: concept
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-09-17
 claim_state: current
-verified: 2026-09-16 — `seedDailyCandles` 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 seed 를 대체하지 않고 이어받는다(`CandleAggregatorTest` 재현 테스트 Red→Green, `MarketDataIngestionServiceTest` prime 검증). 2026-08-23 seedDailyCandles 200봉·실패 시 무재시도·전략별 minCandles 확인분 유지
+verified: 2026-09-17 — M1 폴링 `count=5` + `CandleAggregator` 분 단위 멱등(base/provisional/lastFolded, `prime(candle, fetchedAt)`)으로 상위봉이 완결 분봉으로 접힌다(`CandleAggregatorTest` 재수신 대체·꼬리 복원·자정 경계·prime 겹침, `MarketDataIngestionServiceTest` 오름차순·count 양 경로 검증). 2026-09-16 — `seedDailyCandles` 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 seed 를 대체하지 않고 이어받는다(`CandleAggregatorTest` 재현 테스트 Red→Green, `MarketDataIngestionServiceTest` prime 검증). 2026-08-23 seedDailyCandles 200봉·실패 시 무재시도·전략별 minCandles 확인분 유지
 sources:
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt
@@ -32,13 +32,14 @@ UpbitMarketFeed ──ticker(WS)──┐
 **차트 API 는 store 전용이 아니다** — `ChartController` 는 메모리에 요청 개수만큼 없으면 **DB(`market_candles`)로 완전히 대체**한다(`ChartController.kt:46-53`). 차트 값과 봇이 본 값이 어긋난다면 이 폴백 경로를 먼저 의심한다.
 
 - `latestTickers` — 마켓별 최신 스냅샷
-- `candleBuffers` — `ConcurrentSkipListMap<openTime, Candle>`, 마켓·interval 당 최대 200개. **openTime 키 upsert** 라서 `CandleAggregator` 가 같은 분봉을 반복 갱신해도 중복이 쌓이지 않는다(과거에 중복 누적으로 지표·매수 D1 이 오염된 적이 있다). upsert 의 반대쪽 함정: 집계기가 period 를 **처음** 볼 때 M1 하나로 봉을 새로 만들면 그 upsert 가 부팅 seed 의 완전한 D1 을 재시작 이후 구간만 남은 봉으로 **대체**한다 — 그래서 `seedDailyCandles` 가 **오늘 D1(최신 openTime) 을 집계기에 prime** 해 두고(`persistenceService.primeAggregate` → `CandleAggregator.prime`, 부팅 로그 `Primed D1 aggregate for …`), 첫 M1 은 기존 병합 분기로 이어진다(시가·고저 보존, close 는 최신 M1, volume 은 합 — seed 와 첫 M1 이 부팅당 최대 1분 겹쳐 그만큼 과대일 수 있고 누적되진 않는다; `combined` 경로는 D1 volume 을 쓰지 않고, volume 을 보는 전략(`mean_reversion`·`vwap_band`)에도 하루 중 1분 이내라 무시할 크기). 어제 이전 봉은 M1 이 다시 오지 않아 seed 그대로다. **부팅일만 복원한다** — 프로세스가 자정을 넘기면 새 날 D1 은 M1 모자이크(폴링 라운드 ~62초·`count=1` 이라 분 단위 결손, 레인지가 좁아지는 쪽)로 만들어지는 점은 그대로이고, seed 가 실패한 마켓(무재시도)도 그대로 노출된다. 2026-09-16 이전엔 이 대체 때문에 재시작 다음날 00:00 직후 전일 레인지가 작아져 돌파선 ≈ 당일시가로 무너졌다([[lesson-seed-vs-stream-overwrite]], #209).
+- `candleBuffers` — `ConcurrentSkipListMap<openTime, Candle>`, 마켓·interval 당 최대 200개. **openTime 키 upsert** 라서 `CandleAggregator` 가 같은 분봉을 반복 갱신해도 중복이 쌓이지 않는다(과거에 중복 누적으로 지표·매수 D1 이 오염된 적이 있다). upsert 의 반대쪽 함정: 집계기가 period 를 **처음** 볼 때 M1 하나로 봉을 새로 만들면 그 upsert 가 부팅 seed 의 완전한 D1 을 재시작 이후 구간만 남은 봉으로 **대체**한다 — 그래서 `seedDailyCandles` 가 **오늘 D1(최신 openTime) 을 집계기에 prime** 해 두고(`persistenceService.primeAggregate` → `CandleAggregator.prime`, 부팅 로그 `Primed D1 aggregate for …`), seed 는 확정 집계(base)가 되고 M1 은 그 위에 얹힌다(시가·고저 보존, close 는 최신 M1, volume 은 합). prime 시각의 분보다 오래된 M1(폴링 꼬리)은 seed 에 이미 포함돼 있어 무시하므로 seed 와의 volume 겹침은 부팅당 최대 1분이고 누적되진 않는다(`combined` 경로는 D1 volume 을 쓰지 않고, volume 을 보는 전략(`mean_reversion`·`vwap_band`)에도 하루 중 1분 이내라 무시할 크기). 어제 이전 봉은 M1 이 다시 오지 않아 seed 그대로다. seed 가 실패한 마켓(무재시도)은 그대로 노출된다.
+- **집계기는 분 단위 멱등이다** (2026-09-17) — 폴링은 진행 중 분봉을 돌려주므로 `count=1` 이던 때는 각 분의 완결본을 영영 못 받아 상위봉 volume 이 평균 절반, 고저 레인지가 체계적으로 좁았다(부팅일이 아니어도 상시). 지금은 라운드마다 M1 `count=5`(`M1_FETCH_COUNT`) 를 **오름차순으로** 넣고, 집계기가 period 마다 base(확정 분봉 병합)·provisional(가장 새 분봉의 최신 버전)·lastFolded 를 들고 있다가 더 새 분봉이 오면 provisional 을 base 에 접는다 — 같은 분의 재수신은 대체, 이미 접힌 분은 무시, 건너뛴 분은 다음 라운드 꼬리로 복원(연속 3라운드 ≈4분 공백까지). 그보다 긴 공백은 직전 provisional 이 부분 봉으로 접힌 채 남는다. **바닥보다 오래된 상태 없는 period 는 무시한다** — (market, interval) 별 period 바닥이 있고, 부팅 seed 시점(`startFrom`, 모든 interval — seed 성공·오늘 행 유무와 무관)·prime·새 period 생성 때 올라가며 내려가지 않는다. 부팅 첫 라운드 꼬리의 어제 분봉, Upbit 이 무거래 분을 응답에서 생략해 꼬리에 실리는 오래된 분봉, 축출된 period 의 재유입은 앞부분을 모르므로 부분봉을 만들어 store 의 완전한 seed D1 을 덮지 않는다(2026-09-17 리뷰가 잡은 자정 직후 부팅 결정적 오염 — prime 만으로는 오늘 행이 없는 바로 그 창에서 바닥이 비었다). 부팅 시각의 현재 period(예: 13:02 부팅의 H1 13:00)는 그 이후 분봉만으로 만들어지는 부분봉이다(seed 가 없는 interval 의 기존 한계). count 상한은 period 축출 컷오프(3×interval, M5 = 15분) 미만. 오름차순이 전제다 — 내림차순이면 부분 봉이 확정되고 완결본이 버려져 옛날보다 나빠진다. 2026-09-16 이전엔 이 대체 때문에 재시작 다음날 00:00 직후 전일 레인지가 작아져 돌파선 ≈ 당일시가로 무너졌다([[lesson-seed-vs-stream-overwrite]], #209).
 - `tickerSink` — hot multicast `Flux`. SSE 가 이걸 구독하므로 별도 WS 연결이 필요 없다. `autoCancel=false` 로 두어 마지막 구독자가 끊겨도 sink 가 닫히지 않는다.
 
 ## 수집 코루틴
 
 - **ticker**: WS flow 를 collect 한다. flow 가 에러로든 정상으로든 끝나면 backoff 후 **재구독**한다. 예전 구현은 catch 후 종료라 한 번 끊기면 수집이 영영 멈췄다.
-- **candle**: 60초마다 M1 을 폴링. 캔들 한 번 요청의 상한과 D1 봉 경계(KST 09:00)는 [[upbit-api]] 참조. 부팅 시 `seedDailyCandles` 가 D1 200개를 store 에 한 번 채운다 — 안 하면 D1 버퍼가 하루 1개씩만 쌓여 전략이 요구하는 봉수를 채울 때까지 매 tick REST 폴백을 탄다 — 기본 21일, `macd_cross` 36일, `knee_*` 41일([[trading-engine-loop]] 의 `MIN_DAILY_CANDLES` 와 [[swing-strategies]] 의 `minCandles`). **seed 가 실패하면 재시도가 없어** 그 상태가 오래 간다.
+- **candle**: 60초마다 M1 을 5개(`M1_FETCH_COUNT`) 폴링 — 진행 중 분봉과 완결된 직전 분봉들을 함께 받아 집계기가 완결본으로 접는다(위 `candleBuffers`). 캔들 한 번 요청의 상한과 D1 봉 경계(KST 09:00)는 [[upbit-api]] 참조. 부팅 시 `seedDailyCandles` 가 D1 200개를 store 에 한 번 채운다 — 안 하면 D1 버퍼가 하루 1개씩만 쌓여 전략이 요구하는 봉수를 채울 때까지 매 tick REST 폴백을 탄다 — 기본 21일, `macd_cross` 36일, `knee_*` 41일([[trading-engine-loop]] 의 `MIN_DAILY_CANDLES` 와 [[swing-strategies]] 의 `minCandles`). **seed 가 실패하면 재시도가 없어** 그 상태가 오래 간다.
 - **fan-out 격리**: store 와 persistence 를 각각 독립 try/catch 로 감싼다. 한 sink 실패가 다른 sink 나 수집 코루틴을 죽이지 않게 — 구 Kafka 2-consumer-group 격리와 등가.
 
 ## half-open 워치독

@@ -2,7 +2,7 @@
 title: Upbit API — 이 봇이 의존하는 동작
 category: entity
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-09-17
 claim_state: current
 verified: 2026-09-16 — 수동 매도의 `awaitFill` 재조회는 `TradeExecutionServiceTest`(#105 절)로 확인 · 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
 sources:
@@ -93,7 +93,7 @@ sources:
 
 - **WS ticker** — 실시간 체결가 스트림. 연결이 살아 있어도 데이터가 끊기는 half-open 이 실제로 발생하므로 워치독이 붙어 있다([[marketdata-pipeline]]).
 - **REST 캔들** — `/v1/candles/days` 는 한 번에 최대 200개, `to` 파라미터로 페이지네이션한다. **D1 봉 경계는 KST 09:00(=UTC 00:00)** 이며, 이 때문에 일일 리셋 기준과 봉 open 이 정합한다.
-- 분봉(M1)은 폴링으로 60초마다 수집한다.
+- 분봉(M1)은 폴링으로 60초마다 5개(`count=5`)씩 수집한다 — 진행 중 분봉만 받으면 완결본을 영영 못 받아 상위봉이 절반값이 된다([[marketdata-pipeline]]).
 
 ## 에러
 
