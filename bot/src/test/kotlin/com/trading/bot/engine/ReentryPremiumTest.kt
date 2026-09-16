@@ -14,6 +14,7 @@ import kotlin.math.abs
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 
@@ -43,7 +44,8 @@ class ReentryPremiumTest {
     ) { val day: String get() = createdUtc.substring(0, 10) }
 
     /** 한 진입의 프리미엄 분해. [reentry] 면 같은 날 선행 TIME_EXIT 이 있다. */
-    private class Entry(val t: LiveSemanticsArm.Trade, val dayOpen: Double, val target: Double, val reentry: Boolean, val minutesAfterExit: Long?) {
+    /** [forcedNonTimeExitBefore]: 직전 거래가 같은 날 09:00 한도봉에서 TIME_EXIT 이 아닌 게이트(트레일링·손절·익절)로 청산된 뒤의 재진입 — 대조군에 섞이는 준-재진입. */
+    private class Entry(val t: LiveSemanticsArm.Trade, val dayOpen: Double, val target: Double, val reentry: Boolean, val minutesAfterExit: Long?, val forcedNonTimeExitBefore: Boolean) {
         val premium get() = (t.entryPrice - dayOpen) / dayOpen * 100.0
         val lineComponent get() = (target - dayOpen) / dayOpen * 100.0
         val overshoot get() = (t.entryPrice - target) / dayOpen * 100.0
@@ -68,8 +70,8 @@ class ReentryPremiumTest {
             val idx = chrono.withIndex().associate { (i, c) -> c.candleDateTimeKst.substring(0, 10) to i }
             val sorted = ts.sortedWith(compareBy({ it.entryDate }, { it.entryBarUtc }))
             for ((i, t) in sorted.withIndex()) {
-                val open = dayOpen(market, t.entryDate) ?: continue
-                val prev = chrono.getOrNull((idx[t.entryDate] ?: continue) - 1) ?: continue
+                val open = dayOpen(market, t.entryDate) ?: fail("당일시가 없음: $market ${t.entryDate}")
+                val prev = idx[t.entryDate]?.let { chrono.getOrNull(it - 1) } ?: fail("전일봉 없음: $market ${t.entryDate}")
                 val target = open + k * (prev.highPrice - prev.lowPrice)
                 val prevTrade = sorted.getOrNull(i - 1)
                 val reentry = prevTrade != null && prevTrade.reason == "TIME_EXIT" && prevTrade.exitDate == t.entryDate
@@ -78,9 +80,10 @@ class ReentryPremiumTest {
                     assertTrue(minutes!! > 0, "재진입 봉이 청산 봉보다 앞선다: $prevTrade → $t")
                     assertTrue(abs(prevTrade.exitPrice - open) <= 1e-9 * open, "TIME_EXIT 청산가 ${prevTrade.exitPrice} ≠ 당일시가 $open — 청산 규칙 전제가 깨졌다")
                 }
-                out += Entry(t, open, target, reentry, minutes)
+                out += Entry(t, open, target, reentry, minutes, prevTrade != null && prevTrade.reason != "TIME_EXIT" && prevTrade.exitDate == t.entryDate && prevTrade.exitBarUtc.endsWith("T00:00:00"))
             }
         }
+        assertEquals(trades.size, out.size, "진입 목록이 거래수와 다르다")
         return out
     }
 
@@ -102,14 +105,17 @@ class ReentryPremiumTest {
         }
         out.appendLine()
         val mins = re.mapNotNull { it.minutesAfterExit?.toDouble() }.sorted()
+        fun qm(p: Double) = if (mins.isEmpty()) 0.0 else mins[((mins.size - 1) * p).toInt()]
         val entryBarExit = re.count { it.t.exitOnEntryBar }; val sameDay = re.count { it.t.exitDate == it.t.entryDate && !it.t.exitOnEntryBar }; val ended = re.count { it.t.reason == "END" }
         val rePnl = re.filter { it.t.reason != "END" }.map { it.t.netPnlPct }; val ctlPnl = ctl.filter { it.t.reason != "END" }.map { it.t.netPnlPct }
-        out.appendLine("- 재진입까지 분(구조적으로 ≥ 5분 — 첫 봉 시가는 돌파선 아래): 중앙값 %.0f · 10%% %.0f · 90%% %.0f. 재진입 거래 중 진입 봉 즉시 청산 %d · 같은 날 청산 %d · 구간 끝 END %d.".format(
-            median(mins), if (mins.isEmpty()) 0.0 else mins.first(), if (mins.isEmpty()) 0.0 else mins[((mins.size - 1) * 0.9).toInt()], entryBarExit, sameDay, ended))
+        out.appendLine("- 재진입까지 분(구조적으로 ≥ 봉 길이 — 첫 봉 시가는 돌파선 아래): 최소 %.0f · 10%% %.0f · 중앙값 %.0f · 90%% %.0f. 재진입 거래 중 진입 봉 즉시 청산 %d · 같은 날 청산 %d · 구간 끝 END %d.".format(
+            if (mins.isEmpty()) 0.0 else mins.first(), qm(0.1), median(mins), qm(0.9), entryBarExit, sameDay, ended))
+        out.appendLine("- 대조군에 섞인 준-재진입(같은 날 09:00 한도봉에서 TIME_EXIT 이 아닌 게이트로 청산된 뒤 재진입): %d건 — 차이를 줄이는 쪽의 오염.".format(ctl.count { it.forcedNonTimeExitBefore }))
         out.appendLine("- 재진입 거래 손익(END 제외) 건당 %+.3f (n=%d) vs 대조군 건당 %+.3f (n=%d) — 재진입은 '전날 보유 + 그날 돌파' 로 선택된 부분집합이라 교란된 비교(참고).".format(
             if (rePnl.isEmpty()) 0.0 else rePnl.average(), rePnl.size, if (ctlPnl.isEmpty()) 0.0 else ctlPnl.average(), ctlPnl.size))
-        out.appendLine("- 크기 지표(가법 아님): TIME_EXIT 건당 프리미엄 중앙값 × 재진입 비율 = %+.3f × %.3f = %+.3f%%p / TIME_EXIT. #128 관측(24h 내 재매수 7건 평균 +1.80%%)과 같은 자릿수인지만 본다.".format(
-            st(re) { it.premium }.median, re.size.toDouble() / maxOf(1, timeExits), st(re) { it.premium }.median * re.size / maxOf(1, timeExits)))
+        val rate = re.size.toDouble() / maxOf(1, timeExits); val pr = st(re) { it.premium }
+        out.appendLine("- 크기 지표(가법 아님, TIME_EXIT 건당): 프리미엄 × 재진입 비율 %.3f — pooled 중앙값 %+.3f → %+.3f%%p · pooled 평균 %+.3f → %+.3f%%p · 마켓 균등가중 평균 %+.3f → %+.3f%%p. 헤드라인은 pooled 중앙값, 선언한 estimand(마켓 균등)는 방향 확인용. #128 관측(24h 내 재매수 7건 평균 +1.80%%)과 자릿수만 대조.".format(
+            rate, pr.median, pr.median * rate, pr.mean, pr.mean * rate, pr.marketMean, pr.marketMean * rate))
         out.appendLine()
     }
 
@@ -137,17 +143,22 @@ class ReentryPremiumTest {
             assertEquals(pin.first, all.size, "${level.unit}분 기준 거래수가 선행과 다르다 — 계기 drift")
             assertTrue(abs(all.sumOf { it.netPnlPct } - pin.second) <= 0.05, "${level.unit}분 기준 Σpnl 이 선행과 다르다")
             assertEquals(all.size, all.map { it.market to it.entryDate }.toSet().size, "${level.unit}m: (마켓, 진입일) 이 유일하지 않다")
-            val es = ArrayList<Entry>()
-            for (w in level.windows) es += entries(byWindow.getValue(w.dir), w.daily, { m, d -> w.dayOpen[m to d] }, config.kValue)
+            val perWindow = level.windows.associate { w -> w.dir to entries(byWindow.getValue(w.dir), w.daily, { m, d -> w.dayOpen[m to d] }, config.kValue) }
+            val es = perWindow.values.flatten()
             section(out, "${level.unit}분봉 · 10창 (2020~2025)", all, es)
             if (level.unit == 5) {
-                out.appendLine("| 창 | TIME_EXIT | 재진입 쌍 | 재진입 프리미엄 중앙값 | 대조군 중앙값 |")
-                out.appendLine("|---|---|---|---|---|")
+                out.appendLine("| 창 | TIME_EXIT | 재진입 쌍 | 재진입 프리미엄 중앙값 | 대조군 중앙값 | 재진입 ≤ 대조 |")
+                out.appendLine("|---|---|---|---|---|---|")
+                var below = 0
                 for (w in level.windows) {
-                    val ws = entries(byWindow.getValue(w.dir), w.daily, { m, d -> w.dayOpen[m to d] }, config.kValue)
+                    val ws = perWindow.getValue(w.dir)
                     val r = ws.filter { it.reentry }.map { it.premium }.sorted(); val c = ws.filter { !it.reentry }.map { it.premium }.sorted()
-                    out.appendLine("| ${w.dir} | ${byWindow.getValue(w.dir).count { it.reason == "TIME_EXIT" }} | ${r.size} | %+.3f | %+.3f |".format(median(r), median(c)))
+                    val le = r.isNotEmpty() && median(r) <= median(c); if (le) below++
+                    out.appendLine("| ${w.dir} | ${byWindow.getValue(w.dir).count { it.reason == "TIME_EXIT" }} | ${r.size} | %s | %s | %s |".format(
+                        if (r.isEmpty()) "-" else "%+.3f".format(median(r)), if (c.isEmpty()) "-" else "%+.3f".format(median(c)), if (r.isEmpty()) "-" else if (le) "예" else "아니오"))
                 }
+                out.appendLine()
+                out.appendLine("창별 부호: 재진입 ≤ 대조군 %d/%d (모두 한쪽이면 부호검정 양측 p = %.4f).".format(below, level.windows.size, 2.0 / (1 shl level.windows.size)))
                 out.appendLine()
             }
         }
@@ -157,14 +168,25 @@ class ReentryPremiumTest {
         require(Files.exists(root.resolve("trades.json"))) { "라이브 캐시 없음: $root — #190 의 scripts/collect_live_entry_fixtures.py 로 준비할 것(skip 아님)" }
         val liveDaily = LIVE_MARKETS.associateWith { loadGz(root.resolve("daily").resolve("$it.json.gz"), Candle::class.java) }
         val live5 = LIVE_MARKETS.associateWith { loadGz(root.resolve("intraday5").resolve("$it.json.gz"), Candle::class.java).sortedBy { it.candleDateTimeUtc } }
-        val liveArm = ArrayList<LiveSemanticsArm.Trade>()
+        val liveArmAll = ArrayList<LiveSemanticsArm.Trade>()
         val liveDayOpen = HashMap<kotlin.Pair<String, String>, Double>()
+        val badFirstBar = LinkedHashSet<Pair<String, String>>()
         for (m in LIVE_MARKETS) {
-            for ((d, bars) in live5.getValue(m).groupBy { it.candleDateTimeUtc.substring(0, 10) }) liveDayOpen[m to d] = bars.first().openingPrice
-            liveArm += LiveSemanticsArm.run(m, strategy, liveDaily.getValue(m).reversed(), live5.getValue(m), config, props, warmup = 60).filter { it.entryDate in LIVE_START..LIVE_END }
+            for ((d, bars) in live5.getValue(m).groupBy { it.candleDateTimeUtc.substring(0, 10) }) {
+                // 첫 봉이 00:00 이 아니면 "당일시가 = 청산가" 전제가 그날에는 성립하지 않는다 — 10창은 LadderWindows 가 240분 시가와 대조해 막지만 이 캐시엔 그 가드가 없다.
+                if (!bars.first().candleDateTimeUtc.endsWith("T00:00:00")) { badFirstBar += m to d; continue }
+                liveDayOpen[m to d] = bars.first().openingPrice
+            }
+            liveArmAll += LiveSemanticsArm.run(m, strategy, liveDaily.getValue(m).reversed(), live5.getValue(m), config, props, warmup = 60)
         }
-        val liveEs = entries(liveArm, liveDaily, { m, d -> liveDayOpen[m to d] }, config.kValue)
+        // 재진입 판정은 경계 전 거래까지 본 뒤 기간으로 거른다(07-14 직전 진입 → 07-14 TIME_EXIT → 재진입이 대조군으로 오분류되지 않게).
+        val liveArmKept = liveArmAll.filter { (it.market to it.entryDate) !in badFirstBar }
+        val liveEsAll = entries(liveArmKept, liveDaily, { m, d -> liveDayOpen[m to d] }, config.kValue)
+        val liveEs = liveEsAll.filter { it.t.entryDate in LIVE_START..LIVE_END }
+        val liveArm = liveArmKept.filter { it.entryDate in LIVE_START..LIVE_END }
         section(out, "5분봉 · 라이브 기간 2026-07-14~09-14 (기간정합 계기, warmup 60, 현행 설정 단일)", liveArm, liveEs)
+        out.appendLine("첫 봉이 00:00 이 아니라 제외한 (마켓, 일): %d개%s.".format(badFirstBar.size, if (badFirstBar.isEmpty()) "" else " — " + badFirstBar.joinToString(" ") { "${it.first}/${it.second}" }))
+        out.appendLine()
 
         // ── 라이브 trade_records (집계만) ──
         val live = mapper.readValue<List<LiveTrade>>(Files.readString(root.resolve("trades.json")))
@@ -186,12 +208,13 @@ class ReentryPremiumTest {
         }
         val fast = pairs.filter { it.seconds <= 60 }; val slow = pairs.filter { it.seconds > 60 }
         val afterDeploy = slow.count { p -> LocalDateTime.parse(p.buy.createdUtc).toLocalDate().minusDays(1).toString() in DEPLOY_DATES }
+        val bSignature = slow.count { p -> p.seconds <= 15 * 60 && LocalDateTime.parse(p.buy.createdUtc).toLocalDate().minusDays(1).toString() in DEPLOY_DATES }
         out.appendLine("## 라이브 `trade_records` (운영 combined 2026-07-14~09-14, 집계만 — BUY price 는 계좌 평단 기록가격)")
         out.appendLine()
         out.appendLine("- DAILY_RESET 매도 %d(전부 00h UTC) · 같은 날 같은 마켓 다음 BUY %d(매도 뒤 매도 등 건너뛴 레코드 %d).".format(resets.size, pairs.size, skippedNonBuy))
-        out.appendLine("- 60초 내 재매수 %d — #209 그룹 A(경계 stale window, PR #184 가 09-08 에 해소; 09-16 의 `0534b13` 은 그룹 B 수정)라 리셋 재진입이 아니라 결함 산물, 제외.".format(fast.size))
-        out.appendLine("- 60초 초과 재매수 %d — 갭 최소 %+.2f%% · 최대 %+.2f%% · 중앙값 %+.2f%%(n 이 작아 분포 주장 없음), 분 중앙값 %.0f. 그중 전날 배포(재시작)가 있던 날 %d건(#209 그룹 B 오염 가능 — 전일 D1 절단으로 돌파선이 낮았을 수 있다).".format(
-            slow.size, slow.minOfOrNull { it.gapPct } ?: 0.0, slow.maxOfOrNull { it.gapPct } ?: 0.0, median(slow.map { it.gapPct }.sorted()), median(slow.map { it.seconds / 60.0 }.sorted()), afterDeploy))
+        out.appendLine("- 60초 내 재매수 %d(갭 %+.2f~%+.2f%%) — 시가 근처 즉시 매수는 #209 결함 산물(그룹 A 경계 stale window 또는 그룹 B 전일 D1 절단 — 둘 다 같은 서명, A 는 PR #184, B 는 `0534b13` 이 해소)이라 리셋 재진입이 아니다 → 제외.".format(fast.size, fast.minOfOrNull { it.gapPct } ?: 0.0, fast.maxOfOrNull { it.gapPct } ?: 0.0))
+        out.appendLine("- 60초 초과 재매수 %d — 갭 최소 %+.2f%% · 최대 %+.2f%% · 중앙값 %+.2f%%(n 이 작아 분포 주장 없음), 분 중앙값 %.0f. 전날 배포(재시작)가 있던 날 %d건이지만 그룹 B 오염은 돌파선을 **낮춰** 갭을 줄이고 00h 직후 체결로 나타나므로(그 서명 — 리셋 후 15분 내 + 전날 배포 — 은 %d건) 계기보다 높은 라이브 중앙값을 설명하지 못한다.".format(
+            slow.size, slow.minOfOrNull { it.gapPct } ?: 0.0, slow.maxOfOrNull { it.gapPct } ?: 0.0, median(slow.map { it.gapPct }.sorted()), median(slow.map { it.seconds / 60.0 }.sorted()), afterDeploy, bSignature))
         out.appendLine()
 
         val path = Path.of("build/reports/reentry-premium.md")
