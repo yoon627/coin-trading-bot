@@ -33,6 +33,7 @@
 - [[lesson-secure-cookie-http]] — prod + HTTP 는 브라우저 로그인 불가 (curl 로는 안 잡힌다)
 - [[lesson-cors-origin-rebuild]] — 브라우저만 403(CORS Origin) + 앱 변경엔 이미지 재빌드 필요
 - [[lesson-single-point-verification]] — 한 곳에서 통과한 검증을 일반화하지 말 것 (네트워크 지점 · 코드 분기)
+- [[lesson-seed-vs-stream-overwrite]] — 부팅 seed 와 스트림 집계가 같은 키를 쓰면 스트림의 첫 값이 seed 를 통째로 대체한다 — 재시작 뒤 전일 D1 절단 → 돌파선 ≈ 당일시가 → 09:00 직후 매수(#209, #27 C3). seed 가 오늘 D1 을 집계기에 prime 하도록 수정
 - [[lesson-ec2-sizing-oom]] — 소형 EC2 에서 OOM 으로 부팅 실패 (historical)
 - [[lesson-deploy-script-pitfalls]] — `set -e` 단락 종료, MSYS 경로 변환
 - [[lesson-branch-checkout-drift]] — checkout 이 미커밋 변경을 끌고 간다
