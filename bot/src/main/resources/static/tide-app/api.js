@@ -82,9 +82,6 @@ const TideAPI = {
   // Leaderboard
   leaderboard: () => TideAPI._fetch('/api/leaderboard'),
 
-  // ML
-  mlPredict: (ticker) => TideAPI._fetch(`/api/ml/predict?ticker=${encodeURIComponent(ticker)}`),
-  mlStatus: (ticker) => TideAPI._fetch(`/api/ml/status?ticker=${encodeURIComponent(ticker)}`),
 };
 
 // Format helpers
