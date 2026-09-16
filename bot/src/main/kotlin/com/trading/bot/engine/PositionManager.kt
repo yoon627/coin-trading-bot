@@ -92,6 +92,10 @@ class PositionManager(
     private fun ourSellLockCeiling(state: TradingState): Double =
         if (state.pendingSellUuid == null) 0.0 else state.pendingSellVolume ?: Double.POSITIVE_INFINITY
 
+    /** 우리 매도 주문으로 설명되지 않는 lock — 출금 대기이거나 사용자가 직접 낸 주문이다(팔 수 없으니 보유가 아니다). */
+    private fun isUnattributableLock(account: Account, state: TradingState): Boolean =
+        account.lockedDouble() > 0.0 && heldVolume(account, ourSellLockCeiling(state)) <= 0.0
+
     /**
      * @param clearWhenEmpty 확인된 무잔고를 포지션 해제로 반영한다. 기본 false — 스윙은 감사 기록 없는 청산을 막기 위해
      *   phantom 정리를 `sell()` 에 맡기지만, 적립의 주기 동기화는 수동 전량 매도 뒤에도 장부가 "보유"로 남아
@@ -112,7 +116,7 @@ class PositionManager(
                     state.avgBuyPrice = account.avgBuyPriceDouble()
                     state.holdVolume = held
                     log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
-                } else if (account.lockedDouble() > 0.0) {
+                } else if (isUnattributableLock(account, state)) {
                     // 우리 주문으로 설명되지 않는 lock — 출금 대기이거나 사용자가 직접 낸 주문이다. 팔 수 없으니
                     // 보유로 세지 않고 매수만 막는다. position 은 건드리지 않는다 — 여기서 내리면 markSold 를
                     // 우회한 청산이 되어 감사 기록 없이 포지션이 사라진다(정리는 sell() 의 phantom 경로 몫).
@@ -186,19 +190,32 @@ class PositionManager(
         reservedKrw: Double = 0.0,
     ): TradeRecord? {
         if (entryBlocked(ticker, state, allowExisting = false)) return null
-        val investAmount = try {
-            calculateInvestAmount((getKrwBalance() - reservedKrw).coerceAtLeast(0.0))
+        val accounts = try {
+            upbitClient.getAccounts()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log.error("Failed to fetch balance for buy {}: {}", ticker, e.message, e)
             return null
         }
+        // 기동 뒤 런타임에 생긴 귀속 불명 lock(출금 대기·수동 주문)은 syncPosition 이 안 돌아 못 본다 — 사이징용 잔고에서
+        // 같은 판정을 하고 재동기화(processTicker 의 unsynced 경로)에 넘긴다. 포지션은 건드리지 않는다(sell 의 phantom 경로 몫).
+        val coin = accounts.find { it.currency == ticker.substringAfter("-") }
+        if (coin != null && isUnattributableLock(coin, state)) {
+            if (!state.unattributableLockWarned) {
+                log.warn("Unattributable locked balance for {} at buy: locked={} — deferring to re-sync", ticker, coin.lockedDouble())
+                state.unattributableLockWarned = true
+            }
+            state.unsynced = true
+            return null
+        }
+        val krw = accounts.find { it.currency == "KRW" }?.balanceDouble() ?: 0.0
+        val investAmount = calculateInvestAmount((krw - reservedKrw).coerceAtLeast(0.0))
         if (investAmount < MIN_ORDER_AMOUNT_KRW) {
             log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
             return null
         }
-        // 스윙은 position=false 가드를 지나왔으므로 주문 전 보유량은 0 이다.
+        // 스윙의 priorVolume 은 장부(position=false) 기준 0 이다 — 장부 밖 free 잔고(수동 매수·dust)는 여기서 보지 않는다.
         return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = 0.0)
     }
 
@@ -844,7 +861,18 @@ class PositionManager(
         currentPrice: Double,
         filled: Order?,
     ): TradeRecord? {
-        if (filled?.state == "wait") return null // 진행중 — pending 유지, 다음 tick 재시도
+        if (filled?.state == "wait") {
+            // #120 관측: Upbit 가 wait 중 부분체결을 remaining_volume 에 반영하는지 공식 문서에 없다 — 운영 근거를 남긴다.
+            val snapshot = "${filled.executedVolume}/${filled.remainingVolume}"
+            if ((filled.executedVolume?.toDoubleOrNull() ?: 0.0) > 0.0 && state.partialSellFillLogged != snapshot) {
+                log.info(
+                    "Partial fill while waiting for {} order {}: executed={} remaining={} of {}",
+                    ticker, filled.uuid, filled.executedVolume, filled.remainingVolume, filled.volume,
+                )
+                state.partialSellFillLogged = snapshot
+            }
+            return null // 진행중 — pending 유지, 다음 tick 재시도
+        }
         val executed = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
         return when {
             executed > 0.0 -> {
@@ -1069,8 +1097,6 @@ class PositionManager(
             trailingArmPct = params.trailingArmPct,
         )
     }
-
-    private suspend fun getKrwBalance(): Double = findAccount("KRW")?.balanceDouble() ?: 0.0
 
     private fun calculateInvestAmount(krwBalance: Double): Double {
         // 잔액의 investRatio 비율만 투자하되 maxInvestAmount 로 상한.

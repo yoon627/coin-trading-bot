@@ -198,3 +198,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[marketdata-pipeline]] `candleBuffers` 절에 결손의 실제 크기(`count=1` 은 진행 중 분봉만 → 각 분의 완결본을 영영 못 받아 상위봉 volume 평균 절반·레인지 좁음, 부팅일 무관 상시)와 수정(`M1_FETCH_COUNT=5` 오름차순, `CandleAggregator` base/provisional/lastFolded, `prime(candle, fetchedAt)` 로 seed 겹침 1분 고정, seed 시점 `startFrom` 으로 모든 interval 에 period 바닥) 추가. 잔여: 4분 넘는 폴링 공백.
 - [[lesson-seed-vs-stream-overwrite]] 재발 감지 절에 상시판 포인터. 진행 상태는 plan 소유.
+
+## [2026-09-17] update | trading-engine-loop · upbit-api — buy() 귀속 불명 lock 가드 + wait 부분체결 관측 (#121 · #120)
+
+- [[trading-engine-loop]] 2번 항목: 런타임에 생긴 lock 은 `buy()` 가 사이징 잔고에서 같은 판정(추가 호출 없음)을 해 `unsynced` 로 넘긴다. 운영 로그는 컨테이너 재생성마다 사라져(json-file 10m×3) 발생 빈도는 판단 불가 — 가드가 무료라 빈도와 무관하게 넣었다.
+- [[upbit-api]] 주문 절: `wait` 부분체결 시 `remaining_volume` 갱신은 공식 문서 명시 없음 → 봇이 info 로그로 근거를 쌓는다. #120 의 상한 조이기는 그 근거가 생기면.
