@@ -736,16 +736,24 @@ class PositionManager(
         }
         val sellable = account?.balanceDouble() ?: 0.0
         if (sellable <= 0.0) {
-            // M4: balance=0 이어도 locked>0 이면 매도 주문이 진행 중(잔고가 locked 로 이동)일 수 있다.
-            // locked>0 이면 phantom 이 아니므로 markSold 하지 않고 보류(다음 tick 재시도). balance+locked 가
-            // 둘 다 0 일 때만 진짜 phantom 으로 청산. (locked 무한상주 시 미체결주문 취소 후 재매도는 M3 별도 PR.)
+            // M4(#122): 여기서는 pendingSellUuid 가 없으므로(위 가드) locked 는 우리 매도 주문의 것이 아니다 — 출금 대기나
+            // 사용자가 직접 낸 주문이다. [heldVolume] 의 상한 규칙과 같은 판정으로 보유를 내린다. 보류하면 syncPosition
+            // ("정리는 sell() 몫")과 서로 미뤄 유령 포지션이 영구히 남고 매 tick 경고만 쌓인다.
+            // 진입 메타는 남기고(releaseHoldings) unsynced 를 켜 다음 tick 의 재동기화에 넘긴다: 락이 풀려 코인이 free 로
+            // 돌아오면 재편입돼 보유상한·트레일링이 이어지고, 여전히 불명이면 매수만 막힌다(경고 1회).
+            // (durable pending 유실 후 재시작한 우리 주문은 position 이 복원되지 않아 여기 오지 않는다 — syncPosition 몫.)
             val locked = account?.lockedDouble() ?: 0.0
             if (locked > 0.0) {
-                log.warn("Sell deferred for {}: free balance 0 but locked={} (order in flight) — keeping position", ticker, locked)
-                return null
+                log.warn(
+                    "Sell aborted for {}: free balance 0 and locked={} is not ours (no pending sell) — releasing holdings, re-sync will re-adopt them if the lock clears",
+                    ticker, locked,
+                )
+                state.releaseHoldings()
+                state.unsynced = true
+            } else {
+                log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
+                state.markSold()
             }
-            log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
-            state.markSold()
             // 사다리는 여기서부터의 눌림을 기다린다 — 옛 고점이 남으면 수동 청산 직후 곧바로 첫 단이 들어간다.
             if (reason == SellReason.ACCUMULATE_STEP) state.flatPeak = currentPrice
             persist(state)
