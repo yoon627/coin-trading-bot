@@ -42,7 +42,7 @@ class TrailingResolutionLadderTest {
     @EnabledIfEnvironmentVariable(named = "RUN_TRAILING_LADDER", matches = "true")
     fun `pre-registered resolution ladder for the trailing promotion`() = runBlocking {
         val units = System.getenv("LADDER_UNITS")?.split(",")?.map { it.trim().toInt() } ?: UNITS
-        val smoke = System.getenv("LADDER_UNITS") != null
+        val smoke = units != UNITS // 기본 사다리(240→15→5)가 아니면 배관 smoke 로 표기 — 판정 문장을 내지 않는다
         val levels = LadderWindows.load(units)
         val base240 = levels.first()
         val frame = LadderWindows.frame(base240)
@@ -54,7 +54,7 @@ class TrailingResolutionLadderTest {
         val runs = HashMap<Triple<Int, Cell, Arm>, Map<String, List<LiveSemanticsArm.Trade>>>()
         for (level in levels) for (cell in listOf(BASE) + CELLS) for (arm in Arm.values()) {
             runs[Triple(level.unit, cell, arm)] = LadderWindows.run(level, strategy, cell.point.toConfig(), props, pessimisticTrailing = arm.pessimistic)
-            println("[trailing-ladder] ${level.unit}m ${cell.label} $arm: ${runs.getValue(Triple(level.unit, cell, arm)).values.sumOf { it.size }}건")
+            println("[trailing-resolution] ${level.unit}m ${cell.label} $arm: ${runs.getValue(Triple(level.unit, cell, arm)).values.sumOf { it.size }}건")
         }
         fun trades(unit: Int, cell: Cell, arm: Arm = Arm.PRIMARY) = runs.getValue(Triple(unit, cell, arm))
         fun all(unit: Int, cell: Cell, arm: Arm = Arm.PRIMARY) = trades(unit, cell, arm).values.flatten()
@@ -140,7 +140,7 @@ class TrailingResolutionLadderTest {
         out.appendLine()
         out.appendLine("## 1. 사다리 — 격차/기준거래 %p · 통과 · 수렴")
         out.appendLine()
-        out.appendLine("| 셀 | " + levels.joinToString(" | ") { "${it.unit}분" } + " | 수렴 | 단조 | d 95% 하한 | ${P}분 동시 하한/거래 | 비관 family(${P}분) | 후보 | 읽는 법 |")
+        out.appendLine("| 셀 | " + levels.joinToString(" | ") { "${it.unit}분 (격차/거래 %p)" } + " | 수렴 | 단조 | d 95% 하한 | ${P}분 동시 하한/거래 | 비관 family(${P}분, 총 %p) | 후보 | 읽는 법 |")
         out.appendLine("|---" + "|---".repeat(levels.size) + "|---|---|---|---|---|---|---|")
         for ((i, c) in CELLS.withIndex()) {
             val f = finals.getValue(c); val q = cellOf(P, Arm.PESSIMISTIC, i)
@@ -153,11 +153,12 @@ class TrailingResolutionLadderTest {
         out.appendLine()
         out.appendLine("## 2. ${P}분봉 판정표")
         out.appendLine()
-        out.appendLine("| 셀 | 거래 | 격차 %p | 격차/기준거래 | se | T | 동시95%하한 | 한계p | 통과 | marginal 95% 구간 | 비관 family 격차 · T · 통과 |")
+        out.appendLine("| 셀 | 거래 | 격차 %p | 격차/기준거래 | se | T | 동시95%하한 | 한계p | 통과 | marginal 95% 구간(양측 percentile) | 비관 family 격차 · T · 통과 |")
         out.appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
         for ((i, c) in CELLS.withIndex()) {
             val p = cellOf(P, Arm.PRIMARY, i); val q = cellOf(P, Arm.PESSIMISTIC, i); val m = interval("$P/${Arm.PRIMARY}/$i")
-            val multiplicityOnly = !p.pass && m.ciLow > 0
+            // "marginal(단일 셀) 로는 통과했을 것" — 판정과 같은 studentized 단측 기준(marginalP < α)으로 라벨을 붙인다.
+            val multiplicityOnly = !p.pass && p.marginalP < PairedMaxTBootstrap.ALPHA
             out.appendLine("| %s | %d | %+.2f | %+.3f | %.2f | %.2f | %+.2f | %.4f | %s | [%+.2f, %+.2f]%s | %+.2f · %.2f · %s |".format(
                 c.label, all(P, c).size, p.g, p.g / baseCount(P), p.se, p.t, p.lowerBound, p.marginalP, if (p.pass) "**통과**" else "—",
                 m.ciLow, m.ciHigh, if (multiplicityOnly) " (family 다중성으로만 탈락)" else "", q.g, q.t, if (q.pass) "통과" else "—"))
@@ -196,10 +197,10 @@ class TrailingResolutionLadderTest {
         out.appendLine("- 10창은 승격 판정(7창)과 선행 판정(3창)에 이미 쓰였다 — 확증이 아니라 같은 표본의 해상도 재측정이다.")
         out.appendLine("- 창별 stratified 재추출이라 창 간 변동은 se 에 없다. 생존편향·슬리피지·호가 마찰은 계기 한계 그대로.")
 
-        val path = Path.of("build/reports/trailing-ladder.md")
+        val path = Path.of("build/reports/trailing-resolution.md")
         Files.createDirectories(path.parent)
         Files.writeString(path, out.toString())
-        println("[trailing-ladder] 리포트: ${path.toAbsolutePath()}")
+        println("[trailing-resolution] 리포트: ${path.toAbsolutePath()}")
         println(out)
     }
 
@@ -214,7 +215,7 @@ class TrailingResolutionLadderTest {
         )
         /** [ExitResolutionLadderTest] 와 같은 하한 — 선행 240분 값(+0.146%p/거래)을 보고 낮추면 사전고정이 아니다. */
         const val ECONOMIC_FLOOR = 0.10
-        const val EXPECTED_FRAME_DAYS = 1_500
+        const val EXPECTED_FRAME_DAYS = 10 * LadderWindows.EXPECTED_DAYS_PER_WINDOW
         /** `trailing-arm-finding-2026-09` 변형 A 의 7국면 pooled 격차·기준 거래수 — 계기·fixture 동일이라 240분 rung 이 정확히 재현해야 한다. */
         const val PRIOR_GAP_7 = 110.37
         const val PRIOR_BASE_TRADES_7 = 758
