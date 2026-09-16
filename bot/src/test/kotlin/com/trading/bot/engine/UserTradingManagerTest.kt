@@ -440,4 +440,85 @@ class UserTradingManagerTest {
 
         assertEquals("KRW-ETH", saved.captured.tickers)
     }
+
+    // --- 수동 매도의 진입 전략 귀속 (#129) ---
+    // 엔진이 돌면 메모리 상태가 진실이고 durable 은 그 사본이다. 엔진이 없거나(정지) 그 티커를 아직 싣지 않았으면 durable 만 남는다.
+
+    @Test
+    fun `resolveEntryStrategy prefers the running engine's in-memory state`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.tracks("KRW-BTC") } returns true
+        every { mockEngine.entryStrategyOf("KRW-BTC") } returns "combined"
+
+        assertEquals("combined", manager.resolveEntryStrategy(1L, "KRW-BTC"))
+        coVerify(exactly = 0) { tradingStateService.loadState(any(), any()) }
+    }
+
+    @Test
+    fun `resolveEntryStrategy falls back to the durable row when the engine does not track the ticker`() = runTest {
+        // 엔진 재기동 직후 reviveHeldDormantStates 전 창 — 보유 중 비활성 티커는 메모리에 없다.
+        engines()[1L] = mockEngine
+        every { mockEngine.tracks("KRW-BTC") } returns false
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC").apply { entryStrategy = "rsi_bounce" }
+
+        assertEquals("rsi_bounce", manager.resolveEntryStrategy(1L, "KRW-BTC"))
+    }
+
+    @Test
+    fun `resolveEntryStrategy trusts a tracked state even when its strategy is empty`() = runTest {
+        // markSold 뒤 persist 가 실패해 durable 에 옛 전략이 남아 있어도 메모리가 진실이다 — 그쪽으로 폴백하면 오귀속.
+        engines()[1L] = mockEngine
+        every { mockEngine.tracks("KRW-BTC") } returns true
+        every { mockEngine.entryStrategyOf("KRW-BTC") } returns null
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC").apply { entryStrategy = "stale" }
+
+        assertNull(manager.resolveEntryStrategy(1L, "KRW-BTC"))
+    }
+
+    @Test
+    fun `clearDurableEntryMeta leaves the row alone while the engine tracks the ticker`() = runTest {
+        // durable 은 엔진 메모리의 사본 — 밖에서 read-modify-write 하면 엔진이 그 사이 쓴 pendingSell* 을 되돌린다(lost update).
+        engines()[1L] = mockEngine
+        every { mockEngine.tracks("KRW-BTC") } returns true
+
+        assertFalse(manager.clearDurableEntryMeta(1L, "KRW-BTC"))
+        coVerify(exactly = 0) { tradingStateService.loadState(any(), any()) }
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    @Test
+    fun `resolveEntryStrategy reads the durable row when no engine is registered`() = runTest {
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC").apply { entryStrategy = "combined" }
+
+        assertEquals("combined", manager.resolveEntryStrategy(1L, "KRW-BTC"))
+    }
+
+    @Test
+    fun `resolveEntryStrategy swallows lookup failures so a manual sell can still go out`() = runTest {
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } throws RuntimeException("db down")
+
+        assertNull(manager.resolveEntryStrategy(1L, "KRW-BTC"))
+    }
+
+    @Test
+    fun `clearDurableEntryMeta blanks the entry strategy of the durable row only`() = runTest {
+        val row = TradingState("KRW-BTC").apply { entryStrategy = "combined"; buyDate = java.time.LocalDate.of(2026, 9, 1) }
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns row
+        val saved = slot<TradingState>()
+        coEvery { tradingStateService.upsert(1L, capture(saved)) } returns Unit
+
+        assertTrue(manager.clearDurableEntryMeta(1L, "KRW-BTC"))
+
+        assertNull(saved.captured.entryStrategy)
+        assertNull(saved.captured.buyDate)
+    }
+
+    @Test
+    fun `clearDurableEntryMeta is a no-op without a durable row`() = runTest {
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns null
+
+        assertFalse(manager.clearDurableEntryMeta(1L, "KRW-BTC"))
+
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
 }

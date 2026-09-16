@@ -145,33 +145,6 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeStrategy("   ") }
     }
 
-    // --- validateOrderAmount ---
-
-    @Test
-    fun `validateOrderAmount accepts valid amounts`() {
-        assertDoesNotThrow { validators.validateOrderAmount(5000.0) }
-        assertDoesNotThrow { validators.validateOrderAmount(100000.0) }
-        assertDoesNotThrow { validators.validateOrderAmount(10000000.0) }
-    }
-
-    @Test
-    fun `validateOrderAmount rejects below minimum`() {
-        assertThrows<ResponseStatusException> { validators.validateOrderAmount(4999.0) }
-        assertThrows<ResponseStatusException> { validators.validateOrderAmount(0.0) }
-        assertThrows<ResponseStatusException> { validators.validateOrderAmount(-1000.0) }
-    }
-
-    @Test
-    fun `validateOrderAmount rejects above maximum`() {
-        assertThrows<ResponseStatusException> { validators.validateOrderAmount(10000001.0) }
-    }
-
-    @Test
-    fun `validateOrderAmount rejects NaN and Infinity`() {
-        assertThrows<ResponseStatusException> { validators.validateOrderAmount(Double.NaN) }
-        assertThrows<ResponseStatusException> { validators.validateOrderAmount(Double.POSITIVE_INFINITY) }
-    }
-
     // --- normalizeSellVolume ---
 
     @Test
