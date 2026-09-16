@@ -30,6 +30,8 @@ import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * 구 collector 모듈(Kafka 발행)을 흡수한 in-process 시세 수집기.
@@ -225,6 +227,15 @@ class MarketDataIngestionService(
         }
     }
 
+    private fun primeTodayAggregate(market: String, today: NormalizedCandle): Boolean = try {
+        persistenceService.primeAggregate(today)
+        true
+    } catch (e: IllegalArgumentException) {
+        // seed 는 이미 store 에 들어갔다 — 실패는 등록만이라 "seed 실패" 와 구분해 남긴다(D1 경계가 UTC 자정이 아니게 바뀐 경우).
+        log.error("Failed to prime D1 aggregate for {}: {}", market, e.message)
+        false
+    }
+
     // 부팅 직후 store D1 버퍼를 과거 일봉으로 1회 채운다. 미실행 시 매수/청산(TradingEngine.loadStoreDailyCandles)이
     // store 부족으로 warm-up(D1 은 분봉 집계라 하루 1개씩만 누적 → 최대 ~21일) 동안 매 tick REST 폴백을 탄다.
     // collectCandlesPeriodically 와 같은 코루틴에서 호출되므로 candle writer 단일성 유지(MarketDataStore trim race 방지).
@@ -237,7 +248,11 @@ class MarketDataIngestionService(
             try {
                 val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
                 candles.forEach { marketDataStore.addCandle(it) }
-                log.info("Seeded {} D1 candles into store for {}", candles.size, market)
+                // 오늘(UTC) 봉만 집계기에 등록한다 — 이후 M1 이 이어서 집계할 period 라 등록이 없으면 첫 M1 이 seed 를 대체한다.
+                // 어제 이전 봉은 M1 이 다시 오지 않아 seed 그대로다. 오늘 행이 아직 없으면(경계 직후 무거래) 등록하지 않는다.
+                val today = Instant.now().truncatedTo(ChronoUnit.DAYS)
+                val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it) } ?: false
+                log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
