@@ -13,7 +13,7 @@ import kotlin.math.min
  * | | 백테(`BacktestEngine`) | 라이브(`TradingEngine.runSwing`) | 이 팔 |
  * |---|---|---|---|
  * | 신호 시점 | 일봉 종가 | 10초마다(당일 부분봉 포함 window) | 일중봉마다(240·15·5분 — 직전 봉까지 누적한 부분봉) |
- * | 체결가 | **다음 날 09:00 시가** | 돌파하는 그 순간의 현재가 | `max(target, 봉 시가)` — `combined` 는 현재가 ≤ 돌파선을 거부하므로 실제로는 **돌파선 위에서 여는 첫 봉의 시가**(돌파 봉 자체에서는 진입하지 않는다) |
+ * | 체결가 | **다음 날 09:00 시가** | 돌파하는 그 순간의 현재가 | `max(target, 봉 시가)` — `combined` 는 현재가 ≤ 돌파선을 거부하므로 실제로는 **돌파선 위에서 여는 첫 봉의 시가**(돌파 봉 자체에서는 진입하지 않는다). 진입 필터 경로는 [EntryFilter] 참조 |
  * | 하루 1회 | 구조가 보장 | `boughtToday`(09:00 에 해제) | `boughtToday`(09:00 에 해제) |
  *
  * 이 차이가 왜 중요한가: 백테는 **종가가 돌파선 위에서 마감한 날만** 골라 그 다음 날 09:00 에 산다.
@@ -63,6 +63,8 @@ internal object LiveSemanticsArm {
      * 후보 = B 뒤 `ceil(confirmDelayMinutes / 봉길이)` 봉 이후에 시가 > 돌파선' 이고 봉 시작(00:00 UTC 기준 분) < [entryCutoffMinutes] 인 봉,
      * 후보마다 기준과 같이 `shouldBuy(부분봉, 시가)` 를 재평가하고 체결은 **시가**. [abandonOnPullback] 이면 B 이후 진입 전에 시가 ≤ 돌파선' 봉이 나오면 그날 포기.
      * 봉 시작에 알려진 값만 쓴다 — 봉 안 경로 가정이 없다. `combined` 는 시가 ≤ 돌파선 봉을 거부하므로 중립 필터(전부 기본값)의 진입 집합은 NONE 과 같다.
+     * B·되밀림 판정은 진입을 평가하는 봉(포지션 없음·당일 미매수)에서만 돈다 — 보유 중인 봉은 보지 않는다. h1 이면 매일 첫 봉에서 청산되고 같은 봉에서 평가하므로 무해하고,
+     * 보유가 하루 중반까지 이어지는 설정(maxHoldDays > 1·keepWinners)에서는 청산 직후 봉이 B 가 되어 확인 시계가 재시작한다(셀에 불리한 방향).
      */
     data class EntryFilter(
         val confirmDelayMinutes: Int = 0,
@@ -107,10 +109,10 @@ internal object LiveSemanticsArm {
         require(warmup >= 1) { "warmup 은 1 이상 — 창은 부분봉 1개 + 완결 봉 warmup-1 개다" }
         val useFilter = entryFilter.openRule
         // 봉 길이(분) = 연속 봉 시각의 최소 간격 — 결측이 있어도 최소값은 격자 단위다. 지연 봉 수 = ceil(분/봉길이).
-        val barMinutes = if (!useFilter) 0 else intradayChronological.zipWithNext { a, b ->
+        val barMinutes = if (!useFilter || entryFilter.confirmDelayMinutes <= 0) 0 else intradayChronological.zipWithNext { a, b ->
             java.time.Duration.between(java.time.LocalDateTime.parse(a.candleDateTimeUtc), java.time.LocalDateTime.parse(b.candleDateTimeUtc)).toMinutes().toInt()
         }.filter { it > 0 }.minOrNull() ?: 1
-        val delayBars = if (!useFilter || entryFilter.confirmDelayMinutes <= 0) 0 else (entryFilter.confirmDelayMinutes + barMinutes - 1) / barMinutes
+        val delayBars = if (barMinutes == 0) 0 else (entryFilter.confirmDelayMinutes + barMinutes - 1) / barMinutes
         val signalProps = props.copy(kValue = config.kValue)
         val feePct = config.feeRate * 2 * 100
         val holdLimit = ExitGates.effectiveMaxHoldDays(config.maxHoldDays)
