@@ -91,6 +91,7 @@ internal object LadderWindows {
         pessimisticTrailing: Boolean = false,
         entryBarStopOnClose: Boolean = false,
         keepWinnersUntilDays: Int = 0,
+        entryFilter: LiveSemanticsArm.EntryFilter = LiveSemanticsArm.EntryFilter.NONE,
     ): Map<String, List<LiveSemanticsArm.Trade>> {
         val byWindow = LinkedHashMap<String, List<LiveSemanticsArm.Trade>>()
         for (w in level.windows) {
@@ -98,7 +99,7 @@ internal object LadderWindows {
             for ((market, newestFirst) in w.daily) {
                 out += LiveSemanticsArm.run(
                     market, strategy, newestFirst.reversed(), w.intraday.getValue(market).reversed(), config, props,
-                    entryBarStopOnClose = entryBarStopOnClose, keepWinnersUntilDays = keepWinnersUntilDays, pessimisticTrailing = pessimisticTrailing,
+                    entryBarStopOnClose = entryBarStopOnClose, keepWinnersUntilDays = keepWinnersUntilDays, pessimisticTrailing = pessimisticTrailing, entryFilter = entryFilter,
                 )
             }
             byWindow[w.dir] = out
