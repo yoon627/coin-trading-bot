@@ -497,7 +497,7 @@ class UserTradingManager(
         private const val RESTORE_MAX_ATTEMPTS = 5
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
 
-        // bot_state 는 (user_id, exchange) 별 1행 — 이 매니저는 Upbit 행만 다룬다(KIS 는 StockUserTradingManager).
+        // bot_state 는 (user_id, exchange) 별 1행(V17) — 현재 거래소는 Upbit 뿐이다.
         private const val EXCHANGE = "UPBIT"
     }
 }

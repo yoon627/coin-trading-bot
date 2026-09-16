@@ -1,10 +1,10 @@
 ---
-title: 경량화(rightsizing) — 왜 collector·Kafka·ML 이 없는가
+title: 경량화(rightsizing) — 왜 collector·Kafka·ML·KIS 주식 봇이 없는가
 category: decision
 created: 2026-07-28
-updated: 2026-08-19
+updated: 2026-09-16
 claim_state: current
-verified: 2026-08-19 — price_snapshots 제거(V19) 반영
+verified: 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
 sources:
   - CLAUDE.md
   - PROJECT_ANALYSIS.md
@@ -23,7 +23,7 @@ sources:
 
 ## 남은 흔적을 만나면
 
-- 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다.
+- 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다. **KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다** — 사용자 결정(유지 비용 대비 필요 없음). `kis/` 패키지·`/api/stock|kis/*`·주식 화면·`users.kis_*`·`stock_order_intent`·`stock_position_state` 가 V27 에서 사라졌고 `bot_state.exchange` 컬럼만 남았다(값은 UPBIT 뿐). "KIS"·"stock" 서술은 과거다.
 - 소비자 없이 남은 저장 경로가 잔재로 남는다. `price_snapshots` 가 그랬고 V19 에서 제거됐다([[persistence-schema]]) — 경량화 직후가 아니라 한참 뒤에야 드러났다는 점이 교훈이다. 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
 - Redis 는 남아 있다 — `RateLimitFilter` 가 조건부로 쓴다.
 

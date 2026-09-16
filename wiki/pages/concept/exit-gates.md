@@ -2,7 +2,7 @@
 title: 청산 게이트 — 손절·트레일링·익절·차트·보유상한
 category: concept
 created: 2026-07-28
-updated: 2026-09-14
+updated: 2026-09-16
 claim_state: current
 verified: 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
@@ -14,7 +14,7 @@ sources:
 
 # 청산 게이트
 
-이 페이지의 구현 인용은 Upbit `PositionManager` 기준이다. KIS도 손절·트레일링·익절·선택적 차트 청산의 의미와 우선순위를 별도 `StockPositionManager`에서 유지한다. 실제 KIS 루프의 호출 순서는 [[kis-stock-trading-flow]]를 참조한다.
+이 페이지의 구현 인용은 Upbit `PositionManager` 기준이다(2026-09-16 KIS 경로 제거 후 유일한 청산 구현).
 
 일부 청산 판정식이 `common` 의 `ExitGates` 에 공용화돼 있다 — 라이브(`PositionManager`)와 백테스트(`BacktestEngine`)가 각각 구현하면 백테 결과가 라이브를 대변하지 못하기 때문이다([[backtest-engine]]).
 
@@ -78,4 +78,3 @@ private fun exitParamsOf(state: TradingState): ExitParamsSnapshot = state.exitPa
 > ([[trailing-arm-finding-2026-09]])에서 실제로 발생했고, 그 거래들은 *진입은 옛 규칙, 청산은 새 규칙*이다.
 > 그 기간의 성과를 어느 설정 몫으로 셀지는 정의되지 않는다. 이후 진입분부터는 이 문제가 없다.
 
-⚠️ **KIS 주식 경로(`StockPositionManager`)는 아직 전역을 읽는다** — 별도 상태(`StockPositionState`)에 스냅샷 자체가 없다.
