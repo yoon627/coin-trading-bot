@@ -154,3 +154,10 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-09-09] decision | lesson-bracket-needs-fill-semantics — 사다리 리뷰가 반증한 브래킷 전제를 교훈으로
 
 - [[lesson-bracket-needs-fill-semantics]] 신설: 감도 family 를 "유령 손절 브래킷"으로 설계하면서 계기의 체결 규칙(`combined` 가 현재가 ≤ 돌파선 거부 → 체결은 항상 봉 시가)을 코드로 확인하지 않은 것, 비관 브래킷이 경로 가정과 모순되는 청산을 낸 것. 3 Whys·올바른 방법(체결 규칙 한 줄 + 경로 가정별 단위테스트). 사용자 승인 후 적립(§13).
+
+## [2026-09-16] ingest | KIS(한국투자증권 국내주식) 경로 제거 반영
+
+- [[kis-stock-trading-flow]]·[[kis-order-lifecycle]] 삭제 — 서술 대상 코드(`bot/.../kis/`·`/api/stock|kis/*`·주식 화면)가 사용자 결정으로 통째로 제거됐다(V27 이 `stock_order_intent`·`stock_position_state`·`users.kis_*` 를 DROP).
+- [[architecture-overview]]·[[exit-gates]]·[[marketdata-pipeline]]·[[trading-engine-loop]]·[[persistence-schema]]·[[plan-git-tracking]]·[[rightsizing-history]] 에서 KIS 서술을 제거·정정하고 V27 행을 추가.
+- 근거: 삭제 diff, `./gradlew build` 통과. 진행 상태는 plan 소유.
+

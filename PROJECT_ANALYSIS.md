@@ -8,19 +8,17 @@
 | **프레임워크** | Spring Boot 3.4 + WebFlux (비동기/리액티브) |
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
-| **마이그레이션** | Flyway (V1~V26) |
+| **마이그레이션** | Flyway (V1~V27) |
 | **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
-| **암호화** | AES-GCM 256-bit (사용자별 Upbit/KIS API 키 저장) |
+| **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
 | **배포** | Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 현행 / AWS EC2 t4g.medium (arm64, 4GB) — 2026-07-31 삭제·historical / OCI A1.Flex (arm64, 12GB, Always Free) — 보류 |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
-> 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다.
-
-> **KIS 주식 봇 (Phase 1 — 기반)**: 기존 Upbit 크립토 봇과 같은 인프라(보안·R2DBC·config·WebClient) 위에 한국투자증권 OpenAPI 연동 기반이 `bot/kis/`(별도 gradle 모듈 아님)에 추가됐다. Phase 1 범위 = 브로커 클라이언트(token 24h 캐싱·주문·조회·시세) + **주문유실 방지 WAL**(`stock_order_intent` 테이블 + `StockOrderService` write-ahead + `StockOrderReconciler` 상태기계). **Phase 2 도 배선 완료** — 전략 루프(`kis/engine/KisStockTradingEngine` + `StockUserTradingManager` 부팅 복원), 주식 시세수집(`kis/marketdata/` — `KisMarketDataService`·`KisDailyCandleHistoryCollector`·`KisMarketCalendar`), UI(`StockScreen` + `/api/stock/*`)가 모두 존재한다. 안전상 기본 dry-run(`KIS_LIVE_ENABLED=false`). 설계·진행 기록: git 이력의 `.claude/plans/2026-06-14-stock-bot-kis/`(plans 는 2026-09-15 부터 미추적).
+> 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다. KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다(코드·`/api/stock/*`·`/api/kis/*`·UI·V27 스키마 정리). 설계 기록은 git 이력(`git log --all -- bot/src/main/kotlin/com/trading/bot/kis`).
 
 ---
 
@@ -85,7 +83,7 @@ coin-trading-bot/
 |--------|----------|------------|-----------|
 | **업비트 (Upbit)** | 코인 (KRW 마켓) | WebSocket + REST | 실시간 시세(WS), 분봉/일봉(REST 폴링) |
 
-모든 시세는 `NormalizedTicker`, `NormalizedCandle`로 정규화된다. (`Exchange` enum에 BINANCE/KIS 값이 남아있으나 현재 연동 코드는 없음 — Upbit 단독 운영.)
+모든 시세는 `NormalizedTicker`, `NormalizedCandle`로 정규화된다. (`Exchange` enum에 BINANCE/ALPACA 값이 남아있으나 현재 연동 코드는 없음 — Upbit 단독 운영.)
 
 ---
 
@@ -130,17 +128,18 @@ coin-trading-bot/
 | V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정 |
 | V13 | bot_configs에 `trade_mode` 컬럼 |
 | V14 | `trading_states` — per-(user, ticker) 거래 상태 durable 영속(미해소 주문 uuid·halt·진입 메타). `trade_executions.exchange_order_id` + 부분 unique(재시작 reconcile 멱등). 미사용 `positions` 제거 |
-| V15 | `stock_order_intent` — KIS 주식 주문 WAL(write-ahead log). 비terminal 주문 1건 불변식을 부분 unique 로 DB 강제 |
-| V16 | `users` 에 KIS 자격증명 컬럼(`kis_app_key`/`kis_app_secret` 암호화, `kis_account_no`, `kis_paper`) |
-| V17 | `bot_state` 에 `exchange` 컬럼((user_id, exchange) 별 1행 — Upbit/KIS 동시 운영). WAL 활성 불변식에 `side` 추가 |
-| V18 | `stock_position_state` — 주식 포지션의 durable 스냅샷(트레일링 고점·매수 거래일·진입 전략). 보유수량·평단은 거래소 잔고가 진실이라 저장하지 않는다 |
+| V15 | `stock_order_intent` — KIS 주식 주문 WAL(V27 에서 제거) |
+| V16 | `users` 에 KIS 자격증명 컬럼(V27 에서 제거) |
+| V17 | `bot_state` 에 `exchange` 컬럼((user_id, exchange) 별 1행 — 유지, 현재 값은 UPBIT 뿐). KIS WAL 인덱스 변경(V27 에서 테이블째 제거) |
+| V18 | `stock_position_state` — KIS 포지션 durable 스냅샷(V27 에서 제거) |
 | V19 | 미사용 `price_snapshots` 제거 — watchlist 가 `market_tickers`/`market_candles` 로 옮겨가 소비자가 없어졌다 |
 | V20 | `trading_states` 에 `pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림을 재시작 횟수와 무관한 경과시간으로 판정 |
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구. `buildSellRecord` 가 `strategy` 를 안 넘겨 그때까지의 매도가 전부 `strategy=NULL` 이었다(전략별 손익이 통째로 `unknown` 으로 집계). 귀속은 포지션 구간 내 첫 번째 non-manual BUY 기준 — 수동 매수는 `TradingState` 를 세우지 않아 런타임 `entryStrategy` 후보가 아니다 |
-| V22 | `stock_order_intent.strategy`·`reason` — KIS 체결 기록의 전략·사유 귀속(#130) |
+| V22 | `stock_order_intent.strategy`·`reason`(V27 에서 테이블째 제거) |
 | V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`. 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
 | V24·V25 | `shadow_exit_observation` 신설 + `live_exit_vwap` — 후보 청산 파라미터 그림자 관측·실행 슬리피지 |
 | V26 | `trade_records.order_amount` — 이 주문의 실체결 대금(Σ`trades[].funds`, 수수료 미포함). 엔진 BUY 의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 부풀려 읽던 문제(#146). nullable·백필 없음·롤백 시 DROP 금지 |
+| V27 | KIS 경로 제거 — 원자료를 `kis_archive_*` 4테이블(stock_order_intent·stock_position_state·users_keys·trade_executions)에 복사한 뒤 `stock_order_intent`·`stock_position_state` DROP, `users.kis_*` 5컬럼 DROP, `bot_state`·`bot_configs`·`trade_executions` 의 `exchange='KIS'` 행 삭제. PR revert 는 복구가 아니다(Flyway validate 실패) — 복구는 아카이브에서 V28 로. 아카이브 DROP 은 #203 |
 
 ### 핵심 테이블
 

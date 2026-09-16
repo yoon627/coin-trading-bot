@@ -11,16 +11,14 @@
 - [[exit-gates]] — 손절·트레일링·익절·차트청산·보유상한의 판정식과 비자명한 지점
 - [[swing-strategies]] — `TradingStrategy` 인터페이스와 전략 9종(무릎 매수 2종 포함), 기본 `combined` 의 3조건
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집, `MarketDataStore`, half-open 워치독
-- [[kis-stock-trading-flow]] — KIS 국내주식 봇의 시작·시세·신호·포지션 사이클
-- [[kis-order-lifecycle]] — KIS 수동·자동 주문의 검증·WAL·API 송신·체결 reconcile
 - [[accumulate-ladder]] — 메이저 코인 사다리 매매(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만)와 알트 유니버스 자동 선정 — 둘 다 기본 off, 롤백은 forward-off
-- [[persistence-schema]] — Flyway V1~V23, Upbit·KIS 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속
+- [[persistence-schema]] — Flyway V1~V27, Upbit 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속, KIS 스키마 제거(V27)
 - [[trade-record-volume-semantics]] — `trade_records.volume` 이 엔진은 총보유량 스냅샷, 수동은 증분인 이유와 보유량 산출 규칙, 추정치가 섞인 그룹의 잔량 0 허용 오차
 - [[backtest-engine]] — 단일티커·all-in 구조와 라이브 정합의 한계
 
 ## decision — 이 repo 가 내린 결정
 
-- [[rightsizing-history]] — collector·Kafka·ML 을 왜 제거했나
+- [[rightsizing-history]] — collector·Kafka·ML·KIS 주식 봇을 왜 제거했나
 - [[migration-numbering]] — 미머지 브랜치의 Flyway 번호 선점 문제
 - [[plan-git-tracking]] — `.claude/plans/` 는 gitignored (2026-09-15 추적 해제 — 이유·기각 대안·삭제 전 백업)
 - [[worktree-workflow]] — 분기·병렬 제약·머지 후 자동 정리

@@ -24,7 +24,7 @@ sources:
 
 - **worktree 삭제 전 plan 백업이 다시 필요하다.** 글로벌 `/e` 가 삭제 전 main 으로 백업하는 절차를 그대로 따른다. `git worktree remove` 는 미커밋 plan 을 거부하지 않으니 `git status --porcelain --ignored` 로 확인한다([[worktree-workflow]]).
 - 다른 머신에서 이어가려면 plan 파일을 직접 옮기거나 PR·이슈·코드로 맥락을 복원한다.
-- 되돌리기 이전에 커밋된 plan 들은 git 이력에 남아 있다(`git log --all -- .claude/plans/`). README·PROJECT_ANALYSIS 가 가리키는 `.claude/plans/2026-06-14-stock-bot-kis/` 같은 설계 기록도 이력에서 본다.
+- 되돌리기 이전에 커밋된 plan 들은 git 이력에 남아 있다(`git log --all -- .claude/plans/`). 제거된 KIS 봇의 설계 기록(`.claude/plans/2026-06-14-stock-bot-kis/`)도 이력에서 본다.
 
 ## plan 과 wiki 의 역할 분리
 

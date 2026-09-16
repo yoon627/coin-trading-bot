@@ -30,15 +30,14 @@ class LogMessageSanitizerTest {
     }
 
     @Test
-    fun `KIS appkey appsecret 마스킹`() {
-        val r = LogMessageSanitizer.sanitize("""{"appkey":"PSxyz123","appsecret":"abc+def/secret180==","CANO":"12345678"}""")
+    fun `appkey appsecret JSON 형 마스킹`() {
+        val r = LogMessageSanitizer.sanitize("""{"appkey":"PSxyz123","appsecret":"abc+def/secret180=="}""")
         assertFalse(r.contains("PSxyz123"))
         assertFalse(r.contains("abc+def/secret180"))
-        assertFalse(r.contains("12345678"))
     }
 
     @Test
-    fun `KIS app_key 헤더형 마스킹`() {
+    fun `appkey appsecret 헤더형 마스킹`() {
         val r = LogMessageSanitizer.sanitize("appkey: PSrealkeyvalue appsecret: SECRETvalue123")
         assertFalse(r.contains("PSrealkeyvalue"))
         assertFalse(r.contains("SECRETvalue123"))
