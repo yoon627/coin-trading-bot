@@ -4,6 +4,8 @@ import com.trading.common.domain.Candle
 import com.trading.common.strategy.Indicators
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import kotlin.math.abs
+import kotlin.math.sin
 
 class IndicatorsExtendedTest {
 
@@ -115,6 +117,73 @@ class IndicatorsExtendedTest {
         assertNotNull(macd)
         // histogram = macd - signal
         assertEquals(macd!!.macd - macd.signal, macd.histogram, 0.001)
+    }
+
+    // 표준 MACD(TA-Lib 관례): EMA 는 첫 period 개의 SMA 로 seed 하고 **받은 히스토리 전체**를 누적한다. fast 창은 slow 창의
+    // 꼬리에서 시작하고(ta_MACD.c), 시그널은 slow EMA 가 정의되는 시점부터의 MACD 선 전체에 EMA(9). 35봉만 잘라 첫 값으로
+    // seed 하면 EMA 가 수렴하지 못해 ~42% 오차(#27). 이 참조는 구현과 같은 규칙을 다시 쓴 것이라 전사 실수만 잡는다 —
+    // 규칙 자체의 독립 앵커는 아래 손계산 테스트다.
+    private fun referenceMacd(closesOldestFirst: List<Double>, fast: Int, slow: Int, signal: Int): Triple<Double, Double, Double> {
+        fun ema(series: List<Double>, period: Int): List<Double> {
+            val k = 2.0 / (period + 1)
+            val out = ArrayList<Double>(series.size - period + 1)
+            var value = series.take(period).average()
+            out.add(value)
+            for (i in period until series.size) {
+                value = series[i] * k + value * (1 - k)
+                out.add(value)
+            }
+            return out
+        }
+        val fastEma = ema(closesOldestFirst.drop(slow - fast), fast) // fast 창은 slow 창의 꼬리에서 시작
+        val slowEma = ema(closesOldestFirst, slow)
+        val macdLine = fastEma.zip(slowEma) { f, s -> f - s }
+        val signalLine = ema(macdLine, signal)
+        val macd = macdLine.last()
+        val sig = signalLine.last()
+        return Triple(macd, sig, macd - sig)
+    }
+
+    @Test
+    fun `calculateMacd matches the standard full-history MACD`() {
+        // 추세 + 주기 성분이 있는 결정적 시계열(최신순 입력 규약: index 0 = 최신).
+        val closesOldestFirst = (0 until 120).map { i -> 100.0 + 0.3 * i + 10.0 * sin(i / 7.0) }
+        val candles = closesOldestFirst.reversed().map { Candle(tradePrice = it) }
+        val (macd, signal, hist) = referenceMacd(closesOldestFirst, 12, 26, 9)
+
+        val result = Indicators.calculateMacd(candles, 12, 26, 9)!!
+
+        assertEquals(macd, result.macd, 1e-9)
+        assertEquals(signal, result.signal, 1e-9)
+        assertEquals(hist, result.histogram, 1e-9)
+        // 35봉으로 잘라 계산한 값과는 달라야 한다 — 같다면 히스토리를 버리고 있는 것이다.
+        val truncated = Indicators.calculateMacd(candles.take(35), 12, 26, 9)!!
+        assertTrue(abs(truncated.macd - result.macd) > 1e-3, "전체 히스토리를 쓰면 35봉 절단 결과와 달라야 한다")
+    }
+
+    @Test
+    fun `calculateMacd reproduces a hand-computed TA-Lib case`() {
+        // 참조 구현과 독립인 외부 앵커 — 종이로 검증한 값. TA-Lib 규칙: EMA seed 는 첫 period 개 SMA, fast 창은 slow 창의
+        // 꼬리(bars[slow-fast..slow-1]), 시그널은 MACD 선 첫 signal 개 SMA 로 seed.
+        // closes(오래된 순) = 1,3,2,5,4,7 / fast=2, slow=3, signal=2
+        //   slow EMA(3): seed SMA(1,3,2)=2 → 3.5 → 3.75 → 5.375
+        //   fast EMA(2): seed SMA(3,2)=2.5 → 25/6 → 73/18 → 325/54
+        //   MACD: 1/2, 2/3, 11/36, 139/216 · signal EMA(2): seed 7/12 → 43/108 → 91/162 · hist = 53/648
+        val candles = listOf(1.0, 3.0, 2.0, 5.0, 4.0, 7.0).reversed().map { Candle(tradePrice = it) }
+
+        val result = Indicators.calculateMacd(candles, fastPeriod = 2, slowPeriod = 3, signalPeriod = 2)!!
+
+        assertEquals(139.0 / 216.0, result.macd, 1e-12)
+        assertEquals(91.0 / 162.0, result.signal, 1e-12)
+        assertEquals(53.0 / 648.0, result.histogram, 1e-12)
+    }
+
+    @Test
+    fun `calculateMacd is zero on a flat series`() {
+        val candles = (0 until 60).map { Candle(tradePrice = 100.0) }
+        val result = Indicators.calculateMacd(candles, 12, 26, 9)!!
+        assertEquals(0.0, result.macd, 1e-12)
+        assertEquals(0.0, result.signal, 1e-12)
     }
 
     // --- checkGoldenCross ---

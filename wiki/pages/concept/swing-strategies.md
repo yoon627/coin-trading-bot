@@ -2,9 +2,9 @@
 title: 스윙 전략 9종과 TradingStrategy 인터페이스
 category: concept
 created: 2026-07-28
-updated: 2026-09-02
+updated: 2026-09-16
 claim_state: current
-verified: 2026-08-23 — TradingStrategy.minCandles 계약 도입(기본 21, macd 36, knee 41), StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
+verified: 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입(기본 21, macd 36, knee 41), StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/TradingStrategy.kt
   - bot/src/test/kotlin/com/trading/bot/engine/KneeStrategyComparisonTest.kt
@@ -36,7 +36,7 @@ interface TradingStrategy {
 
 ## 구현 9종
 
-`VolatilityBreakout`, `RsiBounce`, `GoldenCross`, `MacdCross`, `BollingerBounce`, `MeanReversion`, `CombinedStrategy`, `KneeReversal`, `KneePullback`. 지표 계산은 `Indicators` 에 모여 있다.
+`VolatilityBreakout`, `RsiBounce`, `GoldenCross`, `MacdCross`, `BollingerBounce`, `MeanReversion`, `CombinedStrategy`, `KneeReversal`, `KneePullback`. 지표 계산은 `Indicators` 에 모여 있다. `calculateMacd` 는 2026-09-16(#27)부터 TA-Lib 규칙 — 받은 히스토리 전체, EMA 는 첫 period 개 SMA 로 seed(fast 창은 slow 창의 꼬리에서 시작), 시그널은 MACD 선 전체에 EMA(9) — 이라 **충분한 히스토리(수백 봉)를 넘기면** 외부 차트의 MACD 와 일치한다. 단 값은 넘긴 창 길이에 의존한다: 백테는 50봉(`BacktestEngine.MIN_CANDLES`), 라이브는 60봉(`MAX_DAILY_CANDLE_LOOKBACK`), 차트는 `count` 를 넘기므로 셋이 조금씩 다르다(이전 구현은 셋 다 35봉 절단이라 같았지만 표준값과는 크게 달랐다). `calculateEma`·ATR 등 나머지 지표는 아직 이 파일 고유의 단순 방식이라 외부 값과 다르다.
 
 ### 무릎 매수 2종 (`knee_*`)
 
