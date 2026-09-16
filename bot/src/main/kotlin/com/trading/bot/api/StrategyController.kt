@@ -40,7 +40,7 @@ class StrategyController(
     @GetMapping("/performance")
     suspend fun getPerformance(): Map<String, Any> {
         val userId = currentUserId()
-        // 전략 미상(null)은 unknown 으로 묶는다 — 수동 매수로 만든 포지션을 엔진이 청산하면 진입 전략이 없다.
+        // 전략 미상(null)은 unknown 으로 묶는다 — 외부·과거 수동 매수 보유를 syncPosition 으로 편입한 포지션은 진입 전략이 없다.
         val results = tradeRecordRepository.aggregateByStrategy(userId).map { row ->
             mapOf(
                 "strategy" to (row.strategy ?: "unknown"),
