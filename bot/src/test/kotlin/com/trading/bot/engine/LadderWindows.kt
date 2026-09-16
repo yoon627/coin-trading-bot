@@ -11,12 +11,32 @@ import com.trading.common.strategy.TradingStrategy
  */
 internal object LadderWindows {
 
-    class Window(val label: String, val dir: String, val unit: Int, val daily: Map<String, List<Candle>>, val intraday: Map<String, List<Candle>>) {
+    class Window(val label: String, val dir: String, val daily: Map<String, List<Candle>>, val intraday: Map<String, List<Candle>>) {
         /** 워밍업 이후 일봉 날짜(마켓 합집합, 정렬). frame 의 키 공간. */
         val tradingDays: List<String> = daily.values.flatMap { newestFirst ->
             val ch = newestFirst.reversed()
             (BacktestEngine.MIN_CANDLES until ch.size).map { ch[it].candleDateTimeKst.substring(0, 10) }
         }.toSortedSet().toList()
+
+        /** (마켓, 거래일) → 그날 첫 존재 봉 시가. 봉이 없는 마켓-일은 키가 없다. */
+        val dayOpen: Map<Pair<String, String>, Double>
+        val zeroBarMarketDays: Int
+        val maxBarsPerDay: Int
+        init {
+            val opens = HashMap<Pair<String, String>, Double>(); var zero = 0; var maxBars = 0
+            for ((market, newestFirst) in daily) {
+                val ch = newestFirst.reversed()
+                val byDay = intraday.getValue(market).sortedBy { it.candleDateTimeUtc }.groupBy { it.candleDateTimeUtc.substring(0, 10) }
+                for (i in BacktestEngine.MIN_CANDLES until ch.size) {
+                    val d = ch[i].candleDateTimeKst.substring(0, 10)
+                    val bars = byDay[d]
+                    if (bars == null) { zero++; continue }
+                    maxBars = maxOf(maxBars, bars.size)
+                    opens[market to d] = bars.first().openingPrice
+                }
+            }
+            dayOpen = opens; zeroBarMarketDays = zero; maxBarsPerDay = maxBars
+        }
 
         fun key(date: String) = "$dir/$date"
     }
@@ -32,14 +52,32 @@ internal object LadderWindows {
                 "${unit}분봉 캐시 부재: ${r.dir} — 부분 캐시로는 판정하지 않는다(BACKTEST_CACHE_DIR 확인)"
             }
         }
-        return units.map { unit ->
+        val levels = units.map { unit ->
             Level(unit, regimes.map { r ->
                 val daily = BacktestFixtures.loadAll(r)
                 val intraday = if (unit == 240) IntradayFixtures.loadAll(r.dir, daily.keys) else IntradayCache.loadAll(unit, r.dir, daily.keys)
-                Window(r.label, r.dir, unit, daily, intraday)
+                Window(r.label, r.dir, daily, intraday)
             })
         }
+        // 데이터 무결성 — [ExitResolutionLadderTest] 의 7d·7e 와 같은 단정. 캐시 파일이 있어도 절단·중복이면 rung 이 조용히 다른 계기가 된다.
+        val base240 = levels.first()
+        for (w in base240.windows) {
+            require(w.tradingDays.size == EXPECTED_DAYS_PER_WINDOW) { "${w.label}: 240분 frame 일수 ${w.tradingDays.size} ≠ $EXPECTED_DAYS_PER_WINDOW" }
+            require(w.zeroBarMarketDays == 0) { "${w.label}: 240분 결측 마켓-일 ${w.zeroBarMarketDays}" }
+        }
+        for (level in levels) for (w in level.windows) {
+            require(w.maxBarsPerDay <= 24 * 60 / level.unit) { "${level.unit}m ${w.label}: 봉/일 ${w.maxBarsPerDay} > ${24 * 60 / level.unit}" }
+        }
+        for (level in levels.drop(1)) for ((w240, w) in base240.windows.zip(level.windows)) {
+            for ((k, o) in w.dayOpen) {
+                val o240 = w240.dayOpen[k] ?: continue
+                require(kotlin.math.abs(o - o240) <= 1e-9 * maxOf(1.0, o240)) { "${level.unit}m ${w.label} $k: 첫 봉 시가 $o ≠ 240분 $o240" }
+            }
+        }
+        return levels
     }
+
+    const val EXPECTED_DAYS_PER_WINDOW = 150
 
     /** 240분봉 공통 frame — 모든 rung 의 기여가 이 위에 정렬된다(진입일은 해상도와 무관한 거래일 라벨). */
     fun frame(base240: Level): PairedMaxTBootstrap.Frame = PairedMaxTBootstrap.Frame(base240.windows.map { w -> w.tradingDays.map { w.key(it) } })
