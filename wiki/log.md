@@ -183,3 +183,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[breakout-entry-filters-2026-09]] 신설: 계기 `LiveSemanticsArm` 에 `EntryFilter`(기본 NONE = 기존 경로, 시가 규칙) 옵션을 더해 9셀을 5분봉 10창·진입일 기여·maxT 로 판정(규칙 결과 전 커밋 `4bdfae2`). 통과 0·후보 0 → 현행 유지. §2 분해: 지연은 제거 손실 ≈ 체결가 비용, 마진 1% 는 −964 제거 vs −832 체결가 비용, 마감 12h 는 오후 진입 696건 합계 −84. 예측(지연 양수·마진 음수)이 반쯤 틀림 — 기록.
 - [[entry-set-decomposition-2026-09]]·[[entry-resolution-vs-live-2026-09]] "다음" 포인터 추가. `verify.sh` 페이지 수 47(46±2 안). 진행 상태는 plan 소유.
+
+## [2026-09-16] ingest | lesson-seed-vs-stream-overwrite · marketdata-pipeline 갱신 — 재시작 뒤 전일 D1 절단 결함 (#209, #27 C3)
+
+- [[lesson-seed-vs-stream-overwrite]] 신설: `CandleAggregator` 가 period 를 처음 볼 때 M1 하나로 새 봉을 만들어 upsert → 부팅 seed 의 완전한 D1 이 재시작 이후 구간만 남은 봉으로 대체 → 다음날 돌파선 붕괴(라이브 00h 매수 17건 중 7건). `seedDailyCandles` 가 오늘(UTC) D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 이어받게 수정(store 읽기 없음, 재현 테스트 Red→Green). #27 C3 원안(D1 집계 제외+재폴링)은 재폴링 실패 시 store D1 정지·`evaluateChartExit` current-day 가드 부재 때문에 기각; "집계기가 store 를 읽어 병합" 안은 축출 period 재유입 시 이중 계상으로 기각.
+- [[marketdata-pipeline]] `candleBuffers` 절에 병합 규칙·volume 겹침 한계 추가, sources 에 CandleAggregator. 진행 상태는 plan 소유.

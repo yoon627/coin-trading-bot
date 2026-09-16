@@ -12,6 +12,8 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -79,6 +81,32 @@ class MarketDataIngestionServiceTest {
         service.seedDailyCandles(listOf("BTC/KRW"))
 
         verify(exactly = 2) { store.addCandle(candle) }
+    }
+
+    // #209: seed 의 오늘(UTC) 봉은 이후 M1 이 이어서 집계할 period 라 집계기에 prime 한다 — 안 하면 첫 M1 이 seed 를 대체한다.
+    // 응답 순서에 기대지 않고 openTime == 오늘 자정으로 고른다(mock 은 일부러 오래된 봉을 앞에 둔다).
+    @Test
+    fun `seedDailyCandles primes the aggregator with today's seeded candle only`() = runBlocking {
+        val today = Instant.now().truncatedTo(ChronoUnit.DAYS)
+        val todayCandle = candle.copy(openTime = today, closeTime = today.plusSeconds(86_400))
+        val yesterday = candle.copy(openTime = today.minusSeconds(86_400), closeTime = today)
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(yesterday, todayCandle)
+
+        service.seedDailyCandles(listOf("BTC/KRW"))
+
+        verify(exactly = 1) { persistence.primeAggregate(todayCandle) }
+        verify(exactly = 0) { persistence.primeAggregate(yesterday) }
+    }
+
+    @Test
+    fun `seedDailyCandles skips priming when today's candle is absent and still seeds the store`() = runBlocking {
+        val yesterday = candle.copy(openTime = Instant.now().truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(yesterday)
+
+        service.seedDailyCandles(listOf("BTC/KRW"))
+
+        verify(exactly = 1) { store.addCandle(yesterday) }
+        verify(exactly = 0) { persistence.primeAggregate(any()) }
     }
 
     @Test

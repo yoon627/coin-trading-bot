@@ -4,12 +4,13 @@ category: concept
 created: 2026-07-28
 updated: 2026-09-16
 claim_state: current
-verified: 2026-08-23 — seedDailyCandles 200봉·실패 시 무재시도 확인, 전략별 minCandles 반영
+verified: 2026-09-16 — `seedDailyCandles` 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 seed 를 대체하지 않고 이어받는다(`CandleAggregatorTest` 재현 테스트 Red→Green, `MarketDataIngestionServiceTest` prime 검증). 2026-08-23 seedDailyCandles 200봉·실패 시 무재시도·전략별 minCandles 확인분 유지
 sources:
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt
   - bot/src/main/kotlin/com/trading/bot/stream/MarketDataPersistenceService.kt
+  - bot/src/main/kotlin/com/trading/bot/stream/CandleAggregator.kt
 ---
 
 # 시세 수집 파이프라인
@@ -31,7 +32,7 @@ UpbitMarketFeed ──ticker(WS)──┐
 **차트 API 는 store 전용이 아니다** — `ChartController` 는 메모리에 요청 개수만큼 없으면 **DB(`market_candles`)로 완전히 대체**한다(`ChartController.kt:46-53`). 차트 값과 봇이 본 값이 어긋난다면 이 폴백 경로를 먼저 의심한다.
 
 - `latestTickers` — 마켓별 최신 스냅샷
-- `candleBuffers` — `ConcurrentSkipListMap<openTime, Candle>`, 마켓·interval 당 최대 200개. **openTime 키 upsert** 라서 `CandleAggregator` 가 같은 분봉을 반복 갱신해도 중복이 쌓이지 않는다(과거에 중복 누적으로 지표·매수 D1 이 오염된 적이 있다).
+- `candleBuffers` — `ConcurrentSkipListMap<openTime, Candle>`, 마켓·interval 당 최대 200개. **openTime 키 upsert** 라서 `CandleAggregator` 가 같은 분봉을 반복 갱신해도 중복이 쌓이지 않는다(과거에 중복 누적으로 지표·매수 D1 이 오염된 적이 있다). upsert 의 반대쪽 함정: 집계기가 period 를 **처음** 볼 때 M1 하나로 봉을 새로 만들면 그 upsert 가 부팅 seed 의 완전한 D1 을 재시작 이후 구간만 남은 봉으로 **대체**한다 — 그래서 `seedDailyCandles` 가 **오늘 D1(최신 openTime) 을 집계기에 prime** 해 두고(`persistenceService.primeAggregate` → `CandleAggregator.prime`, 부팅 로그 `Primed D1 aggregate for …`), 첫 M1 은 기존 병합 분기로 이어진다(시가·고저 보존, close 는 최신 M1, volume 은 합 — seed 와 첫 M1 이 부팅당 최대 1분 겹쳐 그만큼 과대일 수 있고 누적되진 않는다; `combined` 경로는 D1 volume 을 쓰지 않고, volume 을 보는 전략(`mean_reversion`·`vwap_band`)에도 하루 중 1분 이내라 무시할 크기). 어제 이전 봉은 M1 이 다시 오지 않아 seed 그대로다. **부팅일만 복원한다** — 프로세스가 자정을 넘기면 새 날 D1 은 M1 모자이크(폴링 라운드 ~62초·`count=1` 이라 분 단위 결손, 레인지가 좁아지는 쪽)로 만들어지는 점은 그대로이고, seed 가 실패한 마켓(무재시도)도 그대로 노출된다. 2026-09-16 이전엔 이 대체 때문에 재시작 다음날 00:00 직후 전일 레인지가 작아져 돌파선 ≈ 당일시가로 무너졌다([[lesson-seed-vs-stream-overwrite]], #209).
 - `tickerSink` — hot multicast `Flux`. SSE 가 이걸 구독하므로 별도 WS 연결이 필요 없다. `autoCancel=false` 로 두어 마지막 구독자가 끊겨도 sink 가 닫히지 않는다.
 
 ## 수집 코루틴
