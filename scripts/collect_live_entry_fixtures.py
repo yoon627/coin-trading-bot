@@ -44,13 +44,21 @@ def write_gz(path: pathlib.Path, payload) -> None:
 
 def convert_trades(tsv: pathlib.Path, out: pathlib.Path) -> None:
     rows = []
+    declared: int | None = None
     with tsv.open(encoding="utf-8") as fh:
         header = fh.readline().rstrip("\n").split("\t")
         for line in fh:
             line = line.rstrip("\n")
-            if not line or line.startswith("("):  # psql 의 "(N rows)" 꼬리
+            if not line:
                 continue
-            rec = dict(zip(header, line.split("\t")))
+            if line.startswith("(") and (line.endswith("rows)") or line.endswith("row)")):  # psql 꼬리 "(N rows)"
+                declared = int(line[1:].split()[0])
+                continue
+            fields = line.split("\t")
+            # zip 은 필드 수 불일치를 조용히 흡수한다 — reason 에 탭이 섞이면 그 행만 어긋난 채 들어가고 건수 단언은 통과한다.
+            if len(fields) != len(header):
+                raise SystemExit(f"필드 수 불일치 {len(fields)} ≠ {len(header)}: {line[:60]}…")
+            rec = dict(zip(header, fields))
             rows.append({
                 "id": int(rec["id"]),
                 "market": rec["ticker"],
@@ -60,6 +68,8 @@ def convert_trades(tsv: pathlib.Path, out: pathlib.Path) -> None:
                 "reason": rec.get("reason", ""),
                 "pnl_percent": float(rec["pnl_percent"]) if rec.get("pnl_percent") else None,
             })
+    if declared is not None and declared != len(rows):
+        raise SystemExit(f"행 수 불일치: psql {declared} ≠ 파싱 {len(rows)}")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
     buys = sum(r["side"] == "BUY" for r in rows)
