@@ -2,9 +2,9 @@
 title: lesson — 브래킷·감도 family 는 계기의 체결 규칙을 코드로 확인한 뒤 설계한다 (유령 손절이 없었던 이유)
 category: decision
 created: 2026-09-09
-updated: 2026-09-09
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-09 — 사다리 리뷰(code-reviewer)가 `CombinedStrategy.shouldBuy` 의 `currentPrice <= targetPrice` 거부와 `LiveSemanticsArm` 의 `fill = max(target, open)` 을 대조해 확인. codex 가 `pessimisticTrailing` 의 불가능한 경로를 확인, 단위테스트 red → green 으로 수정
+verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — 사다리 리뷰(code-reviewer)가 `CombinedStrategy.shouldBuy` 의 `currentPrice <= targetPrice` 거부와 `LiveSemanticsArm` 의 `fill = max(target, open)` 을 대조해 확인. codex 가 `pessimisticTrailing` 의 불가능한 경로를 확인, 단위테스트 red → green 으로 수정
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt

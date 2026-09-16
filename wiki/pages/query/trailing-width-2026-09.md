@@ -2,9 +2,9 @@
 title: 트레일링 폭 재판정 — 240분봉에서도 조일수록 좋고 세 후보가 모두 사전고정을 통과했다, 그러나 계기 편향과 같은 방향이다
 category: query
 created: 2026-09-08
-updated: 2026-09-09
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 `ce9c4f5f…` 동일). 이전 확인분: 2026-09-08 — `RUN_TRAILING_WIDTH=true ./gradlew :bot:test --tests "*TrailingWidthIntradayTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`52c38c7`). fixture 10창 D1 + `intraday240/`
+verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 `ce9c4f5f…` 동일). 이전 확인분: 2026-09-08 — `RUN_TRAILING_WIDTH=true ./gradlew :bot:test --tests "*TrailingWidthIntradayTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`52c38c7`). fixture 10창 D1 + `intraday240/`
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/TrailingWidthIntradayTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt

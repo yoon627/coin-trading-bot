@@ -2,9 +2,9 @@
 title: 트레일링 1축 변경 — 이 repo 최초의 사전고정 확증 결과 (신규 7국면)
 category: query
 created: 2026-09-05
-updated: 2026-09-09
+updated: 2026-09-16
 claim_state: current
-verified: 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_REGIME_EXPANSION=true ./gradlew :bot:test --tests "*RegimeExpansionTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`a25096d`). fixture `p2020h1`~`p2023h1` D1 + `intraday240/`(7창 67,193봉, 수집 2026-09-05)
+verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_REGIME_EXPANSION=true ./gradlew :bot:test --tests "*RegimeExpansionTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`a25096d`). fixture `p2020h1`~`p2023h1` D1 + `intraday240/`(7창 67,193봉, 수집 2026-09-05)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/RegimeExpansionTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
@@ -125,7 +125,7 @@ E 는 **익절 상한을 아예 없앤** 설정이라 크게 오른 생존자가
 - **240분봉은 라이브(10초 tick)보다 성기다.** 트레일링은 해상도에 가장 민감한 게이트이고, 그 방향은
   [[exit-resolution-verdict-2026-09]] 이 보인 대로 **후보에 불리**하다 — 즉 여기 수치는 낙관일 수 있다.
 - **스프레드·부분체결·시장충격 없음.** 위 7.3bp 계산이 그 여유를 보여준다.
-- 계좌는 하나인데 이 측정은 마켓별 예산이 독립이라고 가정한다.
+- 계좌는 하나인데 이 측정은 마켓별 예산이 독립이라고 가정한다 → [[shared-balance-2026-09]] 가 같은 계기 위에 공유 잔고를 얹어 다시 셌다(현행 A 는 그 판정의 기준선이 됐다).
 - ⚠️ **승격값 `trailingStopPct=1.5` 는 탐색 격자의 하한이다 — 측정으로 고른 값이 아니다**(2026-09-06, #181).
   격자 밖 해상도로 나머지 축을 고정한 채 트레일링만 스캔하면 선택창 중앙 델타가
   1.00 **+6.27**(8/8) → 1.25 +5.38(8/8) → 1.50 +3.28(7/8) → 2.00 +0.80(5/8) 로 **단조**다.
