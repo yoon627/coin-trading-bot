@@ -24,12 +24,13 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import reactor.core.publisher.Mono
 import org.junit.jupiter.api.Assertions.*
@@ -623,14 +624,18 @@ class TradeExecutionServiceTest {
     fun `manual sell recording completes even if the request is cancelled mid-flight`() = runTest {
         // 브라우저 이탈로 요청 코루틴이 취소돼도 접수된 주문의 기록은 완주해야 한다(NonCancellable). 취소가 polling 중에 들어온다.
         stubSellVolumeContext("sv-nc")
+        // 취소는 polling(getOrder) 안에서 들어와야 한다 — 진입 신호를 받은 뒤에 취소해 가상 시간 스케줄링에 기대지 않는다(#200).
+        val polling = CompletableDeferred<Unit>()
         coEvery { client.getOrder("sv-nc") } coAnswers {
+            polling.complete(Unit)
             delay(100)
             Order(uuid = "sv-nc", state = "done", executedVolume = "0.3")
         }
         coEvery { tradeRecordRepository.save(any()) } returns sellRecordEntity()
 
         val job = launch { service.executeSellVolume(client, "KRW-BTC", "0.3", "manual", 1L) }
-        advanceTimeBy(50)
+        runCurrent()
+        assertTrue(polling.isCompleted, "취소 전에 주문 접수 → 체결 polling 까지 진입해 있어야 한다")
         job.cancel()
         advanceUntilIdle()
 
