@@ -4,7 +4,7 @@ category: entity
 created: 2026-07-28
 updated: 2026-09-17
 claim_state: current
-verified: 2026-09-16 — 수동 매도의 `awaitFill` 재조회는 `TradeExecutionServiceTest`(#105 절)로 확인 · 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
+verified: 2026-09-17 — docs.upbit.com 개별 주문 조회·체결 대기 주문 목록·종료 주문 목록 세 페이지에 `wait` 부분체결 예제 없음(researcher) · 2026-09-16 — 수동 매도의 `awaitFill` 재조회는 `TradeExecutionServiceTest`(#105 절)로 확인 · 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
   - bot/src/main/kotlin/com/trading/bot/client/UpbitClient.kt
@@ -48,7 +48,7 @@ sources:
 주의할 조합:
 
 - **시장가 매수(`price`)** 는 즉시 체결 후 소액 잔량을 환불하며 종료되므로 `wait` 로 장기 잔존하지 않는다. 지정가를 도입한다면 부분체결·잔여주문 취소 로직이 따로 필요하다.
-- **`wait` + `executedVolume>0`** 일 때 미체결 잔량은 `locked` 로 묶인다. 이때 free balance 만 보면 "청산 완료"로 오판한다 — 우리 주문의 미체결 잔량만큼은 `locked` 도 보유로 세야 한다(위 계좌 절의 상한 규칙).
+- **`wait` + `executedVolume>0`** 일 때 미체결 잔량은 `locked` 로 묶인다. 이때 free balance 만 보면 "청산 완료"로 오판한다 — 우리 주문의 미체결 잔량만큼은 `locked` 도 보유로 세야 한다(위 계좌 절의 상한 규칙). 그 상한은 주문 원수량이라 부분체결 구간에서 체결분만큼 느슨하다(#120). 더 조이려면 `remaining_volume` 이 `wait` 중에 부분체결마다 갱신돼야 하는데 **공식 문서는 필드 정의("체결 후 남은 주문 양")만 있고 갱신 시점·`wait` 부분체결 예제가 없다**(2026-09-17 조사, `GET /v1/order`·`/v1/orders/open`·`/v1/orders/closed`). 그래서 봇은 `wait`+부분체결을 만나면 `executed`/`remaining`/`volume` 을 info 로 남긴다(`Partial fill while waiting`) — 운영 로그에서 `remaining < volume` 이 확인되면 그때 상한을 잔량으로 바꾼다.
 
 ## 수수료 — `paid_fee`
 
