@@ -243,6 +243,7 @@ class UserTradingManager(
      * 엔진이 그 티커를 들고 있으면 **아무것도 하지 않는다**: durable 행은 엔진 메모리의 사본이라 여기서 read-modify-write
      * 하면 그 사이 엔진이 쓴 `pendingSell*`(크래시 복구 근거)을 되돌리는 lost update 가 된다. 그 경우 정리는 엔진 몫이다 —
      * 다음 청산 평가에서 phantom 판정이 `markSold` 하고 persist 가 durable 을 덮는다(유니버스에서 빠진 티커는 지연될 수 있다).
+     * 단 귀속 불명 락이 남아 있으면 phantom 경로는 `releaseHoldings` 라 메타가 유지된다(#122) — 그 경우 이 오귀속 창은 닫히지 않는다.
      * @return 실제로 비웠으면 true
      */
     suspend fun clearDurableEntryMeta(userId: Long, ticker: String): Boolean {
