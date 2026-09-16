@@ -50,6 +50,44 @@ class CandleAggregatorTest {
         assertEquals(60.0, merged.quoteVolume) // 합
     }
 
+    // #209 재현: 부팅 seed 의 오늘 D1 을 prime 해 두면 첫 M1 이 그 봉을 이어받아야 한다.
+    // prime 이 없으면 M1 하나로 D1 을 새로 만들어 upsert 하므로 seed 의 시가·고저가 사라지고 재시작 이후 구간만 남는다.
+    @Test
+    fun `first M1 of a period merges into the primed seed candle instead of replacing it`() {
+        val day = inst("2024-01-01T00:00:00Z")
+        val seeded = NormalizedCandle(
+            exchange = Exchange.UPBIT, market = MARKET, openPrice = 100.0, highPrice = 130.0, lowPrice = 80.0, closePrice = 105.0,
+            volume = 50.0, quoteVolume = 500.0, interval = CandleInterval.D1, openTime = day, closeTime = day.plusSeconds(86_400),
+        )
+        aggregator.prime(seeded)
+
+        aggregator.onMinuteCandle(m1("2024-01-01T13:00:00Z", open = 106.0, high = 108.0, low = 104.0, close = 107.0, volume = 2.0, quoteVolume = 20.0))
+        val first = capturedFor(CandleInterval.D1).last()
+        assertEquals(100.0, first.openPrice, "seed 의 시가 보존")
+        assertEquals(130.0, first.highPrice, "seed 의 고가 보존")
+        assertEquals(80.0, first.lowPrice, "seed 의 저가 보존")
+        assertEquals(107.0, first.closePrice, "종가는 최신 M1")
+        assertEquals(52.0, first.volume)
+        assertEquals(520.0, first.quoteVolume)
+
+        aggregator.onMinuteCandle(m1("2024-01-01T13:01:00Z", open = 107.0, high = 135.0, low = 106.0, close = 134.0, volume = 3.0, quoteVolume = 30.0))
+        val second = capturedFor(CandleInterval.D1).last()
+        assertEquals(135.0, second.highPrice, "병합값 위에서 이어서 집계")
+        assertEquals(80.0, second.lowPrice)
+        assertEquals(55.0, second.volume)
+        // 다른 interval(prime 없음)은 기존대로 M1 로 시작한다.
+        assertEquals(106.0, capturedFor(CandleInterval.H1).first().openPrice)
+    }
+
+    @Test
+    fun `prime rejects a candle whose openTime is not aligned to its period`() {
+        val misaligned = NormalizedCandle(
+            exchange = Exchange.UPBIT, market = MARKET, openPrice = 1.0, highPrice = 1.0, lowPrice = 1.0, closePrice = 1.0, volume = 1.0,
+            interval = CandleInterval.D1, openTime = inst("2024-01-01T09:00:00Z"), closeTime = inst("2024-01-02T09:00:00Z"),
+        )
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) { aggregator.prime(misaligned) }
+    }
+
     @Test
     fun `aligns each interval to its period start`() {
         // 2024-01-17 = 수요일: interval 별 정렬 경계가 서로 달라(W1 월요일 01-15, MO1 01-01, D1 01-17)
