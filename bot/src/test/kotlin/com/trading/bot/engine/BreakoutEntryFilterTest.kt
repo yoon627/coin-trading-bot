@@ -72,7 +72,8 @@ class BreakoutEntryFilterTest {
 
         // ── 배관 단정 ──
         for ((unit, expected) in PRIOR_BASELINE) {
-            val t = all(unit, BASE); if (rungs.none { it.unit == unit }) continue
+            if (rungs.none { it.unit == unit }) continue
+            val t = all(unit, BASE)
             assertEquals(expected.first, t.size, "$unit 분 기준 거래수가 선행 분해와 다르다 — 계기 drift, 판정 중단")
             assertTrue(abs(t.sumOf { it.netPnlPct } - expected.second) <= 0.05, "$unit 분 기준 Σpnl %.2f ≠ 선행 %.2f — 판정 중단".format(t.sumOf { it.netPnlPct }, expected.second))
         }
@@ -87,6 +88,12 @@ class BreakoutEntryFilterTest {
             val t = all(level.unit, cell, arm)
             assertEquals(t.size, t.map { it.market to it.entryDate }.toSet().size, "${level.unit}m ${cell.label} $arm: (마켓, 진입일) 이 유일하지 않다")
         }
+        // 계기는 봉 길이를 연속 봉 최소 간격으로 추론한다 — 격자 밖 타임스탬프가 섞이면 지연 봉 수가 조용히 커지므로 rung 단위와 같은지 단정한다.
+        for (level in rungs) for ((market, bars) in level.windows.flatMap { w -> w.intraday.entries }) {
+            val sorted = bars.map { java.time.LocalDateTime.parse(it.candleDateTimeUtc) }.sorted()
+            val minGap = sorted.zipWithNext { a, b -> java.time.Duration.between(a, b).toMinutes() }.filter { it > 0 }.min()
+            assertEquals(level.unit.toLong(), minGap, "${level.unit}m $market: 연속 봉 최소 간격 ${minGap}분 ≠ 단위 — 지연 봉 수 추론이 어긋난다")
+        }
 
         // ── 기여 · 공통 draw · family ──
         val groups = ArrayList<DoubleArray>()
@@ -94,10 +101,6 @@ class BreakoutEntryFilterTest {
         fun put(key: String, arr: DoubleArray) { index[key] = groups.size; groups += arr }
         for (level in rungs) for (arm in Arm.values()) for ((i, c) in CELLS.withIndex()) {
             put("${level.unit}/$arm/$i", LadderWindows.contributions(frame, level, trades(level.unit, c, arm), trades(level.unit, BASE, arm)))
-        }
-        if (R != null) for (i in CELLS.indices) {
-            val aP = groups[index.getValue("$P/${Arm.PRIMARY}/$i")]; val aR = groups[index.getValue("$R/${Arm.PRIMARY}/$i")]
-            put("d/$i", DoubleArray(frame.size) { aP[it] / baseCount(P) - 0.8 * aR[it] / baseCount(R) })
         }
         val sums = PairedMaxTBootstrap.resampleSums(frame, groups)
         fun family(unit: Int, arm: Arm): PairedMaxTBootstrap.Family {
@@ -107,9 +110,8 @@ class BreakoutEntryFilterTest {
         val families = rungs.associate { l -> l.unit to Arm.values().associateWith { family(l.unit, it) } }
         fun cellOf(unit: Int, arm: Arm, i: Int) = families.getValue(unit).getValue(arm).cells[i]
         fun perTrade(unit: Int, i: Int) = cellOf(unit, Arm.PRIMARY, i).g / baseCount(unit)
-        fun interval(key: String) = PairedMaxTBootstrap.interval(groups[index.getValue(key)].sum(), sums[index.getValue(key)])
 
-        data class Final(val pass: Boolean, val converged: Boolean?, val bracket: Boolean, val candidate: Boolean, val marginalOnly: Boolean, val reading: String)
+        data class Final(val converged: Boolean?, val candidate: Boolean, val reading: String)
         val finals = CELLS.withIndex().associate { (i, c) ->
             val p = cellOf(P, Arm.PRIMARY, i)
             val gP = perTrade(P, i); val gR = R?.let { perTrade(it, i) }
@@ -125,7 +127,7 @@ class BreakoutEntryFilterTest {
                 !bracket -> "비관 브래킷 미통과 — 우위가 트레일링 해상도 가정에 기댄다"
                 else -> "경제 하한 미달"
             }
-            c to Final(p.pass, converged, bracket, candidate, !p.pass && p.marginalP < PairedMaxTBootstrap.ALPHA, reading)
+            c to Final(converged, candidate, reading)
         }
 
         // ── 리포트 ──
@@ -142,19 +144,21 @@ class BreakoutEntryFilterTest {
         out.appendLine()
         out.appendLine("## §1 ${P}분봉 판정표 (family ${CELLS.size}셀, q = %.3f · 비관 q = %.3f)".format(families.getValue(P).getValue(Arm.PRIMARY).q, families.getValue(P).getValue(Arm.PESSIMISTIC).q))
         out.appendLine()
-        out.appendLine("| 셀 | 격차 Σ%p | /기준거래 | T | 동시 95% 하한 | marginal p | 통과 | 비관 브래킷 격차 / 통과 | ${R ?: "—"}분 /기준거래 | 수렴 | 경제 하한 ≥ %.2f | 후보 | 읽기 |".format(ECONOMIC_FLOOR))
+        out.appendLine("| 셀 | 격차 Σ%%p | /기준거래 | T | 동시 95%% 하한 | marginal p | 통과 | 비관 브래킷 격차 / 통과 | ${R ?: "—"}분 /기준거래 | 수렴 | 경제 하한 ≥ %.2f | 후보 | 읽기 |".format(ECONOMIC_FLOOR))
         out.appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for ((i, c) in CELLS.withIndex()) {
             val p = cellOf(P, Arm.PRIMARY, i); val b = cellOf(P, Arm.PESSIMISTIC, i); val f = finals.getValue(c)
-            out.appendLine("| ${c.label} | %+.1f | %+.3f | %.2f | %+.1f | %.3f | %s | %+.1f / %s | %s | %s | %s | **%s** | %s |".format(
-                p.g, perTrade(P, i), p.t, p.lowerBound, p.marginalP, if (p.pass) "통과" else "—", b.g, if (b.pass) "통과" else "—",
+            out.appendLine("| %s | %+.1f | %+.3f | %.2f | %+.1f | %.4f | %s | %+.1f / %s | %s | %s | %s | **%s** | %s |".format(
+                c.label, p.g, perTrade(P, i), p.t, p.lowerBound, p.marginalP, if (p.pass) "통과" else "—", b.g, if (b.pass) "통과" else "—",
                 R?.let { "%+.3f".format(perTrade(it, i)) } ?: "—", when (f.converged) { true -> "수렴"; false -> "미수렴"; null -> "미정의" },
                 if (perTrade(P, i) >= ECONOMIC_FLOOR) "충족" else "미달", if (f.candidate) "후보" else "—", f.reading))
         }
         out.appendLine()
+        if (R != null) out.appendLine("${R}분 rung 의 지연 셀은 봉 수 = ceil(분/${R}) 이라 5·10·15분이 전부 1봉(${R}분)으로 같은 규칙이 된다 — 세 셀의 ${R}분 값이 같은 이유. marginal p 는 4자리(사전고정 경계 `p < 0.05` 는 엄격 부등호).")
+        out.appendLine()
         out.appendLine("## §2 셀별 진입 집합 분해 (${P}분 PRIMARY, 키 = (마켓, 진입일))")
         out.appendLine()
-        out.appendLine("| 셀 | 기준 진입 중 제거 (건 · Σpnl 기준) | 같은 날 유지 (건 · 체결가 평균 Δ%p · Σpnl 셀−기준) | 셀 전용 진입 (건 · Σpnl) | 합 = 격차 |")
+        out.appendLine("| 셀 | 기준 진입 중 제거 (건 · Σpnl 기준 · 건당) | 같은 날 유지 (건 · 체결가 평균 Δ% · Σpnl 셀−기준) | 셀 전용 진입 (건 · Σpnl) | 합 = 격차 |")
         out.appendLine("|---|---|---|---|---|")
         val baseP = all(P, BASE).associateBy { it.market to it.entryDate }
         for (c in CELLS) {
@@ -165,7 +169,7 @@ class BreakoutEntryFilterTest {
             val keptDelta = kept.entries.sumOf { (k, t) -> t.netPnlPct - baseP.getValue(k).netPnlPct }
             val avgFill = if (kept.isEmpty()) 0.0 else kept.entries.map { (k, t) -> (t.entryPrice - baseP.getValue(k).entryPrice) / baseP.getValue(k).entryPrice * 100 }.average()
             val gap = -removed.sumOf { it.netPnlPct } + keptDelta + added.sumOf { it.netPnlPct }
-            out.appendLine("| ${c.label} | %d · %+.1f | %d · %+.3f · %+.1f | %d · %+.1f | %+.1f |".format(removed.size, removed.sumOf { it.netPnlPct }, kept.size, avgFill, keptDelta, added.size, added.sumOf { it.netPnlPct }, gap))
+            out.appendLine("| %s | %d · %+.1f · %+.2f | %d · %+.3f · %+.1f | %d · %+.1f | %+.1f |".format(c.label, removed.size, removed.sumOf { it.netPnlPct }, if (removed.isEmpty()) 0.0 else removed.sumOf { it.netPnlPct } / removed.size, kept.size, avgFill, keptDelta, added.size, added.sumOf { it.netPnlPct }, gap))
         }
         out.appendLine()
         out.appendLine("## §3 청산 사유 구성 · 진입 봉 청산 (${P}분 PRIMARY)")
@@ -179,23 +183,23 @@ class BreakoutEntryFilterTest {
         out.appendLine()
         out.appendLine("## §4 창별 격차 (${P}분 PRIMARY, Σ%p — 판정에 쓰지 않는다)")
         out.appendLine()
-        val P5 = rungs.last()
-        out.appendLine("| 셀 | " + P5.windows.joinToString(" | ") { it.dir } + " | 음수 창 | 최악 창 |")
-        out.appendLine("|---|" + P5.windows.joinToString("") { "---|" } + "---|---|")
+        val levelP = rungs.last()
+        out.appendLine("| 셀 | " + levelP.windows.joinToString(" | ") { it.dir } + " | 음수 창 | 최악 창 |")
+        out.appendLine("|---|" + levelP.windows.joinToString("") { "---|" } + "---|---|")
         for (c in CELLS) {
-            val perWin = P5.windows.map { w -> trades(P, c).getValue(w.dir).sumOf { it.netPnlPct } - trades(P, BASE).getValue(w.dir).sumOf { it.netPnlPct } }
+            val perWin = levelP.windows.map { w -> trades(P, c).getValue(w.dir).sumOf { it.netPnlPct } - trades(P, BASE).getValue(w.dir).sumOf { it.netPnlPct } }
             val worst = perWin.withIndex().minBy { it.value }
-            out.appendLine("| ${c.label} | " + perWin.joinToString(" | ") { "%+.1f".format(it) } + " | ${perWin.count { it < 0 }}/${perWin.size} | ${P5.windows[worst.index].dir} %+.1f |".format(worst.value))
+            out.appendLine("| ${c.label} | " + perWin.joinToString(" | ") { "%+.1f".format(it) } + " | ${perWin.count { it < 0 }}/${perWin.size} | ${levelP.windows[worst.index].dir} %+.1f |".format(worst.value))
         }
         out.appendLine()
-        out.appendLine("## §5 지연 셀 진단 (${P}분 PRIMARY) — 체결 봉 − 돌파 봉(분) 분포, 신호 재확인으로 밀린 후보 수")
+        out.appendLine("## §5 지연 셀 진단 (${P}분 PRIMARY) — 체결 봉 − 돌파 봉 B 의 봉 수 × ${P}분(결측 봉은 세지 않으므로 벽시계의 하한; 되밀림 후 재돌파 대기와 신호 재확인이 섞여 있다)")
         out.appendLine()
         out.appendLine("| 셀 | 진입 | 지연 분 최소/중앙/최대 | 지연 0 비율 | 신호 거부로 밀린 후보 합 | 밀림 있는 진입 |")
         out.appendLine("|---|---|---|---|---|---|")
         for (c in CELLS) {
             val t = all(P, c); if (t.isEmpty()) continue
             val mins = t.map { it.entryDelayBars * P.toDouble() }.sorted()
-            out.appendLine("| ${c.label} | %d | %.0f / %.0f / %.0f | %.2f | %d | %d |".format(t.size, mins.first(), mins[mins.size / 2], mins.last(), t.count { it.entryDelayBars == 0 }.toDouble() / t.size, t.sumOf { it.entrySignalDeferrals }, t.count { it.entrySignalDeferrals > 0 }))
+            out.appendLine("| %s | %d | %.0f / %.0f / %.0f | %.2f | %d | %d |".format(c.label, t.size, mins.first(), mins[mins.size / 2], mins.last(), t.count { it.entryDelayBars == 0 }.toDouble() / t.size, t.sumOf { it.entrySignalDeferrals }, t.count { it.entrySignalDeferrals > 0 }))
         }
         out.appendLine()
         out.appendLine("## 배관 확인")
@@ -207,7 +211,7 @@ class BreakoutEntryFilterTest {
         out.appendLine()
         out.appendLine("- 라이브 진입 76건 중 24건은 어떤 해상도의 계기도 재현하지 않고 그중 13건이 09:00 KST 직후다(#209 가설) — 시각 축 셀(마감 12h·18h)은 계기 안에서만 성립하는 판정이다.")
         out.appendLine("- 5분 계기 선택은 F1 동률 유보의 실용 판단을 승계한다(`entry-resolution-vs-live-2026-09`). 필터 셀의 시가 체결은 라이브 tick 체결보다 늦고 높다(셀에 불리한 편향).")
-        out.appendLine("- 5분봉 결측(창 안 1.7%, AVAX 급 8%)은 지연 셀의 '봉 수' 를 벽시계보다 길게 만들 수 있다 — §5 분 분포가 그 크기를 보인다. 생존편향·슬리피지·호가 마찰은 계기 한계 그대로.")
+        out.appendLine("- 5분봉 결측(창 안 1.7%, AVAX 급 8%)은 지연 셀의 '봉 수' 를 벽시계보다 길게 만들 수 있다 — §5 는 봉 수 기준이라 그 크기를 보이지 못한다(하한). 마감 셀의 시각은 거래일 시작(09:00 KST) 기준 — 12h = 21:00 KST, 18h = 03:00 KST 이후 진입 금지. 생존편향·슬리피지·호가 마찰은 계기 한계 그대로.")
         if (smoke) out.appendLine("\n**SMOKE 실행(${units}) — 판정 아님.**")
 
         val path = Path.of("build/reports/breakout-entry-filters.md")
