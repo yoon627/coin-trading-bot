@@ -39,8 +39,8 @@ SERVER_PORT=18080 DB_PORT=55433 DB_PASSWORD=k6local UPBIT_ACCESS_KEY= UPBIT_SECR
 > ⚠️ `load` 시나리오는 **iteration 마다** `/api/auth/register` 로 계정을 만들고(`k6user_*`) 인증 엔드포인트를 친다.
 > **운영 도메인에는 돌리지 않는다** — 로컬(`docker-compose.yml`)이나 일회용 인스턴스에서만.
 >
-> 현행 `RateLimitFilter` 는 `/api/auth` 30/min, 그 외 60/min 을 **클라이언트 IP 단위**로 센다(버킷 키는 프록시가 부여한 client IP 뿐,
-> `/actuator`·`/api/prices` 만 제외). 한 머신에서 뜬 VU 전부가 한 버킷을 공유하므로 그대로면 `load` 는 VU 수와 무관하게 429 로
+> 현행 `RateLimitFilter` 는 `/api/auth` 30/min, 그 외 60/min 을 **클라이언트 IP 단위**로 센다(버킷 키는 (인증/일반) × 프록시가 부여한 client IP — 두 카운터는 따로 돈다,
+> `/actuator`·`/api/prices` 만 제외). 한 머신에서 뜬 VU 전부가 같은 두 버킷을 공유하므로 그대로면 `load` 는 VU 수와 무관하게 429 로
 > 에러율 임계를 넘는다. 로컬은 프록시가 없어 앱이 `X-Forwarded-For` 를 그대로 믿으므로, `LOCAL_CLIENT_IPS=1` 이 iteration 마다
 > 다른 주소를 붙여 버킷을 나눈다(rate limit 필터 자체는 켜진 채로 측정된다). **운영에서는 Caddy 가 이 헤더를 실제 peer IP 로
 > 덮어써 아무 효과가 없다** — 우회 수단이 아니라 로컬 측정용이다.
