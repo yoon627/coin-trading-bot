@@ -25,7 +25,7 @@ k6 run -e ONLY=load perf/load-test.js
 > ⚠️ `load` 시나리오는 **iteration 마다** `/api/auth/register` 로 계정을 만들고(`k6user_*`) 인증 엔드포인트를 친다.
 > **운영 도메인에는 돌리지 않는다** — 로컬(`docker-compose.yml`)이나 일회용 인스턴스에서만.
 >
-> 현행 `RateLimitFilter` 는 `/api/auth` 30/min, 그 외 60/min 을 **클라이언트 IP 단위**로 센다(`X-User-Id` 헤더가 없으면 IP 가 버킷 키,
+> 현행 `RateLimitFilter` 는 `/api/auth` 30/min, 그 외 60/min 을 **클라이언트 IP 단위**로 센다(버킷 키는 프록시가 부여한 client IP 뿐,
 > `/actuator`·`/api/prices` 만 제외). 한 머신에서 뜬 VU 전부가 한 버킷을 공유하므로 `load` 는 VU 수와 무관하게 429 로
 > 에러율 임계를 넘는다 — 부하 측정으로 쓰려면 rate limit 을 끄는 로컬 스위치나 VU 별 버킷 분리가 먼저다(#25 잔여).
 > `/api/portfolio` 는 Upbit 키 없는 k6 유저에게 400 이 정상이라 check 가 그 값을 허용한다(`http_req_failed` 에는 잡힌다).
