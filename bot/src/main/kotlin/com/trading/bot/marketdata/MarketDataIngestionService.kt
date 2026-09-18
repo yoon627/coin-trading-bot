@@ -76,7 +76,7 @@ class MarketDataIngestionService(
         // 초당 약 6.7회로 유지한다. 마켓 13개면 한 사이클이 약 2초로, 수집 주기(60s)에 영향이 없다.
         internal const val CANDLE_REQUEST_SPACING_MS = 150L
 
-        // 한 라운드에 받는 M1 개수. 1 이면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(집계 volume ≈ 절반).
+        // 한 라운드에 받는 M1 개수. 1 이면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(실측: 일봉 volume 이 Upbit 의 중앙값 66%).
         // 5 면 라운드가 연속 3회(≈4분) 실패해도 그 사이 분의 완결본이 꼬리에 들어온다. Upbit 은 무거래 분을 생략하므로
         // 꼬리가 수 시간 전 분봉을 실을 수 있다 — 그 재유입은 count 가 아니라 CandleAggregator 의 period 바닥이 막는다.
         internal const val M1_FETCH_COUNT = 5
