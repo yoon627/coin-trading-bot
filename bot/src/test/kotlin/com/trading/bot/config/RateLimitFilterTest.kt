@@ -182,6 +182,33 @@ class RateLimitFilterTest {
     }
 
     @Test
+    fun `filter keys non-auth requests by client ip and ignores a client-supplied X-User-Id`() {
+        // 이 헤더를 설정하는 서버 구성요소는 없다 — 클라이언트가 보낸 값을 키로 쓰면 값만 바꿔 버킷을 무한히 새로 받는다.
+        val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
+        val valueOps = mockk<ReactiveValueOperations<String, String>>()
+        every { redisTemplate.opsForValue() } returns valueOps
+        val keys = mutableListOf<String>()
+        every { valueOps.increment(capture(keys)) } returns Mono.just(1L)
+        every { redisTemplate.expire(any(), any<Duration>()) } returns Mono.just(true)
+        val filter = RateLimitFilter(redisTemplate)
+
+        for (spoofed in listOf("alice", "bob")) {
+            val exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/trades")
+                    .header("X-Forwarded-For", "203.0.113.5")
+                    .header("X-User-Id", spoofed)
+                    .build()
+            )
+            val chain = mockk<WebFilterChain>()
+            every { chain.filter(exchange) } returns Mono.empty()
+            filter.filter(exchange, chain).block()
+        }
+
+        assertEquals(1, keys.map { it.substringBeforeLast(':') }.distinct().size, "헤더 값이 달라도 같은 버킷이어야 함: $keys")
+        assertTrue(keys.all { it.contains("203.0.113.5") }, "버킷 키는 client IP: $keys")
+    }
+
+    @Test
     fun `filter takes first ip from X-Forwarded-For chain`() {
         // XFF 가 "client, proxy.." 체인일 때 원 client(첫 항목)를 식별자로 사용.
         val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
