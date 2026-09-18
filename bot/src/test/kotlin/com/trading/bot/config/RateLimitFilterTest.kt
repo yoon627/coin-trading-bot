@@ -208,6 +208,48 @@ class RateLimitFilterTest {
         assertTrue(keys.all { it.contains("203.0.113.5") }, "버킷 키는 client IP: $keys")
     }
 
+    // 인증(30/min)과 일반 API(60/min)가 카운터 하나를 나눠 쓰면, 같은 IP 의 폴링이 1분에 30회를 넘을 때(한 화면은
+    // 약 20/min 이라 탭 2개·NAT 공유에서) 같은 분의 로그아웃·재로그인이 자기 한도를 하나도 안 썼는데 429 가 된다.
+    @Test
+    fun `api traffic does not consume the auth bucket of the same client`() {
+        val filter = RateLimitFilter(null)
+        fun send(method: String, path: String): HttpStatus? {
+            val request = if (method == "POST") MockServerHttpRequest.post(path) else MockServerHttpRequest.get(path)
+            val exchange = MockServerWebExchange.from(request.header("X-Forwarded-For", "203.0.113.9").build())
+            val chain = mockk<WebFilterChain>()
+            every { chain.filter(exchange) } returns Mono.empty()
+            filter.filter(exchange, chain).block()
+            return exchange.response.statusCode as HttpStatus?
+        }
+
+        repeat(40) { assertNotEquals(HttpStatus.TOO_MANY_REQUESTS, send("GET", "/api/trades"), "일반 API 40회는 60 한도 안") }
+
+        assertNotEquals(HttpStatus.TOO_MANY_REQUESTS, send("POST", "/api/auth/login"), "인증 버킷은 일반 API 호출에 소모되지 않는다")
+    }
+
+    // 위 재현은 벽시계에 묶여 있다(41요청 사이 분이 바뀌면 카운터가 비어 회귀를 놓친다) — 키 자체를 단정해 시간과 무관하게,
+    // 운영이 실제로 타는 Redis 경로에서 분리를 고정한다.
+    @Test
+    fun `auth and api requests of one client use different redis keys`() {
+        val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
+        val valueOps = mockk<ReactiveValueOperations<String, String>>()
+        every { redisTemplate.opsForValue() } returns valueOps
+        val keys = mutableListOf<String>()
+        every { valueOps.increment(capture(keys)) } returns Mono.just(1L)
+        every { redisTemplate.expire(any(), any<Duration>()) } returns Mono.just(true)
+        val filter = RateLimitFilter(redisTemplate)
+
+        for (request in listOf(MockServerHttpRequest.get("/api/trades"), MockServerHttpRequest.post("/api/auth/login"))) {
+            val exchange = MockServerWebExchange.from(request.header("X-Forwarded-For", "203.0.113.9").build())
+            val chain = mockk<WebFilterChain>()
+            every { chain.filter(exchange) } returns Mono.empty()
+            filter.filter(exchange, chain).block()
+        }
+
+        assertTrue(keys[0].startsWith("ratelimit:api:203.0.113.9:"), keys.toString())
+        assertTrue(keys[1].startsWith("ratelimit:auth:203.0.113.9:"), keys.toString())
+    }
+
     @Test
     fun `filter takes first ip from X-Forwarded-For chain`() {
         // XFF 가 "client, proxy.." 체인일 때 원 client(첫 항목)를 식별자로 사용.
