@@ -47,11 +47,10 @@ class RateLimitFilter(
         val isAuthEndpoint = path.startsWith("/api/auth")
         val limit = if (isAuthEndpoint) MAX_AUTH_REQUESTS_PER_MINUTE else MAX_REQUESTS_PER_MINUTE
 
-        val userId = if (isAuthEndpoint) clientIp
-            else exchange.request.headers.getFirst("X-User-Id") ?: clientIp
-
+        // 버킷 키는 client IP 하나다 — 요청이 스스로 주장하는 식별자는 키에 넣지 않는다. IP 의 신뢰는 [clientIp] 의 전제
+        // (Caddy 뒤 `deploy/*` 판)에 달려 있다: 루트 docker-compose 처럼 8080 을 직접 노출하면 XFF 도 위조된다.
         val minute = System.currentTimeMillis() / 60000
-        val key = "$KEY_PREFIX$userId:$minute"
+        val key = "$KEY_PREFIX$clientIp:$minute"
 
         if (redisTemplate == null) {
             return if (isMemoryRateLimited(key, minute, limit)) reject(exchange, limit)
