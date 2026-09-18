@@ -8,7 +8,7 @@ on:
     # 문서·지식베이스·plan 만 바뀐 push 는 배포하지 않는다. main push 가 곧 운영 배포라
     # 컨테이너 재생성 = 트레이딩 엔진 재시작인데, 아래 경로는 실행 이미지에 들어가지 않는다
     # (Dockerfile 이 COPY 하는 것은 `*.gradle.kts`·`gradle/` 래퍼·`common/`·`bot/` 뿐이고
-    # 앱 리소스에 .md 가 없다).
+    # 앱 리소스에 .md 가 없다). `perf/`(k6 스크립트)는 `.dockerignore` 로 빌드 컨텍스트에서도 빠진다.
     #
     # ⚠️ 배포에 영향을 주는 것은 넣지 말 것 — 특히 `deploy/**`(compose·배포 스크립트)와
     # `Dockerfile`·`.dockerignore`·`gradle/**`·`*.gradle.kts`. paths-ignore 는 **push 로 들어온
@@ -26,6 +26,7 @@ on:
       - '.claude/**'
       - 'wiki/**'
       - 'docs/**'
+      - 'perf/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -162,7 +163,7 @@ jobs:
           # ⚠️ 아래 제외 목록은 파일 상단 on.push.paths-ignore 와 **반드시 같이** 유지한다.
           #    한쪽만 넓히면 그 경로가 다시 조용한 미배포 구간이 된다.
           code_changes="$(git diff --name-only "$GITHUB_SHA" "$current_main" -- . \
-            ':(exclude)**.md' ':(exclude).claude/**' ':(exclude)wiki/**' ':(exclude)docs/**')"
+            ':(exclude)**.md' ':(exclude).claude/**' ':(exclude)wiki/**' ':(exclude)docs/**' ':(exclude)perf/**')"
 
           if [[ -z "$code_changes" ]]; then
             echo 'current=true' >> "$GITHUB_OUTPUT"
