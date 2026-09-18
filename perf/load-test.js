@@ -11,6 +11,14 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 // ONLY=smoke|load 로 시나리오를 고른다(k6 에는 시나리오 선택 플래그가 없다 — grafana/k6#3054).
 // load 는 iteration 마다 계정을 등록하므로 운영 도메인에는 ONLY=smoke 로만 돌린다(perf/README.md).
 const ONLY = __ENV.ONLY;
+// LOCAL_CLIENT_IPS=1: iteration 마다 다른 X-Forwarded-For 를 붙여 한 머신의 VU 들이 rate limit 버킷 하나를 나눠 쓰지 않게 한다.
+// 프록시 없는 로컬 서버 전용 — 운영은 Caddy 가 이 헤더를 실제 peer IP 로 덮어쓰므로 아무 효과가 없다(perf/README.md).
+const LOCAL_CLIENT_IPS = __ENV.LOCAL_CLIENT_IPS === '1';
+
+function clientIpHeader() {
+  if (!LOCAL_CLIENT_IPS) return {};
+  return { 'X-Forwarded-For': `10.${__VU % 256}.${Math.floor(__ITER / 256) % 256}.${__ITER % 256}` };
+}
 
 const scenarios = {
     // Smoke test: 1 user, quick sanity check
@@ -55,7 +63,7 @@ function registerAndLogin(id) {
     username: username,
     password: 'testpass123',
   });
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = Object.assign({ 'Content-Type': 'application/json' }, clientIpHeader());
 
   // Register
   http.post(`${BASE_URL}/api/auth/register`, payload, { headers });
@@ -78,10 +86,10 @@ function registerAndLogin(id) {
 
 function authHeaders(token) {
   return {
-    headers: {
+    headers: Object.assign({
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
-    },
+    }, clientIpHeader()),
   };
 }
 
@@ -118,13 +126,13 @@ export function loadTest() {
   const token = registerAndLogin(__VU);
 
   group('Public Endpoints', () => {
-    const health = http.get(`${BASE_URL}/actuator/health`);
+    const health = http.get(`${BASE_URL}/actuator/health`, { headers: clientIpHeader() });
     check(health, { 'health 200': (r) => r.status === 200 }) || errorRate.add(1);
 
-    const leaderboard = http.get(`${BASE_URL}/api/leaderboard`);
+    const leaderboard = http.get(`${BASE_URL}/api/leaderboard`, { headers: clientIpHeader() });
     check(leaderboard, { 'leaderboard 200': (r) => r.status === 200 }) || errorRate.add(1);
 
-    const latest = http.get(`${BASE_URL}/api/prices/latest`);
+    const latest = http.get(`${BASE_URL}/api/prices/latest`, { headers: clientIpHeader() });
     check(latest, { 'latest prices 200': (r) => r.status === 200 }) || errorRate.add(1);
   });
 
@@ -153,7 +161,11 @@ export function loadTest() {
       }) || errorRate.add(1);
 
       // Portfolio — k6 유저는 Upbit 키가 없어 400 이 정상 응답이다(PortfolioController). 그 외는 실패로 센다.
-      const portfolio = http.get(`${BASE_URL}/api/portfolio`, authHeaders(token));
+      // expectedStatuses 가 없으면 이 400 이 http_req_failed 에 iteration 당 1건씩(=10%) 쌓여 임계를 항상 깬다.
+      const portfolio = http.get(
+        `${BASE_URL}/api/portfolio`,
+        Object.assign(authHeaders(token), { responseCallback: http.expectedStatuses(200, 400) }),
+      );
       check(portfolio, {
         'portfolio 200 or 400(no keys)': (r) => r.status === 200 || r.status === 400,
       }) || errorRate.add(1);
