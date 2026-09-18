@@ -203,3 +203,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[trading-engine-loop]] 2번 항목: 런타임에 생긴 lock 은 `buy()` 가 사이징 잔고에서 같은 판정(추가 호출 없음)을 해 `unsynced` 로 넘긴다. 운영 로그는 컨테이너 재생성마다 사라져(json-file 10m×3) 발생 빈도는 판단 불가 — 가드가 무료라 빈도와 무관하게 넣었다.
 - [[upbit-api]] 주문 절: `wait` 부분체결 시 `remaining_volume` 갱신은 공식 문서 명시 없음 → 봇이 info 로그로 근거를 쌓는다. #120 의 상한 조이기는 그 근거가 생기면.
+
+## [2026-09-18] update | marketdata-pipeline — M1 count=5 배포 후 실측, 결손 크기 서술 정정
+
+- [[marketdata-pipeline]] candleBuffers 절의 "volume 평균 절반·레인지 체계적으로 좁음"을 운영 실측으로 교체: 구 규칙 일봉 volume 은 Upbit 의 중앙값 66%(최소 47%), 레인지는 중앙값 1.000·약 5일 중 1일만 2% 이상 좁음(최악 −12.5%). 신 규칙 09-17 은 13마켓 전부 일치. [[lesson-seed-vs-stream-overwrite]]·[[upbit-api]] 의 같은 서술도 맞춤.
