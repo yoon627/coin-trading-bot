@@ -2,7 +2,7 @@
 title: lesson — 부팅 seed 와 스트림 집계가 같은 키를 쓰면 스트림의 첫 값이 seed 를 통째로 대체한다 (D1 절단 → 돌파선 붕괴)
 category: decision
 created: 2026-09-16
-updated: 2026-09-17
+updated: 2026-09-18
 claim_state: current
 verified: 2026-09-16 — 수정은 seed 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록(store 읽기 없음). `CandleAggregator.kt` 원문(`existing == null` 분기가 M1 하나로 새 봉 → `addCandle` upsert)·`MarketDataIngestionService.seedDailyCandles`·`MarketDataStore.addCandle` 로 경로 확정. 라이브 00h 매수 17건 중 7건이 배포(재시작) 다음날 당일시가 바로 위에서 체결(#209 코멘트 표). 재현 테스트 `CandleAggregatorTest` Red→Green
 sources:
@@ -33,6 +33,6 @@ sources:
 
 ## 재발 감지
 
-재시작 다음날 00:00~01:00 UTC 진입이 당일시가 근처에 몰리면 이 계열이다. 같은 증상의 **상시판**(재시작과 무관하게 전일 레인지가 좁음)은 폴링 `count=1` 이 각 분의 완결본을 못 받던 결손이었고 2026-09-17 에 `count=5` + 집계기 분 단위 멱등으로 닫혔다([[marketdata-pipeline]] candleBuffers). `entry-resolution-vs-live-2026-09` 의 대조 하네스(`LiveEntryResolutionTest`)를 다시 돌리면 "라이브 전용" 건수로 잡힌다.
+재시작 다음날 00:00~01:00 UTC 진입이 당일시가 근처에 몰리면 이 계열이다. 같은 뿌리의 **상시 결손**(폴링 `count=1` 이 각 분의 완결본을 못 받음)은 2026-09-17 에 `count=5` + 집계기 분 단위 멱등으로 닫혔다 — 다만 실측상 그 결손은 주로 volume(중앙값 66%)이었고 전일 레인지는 약 5일 중 1일만 2% 이상 좁았으므로, 이 페이지의 증상(돌파선 붕괴)만큼 크지 않았다([[marketdata-pipeline]] candleBuffers). `entry-resolution-vs-live-2026-09` 의 대조 하네스(`LiveEntryResolutionTest`)를 다시 돌리면 "라이브 전용" 건수로 잡힌다.
 
 관련: [[marketdata-pipeline]], [[trading-engine-loop]], [[lesson-single-point-verification]](한 지점 통과를 일반화하지 말 것 — 여기서는 "부팅 직후엔 맞다" 가 그 지점이었다).
