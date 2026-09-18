@@ -209,7 +209,7 @@ class MarketDataIngestionServiceTest {
         coVerify(exactly = 2) { feed.getCandles("BTC/KRW", CandleInterval.M1, MarketDataIngestionService.M1_FETCH_COUNT) }
     }
 
-    // 상수 단정 — 1 로 되돌리면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(상위봉 volume ≈ 절반). 동작 테스트가 아니라 회귀 표지.
+    // 상수 단정 — 1 로 되돌리면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(실측: 일봉 volume 이 Upbit 의 중앙값 66%). 동작 테스트가 아니라 회귀 표지.
     @Test
     fun `M1 fetch count exceeds one so completed minutes arrive in the tail`() {
         assertTrue(MarketDataIngestionService.M1_FETCH_COUNT > 1)
