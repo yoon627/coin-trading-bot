@@ -155,6 +155,11 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[lesson-bracket-needs-fill-semantics]] 신설: 감도 family 를 "유령 손절 브래킷"으로 설계하면서 계기의 체결 규칙(`combined` 가 현재가 ≤ 돌파선 거부 → 체결은 항상 봉 시가)을 코드로 확인하지 않은 것, 비관 브래킷이 경로 가정과 모순되는 청산을 낸 것. 3 Whys·올바른 방법(체결 규칙 한 줄 + 경로 가정별 단위테스트). 사용자 승인 후 적립(§13).
 
+## [2026-09-10] query | external-signal-gate-2026-09 — 외부 레짐 게이트 13셀 사전고정 판정 1페이지 추가
+
+- [[external-signal-gate-2026-09]] 신설: 김치프리미엄·BTC 펀딩·공포탐욕·ETH/BTC·테이커 매수 비율 13셀을 `combined` 진입 게이트로 얹어 5분봉 사전고정 판정(`ca3242e`). 5분봉 13셀 전부 양수·`FNG_FEAR` maxT 통과(+0.164/거래)지만 위상 이동 null 21/260 통과(상한 13) → 계기 무효·후보 0. 이득은 신호 정보가 아니라 음수 기준선(−219%p)에서 진입을 줄인 효과.
+- 근거: `ExternalRegimeGateTest`(`RUN_EXTERNAL_GATE=true`) 산출물, fixture `backtest/external/` 5종(`scripts/collect_external_series.py`, 2026-09-10 수집). 진행 상태는 plan 소유.
+
 ## [2026-09-16] ingest | KIS(한국투자증권 국내주식) 경로 제거 반영
 
 - [[kis-stock-trading-flow]]·[[kis-order-lifecycle]] 삭제 — 서술 대상 코드(`bot/.../kis/`·`/api/stock|kis/*`·주식 화면)가 사용자 결정으로 통째로 제거됐다(V27 이 `stock_order_intent`·`stock_position_state`·`users.kis_*` 를 DROP).
@@ -207,3 +212,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-09-18] update | marketdata-pipeline — M1 count=5 배포 후 실측, 결손 크기 서술 정정
 
 - [[marketdata-pipeline]] candleBuffers 절의 "volume 평균 절반·레인지 체계적으로 좁음"을 운영 실측으로 교체: 구 규칙 일봉 volume 은 Upbit 의 중앙값 66%(최소 47%), 레인지는 중앙값 1.000·약 5일 중 1일만 2% 이상 좁음(최악 −12.5%). 신 규칙 09-17 은 13마켓 전부 일치. [[lesson-seed-vs-stream-overwrite]]·[[upbit-api]] 의 같은 서술도 맞춤.
+
+## [2026-09-23] update | external-signal-gate-2026-09 — main 반영·재현 확인
+
+- [[external-signal-gate-2026-09]] 는 2026-09-10 판정 뒤 로컬 브랜치에만 있었다. main 에 병합하고 병합 트리에서 하네스를 다시 돌려 기준 거래·셀 수치·N0 20·후보 0 이 기록과 같음을 확인(`verified` 갱신). 결론 불변.
