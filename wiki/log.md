@@ -212,3 +212,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-09-18] update | marketdata-pipeline — M1 count=5 배포 후 실측, 결손 크기 서술 정정
 
 - [[marketdata-pipeline]] candleBuffers 절의 "volume 평균 절반·레인지 체계적으로 좁음"을 운영 실측으로 교체: 구 규칙 일봉 volume 은 Upbit 의 중앙값 66%(최소 47%), 레인지는 중앙값 1.000·약 5일 중 1일만 2% 이상 좁음(최악 −12.5%). 신 규칙 09-17 은 13마켓 전부 일치. [[lesson-seed-vs-stream-overwrite]]·[[upbit-api]] 의 같은 서술도 맞춤.
+
+## [2026-09-23] update | external-signal-gate-2026-09 — main 반영·재현 확인
+
+- [[external-signal-gate-2026-09]] 는 2026-09-10 판정 뒤 로컬 브랜치에만 있었다. main 에 병합하고 병합 트리에서 하네스를 다시 돌려 기준 거래·셀 수치·N0 20·후보 0 이 기록과 같음을 확인(`verified` 갱신). 결론 불변.
