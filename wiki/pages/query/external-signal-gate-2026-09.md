@@ -2,9 +2,9 @@
 title: 외부 레짐 게이트 — 김프·펀딩·공포탐욕·ETH/BTC·테이커 13셀은 5분봉에서 전부 양수지만 위상 이동 대조군도 같이 통과한다(N0 20 > 13) → 정보가 아니라 "덜 거래" 효과, 후보 0
 category: query
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-09-23
 claim_state: current
-verified: 2026-09-10 — `RUN_EXTERNAL_GATE=true BACKTEST_CACHE_DIR=~/.cache/coin-trading-bot/backtest-cache ./gradlew :bot:test --tests "*ExternalRegimeGateTest*" --rerun-tasks` (JDK jbr-21.0.9, 약 4분). 사전고정 커밋 `ca3242e`(plan + 하네스 + fixture, 15·5분봉 결과 전); 리뷰가 잡은 배관 결함(위상 이동을 행 인덱스→달력 순환으로, 240·15분 rung 거래수 핀·봉/일·첫 봉 시가 단정 복원) 수정 후 같은 규칙으로 재실행 — 셀 수치 불변, N0 21→20. fixture 10창 D1 + `intraday240/` + `backtest-cache/intraday{15,5}/` + `backtest/external/` 5종(수집 2026-09-10)
+verified: 2026-09-23 — main(`41f1fd1`, 이후 계기 변경 `EntryFilter`·진입/청산 봉 시각 필드 포함)에 병합한 트리에서 같은 명령으로 재실행: 기준 거래 1,058/1,659/1,767·셀 수치·N0 20·후보 0 이 기록과 동일 · 2026-09-10 — `RUN_EXTERNAL_GATE=true BACKTEST_CACHE_DIR=~/.cache/coin-trading-bot/backtest-cache ./gradlew :bot:test --tests "*ExternalRegimeGateTest*" --rerun-tasks` (JDK jbr-21.0.9, 약 4분). 사전고정 커밋 `ca3242e`(plan + 하네스 + fixture, 15·5분봉 결과 전); 리뷰가 잡은 배관 결함(위상 이동을 행 인덱스→달력 순환으로, 240·15분 rung 거래수 핀·봉/일·첫 봉 시가 단정 복원) 수정 후 같은 규칙으로 재실행 — 셀 수치 불변, N0 21→20. fixture 10창 D1 + `intraday240/` + `backtest-cache/intraday{15,5}/` + `backtest/external/` 5종(수집 2026-09-10)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/ExternalRegimeGateTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/ExternalSeries.kt
