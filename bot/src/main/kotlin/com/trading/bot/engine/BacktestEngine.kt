@@ -17,11 +17,11 @@ import kotlin.math.sqrt
  *
  * D1 규약은 라이브보다 하루 늦게 대응한다 — 신호 봉 `t` 종가 → 체결 `t+1` 시가가 라이브의 `t` 일 장중 돌파 매수이고,
  * TIME_EXIT(`t+2` 시가)가 라이브의 `t+1` 일 09:00 리셋이다. 라이브는 리셋 때 `boughtToday` 가 풀려 그날 돌파하면
- * 다시 사므로, 그 사건은 "신호 `t+1` 종가 → 체결 `t+2` 시가" = 청산 봉 재진입이다. LEGACY 는 청산 봉에서 진입
- * 평가를 하지 않아 이 기회를 지운다(2봉 공백, #128·#144).
+ * 다시 사므로, 그 사건은 "신호 `t+1` 종가 → 체결 `t+2` 시가" = 청산 봉 재진입이다. LEGACY 는 TIME_EXIT 봉에서 진입
+ * 평가를 하지 않아 이 기회를 지운다(2봉 공백, #128·#144). 가격게이트 청산 뒤 규칙은 모드와 무관하다(#223).
  */
 enum class ReentryMode {
-    /** 청산 봉 `i` → 신호 `i+1` → 체결 `i+2`. `LIVE_SAME_BAR` + 쿨다운 2봉과 같다(BacktestReentryEquivalenceTest). */
+    /** TIME_EXIT 봉 `i` → 신호 `i+1` → 체결 `i+2`. `LIVE_SAME_BAR` + 쿨다운 2봉과 같다(BacktestReentryEquivalenceTest). */
     LEGACY_NEXT_BAR,
 
     /** 기본값. TIME_EXIT 한정 same-bar 재진입 — 청산 봉 `D` 의 `open` 에 재진입(신호는 `D-1` 종가까지). */
@@ -228,8 +228,9 @@ class BacktestEngine(
         val signalProps = tradingProperties.copy(kValue = config.kValue)
 
         // LIVE_SAME_BAR 재진입 예약 — TIME_EXIT 이 난 봉 + 쿨다운. -1 = 예약 없음.
-        // "봉당 진입 1회"(라이브 boughtToday 등가)는 별도 플래그가 아니라 구조가 보장한다 — 한 반복은
-        // 재진입 경로나 통상 경로 중 하나에서만 체결하고, 체결하면 곧바로 다음 봉으로 넘어간다.
+        // "봉당 진입 1회"(라이브 boughtToday 등가)는 별도 플래그가 아니라 구조가 보장한다 — 봉 k 체결은 반복 k-1 의
+        // 통상 경로나 반복 k 의 재진입뿐이고, 재진입은 k 에서 TIME_EXIT 이 났을 때만인데 k 에 체결된 포지션은
+        // holdDays=0 이라 k 에서 TIME_EXIT 이 날 수 없다(effectiveMaxHoldDays ≥ 1).
         var reentryDueAt = -1
 
         for (i in MIN_CANDLES until chronological.size) {
@@ -239,14 +240,15 @@ class BacktestEngine(
 
             if (state.position) {
                 val reason = processExit(state, strategy, i, chronological[i], window, config, signalProps)
-                // 라이브는 09:00 리셋 매도와 동시에 boughtToday 가 풀려 곧바로 재매수가 가능하다.
-                // 가격게이트 청산은 제외 — 청산가가 실제 체결가가 아니라 게이트 임계가이고, 봉의 high/low 를
-                // 본 뒤 같은 봉에 사는 셈이라 look-ahead 다(#128 plan Decision 4).
-                if (config.reentryMode == ReentryMode.LIVE_SAME_BAR && reason == "TIME_EXIT") {
+                if (state.position) continue
+                // TIME_EXIT 뒤 재진입은 ReentryMode 가 정한다. 가격게이트·차트 청산은 같은 봉 재진입만 막는다 — 청산을
+                // 확정한 그 봉의 정보(high/low·종가)를 본 뒤 그 봉 시가에 사는 셈이고, 청산가(임계가·종가)가 시가
+                // 재진입가와 짝이 맞지 않는다. 청산 봉 종가 신호 → 다음 봉 체결은 아래 통상 경로가 평가한다(#223).
+                if (reason == "TIME_EXIT") {
+                    if (config.reentryMode == ReentryMode.LEGACY_NEXT_BAR) continue
                     reentryDueAt = i + config.reentryCooldownBars
+                    if (reentryDueAt != i) continue
                 }
-                // 청산이 난 봉에서는 기존 규약상 진입 평가를 하지 않는다. 예약된 재진입이 바로 이 봉일 때만 이어간다.
-                if (state.position || reentryDueAt != i) continue
             }
 
             if (reentryDueAt >= 0) {
@@ -263,7 +265,8 @@ class BacktestEngine(
                     // 보호가 사라져 편향된다. 진입 신호·체결가는 이 봉 high/low 확정 전에 정해졌으므로
                     // look-ahead 가 아니다(#128 plan Decision 5).
                     processExit(state, strategy, i, chronological[i], window, config, signalProps)
-                    continue
+                    if (state.position) continue
+                    // 같은 봉 게이트로 청산됐으면 위와 같은 규칙 — 이 봉 종가 신호 → 다음 봉 체결은 통상 경로가 평가한다.
                 }
                 // 재진입 신호가 없었으면 이 봉의 통상 진입 기회(신호=봉 i 종가, 체결=봉 i+1 시가)는 살아 있다.
                 // 여기서 continue 하면 legacy 가 갖는 그 기회를 쿨다운 팔만 잃어, 측정이 정책 차이가 아니라
