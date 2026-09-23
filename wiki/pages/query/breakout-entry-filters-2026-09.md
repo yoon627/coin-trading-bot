@@ -2,7 +2,7 @@
 title: combined 진입 필터 사전고정 판정 — 되밀린 돌파를 막는 9셀(지연·되밀림 포기·마진·시간 마감) 중 5분봉에서 잡음과 분리되는 것은 없다, 현행 유지
 category: query
 created: 2026-09-16
-updated: 2026-09-16
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-16 — `RUN_ENTRY_FILTER=true BACKTEST_CACHE_DIR=~/.cache/coin-trading-bot/backtest-cache ./gradlew :bot:test --tests "*BreakoutEntryFilterTest*" --rerun-tasks`(JDK 21.0.9) → `bot/build/reports/breakout-entry-filters.md`. 규칙·family·계기 옵션은 결과 전에 커밋(`4bdfae2`; 리뷰 후 리포트 포맷·smoke 가드·죽은 코드·격자 단정만 수정, 판정 수치 불변 — 리뷰어가 바이트 동일 재현 확인). 배관: 5분 1,767/−219.4 · 15분 1,659/−124.8 선행 재현, 중립 필터 진입 집합 = 기존 경로, frame 1,500일, 계기 실행 3,520회. 계기 옵션 의미는 합성 봉 단위테스트 9건, 기존 핀 13건·env 핀 2건 재현
 sources:
@@ -66,6 +66,7 @@ family q = 2.41(주)·2.42(비관). 어느 셀도 경제 하한 0.10%p/거래에
 - **진입 조건 축도 5분봉 계기에서는 잡음과 분리되는 후보가 없다.** 청산 축([[exit-resolution-ladder-2026-09]]·[[trailing-resolution-2026-09]])과 같은 결론이다 — 현행 `combined` 의 5분봉 성적(−219%p)은 이 family 로는 고칠 수 없다.
 - 남은 방향은 셋이고 전부 이 계기 밖이다: (a) 마진 셀의 비용 구조가 시가 체결 가정에 묶여 있으므로 **tick 단위 체결 계기**(초봉은 최근 3개월만 — [[upbit-api]])나 라이브 그림자 관측으로만 재판정 가능 (b) 되밀린 돌파의 시간 척도가 15분보다 길다면 지연 30~60분 family 를 따로 사전고정할 수 있으나 체결가 비용이 선형으로 커진다(§2 의 +0.135 → +0.224%/10분) (c) 라이브 진입의 1/6 이 계기 밖 규칙(09:00 직후, #209)이라 그쪽이 먼저다.
 - family 를 결과 후 넓히지 않는다(사전고정). 이 페이지의 수치를 근거로 특정 셀을 라이브에 올리지 않는다.
+- 같은 계기에서 MA·RSI 를 완결 일봉만으로 계산하는 변형도 후보 0 이다([[completed-bar-indicators-2026-09]]) — 진입 축 세 번째 소진.
 
 ## 한계
 
