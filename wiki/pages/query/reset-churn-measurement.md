@@ -2,7 +2,7 @@
 title: 일일리셋 반사실 측정 결과 — 신호 지속성의 가치는 작고 표본에 취약하다
 category: query
 created: 2026-08-25
-updated: 2026-08-26
+updated: 2026-09-23
 claim_state: current
 verified: 2026-08-26 — **시점 중립 fixture(#112)로 재실행**. `RUN_COUNTERFACTUAL=true ./gradlew :bot:test --tests "*DailyResetCounterfactualTest*" --rerun-tasks`. 최초 측정(2026-08-25, 커밋 393845e)은 편향된 유니버스였다 — 아래 정정 참조
 sources:
@@ -13,6 +13,8 @@ sources:
 ---
 
 # 일일리셋 반사실 측정 결과
+
+> ⚠️ **엔진 버전 경계**: 이 페이지의 수치는 2026-09-23 전 `BacktestEngine` 에서 나왔다. 그 뒤 기본 재진입이 `LIVE_SAME_BAR`(#144)로, 가격게이트 청산 뒤 최소 간격이 2봉 → 1봉(#223, 두 모드 공통)으로 바뀌어 같은 명령으로 재실행하면 수치가 달라진다(LEGACY 팔 포함). 재현은 그 전 커밋(`b7edad6`)에서 한다 — [[backtest-engine]].
 
 GitHub #128 은 운영 데이터에서 `DAILY_RESET` 매도가 **건수 1위인데 수익률 합 −0.31%** 이고, 15/18 건이 재매수됐으며 24h 내 재매수 7건은 평균 **+1.80% 더 비싸게** 샀다고 보고했다(추정 비용 −13.3%p ≈ **1.9%p/건**). 이슈 스스로 "관찰된 상관이지 인과 증명이 아니다"라고 한계를 달았고, 이 페이지는 그 반사실을 백테로 재려 한 결과다.
 
