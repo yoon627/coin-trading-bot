@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * TIME_EXIT 직후 재진입 모델(#128). 라이브는 09:00 리셋 매도 후 같은 경계에서 `boughtToday` 가 풀려
- * 곧바로 재매수가 가능한데, 기존 백테는 청산 봉에서 진입 평가를 안 해 2봉 공백이 강제된다.
+ * 청산 직후 재진입 모델(#128·#144·#223). 라이브는 09:00 리셋 때 `boughtToday` 가 풀려 그날 돌파하면 다시 산다 —
+ * TIME_EXIT 뒤는 `ReentryMode` 가, 가격게이트 청산 뒤(같은 봉 금지·다음 봉 허용)는 모드와 무관한 엔진 규칙이 정한다.
  *
  * 캔들은 봉마다 가격이 1씩 오르고 O=H=L=C 라 가격 게이트가 절대 발동하지 않는다 —
  * TIME_EXIT 만 남겨 재진입 타이밍을 격리한다. `openingPrice - 10_000` 이 곧 chronological 인덱스라
@@ -147,6 +147,21 @@ class BacktestReentryTest {
     }
 
     @Test
+    fun `re-entry stopped out on its own bar enters again on the next bar`() = runTest {
+        // 재진입 포지션이 같은 봉 게이트로 청산돼도 그 봉 종가 신호 → 다음 봉 체결은 살아 있어야 한다. 삼키면
+        // 쿨다운 팔만 legacy(통상 경로로 들어온 포지션의 게이트 청산은 다음 봉 진입)와 갈라진다 — 동등성 테스트가 잡은 경로.
+        val exitBar = 52
+        val candles = flatRisingCandles(120, lowAt = mapOf(exitBar to (10_000.0 + exitBar) * 0.90))
+        val result = engineOf(AlwaysBuy())
+            .run("always_buy", candles, "KRW-BTC", timeExitConfig(ReentryMode.LIVE_SAME_BAR))
+
+        assertNotNull(result)
+        val stopped = result!!.trades.single { it.buyIndex == exitBar }
+        assertEquals("STOP_LOSS", stopped.reason)
+        assertEquals(exitBar + 1, result.trades.first { it.buyIndex > exitBar }.buyIndex, "${result.trades.take(4)}")
+    }
+
+    @Test
     fun `cooldown blocks re-entry for exactly N bars`() = runTest {
         // A2 — 초과·미달 모두 실패해야 한다.
         for (n in 1..3) {
@@ -161,24 +176,24 @@ class BacktestReentryTest {
     }
 
     @Test
-    fun `price gate exits keep the legacy gap even in live same-bar mode`() = runTest {
-        // A2b — SL/TP/트레일링 청산가는 실제 체결가가 아니라 게이트 임계가이고 청산 시각을 D1 에서 모른다.
-        // 같은 봉 재진입은 봉의 high/low 를 본 뒤 사는 셈이라 look-ahead → 기존 규약 유지.
+    fun `price gate exits re-enter on the next bar from the exit bar's close signal`() = runTest {
+        // SL/TP/트레일링 청산가는 게이트 임계가이고 청산 시각을 D1 에서 모른다 — 같은 봉 재진입은 봉의 high/low 를
+        // 본 뒤 사는 셈이라 look-ahead 로 금지한다. 청산 봉 종가 신호 → 다음 봉 시가 체결은 look-ahead 가 아니고,
+        // 라이브의 "게이트 청산(매수일) 다음 거래일 돌파 재매수"에 대응한다(D1 하루 지연). 간격은 정확히 1봉.
         val slBar = 52
         val candles = flatRisingCandles(120, lowAt = mapOf(slBar to (10_000.0 + slBar) * 0.90))
-        // maxHoldDays 를 크게 잡아 TIME_EXIT 을 배제하고 손절만 남긴다.
-        val config = BacktestConfig(maxHoldDays = 999, reentryMode = ReentryMode.LIVE_SAME_BAR)
-        val result = engineOf(AlwaysBuy()).run("always_buy", candles, "KRW-BTC", config)
+        for (mode in ReentryMode.entries) {
+            // maxHoldDays 를 크게 잡아 TIME_EXIT 을 배제하고 손절만 남긴다.
+            val config = BacktestConfig(maxHoldDays = 999, reentryMode = mode)
+            val result = engineOf(AlwaysBuy()).run("always_buy", candles, "KRW-BTC", config)
 
-        assertNotNull(result)
-        val sl = result!!.trades.firstOrNull { it.reason == "STOP_LOSS" }
-        assertNotNull(sl, "손절 trade 가 있어야 한다: ${result.trades.take(4)}")
-        val next = result.trades.firstOrNull { it.buyIndex > sl!!.sellIndex }
-        assertNotNull(next, "후속 진입이 없으면 이 단언은 공허하다 — 시나리오가 깨진 것: ${result.trades.take(4)}")
-        assertTrue(
-            next!!.buyIndex >= sl!!.sellIndex + 2,
-            "가격게이트 청산 뒤에는 기존 2봉 공백을 유지해야 한다 (sell=${sl.sellIndex}, buy=${next.buyIndex})",
-        )
+            assertNotNull(result, "$mode")
+            val sl = result!!.trades.firstOrNull { it.reason == "STOP_LOSS" }
+            assertNotNull(sl, "$mode: 손절 trade 가 있어야 한다: ${result.trades.take(4)}")
+            val next = result.trades.firstOrNull { it.buyIndex >= sl!!.sellIndex }
+            assertNotNull(next, "$mode: 후속 진입이 없으면 이 단언은 공허하다 — 시나리오가 깨진 것: ${result.trades.take(4)}")
+            assertEquals(sl!!.sellIndex + 1, next!!.buyIndex, "$mode: 가격게이트 청산 봉 종가 신호로 다음 봉에 진입해야 한다")
+        }
     }
 
     @Test
