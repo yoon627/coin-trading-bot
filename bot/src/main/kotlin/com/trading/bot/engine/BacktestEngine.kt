@@ -15,14 +15,16 @@ import kotlin.math.sqrt
 /**
  * TIME_EXIT(라이브 `DAILY_RESET`) 직후 재진입을 어떻게 모델링할지.
  *
- * 라이브는 09:00 리셋 매도 후 ~10초 뒤 재매수가 가능한데(`boughtToday` 가 같은 경계에서 풀린다),
- * 기존 백테는 청산 봉에서 진입 평가를 아예 하지 않아 **2봉 강제 공백**이 생긴다(#128).
+ * D1 규약은 라이브보다 하루 늦게 대응한다 — 신호 봉 `t` 종가 → 체결 `t+1` 시가가 라이브의 `t` 일 장중 돌파 매수이고,
+ * TIME_EXIT(`t+2` 시가)가 라이브의 `t+1` 일 09:00 리셋이다. 라이브는 리셋 때 `boughtToday` 가 풀려 그날 돌파하면
+ * 다시 사므로, 그 사건은 "신호 `t+1` 종가 → 체결 `t+2` 시가" = 청산 봉 재진입이다. LEGACY 는 청산 봉에서 진입
+ * 평가를 하지 않아 이 기회를 지운다(2봉 공백, #128·#144).
  */
 enum class ReentryMode {
-    /** 기존 동작 — 청산 봉 `i` → 신호 `i+1` → 체결 `i+2`. 기본값(계약 보존). */
+    /** 청산 봉 `i` → 신호 `i+1` → 체결 `i+2`. `LIVE_SAME_BAR` + 쿨다운 2봉과 같다(BacktestReentryEquivalenceTest). */
     LEGACY_NEXT_BAR,
 
-    /** TIME_EXIT 한정 same-bar 재진입 — 청산 봉 `D` 의 `open` 에 재진입(신호는 `D-1` 종가까지). */
+    /** 기본값. TIME_EXIT 한정 same-bar 재진입 — 청산 봉 `D` 의 `open` 에 재진입(신호는 `D-1` 종가까지). */
     LIVE_SAME_BAR,
 }
 
@@ -43,12 +45,10 @@ data class BacktestConfig(
      */
     val holdLimitOnlyWhenProfitable: Boolean = false,
     /**
-     * 기본값을 라이브(0공백)와 다르게 두는 이유 — `M1ReplayBiasTest`·`StrategySearch`·
-     * `KneeStrategyComparisonTest` 가 `BacktestConfig()` 를 상속하므로, 기본값을 바꾸면 그 측정들의
-     * 모집단 자체가 달라진다. `/backtest` public 계약도 조용히 바뀐다. 전환은 라이브 변경을 결정하는
-     * 후속 작업에서 함께 판단한다(#128 plan Decision 6).
+     * 기본은 라이브 정합([ReentryMode] 의 하루 지연 대응). 재진입가를 돌파가가 아니라 시가로 놓는 오차는 통상 진입과
+     * 체결 규약이 같아 LEGACY 로도 줄지 않는다 — LEGACY 는 라이브에 있는 재진입 기회를 지울 뿐이다(#144).
      */
-    val reentryMode: ReentryMode = ReentryMode.LEGACY_NEXT_BAR,
+    val reentryMode: ReentryMode = ReentryMode.LIVE_SAME_BAR,
     /** [ReentryMode.LIVE_SAME_BAR] 에서 재진입을 몇 봉 막을지. 0 = 청산 봉 즉시 재진입. */
     val reentryCooldownBars: Int = 0,
     /**

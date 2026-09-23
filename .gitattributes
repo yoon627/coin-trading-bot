@@ -1,2 +1,2 @@
-# 백테 fixture·골든은 원문 바이트 비교(BacktestLegacyGoldenTest.readText) — Windows autocrlf 체크아웃에서 CRLF 로 풀리면 실패한다(#193)
+# 백테 fixture·골든은 원문 바이트 비교(BacktestDefaultGoldenTest.readText) — Windows autocrlf 체크아웃에서 CRLF 로 풀리면 실패한다(#193)
 bot/src/test/resources/backtest/** text eol=lf

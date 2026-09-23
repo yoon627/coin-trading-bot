@@ -43,7 +43,7 @@ class BacktestReentryEquivalenceTest {
 
     @Test
     fun `cooldown 2 reproduces legacy exactly on real fixtures`() = runBlocking {
-        val legacy = BacktestConfig(maxHoldDays = 1)
+        val legacy = BacktestConfig(maxHoldDays = 1, reentryMode = ReentryMode.LEGACY_NEXT_BAR)
         val cooldown2 = BacktestConfig(
             maxHoldDays = 1,
             reentryMode = ReentryMode.LIVE_SAME_BAR,
