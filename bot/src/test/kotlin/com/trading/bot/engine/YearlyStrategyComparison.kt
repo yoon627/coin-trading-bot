@@ -175,7 +175,7 @@ internal class YearlyStrategyComparison(
         sb.appendLine("- 선택 창 상위 $TOP_N_FOR_RETENTION(동점 포함 ${top.size}개: ${top.joinToString(", ") { both[it] }}) 중 검증 창 상위 절반($half 위 이내) 잔류: $retained/${top.size} — 무작위 기준선 ≈ 50%.")
         sb.appendLine("- 검증 창 순위: " + both.indices.sortedBy { validateRank[it] }.joinToString(", ") { "${both[it]}(${validateRank[it]})" })
         sb.appendLine()
-        sb.appendLine("각주: 각 창은 flat 에서 시작하고 창 끝의 열린 포지션은 END 강제 청산한다 — 선택/검증 경계(242→243)에 걸친 포지션은 두 창에서 다르게 처리되므로 전체 ≠ 선택+검증(122봉 창에서 END 비중 큼). LEGACY 재진입은 청산 후 2봉 공백(라이브보다 보수적), LIVE 는 09:00 즉시 재매수 근사. 적립은 프로덕션 OFF 인 기본값 5/3/3 의 백테. 8종은 지난 1년을 살아남은 운영 티커라 생존편향이 있다.")
+        sb.appendLine("각주: 각 창은 flat 에서 시작하고 창 끝의 열린 포지션은 END 강제 청산한다 — 선택/검증 경계(242→243)에 걸친 포지션은 두 창에서 다르게 처리되므로 전체 ≠ 선택+검증(122봉 창에서 END 비중 큼). LEGACY 재진입은 TIME_EXIT 후 2봉 공백(라이브보다 보수적), LIVE 는 리셋 당일 돌파 재매수 근사(청산 봉 재진입). 적립은 프로덕션 OFF 인 기본값 5/3/3 의 백테. 8종은 지난 1년을 살아남은 운영 티커라 생존편향이 있다.")
         return sb.toString()
     }
 
