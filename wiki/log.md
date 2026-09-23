@@ -216,3 +216,9 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-09-23] update | external-signal-gate-2026-09 — main 반영·재현 확인
 
 - [[external-signal-gate-2026-09]] 는 2026-09-10 판정 뒤 로컬 브랜치에만 있었다. main 에 병합하고 병합 트리에서 하네스를 다시 돌려 기준 거래·셀 수치·N0 20·후보 0 이 기록과 같음을 확인(`verified` 갱신). 결론 불변.
+
+## [2026-09-23] query | completed-bar-indicators-2026-09 — 완결 봉 MA/RSI 변형 사전고정 판정 (#27 J 후반)
+
+- [[completed-bar-indicators-2026-09]] 신설: #27 "미완성 당일봉 신호 제외"의 전제(라이브·백테 불일치)가 현재 코드에서 성립하지 않음을 확인(둘 다 부분봉 포함)하고, 완결 봉 MA/RSI 3셀을 5분봉 계기로 판정 — 후보 0, null(전이일 마스크 이동, 셀 규모 맞춤) N0 0/60 유효. 규칙 결과 전 커밋 `6bf68c7`.
+- [[breakout-entry-filters-2026-09]]·[[external-signal-gate-2026-09]] 결론 절에 포인터. 진행 상태는 plan·이슈 소유.
+
