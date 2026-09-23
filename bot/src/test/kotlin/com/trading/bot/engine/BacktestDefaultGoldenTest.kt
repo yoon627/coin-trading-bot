@@ -9,15 +9,14 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 /**
- * `BacktestConfig()` 기본값의 fixture 실데이터 결과를 trade 단위로 고정한다(#128 A3b).
+ * `BacktestConfig()` 기본값의 fixture 실데이터 결과를 trade 단위로 고정한다.
  *
- * 재진입 모델(`ReentryMode`)은 기본값이 [ReentryMode.LEGACY_NEXT_BAR] 라 기존 결과를 바꾸지 않아야 하는데,
- * 단위 테스트 통과만으로는 그걸 못 덮는다 — 실제로 도입 직전 커밋(`db48763`)과 이 골든이 바이트 동일함을
- * 대조해 확인했다. 기본값을 바꾸면 `M1ReplayBiasTest`·`StrategySearch`·`/backtest` 호출자의 모집단이
- * 조용히 달라지므로, 그 변경이 여기서 먼저 빨갛게 뜨도록 둔다.
+ * 기본값을 바꾸면 `/backtest` 호출자와 기본 생성자를 쓰는 측정(`M1ReplayBiasTest`·`KneeStrategyComparisonTest`)의
+ * 모집단이 조용히 달라지므로, 그 변경이 여기서 먼저 빨갛게 뜨도록 둔다. `LEGACY_NEXT_BAR` 의 fixture 단위 동작은
+ * `BacktestReentryEquivalenceTest`(cooldown 2 == legacy)가 가둔다.
  *
  * fixture 유니버스나 기본값을 **의도적으로** 바꿀 때만 재생성한다:
- *   `GOLDEN_OUT="$PWD/bot/src/test/resources/backtest/legacy-golden.txt" ./gradlew :bot:test --tests "*LegacyGolden*" --rerun-tasks`
+ *   `GOLDEN_OUT="$PWD/bot/src/test/resources/backtest/default-golden.txt" ./gradlew :bot:test --tests "*DefaultGolden*" --rerun-tasks`
  *
  * 함정 둘 — 겪고 나서 적는다:
  * 1. **`GOLDEN_OUT` 은 절대경로여야 한다.** 테스트의 작업 디렉토리가 `bot/` 이라 상대경로를 주면
@@ -27,7 +26,7 @@ import org.junit.jupiter.api.Test
  * 골든은 classpath(`build/resources/test/`)의 fixture 로 만들어진다 — 리소스 복사 후에 돌려야
  * stale 데이터로 만든 골든을 커밋하지 않는다.
  */
-class BacktestLegacyGoldenTest {
+class BacktestDefaultGoldenTest {
 
     private val engine = BacktestEngine(listOf(VolatilityBreakout(), CombinedStrategy()), TradingProperties())
 
@@ -42,7 +41,7 @@ class BacktestLegacyGoldenTest {
             return@runBlocking
         }
 
-        val expected = requireNotNull(javaClass.getResourceAsStream("/backtest/legacy-golden.txt")) {
+        val expected = requireNotNull(javaClass.getResourceAsStream("/backtest/default-golden.txt")) {
             "golden fixture 없음"
         }.use { it.reader().readText() }
 
