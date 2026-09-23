@@ -2,7 +2,7 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-09-17
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
@@ -83,7 +83,7 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 > (`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`). 미관측 7국면 사전고정 판정을 통과한 승격이며
 > 근거·한계는 [[trailing-arm-finding-2026-09]]. **운영값의 근거는 코드가 아니라 그 env 다** —
 > 확인은 `docker compose exec app printenv | grep TRADING_TRAILING`.
-> 코드 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`legacy-golden.txt` 핀·기본 생성자를 쓰는 테스트 76곳이
+> 코드 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`default-golden.txt` 핀·기본 생성자를 쓰는 테스트 76곳이
 > 2.0/3.0 을 전제한다. 이전은 골든 재생성을 동반한 별도 작업이다.
 
 ## 주문 유실 방지 구조

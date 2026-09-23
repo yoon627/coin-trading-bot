@@ -222,3 +222,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 - [[completed-bar-indicators-2026-09]] 신설: #27 "미완성 당일봉 신호 제외"의 전제(라이브·백테 불일치)가 현재 코드에서 성립하지 않음을 확인(둘 다 부분봉 포함)하고, 완결 봉 MA/RSI 3셀을 5분봉 계기로 판정 — 후보 0, null(전이일 마스크 이동, 셀 규모 맞춤) N0 0/60 유효. 규칙 결과 전 커밋 `6bf68c7`.
 - [[breakout-entry-filters-2026-09]]·[[external-signal-gate-2026-09]] 결론 절에 포인터. 진행 상태는 plan·이슈 소유.
 
+## [2026-09-23] update | backtest-engine — 기본 재진입 모델 LIVE_SAME_BAR 전환 (#144)
+
+- [[backtest-engine]] 재진입 모델 표·"기본값을 바꾸면 안 된다" 문단을 전환 근거(D1 규약은 라이브보다 하루 늦게 대응 → 청산 봉 재진입 = 리셋 당일 돌파 재매수, LEGACY 는 그 기회를 지움)와 기각한 반론으로 교체. 골든은 `default-golden.txt`/`BacktestDefaultGoldenTest` 로 rename·재생성.
+- [[exit-gates]] 재진입 문단을 "리셋 당일 돌파 재매수"로 교정(시가 즉시 재매수 아님). [[reentry-premium-2026-09]]·[[swing-strategies]]·[[trading-engine-loop]] 에 포인터·파일명 동기화. 가격게이트 뒤 공백은 #223.
