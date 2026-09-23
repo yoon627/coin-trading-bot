@@ -2,9 +2,9 @@
 title: 백테스트 엔진 — 구조와 라이브 정합의 한계
 category: concept
 created: 2026-07-28
-updated: 2026-08-25
+updated: 2026-09-23
 claim_state: current
-verified: 2026-08-25 — ReentryMode 도입(커밋 25750aa·902d781) 후 simulateTrades 전문 재확인, legacy 기본값은 도입 직전 커밋과 trade 단위 동일함을 BacktestLegacyGoldenTest 로 대조
+verified: 2026-09-23 — 기본값 LIVE_SAME_BAR 전환(#144): 전체 :bot:test 1061건(skip 32) 통과, 재생성한 default-golden.txt 에서 같은 봉 재진입 24건 전부 직전 TIME_EXIT 뒤(가격게이트 뒤 0건), 거래 444→509(+65 — TIME_EXIT 뒤 간격 0봉 24건·1봉 57건 신설, 나머지는 경로 이동; 가격게이트 뒤 최소 간격은 두 모드 모두 2봉), 명시적 LEGACY 결과는 옛 legacy-golden.txt 와 바이트 동일 · 2026-08-25 — ReentryMode 도입(커밋 25750aa·902d781) 후 simulateTrades 전문 재확인, legacy 기본값은 도입 직전 커밋과 trade 단위 동일함을 BacktestLegacyGoldenTest 로 대조
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt
   - bot/src/main/kotlin/com/trading/bot/engine/IntrabarExitModel.kt
@@ -42,8 +42,8 @@ sources:
 
 | 값 | 의미 |
 |---|---|
-| `LEGACY_NEXT_BAR` (**기본**) | 위의 2봉 공백. 기존 결과·기존 호출자 보존 |
-| `LIVE_SAME_BAR` | `TIME_EXIT` 에 한해 청산 봉 시가에 재진입. `reentryCooldownBars` 로 N봉 지연 |
+| `LIVE_SAME_BAR` (**기본**, 2026-09-23~) | `TIME_EXIT` 에 한해 청산 봉 시가에 재진입. 재진입 신호가 없으면 그 봉 종가로 통상 진입(`i+1` 체결)도 평가한다. `reentryCooldownBars` 로 N봉 지연 |
+| `LEGACY_NEXT_BAR` | 위의 2봉 공백. `LIVE_SAME_BAR` + 쿨다운 2봉과 trade 단위로 같다(`BacktestReentryEquivalenceTest`) |
 
 비자명한 지점:
 
@@ -51,7 +51,11 @@ sources:
 - **재진입 신호 window 는 봉 `i` 를 제외**한다(`subList(max(0, i-MIN_CANDLES), i)`). 공용 `window` 는 봉 `i` 를 포함하므로 그대로 재사용하면 봉 D 종가를 보고 봉 D 시가에 사는 셈이 된다.
 - **재진입 포지션도 그 봉의 intrabar 게이트를 받는다.** 안 그러면 churn 포지션만 손절·익절 보호가 사라져 편향된다. Upbit 일봉 경계가 `T09:00:00` KST 라 봉 D 는 09:00→09:00 구간이고, 시가 재진입 포지션은 봉 D 전 구간을 실제로 겪으므로 이 평가가 옳다([[upbit-api]]).
 - **봉당 재진입 1회** (라이브 `boughtToday` 등가).
-- **기본값을 바꾸면 안 된다** — `M1ReplayBiasTest`·`KneeStrategyComparisonTest`·`/backtest` 호출자가 `BacktestConfig()` 를 쓰므로 모집단이 조용히 달라진다. `BacktestLegacyGoldenTest` 가 trade 단위로 이를 가둔다.
+- **기본값은 라이브 정합이다(#144).** 근거는 **D1 규약이 라이브보다 하루 늦게 대응한다**는 것 — 신호 봉 `t` 종가 → 체결 `t+1` 시가가 라이브의 `t` 일 장중 돌파 매수이고, TIME_EXIT(`t+2` 시가)가 라이브의 `t+1` 일 09:00 리셋이다. 라이브는 리셋 당일 돌파하면 다시 사므로 그 사건이 곧 "신호 `t+1` 종가 → `t+2` 시가" 청산 봉 재진입이다. `LEGACY_NEXT_BAR` 는 이 합법적 기회를 지운다.
+  - **기각한 반론 — "라이브는 09:00 시가에 되살 수 없으니 LEGACY 가 맞다"**: 전제(시가 즉시 재매수 불가)는 맞다 — 목표가가 `당일시가 + k·전일레인지` 이고, 2026-09-08 전의 "공백 0" 재매수는 #209 결함이었다([[exit-gates]], [[reentry-premium-2026-09]] 재진입 중앙값 530분). 그러나 하루 지연 대응에서 청산 봉 시가 재진입은 "리셋 당일 시가 재매수"가 아니라 "리셋 당일 돌파 재매수"에 대응하므로 결론이 따라오지 않는다.
+  - 재진입가를 돌파가가 아니라 시가로 놓는 오차([[reentry-premium-2026-09]] ≈0.8%p/TIME_EXIT)는 통상 진입과 체결 규약이 같아 LEGACY 로 바꿔도 줄지 않는다(통상 진입 쪽 오차의 크기는 잰 적이 없다). 재진입 관련 판정의 계기는 여전히 5분봉 `LiveSemanticsArm` 이다.
+  - 정합은 TIME_EXIT 뒤에만이다 — 가격게이트 청산 뒤에는 두 모드 모두 최소 2봉 공백(청산 봉 `continue`)이 남는다.
+- `/backtest`(`StrategyController`)는 reentryMode 를 넘기지 않아 이 기본값을 쓴다. 기본값 결과는 `BacktestDefaultGoldenTest`(`default-golden.txt`)가 trade 단위로 가둔다 — 2026-09-23 전의 `M1ReplayBiasTest`·`KneeStrategyComparisonTest` 수치는 LEGACY 기본값에서 나온 것이다.
 
 `holdLimitOnlyWhenProfitable` 은 보유상한 청산을 수익 중일 때만 내는 정책 노브다(#128 2안 측정용, 기본 off).
 
@@ -77,7 +81,7 @@ sources:
 
 - **`useMarketFilter`(50일 MA 아래 매수 차단)는 백테 전용 opt-in** 이며 기본 off 다. 라이브 매수 경로에는 이 필터가 **없다**. 백테에서 켠 채 좋은 결과를 얻고 라이브가 같을 거라 기대하면 안 된다.
 - 라이브는 pending reconcile, 잔고 부족, 최소주문금액(5,000원) 같은 현실 제약을 받지만 백테는 받지 않는다([[trading-engine-loop]]).
-- **재진입 공백은 반대로 백테가 더 엄격했다.** 라이브의 `boughtToday` 는 거래일 1회 제약이고 09:00 경계에서 풀리므로 리셋 매도 직후 재매수가 가능한데(공백 ~0), 백테 루프는 `if (position) processExit else processEntry` 라 **청산한 봉에서 진입 평가를 아예 하지 않는다** — 청산 봉 `i` → 신호 `i+1` → 체결 `i+2` 로 **2봉 공백이 강제**됐다. 일봉 기준으로 백테가 라이브보다 restrictive 하다는 뜻이고, 이 때문에 "일일리셋 churn 의 비용"을 기본 설정으로는 잴 수 없었다(#128).
+- **재진입 공백은 반대로 백테가 더 엄격했다(2026-09-23 전 기본 `LEGACY_NEXT_BAR`).** 라이브의 `boughtToday` 는 거래일 1회 제약이고 09:00 경계에서 풀리므로 리셋 당일 돌파하면 다시 사는데, 백테 루프는 `if (position) processExit else processEntry` 라 **청산한 봉에서 진입 평가를 아예 하지 않는다** — 청산 봉 `i` → 신호 `i+1` → 체결 `i+2` 로 **2봉 공백이 강제**됐다. 일봉 기준으로 백테가 라이브보다 restrictive 하다는 뜻이고, 이 때문에 "일일리셋 churn 의 비용"을 기본 설정으로는 잴 수 없었다(#128). 지금 기본 `LIVE_SAME_BAR` 는 TIME_EXIT 봉에서 진입을 평가하고, 가격게이트 청산 봉에서는 여전히 하지 않는다(#223).
 - 체결 가정이 "다음 봉 시가에 전량"이다. 호가·유동성·부분체결이 없다.
 
 이 한계들 때문에 멀티종목·포지션 사이징이 필요한 전략(주식 퀀트 등)에는 사실상 신규 엔진이 필요하다 — 재사용은 신호 평가 루프 수준까지다. 전략 개선 파이프라인의 기대치는 [[strategy-evolution-expectations]] 참조.

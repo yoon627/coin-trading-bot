@@ -2,7 +2,7 @@
 title: 리셋 뒤 재진입 프리미엄 — 리셋 고유의 가격 불이익은 없지만(5분 중앙값 +2.16% vs 대조군 +2.77%) 왕복 비용인 돌파 프리미엄 자체는 남고 D1 반사실은 그것을 0 으로 그린다(≈0.8%p/TIME_EXIT)
 category: query
 created: 2026-09-16
-updated: 2026-09-16
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-16 — `RUN_REENTRY_PREMIUM=true BACKTEST_CACHE_DIR=~/.cache/coin-trading-bot/backtest-cache ./gradlew :bot:test --tests "*ReentryPremiumTest*" --rerun-tasks`(JDK 21.0.9) → `bot/build/reports/reentry-premium.md`. 지표는 결과 전 커밋(`e0506ae`), 리뷰 반영(분위·경계·B 서명)은 결과 후 커밋. 배관: 5분 1,767/−219.4 · 15분 1,659/−124.8 선행 재현, (마켓, 진입일) 유일, 진입 목록 == 거래수 단정(무보고 드롭 없음), TIME_EXIT 청산가 == 당일시가 단정, 재진입 봉 > 청산 봉, DAILY_RESET 47건 전부 00h UTC 단정
 sources:
@@ -42,7 +42,7 @@ sources:
 ## 이것이 뜻하는 것
 
 - **#143 의 M1 fixture 는 필요 없다** — 목적(재진입 슬리피지 측정)은 5분봉으로 답했고, 남은 정밀도(돌파 봉 안 가격)는 오버슈트 0.2~0.35% 안의 일이다. #143 은 닫아도 된다.
-- **#144(reentryMode 기본값)**: 이 수치는 `LIVE_SAME_BAR`(청산 봉 시가 재진입)로 바꿔도 **남는 가격 편향**의 크기다 — 타이밍만 맞추고 가격은 여전히 청산가라 재진입을 TIME_EXIT 건당 ≈0.8%p 유리하게 그린다. 전환 판단(public 계약·baseline 재수립·라이브 동반)은 별개이고, 어느 모드든 D1 로는 이 항을 못 재므로 5분 계기가 재진입 관련 판정의 계기여야 한다.
+- **#144(reentryMode 기본값)**: 이 수치는 `LIVE_SAME_BAR`(청산 봉 시가 재진입)로 바꿔도 **남는 가격 편향**의 크기다 — 타이밍만 맞추고 가격은 여전히 청산가라 재진입을 TIME_EXIT 건당 ≈0.8%p 유리하게 그린다. 어느 모드든 D1 로는 이 항을 못 재므로 5분 계기가 재진입 관련 판정의 계기여야 한다. LEGACY 도 같은 시가 체결 규약이라 이 편향을 줄이지 못한다 — 2026-09-23 기본값을 `LIVE_SAME_BAR` 로 전환했다([[backtest-engine]]).
 - #128 의 결론("리셋 churn 의 처방 없음")은 **부분 강화·부분 유보**다 — 헤드라인이던 재매수 프리미엄은 리셋 고유 비용이 아니지만, D1 반사실이 재진입 다리를 0 으로 그린 만큼(≈0.8%p/TIME_EXIT) 리셋을 유리하게 봤을 수 있다. 리셋 정책의 재판정은 5분 계기로 사전고정해야 한다(한계 참조).
 
 ## 한계
