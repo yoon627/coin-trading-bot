@@ -2,7 +2,7 @@
 title: 운영 8종 1년 전략 비교 — 하락장 1년에서 스윙은 소폭 ±, 적립·단순보유는 반토막
 category: query
 created: 2026-09-03
-updated: 2026-09-03
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-03 — fixture `yearly/`(2025-09-03~2026-09-02, 수집 2026-09-03) 위에서 `RUN_YEARLY_COMPARE=true ./gradlew :bot:test --tests "*YearlyStrategyComparisonTest*" --rerun-tasks`(6건 실행/skip 0), 엔진 main `304f0b0`(적립 프로파일 #163 포함). 지표 정의는 본문·`YearlyStrategyComparison.kt` KDoc
 sources:
@@ -13,6 +13,8 @@ sources:
 ---
 
 # 운영 8종 1년 전략 비교
+
+> ⚠️ **엔진 버전 경계**: 이 페이지의 수치는 2026-09-23 전 `BacktestEngine` 에서 나왔다. 그 뒤 가격게이트 청산 뒤 최소 간격이 2봉 → 1봉(#223, legacy·live 두 팔 공통)으로 바뀌어 같은 명령으로 재실행하면 수치가 달라진다. 재현은 커밋 `b7edad6` 에서 한다 — [[backtest-engine]].
 
 **질문**: 지금 운용 중인 8종(BTC·ETH·XRP·SOL·DOGE·ADA·AVAX·LINK)의 최근 1년 일봉에서 스윙 전략 9종(라이브 기본 리스크 파라미터, 재진입 2모드), 적립 사다리(기본 5/3/3), 단순보유 중 무엇이 가장 벌었나. 앞 193봉(선택)/뒤 122봉(검증) 분할에서 순위가 유지되나.
 

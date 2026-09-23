@@ -2,7 +2,7 @@
 title: 익일 09:00 전량매도는 최선인가 — 13정책 × 2base × 7창 재검토
 category: query
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-04 — `RUN_RESET_POLICY=true ./gradlew :bot:test --tests "*ResetPolicySweepTest*" --rerun-tasks` (JDK 21.0.9), fixture yearly/·bull/·bear/·p2024h2/·p2025h1/
 sources:
@@ -12,6 +12,8 @@ sources:
 ---
 
 # 익일 09:00 전량매도는 최선인가
+
+> ⚠️ **엔진 버전 경계**: 이 페이지의 수치는 2026-09-23 전 `BacktestEngine` 에서 나왔다. 그 뒤 기본 재진입이 `LIVE_SAME_BAR`(#144)로, 가격게이트 청산 뒤 최소 간격이 2봉 → 1봉(#223, 두 모드 공통)으로 바뀌어 같은 명령으로 재실행하면 수치가 달라진다(LEGACY 팔 포함). 재현은 그 전 커밋(`b7edad6`)에서 한다 — [[backtest-engine]].
 
 **질문**: 이 봇은 매수 후 익일 09:00 KST 에 보유 전량을 손익과 무관하게 판다(`maxHoldDays=1`). 이게 최선인가.
 

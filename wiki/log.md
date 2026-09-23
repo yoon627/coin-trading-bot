@@ -226,3 +226,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[backtest-engine]] 재진입 모델 표·"기본값을 바꾸면 안 된다" 문단을 전환 근거(D1 규약은 라이브보다 하루 늦게 대응 → 청산 봉 재진입 = 리셋 당일 돌파 재매수, LEGACY 는 그 기회를 지움)와 기각한 반론으로 교체. 골든은 `default-golden.txt`/`BacktestDefaultGoldenTest` 로 rename·재생성.
 - [[exit-gates]] 재진입 문단을 "리셋 당일 돌파 재매수"로 교정(시가 즉시 재매수 아님). [[reentry-premium-2026-09]]·[[swing-strategies]]·[[trading-engine-loop]] 에 포인터·파일명 동기화. 가격게이트 뒤 공백은 #223.
+
+## [2026-09-23] update | backtest-engine — 가격게이트 청산 봉 종가 신호 평가 (#223)
+
+- [[backtest-engine]] 재진입 모델 절: 가격게이트 청산 뒤 간격 규칙(같은 봉 금지·다음 봉 허용, 모드 무관)과 보유상한 봉 시가 판정 청산·비매수일 게이트 청산 한계를 기재. 골든 509→558(가격게이트 뒤 간격 1봉 54건 신설). [[reset-churn-measurement]]·[[hold-limit-policy-2026-09]]·[[yearly-strategy-comparison]] 에 엔진 버전 경계 주석.
