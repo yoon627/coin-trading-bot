@@ -75,7 +75,7 @@ python3 scripts/collect_backtest_fixtures.py --write     # fixture 파일까지 
 
 선정 규칙·정규화가 전부 그 스크립트에 있다 — 문서에만 적어두면 어긋난다.
 유니버스가 바뀌면 `BacktestFixtures.MARKETS_BY_REGIME`·`PAIRED_MARKETS` 와
-`BacktestFixturesTest` 의 핀, 그리고 `legacy-golden.txt` 를 함께 갱신해야 한다.
+`BacktestFixturesTest` 의 핀, 그리고 `default-golden.txt` 를 함께 갱신해야 한다.
 
 ⚠️ **마지막 봉이 완결됐는지 확인할 것.** 예전 `bear/` 은 2026-08-19 에 수집해 마지막 봉
 (2026-08-18 09:00~2026-08-19 09:00)이 형성 중인 미완성 봉이었다. 구간 끝 다음날 09:00 KST 이후에 받는다.

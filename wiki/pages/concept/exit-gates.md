@@ -2,7 +2,7 @@
 title: 청산 게이트 — 손절·트레일링·익절·차트·보유상한
 category: concept
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
@@ -41,7 +41,7 @@ sources:
 
 따라서 백테의 청산 사유(reason) 분포를 라이브와 1:1로 비교하면 안 된다.
 
-**청산 직후의 재진입도 다르다.** 라이브는 09:00 경계에서 `boughtToday` 가 풀려 보유상한 청산 직후 재매수가 가능하지만(공백 ~0), 백테는 기본 설정에서 2봉 공백이 강제된다.
+**청산 직후의 재진입.** 라이브는 09:00 경계에서 `boughtToday` 가 풀려 보유상한 청산 당일 돌파하면 다시 산다(목표가가 `당일시가 + k·전일레인지` 라 시가 즉시 재매수는 아니다). 백테는 2026-09-23 부터 기본 `LIVE_SAME_BAR` 로 이 기회를 모델링한다(#144, 그 전 기본 LEGACY 는 2봉 공백).
 단 2026-09-08 부터 라이브는 **오늘 거래일 D1 이 있는 소스(store 또는 REST)로만** 재매수를 평가한다 — 그 전(약 60~120초)의 "공백 0" 재매수는 어제 window 위의 판정이었다([[trading-engine-loop]] 8번). `BacktestConfig.reentryMode` 가 이 축을 노브로 노출한다 — 배경과 측정 결과는 [[backtest-engine]]·[[reset-churn-measurement]].
 
 ## 비자명한 지점

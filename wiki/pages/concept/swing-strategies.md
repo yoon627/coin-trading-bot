@@ -2,7 +2,7 @@
 title: 스윙 전략 9종과 TradingStrategy 인터페이스
 category: concept
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-09-23
 claim_state: current
 verified: 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입(기본 21, macd 36, knee 41), StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
@@ -61,7 +61,7 @@ interface TradingStrategy {
   ⚠️ **위 수치는 교체 전 fixture(오늘 기준 거래대금 상위 — 상승장 4마켓·paired 4)에서 나온 것이다.** 그 선정에
   look-ahead 가 있음이 실측됐고([[universe-look-ahead-audit]]) fixture 는 시점 중립 유니버스(두 국면 8마켓·
   paired 3 = XRP·BTC·SOL)로 교체됐다(#112, `scripts/collect_backtest_fixtures.py`). **이 무릎 비교는 새 fixture 로
-  아직 재실행하지 않았다** — 재실행 전까지 방향 관찰로만 남긴다. 같은 교체로 결론이 뒤집힌 전례는
+  아직 재실행하지 않았다**(2026-09-23 부터는 `BacktestConfig` 기본 재진입도 `LIVE_SAME_BAR` 라 `liveDefault`·`swing` 두 팔 모두 재실행 수치가 두 겹으로 달라진다 — [[backtest-engine]]) — 재실행 전까지 방향 관찰로만 남긴다. 같은 교체로 결론이 뒤집힌 전례는
   [[reset-churn-measurement]] 참조.
 - ⚠️ 어깨 청산은 `chartExitEnabled` 가 꺼져 있으면 호출되지 않고, `maxHoldDays=1` 이면 백테에서도 `atHoldLimit` 게이트에 막혀 CHART_EXIT 대신 TIME_EXIT 이 난다([[exit-gates]]). 즉 **기본 설정에서는 dead path** 다.
 

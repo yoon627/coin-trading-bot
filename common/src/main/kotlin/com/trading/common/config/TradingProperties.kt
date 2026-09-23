@@ -13,7 +13,7 @@ data class TradingProperties(
     val maxLossPct: Double = 5.0,
     // ⚠️ 운영은 2026-09-06 부터 **1.5**(arm 0)로 돈다 — env 오버라이드가 소유한다
     // (`TRADING_TRAILING_STOP_PCT`/`_ARM_PCT`, wiki `query/trailing-arm-finding-2026-09`).
-    // 여기 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`legacy-golden.txt` 핀·기본 생성자를 쓰는
+    // 여기 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`default-golden.txt` 핀·기본 생성자를 쓰는
     // 테스트 76곳이 이 값을 전제한다. 승격은 env 로 하고, 코드 기본값 이전은 골든 재생성을 동반한 별도 작업이다.
     val trailingStopPct: Double = 2.0,
     // 트레일링 arm 임계(%): 고점 수익률이 이 값에 도달한 뒤에만 트레일링 평가. 0 이면 수익 중 즉시.

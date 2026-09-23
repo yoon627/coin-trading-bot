@@ -11,7 +11,7 @@ data class ExitDecision(val reason: String, val sellPrice: Double)
  * 서로 다른 정책으로 갈라지면서 컴파일도 테스트도 통과한다(이 object 가 존재하는 이유).
  *
  * `atrStop`/`atrTakeProfit` 이 null 이면 기존 퍼센트 게이트를 그대로 쓴다 — 퍼센트 경로의 부동소수 비교를
- * 가격 비교로 바꾸지 않는 이유는 경계에서 결과가 달라져 기존 골든(BacktestLegacyGoldenTest)이 흔들리기 때문이다.
+ * 가격 비교로 바꾸지 않는 이유는 경계에서 결과가 달라져 기존 골든(BacktestDefaultGoldenTest)이 흔들리기 때문이다.
  */
 data class ExitLevels(
     val atrStopPrice: Double? = null,
