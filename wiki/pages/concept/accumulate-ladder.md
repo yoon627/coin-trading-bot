@@ -2,9 +2,9 @@
 title: 적립 프로파일 — 메이저 코인 사다리 매매와 알트 유니버스 자동 선정
 category: concept
 created: 2026-09-02
-updated: 2026-09-16
+updated: 2026-09-27
 claim_state: current
-verified: 2026-09-16 — 귀속 불명 락 시 `releaseHoldings` 가 사다리 장부를 남기는 것은 `PositionManagerExtendedTest`(#122)로, `unsynced` 중 `runAccumulate` skip 은 `TradingEngine.kt:528` 코드로 확인 · 2026-09-02 — AccumulateLadder.kt·AccumulateBacktest.kt·TradingEngine.kt(runAccumulate/applyTickers)·PositionManager.kt(buyRung/sellVolume/sellTransition)·LadderStateMapper.kt·UniverseSelector.kt 전문, V23 을 실제 Postgres 에 적용(scripts/run-db-tests.sh 3건/skip 0), AccumulateBacktestTest 격자 출력
+verified: 2026-09-27 — 목록 밖 사다리 행 제외·WARN(첫 단 pending·적립 설정 안 티커 비대상 포함)과 흔적 판정의 auto 무관 적용은 `TradingEngineUniverseTest`(#226)와 뮤테이션으로 확인, 실행 중 start 409·reload 입력은 `UserTradingManagerTest` · 2026-09-16 — 귀속 불명 락 시 `releaseHoldings` 가 사다리 장부를 남기는 것은 `PositionManagerExtendedTest`(#122)로, `unsynced` 중 `runAccumulate` skip 은 `TradingEngine.kt:528` 코드로 확인 · 2026-09-02 — AccumulateLadder.kt·AccumulateBacktest.kt·TradingEngine.kt(runAccumulate/applyTickers)·PositionManager.kt(buyRung/sellVolume/sellTransition)·LadderStateMapper.kt·UniverseSelector.kt 전문, V23 을 실제 Postgres 에 적용(scripts/run-db-tests.sh 3건/skip 0), AccumulateBacktestTest 격자 출력
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/AccumulateLadder.kt
   - common/src/main/kotlin/com/trading/common/config/AccumulateProperties.kt
@@ -13,6 +13,7 @@ sources:
   - bot/src/main/kotlin/com/trading/bot/engine/LadderStateMapper.kt
   - bot/src/main/kotlin/com/trading/bot/engine/UniverseSelector.kt
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
+  - bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/resources/db/migration/V23__trading_states_accumulate_ladder.sql
   - docs/superpowers/specs/2026-09-02-accumulate-ladder-design.md
@@ -52,17 +53,17 @@ sources:
 - **진입점 분리**: `buy()` 는 기존 5중 가드(`entryBlocked`) + `investRatio` 사이징, `buyRung()` 은 `position` 가드만 제외한 같은 가드 + 단당 금액. 플래그로 가드를 우회하지 않는다. 주문 이후 공용부는 `placeBuy` — 진입 메타(`buyDate`·`entryStrategy`·`exitParams`)는 **신규 진입일 때만** 지운다. 추가 단에서 지우면 미체결(cancel+0)로 끝났을 때 영구 유실돼, 프로파일을 끈 뒤 보유상한 청산이 날짜를 잃는다.
 - **정합(`LadderStateMapper.reconcile`)은 매 tick 돈다 — 정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다.** `hold>0 && rungs==0` → 실측 원가로 rung 추정(`ceil(원가/단당)`, 상한 max) + `lastActionPrice = avg` + WARN("편입"). 운영 `.env` 가 BTC·ETH 를 스윙으로 들고 있어 **적립을 켜는 순간 이 경로가 실제로 발동**한다 — 의도된 컷오버. `hold<=0 && rungs>0` → 비움 + `flatPeak` 를 현재가로 재앵커 + WARN(수동 청산 추정 — 옛 고점을 남기면 같은 tick 에 첫 단이 들어가 청산을 되돌린다). `rungs != ceil(원가/단당)` → 원가가 말하는 단수로 조정 — 아래로는 90% 미만 부분 매도가 반복돼 잔고는 줄어도 rung 이 안 줄어 단당 매도 대금이 최소주문 아래로 내려가는 것을, 위로는 수동 추가 매수로 원가가 늘었는데 rung 이 모자라 다음 상승에 전량(isFinal)이 나가는 것을 막는다(단 원가가 예산을 넘는 편입 포지션은 상향하지 않는다 — 원가 기준이 늘 maxRungs 라 매도로 줄인 rung 을 매번 되돌린다). 장부는 원가의 함수다(단 매수는 매번 단당 KRW, 분할 매도는 원가를 1/n 씩 줄이므로 정상 경로에서는 늘 일치). 올림 허용치는 매도 rung 소모 기준(`SELL_FILL_RATIO` 0.9)과 짝(1 − 0.9)이다 — 90% 체결로 지운 단(원가 x.1)이 되살아나지 않고, 89% 체결로 남긴 단(x.11)은 남는다. 부분 매도 reconcile 에서 취소 잔량의 unlock 이 늦어 거래소 기준 잔량이 과소면 주문 전 보유(`pending_sell_prior_volume`, durable — 재시작 뒤 `holdVolume` 은 이미 과소 동기화돼 있다) − 체결량을 하한으로 쓴다(60초 동기화가 이후 실측으로 맞춘다). 비최종 단의 매도 수량은 주문 문자열로 절삭된 값(8자리)을 장부·기록에도 쓴다. 런타임에 장부와 잔고가 갈라져도(부분체결·수동 매매) 다음 tick 에 스스로 맞춘다 — 적립엔 다른 청산 게이트가 없어 여기 말고는 풀 곳이 없다. 마지막 단이 90~99% 체결돼 잔량이 남으면 `sellTransition` 이 rung 을 1 로 유지한다.
 - **현금 경쟁**: 적립이 아직 투입하지 않은 예산 `Σ max(0, budget − avg×hold)` 를 스윙 `buy()` 사이징에서 뺀다(`reservedKrw`). 단이 예산·KRW 부족으로 건너뛰어지면 사유가 바뀔 때만 WARN 하고 `/api/bot/status.positions[].accumulate_skip` 에 노출한다.
-- **역방향 컷오버**: 적립 티커를 끄면 남은 포지션이 즉시 스윙 게이트(손절 −5%·09:00 청산)를 받는다. `buyDate` 는 마지막 단 매수일이다.
+- **역방향 컷오버**: 적립 티커를 끄면 남은 포지션이 즉시 스윙 게이트(손절 −5%·09:00 청산)를 받는다 — 그 티커가 사용자 목록(또는 auto 선정)에 있을 때다. `buyDate` 는 마지막 단 매수일이다. 사용자 목록에도 없으면 `start()` 가 그 사다리 행(`rungsFilled>0`·단 매수 `pendingBuyTriggerPrice`·`entryStrategy=accumulate`)을 잔류로 싣지 않고 WARN 으로 알린다(#226 — 목록 밖 잔류 규칙이 쌓아 온 단을 시장가로 팔지 않게). auto 의 dormant 되살리기도 그 행을 되살리지 않는다. auto 선정이 그 티커를 다시 고르면 `applyTickers` 가 싣고 스윙 게이트를 받는다(이전부터의 동작).
 - **기록**: 단 매수는 기존 BUY 스냅샷 규약([[trade-record-volume-semantics]]), 단 매도는 `reason=ACCUMULATE_STEP`·`strategy=accumulate`·`volume=판 수량`. 편입된 스윙 포지션이어도 적립 규칙으로 팔았으면 `accumulate` 몫이다. 리더보드 `aggregateSellStatsByUser` 는 accumulate 행을 제외한다 — `/api/strategies/performance` 는 SELL 행 `pnl_percent` 단순 합산이라 부분 매도가 잦은 이 프로파일에서 과대계상된다.
 - **durable(V23)**: `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`([[persistence-schema]]). 잔고·평단은 종전대로 거래소 복원.
 
 ## 알트 유니버스 자동 선정 (`trading.universe.auto`, 기본 off)
 
 - `UniverseSelector` 는 싱글톤 `@Service` 로 인증 없는 `publicUpbitClient` 를 쓴다 — 유저 엔진 수만큼 같은 공개 조회를 반복하지 않게 1분 TTL 스냅샷을 공유하고, 사용자 키 장애와 결합되지 않는다. `getMarkets()`(`/v1/market/all?is_details=true`)의 `market_event.warning`(투자유의) 과 `PeggedAssets`(스테이블·EURC·XAUT), 적립 티커를 제외하고 `acc_trade_price_24h` 내림차순. **조회 실패는 null** — 불완전한 순위로 판정하지 않는다(`PointInTimeUniverse` 와 같은 원칙).
-- `TradingEngine.applyTickers(next)` 가 선정 결과를 활성 집합에 반영하는 유일한 경로다(`start()` 의 초기 합집합·dormant 되살리기는 별도). 신규 티커를 `syncPosition` 했을 때 수동 보유·unsynced 를 발견하면 즉시 영속한다 — 첫 저장 전에 죽고 다음 선정에서 빠지면 그 포지션은 어디에도 남지 않는다. 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고 빠진 티커의 상태는 리셋·status 에 계속 섞인다. 적립 티커 + 보유/pending/`unsynced`(보유 여부 미확인 — 실제 포지션일 수 있다) 티커를 고정하고 알트 몫을 20(`RequestValidators` 의 API 상한과 동일)까지만 채운다 — 적립·보유 티커는 자르지 않으므로 활성 총수는 이를 넘을 수 있다. 기동 시와 09:00 경계(`checkAndReset` true tick — 재시작 첫 tick 도 포함)에 `refreshUniverse()`.
+- `TradingEngine.applyTickers(next)` 가 선정 결과를 활성 집합에 반영하는 유일한 경로다(`start()` 의 초기 합집합·dormant 되살리기·비-auto 정리 단계는 별도). 신규 티커를 `syncPosition` 했을 때 수동 보유·unsynced 를 발견하면 즉시 영속한다 — 첫 저장 전에 죽고 다음 선정에서 빠지면 그 포지션은 어디에도 남지 않는다. 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고 빠진 티커의 상태는 리셋·status 에 계속 섞인다. 적립 티커 + 보유/pending/`unsynced`(보유 여부 미확인 — 실제 포지션일 수 있다) 티커를 고정하고 알트 몫을 20(`RequestValidators` 의 API 상한과 동일)까지만 채운다 — 적립·보유 티커는 자르지 않으므로 활성 총수는 이를 넘을 수 있다. 기동 시와 09:00 경계(`checkAndReset` true tick — 재시작 첫 tick 도 포함)에 `refreshUniverse()`.
 - **첫 선정 전에는 진입 없음**: auto 면 `swingUniverse` 를 빈 집합으로 시작한다. 선정 API 가 죽은 채 재시작하면 durable 잔재 전부가 활성인데 "제한 없음"으로 두면 그들이 전부 신호에 따라 진입한다 — 청산·reconcile 만 돌고 첫 선정이 성공해야 진입이 열린다.
-- **재시작**: 자동 선정 티커는 `bot_state.tickers` 에 없으므로 `start()` 는 auto 일 때 durable 행 중 보유·pending 흔적(pending uuid·`entryStrategy`·`buyDate`)이 있는 것을 활성에 싣는다 — 안 그러면 그 보유·pending 은 `applyTickers` 의 보호 집합에 들어갈 기회가 없어 아무도 reconcile 하지 않는다. 흔적 없는 행은 `runLoop` 초입에서 계좌를 1회 조회해 **실제 잔고가 있는 것만** 되살린다(조회 실패면 dormant 로 남겨 매 루프·09:00 갱신 때 재시도, 되살린 티커는 곧바로 `syncPosition`) — 외부·수동 보유를 `syncPosition` 으로 편입한 포지션은 메타가 없는데 빠뜨리면 청산 평가를 영영 못 받는다. 잔고 없는 잔재는 싣지 않는다(회전할수록 쌓이는 행마다 계좌를 조회하지 않게). 기동 시 갱신은 `runLoop` 의 복구 경계 안에서 실패를 흡수한다(직전 목록 유지). 갱신으로 복원된 durable 상태에는 현재 거래일 기준 `resetDaily` 를 적용한다(옛 `boughtDate` 로 하루 종일 진입이 막히지 않게).
-- **`bot_state.tickers` 는 사용자 의도만 저장한다.** 파생 집합을 되쓰면 auto 를 꺼도 그날의 알트가 남아 되돌릴 수 없다. `startBot` 은 받은 목록을 그대로 저장한다.
+- **재시작**: 자동 선정 티커는 `bot_state.tickers` 에 없으므로 `start()` 는 durable 행 중 보유·pending 흔적(pending uuid·`entryStrategy`·`buyDate`)이 있는 것을 활성에 싣는다 — 안 그러면 그 보유·pending 은 `applyTickers` 의 보호 집합에 들어갈 기회가 없어 아무도 reconcile 하지 않는다. 이 흔적 판정은 2026-09-27(#226)부터 auto 여부와 무관하게 적용된다(사용자가 목록에서 뺀 티커도 같은 처지라서 — [[trading-engine-loop]]). 흔적 없는 행은 `runLoop` 초입에서 계좌를 1회 조회해 **실제 잔고가 있는 것만** 되살린다(조회 실패면 dormant 로 남겨 매 루프·09:00 갱신 때 재시도, 되살린 티커는 곧바로 `syncPosition`) — 외부·수동 보유를 `syncPosition` 으로 편입한 포지션은 메타가 없는데 빠뜨리면 청산 평가를 영영 못 받는다. 잔고 없는 잔재는 싣지 않는다(회전할수록 쌓이는 행마다 계좌를 조회하지 않게). 기동 시 갱신은 `runLoop` 의 복구 경계 안에서 실패를 흡수한다(직전 목록 유지). 갱신으로 복원된 durable 상태에는 현재 거래일 기준 `resetDaily` 를 적용한다(옛 `boughtDate` 로 하루 종일 진입이 막히지 않게).
+- **`bot_state.tickers` 는 사용자 의도만 저장한다.** 파생 집합을 되쓰면 auto 를 꺼도 그날의 알트가 남아 되돌릴 수 없다. `startBot` 은 받은 목록을 그대로 저장한다. 엔진이 이미 돌면 다른 목록은 409 로 거절하고 저장하지 않으며, 같거나 없으면 엔진의 사용자 목록(`getUserTickers()`)을 저장한다(#226). reload 도 활성 집합이 아니라 그 목록으로 재기동한다.
 - watchlist 밖 티커의 시세는 REST 폴백이다([[marketdata-pipeline]] 은 부팅 시 `watchlist.tickers` 를 한 번 잡는다). D1 캔들 폴백은 싱글톤 `DailyCandleCache`(60초 TTL, 티커별 Mutex 로 동시 miss 를 한 요청으로) — ingestion 의 캔들 주기와 같아 신선도는 store 경로와 동일하다. 거래소가 요청보다 적게 준 응답(상장 60일 미만)도 TTL 동안 재사용한다 — miss 로 보면 신규 상장 종목이 매 tick REST 를 다시 친다.
 
 ## 백테 (`AccumulateBacktest`)
