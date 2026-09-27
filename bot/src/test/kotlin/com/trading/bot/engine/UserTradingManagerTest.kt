@@ -60,8 +60,6 @@ class UserTradingManagerTest {
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
-    // reload 복귀가 옛 엔진의 메모리 상태를 넘기는지 가르려면 비어 있지 않아야 한다 — 빈 맵이면 emptyMap() 과 구분이 안 된다.
-    private val reloadSnapshot = mapOf("KRW-XRP" to TradingState("KRW-XRP", position = true, entryStrategy = "combined"))
 
     @BeforeEach
     fun setup() {
@@ -117,7 +115,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
@@ -130,8 +127,10 @@ class UserTradingManagerTest {
 
         assertSame(mockEngine, engines()[1L], "로드 실패 시 교체 엔진이 등록되면 안 된다")
         verify(exactly = 0) { manager.createEngine(any()) }
-        // 옛 엔진 재기동 — 메모리 상태를 넘겨야 목록 밖 잔류 포지션이 복귀 뒤에도 관리된다(#226).
-        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), reloadSnapshot) }
+        // 옛 엔진 재기동 — 직전 사용자 목록·메모리 상태 그대로여야 목록 밖 잔류 포지션이 복귀 뒤에도 관리된다(#226).
+        // 빈 상태로 start 하면 그 포지션이 빠진다.
+        verify(exactly = 1) { mockEngine.resume() }
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) }
         verify(exactly = 0) { mockEngine.getActiveTickers() }
     }
 
@@ -141,7 +140,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
@@ -150,7 +148,7 @@ class UserTradingManagerTest {
 
         coVerify(ordering = Ordering.ORDERED) {
             mockEngine.stop()
-            mockEngine.start(listOf("KRW-BTC"), reloadSnapshot)
+            mockEngine.resume()
         }
     }
 
@@ -159,7 +157,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val cause = RuntimeException("db down")
@@ -181,13 +178,12 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val loadFailure = RuntimeException("db down")
         coEvery { tradingStateService.loadStates(1L) } throws loadFailure
         val restoreFailure = RuntimeException("engine start failed")
-        coEvery { mockEngine.start(any(), any()) } throws restoreFailure
+        every { mockEngine.resume() } throws restoreFailure
 
         val thrown = assertThrows(RuntimeReloadFailedException::class.java) {
             runBlocking { manager.reloadUserRuntime(1L) }
@@ -208,7 +204,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled")
@@ -217,7 +212,7 @@ class UserTradingManagerTest {
             runBlocking { manager.reloadUserRuntime(1L) }
         }
 
-        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), reloadSnapshot) } // 복구는 수행
+        verify(exactly = 1) { mockEngine.resume() } // 복구는 수행
         assertSame(mockEngine, engines()[1L], "취소 시 엔진이 교체되면 안 된다")
     }
 
@@ -512,7 +507,40 @@ class UserTradingManagerTest {
         assertEquals("combined", result["strategy"])
         assertEquals("krw-btc,KRW-ETH", saved.captured.tickers)
         assertEquals("combined", saved.captured.strategy)
+        verify(exactly = 1) { mockEngine.setStrategy("combined") }
         coVerify(exactly = 0) { mockEngine.start(any(), any()) }
+    }
+
+    @Test
+    fun `getStatus exposes the config default list and the running engine's ticker groups`() {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-SOL")
+        every { mockEngine.getAccumulateTickers() } returns listOf("KRW-ADA")
+        every { mockEngine.getEntryTickers() } returns listOf("KRW-A")
+        every { mockEngine.getExitOnlyTickers() } returns listOf("KRW-XRP")
+
+        val status = manager.getStatus(1L)
+
+        // 미리 채울 기본값은 목록 없이 시작할 때 쓰는 설정 목록과 같은 소스다.
+        assertEquals(listOf("KRW-BTC"), status["default_tickers"])
+        assertEquals(listOf("KRW-SOL"), status["user_tickers"])
+        assertEquals(listOf("KRW-A"), status["entry_tickers"])
+        assertEquals(listOf("KRW-ADA"), status["accumulate_tickers"])
+        assertEquals(listOf("KRW-XRP"), status["exit_only_tickers"])
+    }
+
+    @Test
+    fun `getStatus shows no ticker groups for an engine that is registered but not running`() {
+        // 기동 전에 실패한 restore·wasRunning=false reload 는 맵에 엔진을 남긴다 — 그 옛 목록을 실행 중처럼 보이면 안 된다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { mockEngine.getUserTickers() } returns listOf("KRW-SOL")
+
+        val status = manager.getStatus(1L)
+
+        assertEquals(emptyList<String>(), status["user_tickers"])
+        assertEquals(listOf("KRW-BTC"), status["default_tickers"])
     }
 
     @Test
