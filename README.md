@@ -203,6 +203,14 @@ coin-trading-bot/
 
 `TRADING_UNIVERSE_AUTO=true` 면 스윙 대상은 `TRADING_TICKERS` 대신 Upbit 24h 거래대금 상위 `TRADING_UNIVERSE_ALT_COUNT`(기본 8, 최대 16)개로 정해지고, 기동 시와 매 09:00 KST 에 다시 고릅니다. 투자유의 종목·페그 자산(스테이블·금 토큰)·적립 티커는 제외됩니다. 보유 중이거나 미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남고, 자동 선정 알트는 적립·보유 티커와 합쳐 20 까지만 채웁니다(적립·보유 티커 자체는 자르지 않습니다). 사용자가 UI 에서 고른 목록(`bot_state.tickers`)은 그대로 보존되므로 끄면 예전과 같이 돌아갑니다. 선정 API 가 실패하면 직전 목록을 유지합니다. 자동 선정 티커는 관심목록(`WATCHLIST_TICKERS`) 밖이면 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
 
+### 거래 목록을 바꿀 때
+
+목록(`TRADING_TICKERS`, 또는 UI·API 로 준 `bot_state.tickers`)에서 뺀 티커라도 봇이 산 포지션과 미해소 주문은 청산될 때까지 계속 관리합니다 — 손절·트레일링·보유상한은 적용되고 새로 사지는 않습니다. 이 규칙은 `TRADING_UNIVERSE_AUTO` 와 무관하며, 청산된 뒤에는 다음 09:00 에 활성 목록에서 빠집니다. 적립 설정에서 빠졌고 목록에도 없는 사다리 보유분은 스윙 청산을 받지 않도록 관리하지 않고 기동 로그 WARN 으로 알립니다(적립에 다시 넣거나 직접 정리하세요).
+
+이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려주고, 요청에 전략이 있으면 그 전략만 적용합니다.
+
+`GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 스윙 티커 — 자동 선정이 꺼져 있으면 사용자 목록, 켜져 있으면 선정 알트), `accumulate_tickers`(적립), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·적립·청산 대기를 나눠 보여 줍니다.
+
 ## 웹 UI
 
 정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
