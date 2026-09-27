@@ -415,6 +415,27 @@ class TradingEngineTest {
     }
 
     @Test
+    fun `processTicker treats an order known only by identifier as pending`() = runTest {
+        // 응답을 못 받아 uuid 가 없는 주문도 미해소다 — 평가를 돌리면 같은 주문을 한 번 더 낸다(#227).
+        val engine = createEngine()
+        val buying = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-b")
+        val selling = TradingState("KRW-BTC", position = true, pendingSellIdentifier = "ctb-s")
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        every { positionManager.checkStopLoss(any(), any()) } returns true
+        coEvery { positionManager.reconcilePendingBuy(any(), any(), any()) } returns null
+        coEvery { positionManager.reconcilePendingSell(any(), any(), any()) } returns null
+
+        engine.processTicker("KRW-BTC", buying, strategy)
+        engine.processTicker("KRW-BTC", selling, strategy)
+
+        coVerify { positionManager.reconcilePendingBuy("KRW-BTC", buying, 100.0) }
+        coVerify { positionManager.reconcilePendingSell("KRW-BTC", selling, 100.0) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
+    }
+
+    @Test
     fun `processTicker skips sell while pending sell is unresolved`() = runTest {
         val engine = createEngine()
         val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell")

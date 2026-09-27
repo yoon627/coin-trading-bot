@@ -103,6 +103,32 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `applyTickers keeps a ticker whose order is known only by identifier`() = runBlocking {
+        // 목록에서 빠진 티커의 불명 주문을 버리면 아무도 확정하지 않는다 — 재시작 잔류 판정도 같은 술어를 쓴다(#227).
+        val engine = createEngine()
+        engine.start(listOf("KRW-ETH", "KRW-Q"), mapOf("KRW-Q" to TradingState("KRW-Q", pendingSellIdentifier = "ctb-q")))
+        engine.stop()
+
+        engine.applyTickers(listOf("KRW-ETH"))
+
+        assertEquals(setOf("KRW-ETH", "KRW-Q"), engine.getActiveTickers().toSet())
+    }
+
+    @Test
+    fun `start keeps a ticker outside the list whose order is known only by identifier`() = runBlocking {
+        val firstTick = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+        val engine = createEngine()
+
+        engine.start(listOf("KRW-BTC"), linkedMapOf("KRW-Q" to TradingState("KRW-Q", pendingSellIdentifier = "ctb-q")))
+        withTimeout(5_000) { firstTick.await() }
+        engine.stop()
+
+        assertEquals(listOf("KRW-BTC", "KRW-Q"), engine.getActiveTickers())
+    }
+
+    @Test
     fun `applyTickers seeds a new ticker from its durable state, not a blank one`() = runBlocking {
         // 재시작 전 남긴 pending uuid·halt 가 빈 상태로 덮이면 reconcile 이 영영 돌지 않고 다음 upsert 가 DB 행까지 지운다.
         val engine = createEngine()
