@@ -394,6 +394,9 @@ class TradingEngineUniverseTest {
 
         assertEquals(listOf("KRW-BTC", "KRW-XRP", "KRW-U", "KRW-P"), engine.getActiveTickers())
         assertEquals(engine.getActiveTickers().toSet(), engine.getStates().keys)
+        // 잔고 없음·귀속 불명 락 없음이 확인된 행이라 옛 진입 메타도 비운다 — 남기면 그 위에 사람이 다시 산 코인이
+        // 다음 기동에 잔류로 실려 옛 buyDate 로 보유상한 매도된다.
+        coVerify { positionManager.persistState(match { it.ticker == "KRW-GONE" && it.entryStrategy == null && it.buyDate == null }) }
     }
 
     @Test
@@ -443,7 +446,8 @@ class TradingEngineUniverseTest {
     @Test
     fun `a restart with new inputs drops states from the previous run`() = runBlocking {
         val engine = createEngine()
-        engine.start(listOf("KRW-BTC"), mapOf("KRW-BTC" to TradingState("KRW-BTC")))
+        // 보유 상태라 정리 단계는 빼지 않는다 — 빠진다면 start 가 직전 실행 상태를 버렸기 때문이다.
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-BTC" to held("KRW-BTC")))
         engine.stop()
 
         engine.start(listOf("KRW-ETH"))
@@ -469,14 +473,40 @@ class TradingEngineUniverseTest {
     }
 
     @Test
-    fun `restarting from the snapshot keeps a retained holding active`() = runBlocking {
+    fun `ticker groups split the active set into accumulate and exit-only tickers`() = runBlocking {
+        val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-ADA"))
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
+        engine.stop()
+
+        assertEquals(listOf("KRW-ADA"), engine.getAccumulateTickers())
+        assertEquals(listOf("KRW-BTC"), engine.getEntryTickers())
+        assertEquals(listOf("KRW-XRP"), engine.getExitOnlyTickers())
+    }
+
+    @Test
+    fun `with auto the selected alts are the entry tickers, not the user list`() = runBlocking {
+        // auto 는 사용자 목록 대신 선정 알트로 매매한다 — 화면이 사용자 목록을 거래쌍으로 보이면 실제 대상이 어디에도 안 보인다.
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-A")
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
+        engine.stop()
+        engine.refreshUniverse()
+
+        assertEquals(listOf("KRW-A"), engine.getEntryTickers())
+        assertEquals(listOf("KRW-XRP"), engine.getExitOnlyTickers())
+    }
+
+    @Test
+    fun `resume restarts with the previous user list and keeps a retained holding active`() = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
         engine.stop()
 
-        engine.start(engine.getUserTickers(), engine.restartSnapshot())
+        engine.resume()
         engine.stop()
 
+        assertEquals(listOf("KRW-BTC"), engine.getUserTickers())
         assertTrue("KRW-XRP" in engine.getActiveTickers())
     }
 }
