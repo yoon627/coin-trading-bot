@@ -2,12 +2,13 @@
 title: Upbit API — 이 봇이 의존하는 동작
 category: entity
 created: 2026-07-28
-updated: 2026-09-17
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-17 — docs.upbit.com 개별 주문 조회·체결 대기 주문 목록·종료 주문 목록 세 페이지에 `wait` 부분체결 예제 없음(researcher) · 2026-09-16 — 수동 매도의 `awaitFill` 재조회는 `TradeExecutionServiceTest`(#105 절)로 확인 · 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
+verified: 2026-09-28 — docs.upbit.com `new-order`·`get-order`·`rest-api-guide` 의 identifier 제약·오류 이름 원문(researcher + 직접 확인), reactor-netty-http 1.2.1 sources `HttpClientConnect.java:360-395` 의 재시도 조건, `UpbitClientTest` identifier 6건(본문·JWT 해시·조회·404 구분·오류 분류·생성 형식) · 2026-09-17 — docs.upbit.com 개별 주문 조회·체결 대기 주문 목록·종료 주문 목록 세 페이지에 `wait` 부분체결 예제 없음(researcher) · 2026-09-16 — 수동 매도의 `awaitFill` 재조회는 `TradeExecutionServiceTest`(#105 절)로 확인 · 2026-08-22 — docs.upbit.com 전체 계좌 조회의 balance/locked 필드 정의 원문, PositionManager.heldVolume 상한 규칙 (#56). 이전 2026-07-28 — PositionManager.kt 주문 경로 실측(ord_type·volume·상태 판정), MarketDataIngestionService.kt 수집 경로 · 2026-08-31 — docs.upbit.com 개별 주문 조회의 `paid_fee`/`reserved_fee`/`remaining_fee` 필드 정의 원문 확인(#133). `paid_fee` 가 부분체결 cancel 에서도 최종값인지는 실제 응답 fixture 로 미확인
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
   - bot/src/main/kotlin/com/trading/bot/client/UpbitClient.kt
+  - bot/src/main/kotlin/com/trading/bot/client/UpbitClientImpl.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt
 ---
@@ -39,7 +40,10 @@ sources:
 
 - **최소 주문 금액 5,000 KRW.** 미만이면 주문이 성립하지 않는다.
 - 매도 수량은 `Double` 로 변환하지 않고 거래소가 준 문자열을 그대로 쓴다 — 부동소수 오차로 잔고를 초과하는 것을 피하기 위함이다.
-- **주문은 멱등이 아니다.** idempotency key 가 없으므로 타임아웃·429 에 자동 재시도하지 않는다. 대신 uuid 를 durable 로 기록하고 다음 tick 에 reconcile 한다([[trading-engine-loop]]).
+- **주문 생성은 멱등이 아니지만, 클라이언트 `identifier` 로 나중에 찾을 수 있다**(2026-09-28, #227). `identifier` 는 계정 전체에서 영구 고유(취소·실패 주문 포함 재사용 불가 — 재사용하면 `400 duplicated_identifier`)·최대 64자이고, `GET /v1/order?identifier=` 로 조회된다(모르면 `404 order_not_found`, 2024-10-18 이후 주문). 그래도 타임아웃·429 에 자동 재시도하지 않는다 — 엔진은 identifier(`ctb-`+UUID v4)를 **주문 전에** durable 로 남기고, 응답을 못 받은 주문은 다음 tick 에 identifier 로 확정한다([[trading-engine-loop]]). **문서에 없는 것**: "오류 응답이면 주문이 만들어지지 않았다"는 명시, 5xx 의 접수 여부, 접수 직후 조회 가시성 지연, identifier 조회의 보존기간.
+- **주문 생성 오류 중 "미접수"의 증거로 쓰는 것은 요청 검증 오류뿐이다**(`provesOrderNotPlaced`): `create_ask_error`·`create_bid_error`·`insufficient_funds_ask`·`insufficient_funds_bid`·`under_min_total_ask`·`under_min_total_bid`·`over_krw_funds_bid`·`validation_error`·`invalid_parameter`(에러 안내 페이지 표기는 `invaild_parameter` — 둘 다 받는다)·`notfoundmarket`·403 `market_offline`. 인증(401 `nonce_used` 등·403 `out_of_scope`)·429·418·5xx·이름 없는 응답·`duplicated_identifier`·전송 계층 오류는 접수 여부를 말해 주지 않으므로 identifier 로 확정한다.
+- **전송 계층 재시도**: reactor-netty 1.2.1 은 연결 리셋 시 **헤더를 아직 보내지 않았을 때만** 한 번 재시도한다(`HttpClientConnect` — 보냈으면 재시도를 끈다). 그래서 주문 POST 가 조용히 두 번 나가는 경로는 없다. 설령 재전송돼도 같은 identifier 라 거래소가 중복으로 거절한다.
+- **예상된 404 는 ERROR 로 남기지 않는다** — identifier 조회의 `order_not_found` 는 정상 결과라 INFO 다. `handleError` 의 ERROR 는 Discord 알림이 된다.
 
 ## 주문 상태
 

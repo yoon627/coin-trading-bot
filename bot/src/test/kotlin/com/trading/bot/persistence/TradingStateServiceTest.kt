@@ -77,6 +77,26 @@ class TradingStateServiceTest {
     }
 
     @Test
+    fun `order identifiers survive a round trip`() = runTest {
+        // uuid 를 받기 전에 끊긴 주문을 재시작 뒤 찾을 유일한 근거다(#227). 두 방향이 서로 바뀌지 않게 값을 다르게 둔다.
+        val domain = com.trading.bot.domain.TradingState(
+            ticker = "KRW-BTC",
+            pendingBuyIdentifier = "ctb-buy",
+            pendingSellIdentifier = "ctb-sell",
+        )
+        val saved = slot<TradingStateEntity>()
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns reactor.core.publisher.Mono.empty()
+        every { repository.save(capture(saved)) } answers { reactor.core.publisher.Mono.just(saved.captured) }
+
+        service.upsert(1L, domain)
+        rows(saved.captured)
+        val restored = service.loadStates(1L)["KRW-BTC"]!!
+
+        assertEquals("ctb-buy", restored.pendingBuyIdentifier)
+        assertEquals("ctb-sell", restored.pendingSellIdentifier)
+    }
+
+    @Test
     fun `stuck-sell alert fields survive a round trip`() = runTest {
         // 이 repo 는 매핑 누락으로 컬럼이 통째로 유실된 전례가 있다(market_tickers.volume_24h).
         // 새 필드는 재시작 후 알림 판정의 근거이므로 왕복을 고정한다(#55).

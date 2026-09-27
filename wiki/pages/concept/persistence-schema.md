@@ -1,10 +1,10 @@
 ---
-title: DB 스키마 — Flyway V1~V27 와 Upbit 핵심 테이블
+title: DB 스키마 — Flyway V1~V28 와 Upbit 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-16 — V27(KIS DROP)을 `scripts/run-db-tests.sh`(실 Postgres 17)로 V1~V27 순차 적용, DB 통합테스트 5건/skip 0 통과. 빈 테이블이라 DELETE·아카이브는 구문만 증명. 이전 확인분: 2026-09-05 — V24 는 신규 테이블 추가만이라 기존 경로에 영향이 없고 `./gradlew build` 통과로만 확인했다(실제 Postgres 적용은 미실행 — `scripts/run-db-tests.sh` 필요). 이전 확인분: 2026-09-02 — V23 을 scripts/run-db-tests.sh(실제 Postgres 17)로 적용해 TradingStateRoundTripTest 3건/skip 0 통과. 이전 확인분: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
+verified: 2026-09-28 — V28 을 `scripts/run-db-tests.sh`(실 Postgres 17)로 적용, TradingStateRoundTripTest 3건/skip 0 통과(identifier 두 컬럼 왕복 포함) · 2026-09-16 — V27(KIS DROP)을 `scripts/run-db-tests.sh`(실 Postgres 17)로 V1~V27 순차 적용, DB 통합테스트 5건/skip 0 통과. 빈 테이블이라 DELETE·아카이브는 구문만 증명. 이전 확인분: 2026-09-05 — V24 는 신규 테이블 추가만이라 기존 경로에 영향이 없고 `./gradlew build` 통과로만 확인했다(실제 Postgres 적용은 미실행 — `scripts/run-db-tests.sh` 필요). 이전 확인분: 2026-09-02 — V23 을 scripts/run-db-tests.sh(실제 Postgres 17)로 적용해 TradingStateRoundTripTest 3건/skip 0 통과. 이전 확인분: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
 sources:
   - bot/src/main/resources/db/migration/
   - PROJECT_ANALYSIS.md
@@ -13,7 +13,7 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V26** 다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V28** 다.
 
 | 버전 | 내용 |
 |---|---|
@@ -33,7 +33,8 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V22 | `stock_order_intent.strategy`·`reason`(V27 에서 테이블째 제거) |
 | V25 | `shadow_exit_observation.live_exit_vwap` — 실체결 단가. V24 는 모델 과대추정폭만 쟀고 남은 절반인 **실행 슬리피지**(판단 tick 가격 vs 실체결)를 여기서 얻는다. nullable 이며 값이 없으면 그 관측은 슬리피지 분모에서 빠진다(0 을 넣으면 "마찰 없음" 오독) |
 | V26 | `trade_records.order_amount` — **이 주문의 실체결 대금**(`Σ trades[].funds`, 수수료 미포함). 엔진 BUY 행의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 그것을 주문 금액으로 읽어 부풀려졌다(#146). nullable·백필 없음·롤백 시 DROP 하지 않는다. 경로별 규칙은 [[trade-record-volume-semantics]] |
-| V27 | **KIS 경로 제거** — 원자료를 `kis_archive_stock_order_intent`·`kis_archive_stock_position_state`·`kis_archive_users_keys`·`kis_archive_trade_executions` 4테이블에 복사한 뒤 `stock_order_intent`·`stock_position_state` DROP, `users.kis_*` 5컬럼 DROP, `bot_state`·`bot_configs`·`trade_executions` 의 `exchange='KIS'` 행 삭제. PR revert 는 복구가 아니다(Flyway validate 로 기동 실패) — 복구는 아카이브에서 V28 로(identity 재삽입은 `OVERRIDING SYSTEM VALUE` + sequence 재설정). 아카이브는 한 달 보관 후 DROP 예정(GitHub 이슈 소유). `bot_state.exchange` 컬럼·unique 는 Upbit 코드가 쓰므로 유지 |
+| V27 | **KIS 경로 제거** — 원자료를 `kis_archive_stock_order_intent`·`kis_archive_stock_position_state`·`kis_archive_users_keys`·`kis_archive_trade_executions` 4테이블에 복사한 뒤 `stock_order_intent`·`stock_position_state` DROP, `users.kis_*` 5컬럼 DROP, `bot_state`·`bot_configs`·`trade_executions` 의 `exchange='KIS'` 행 삭제. PR revert 는 복구가 아니다(Flyway validate 로 기동 실패) — 복구는 아카이브에서 새 마이그레이션으로(V28 은 아래 identifier 가 썼다. identity 재삽입은 `OVERRIDING SYSTEM VALUE` + sequence 재설정). 아카이브는 한 달 보관 후 DROP 예정(GitHub 이슈 소유). `bot_state.exchange` 컬럼·unique 는 Upbit 코드가 쓰므로 유지 |
+| V28 | `trading_states.pending_buy_identifier`·`pending_sell_identifier`(VARCHAR(64)) — 주문 전에 남기는 클라이언트 identifier. 응답을 못 받은 주문을 재시작 뒤 거래소에서 찾는 근거다([[trading-engine-loop]] "응답을 못 받은 주문", #227). 컬럼 추가만이라 옛 이미지는 무시하지만, 옛 코드는 identifier 만 있는 pending 을 모르고 다시 주문한다. 그래서 롤백은 **새 이미지 정지 → `SELECT ticker FROM trading_states WHERE pending_buy_identifier IS NOT NULL OR pending_sell_identifier IS NOT NULL` 0 행 확인 → 옛 이미지 기동** 순서다(도는 중에 확인하면 그 사이 새 행이 생긴다). 남은 행은 Upbit 주문 내역으로 확인해, 주문이 있으면 그 uuid 를 `pending_buy_uuid`/`pending_sell_uuid` 로 옮기고 identifier 를 NULL 로, 없으면 identifier 만 NULL 로 비운다(있는 주문을 NULL 로만 지우면 옛 코드가 그 체결을 기록할 근거를 잃는다) |
 | V24 | `shadow_exit_observation` — 후보 청산 파라미터의 **그림자 관측**. 라이브 매매에는 관여하지 않고(계산·기록 전용, 기본 off) 백테 모델 청산가 `peak × (1−trail/100)` 가 실제 10초 tick 에서 얼마나 낙관인지만 잰다([[trailing-arm-finding-2026-09]]). 되돌릴 때는 `trading.shadow-exit.enabled=false` 로 끈다(forward-off) |
 | V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`([[accumulate-ladder]]). 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
 
@@ -67,6 +68,7 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 per-(user, ticker) 거래 상태를 durable 하게 보관한다. 이게 없으면 재시작·배포 때마다 다음이 증발한다:
 
 - `pendingBuyUuid` / `pendingSellUuid` — 미해소 주문. 유실되면 아무도 reconcile 하지 않는 orphan 주문이 남는다.
+- `pendingBuyIdentifier` / `pendingSellIdentifier`(V28) — uuid 를 받기 전 단계의 같은 역할. 주문 **전에** 기록돼, 응답을 못 받은 주문을 identifier 조회로 확정한다. uuid 를 알게 되면 비운다.
 - `peakPrice` — 트레일링 스톱의 기준선. 0 에서 다시 쌓이면 이미 발동했어야 할 청산이 안 걸린다.
 - `halted` / `reconcileFailureCount` — 재시작으로 halt 가 풀려 장애 중 재진입하는 것을 막는다.
 - `entryStrategy` — 진입 전략으로 청산을 평가하기 위해([[exit-gates]]). **실제로 소비되는 건 이 필드뿐이다.**
@@ -74,7 +76,7 @@ per-(user, ticker) 거래 상태를 durable 하게 보관한다. 이게 없으�
 
 ## `trade_executions.exchange_order_id` 부분 unique
 
-재시작 후 reconcile 이 같은 체결을 다시 기록하는 것을 DB 레벨에서 막는 **멱등 키**다. 다만 이건 *중복 insert* 만 막고, *기록이 아예 없었던* 방향은 막지 못한다 — 감사 기록 유실 경로는 [[trading-engine-loop]] 의 "알려진 갭" 참조.
+재시작 후 reconcile 이 같은 체결을 다시 기록하는 것을 DB 레벨에서 막는 **멱등 키**다. 다만 이건 *중복 insert* 만 막고, *기록이 아예 없었던* 방향은 막지 못한다 — 응답을 못 받은 주문이 기록 없이 사라지던 경로와 그 확정 규칙은 [[trading-engine-loop]] 의 "응답을 못 받은 주문" 참조.
 
 ## 성질
 
