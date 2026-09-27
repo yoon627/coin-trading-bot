@@ -1,16 +1,25 @@
 package com.trading.bot.client
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
+import com.trading.bot.domain.OrderRequest
+import io.jsonwebtoken.Jwts
+import io.jsonwebtoken.security.Keys
+import java.security.MessageDigest
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.springframework.web.reactive.function.client.WebClient
 
 class UpbitClientTest {
@@ -106,6 +115,107 @@ class UpbitClientTest {
         assertEquals(FeeBasis.Measured(0.0), Order(uuid = "o", paidFee = "0").feeBasis())
         assertEquals(FeeBasis.Measured(12.3), Order(uuid = "o", paidFee = "12.3").feeBasis())
     }
+
+    @Test
+    fun `placeOrder sends the identifier in the body and signs it into the query hash`() = runTest {
+        // 해시에서 빠지면 거래소가 서명 불일치로 거절하고, 본문에서 빠지면 불명 주문을 identifier 로 찾을 수 없다(#227).
+        mockServer.enqueue(MockResponse().setBody("""{"uuid":"o-9"}""").addHeader("Content-Type", "application/json"))
+
+        client.placeOrder(OrderRequest(market = "KRW-BTC", side = "bid", ordType = "price", price = "10000", identifier = "ctb-abc"))
+
+        val request = mockServer.takeRequest()
+        assertEquals("ctb-abc", ObjectMapper().readTree(request.body.readUtf8()).get("identifier")?.asText())
+        assertEquals(sha512("market=KRW-BTC&side=bid&ord_type=price&price=10000&identifier=ctb-abc"), queryHashOf(request))
+    }
+
+    @Test
+    fun `placeOrder without an identifier leaves it out of the request`() = runTest {
+        mockServer.enqueue(MockResponse().setBody("""{"uuid":"o-10"}""").addHeader("Content-Type", "application/json"))
+
+        client.placeOrder(OrderRequest(market = "KRW-BTC", side = "ask", ordType = "market", volume = "0.1"))
+
+        val request = mockServer.takeRequest()
+        assertFalse(ObjectMapper().readTree(request.body.readUtf8()).has("identifier"))
+        assertEquals(sha512("market=KRW-BTC&side=ask&ord_type=market&volume=0.1"), queryHashOf(request))
+    }
+
+    @Test
+    fun `getOrderByIdentifier returns the order the exchange knows by that identifier`() = runTest {
+        mockServer.enqueue(
+            MockResponse()
+                .setBody("""{"uuid":"o-11","identifier":"ctb-abc","state":"done","executed_volume":"0.001"}""")
+                .addHeader("Content-Type", "application/json"),
+        )
+
+        val order = client.getOrderByIdentifier("ctb-abc")
+
+        assertEquals("o-11", order?.uuid)
+        val request = mockServer.takeRequest()
+        assertEquals("/v1/order?identifier=ctb-abc", request.path)
+        assertEquals(sha512("identifier=ctb-abc"), queryHashOf(request))
+    }
+
+    @Test
+    fun `getOrderByIdentifier returns null only when the exchange says the order does not exist`() = runTest {
+        mockServer.enqueue(
+            MockResponse().setResponseCode(404)
+                .setBody("""{"error":{"name":"order_not_found","message":"주문을 찾지 못했습니다."}}""")
+                .addHeader("Content-Type", "application/json"),
+        )
+        assertNull(client.getOrderByIdentifier("ctb-missing"))
+
+        // 같은 404 라도 다른 이유면 "주문이 없다"의 증거가 아니다 — 미접수 확정으로 흘러가면 안 된다.
+        mockServer.enqueue(
+            MockResponse().setResponseCode(404)
+                .setBody("""{"error":{"name":"currency_not_found","message":"x"}}""")
+                .addHeader("Content-Type", "application/json"),
+        )
+        assertThrows<UpbitApiException> { client.getOrderByIdentifier("ctb-other") }
+
+        mockServer.enqueue(MockResponse().setResponseCode(500).setBody("oops"))
+        assertThrows<UpbitApiException> { client.getOrderByIdentifier("ctb-down") }
+    }
+
+    @Test
+    fun `only request validation errors prove that an order was not placed`() {
+        listOf(
+            400 to "insufficient_funds_bid", 400 to "insufficient_funds_ask", 400 to "under_min_total_bid",
+            400 to "under_min_total_ask", 400 to "create_bid_error", 400 to "create_ask_error", 400 to "validation_error",
+            400 to "invalid_parameter", 400 to "over_krw_funds_bid", 400 to "notfoundmarket", 403 to "market_offline",
+        ).forEach { (status, name) ->
+            assertTrue(UpbitApiException(status, name, null, "").provesOrderNotPlaced(), "$status $name")
+        }
+        // 접수 여부를 말해 주지 않는 실패 — 불명으로 남겨 identifier 로 확정해야 한다.
+        listOf(
+            UpbitApiException(400, "duplicated_identifier", null, ""),
+            UpbitApiException(401, "nonce_used", null, ""),
+            UpbitApiException(403, "out_of_scope", null, ""),
+            UpbitApiException(429, null, null, ""),
+            UpbitApiException(400, null, null, "<html>"),
+            UpbitApiException(500, null, null, ""),
+            UpbitApiException(500, "insufficient_funds_bid", null, ""),
+            java.util.concurrent.TimeoutException("response timeout"),
+            java.io.IOException("connection reset"),
+        ).forEach { assertFalse(it.provesOrderNotPlaced(), it.toString()) }
+    }
+
+    @Test
+    fun `order identifiers are unique and fit the exchange limit`() {
+        val ids = List(100) { newOrderIdentifier() }
+        assertEquals(100, ids.toSet().size)
+        assertTrue(ids.all { it.length <= 64 && it.matches(Regex("[a-z0-9-]+")) })
+    }
+
+    private fun queryHashOf(request: RecordedRequest): String? {
+        val token = request.getHeader("Authorization")!!.removePrefix("Bearer ")
+        val claims = Jwts.parser()
+            .verifyWith(Keys.hmacShaKeyFor("test-secret-key-that-is-long-enough".toByteArray()))
+            .build().parseSignedClaims(token).payload
+        return claims["query_hash"] as String?
+    }
+
+    private fun sha512(s: String): String =
+        MessageDigest.getInstance("SHA-512").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
     @Test
     fun `getMarkets parses the investment warning flag from the real response shape`() = runTest {

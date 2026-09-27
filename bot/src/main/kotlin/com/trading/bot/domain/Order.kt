@@ -118,6 +118,8 @@ data class OrderRequest(
     val ordType: String,
     val volume: String? = null,
     val price: String? = null,
+    /** 클라이언트 주문 식별자 — 응답을 못 받은 주문을 나중에 찾는 유일한 수단이다([com.trading.bot.client.newOrderIdentifier]). */
+    val identifier: String? = null,
 ) {
     fun toQueryString(): String {
         return toParamMap().entries.joinToString("&") { "${it.key}=${it.value}" }
@@ -131,6 +133,7 @@ data class OrderRequest(
         )
         volume?.let { params["volume"] = it }
         price?.let { params["price"] = it }
+        identifier?.let { params["identifier"] = it }
         return params
     }
 }

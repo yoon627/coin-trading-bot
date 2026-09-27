@@ -83,7 +83,7 @@ class UpbitClientImpl(
             "${URLEncoder.encode(it.key, StandardCharsets.UTF_8)}=${URLEncoder.encode(it.value, StandardCharsets.UTF_8)}"
         }
         // 주문 생성은 비멱등 — 429 등에서 재시도하면 중복 주문이 체결될 수 있어 재시도 금지.
-        // 실패는 그대로 전파해 호출부가 해당 tick 을 건너뛰게 한다.
+        // 실패는 그대로 전파한다. 접수 여부는 호출부가 provesOrderNotPlaced 와 identifier 조회로 판정한다.
         return upbitWebClient.post()
             .uri("/v1/orders")
             .header("Authorization", authProvider!!.authorizationHeader(queryString))
@@ -106,6 +106,24 @@ class UpbitClientImpl(
         }.retryOnRateLimit().awaitSingle()
     }
 
+    override suspend fun getOrderByIdentifier(identifier: String): Order? {
+        val queryString = "identifier=$identifier"
+        return try {
+            Mono.defer {
+                upbitWebClient.get()
+                    .uri("/v1/order?identifier={identifier}", identifier)
+                    .header("Authorization", authProvider!!.authorizationHeader(queryString))
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError) { handleError(it, expected = ::isOrderNotFound) }
+                    .bodyToMono<Order>()
+            }.retryOnRateLimit().awaitSingle()
+        } catch (e: UpbitApiException) {
+            if (isOrderNotFound(e)) null else throw e
+        }
+    }
+
+    private fun isOrderNotFound(e: UpbitApiException) = e.statusCode == 404 && e.errorName == "order_not_found"
+
     override suspend fun cancelOrder(uuid: String): Order {
         val queryString = "uuid=$uuid"
         return Mono.defer {
@@ -118,12 +136,21 @@ class UpbitClientImpl(
         }.retryOnRateLimit().awaitSingle()
     }
 
-    private fun handleError(response: ClientResponse): Mono<Throwable> {
+    /** @param expected 호출자가 정상 결과로 다루는 오류 — ERROR 로그가 Discord 알림으로 나가므로 그런 응답은 INFO 로 남긴다. */
+    private fun handleError(
+        response: ClientResponse,
+        expected: (UpbitApiException) -> Boolean = { false },
+    ): Mono<Throwable> {
         val statusValue = response.statusCode().value()
         return response.bodyToMono<String>().defaultIfEmpty("(no body)").map { body ->
-            log.error("Upbit API error: {} - {}", response.statusCode(), body)
             val (errorName, errorMessage) = parseUpbitErrorBody(body)
-            UpbitApiException(statusValue, errorName, errorMessage, body)
+            UpbitApiException(statusValue, errorName, errorMessage, body).also {
+                if (expected(it)) {
+                    log.info("Upbit API: {} - {}", response.statusCode(), body)
+                } else {
+                    log.error("Upbit API error: {} - {}", response.statusCode(), body)
+                }
+            }
         }
     }
 
