@@ -320,6 +320,8 @@ class UserTradingManager(
 
     fun getStatus(userId: Long): Map<String, Any> {
         val engine = engines[userId]
+        // 맵에는 기동 전에 실패했거나 정지된 채 남은 엔진이 있을 수 있다 — 그 옛 목록을 실행 중인 것처럼 보이지 않는다.
+        val live = engine?.takeIf { it.isRunning() }
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
             "strategy" to (engine?.getActiveStrategyName() ?: userStrategies[userId] ?: tradingProperties.strategy),
@@ -328,6 +330,13 @@ class UserTradingManager(
             // them, so reading from states here would briefly return [] right
             // after /api/bot/start.
             "tickers" to (engine?.getActiveTickers() ?: emptyList<String>()),
+            // 화면용 분류 — 활성 집합(tickers)은 사용자 목록·적립·청산 대기가 섞인 파생 집합이라, 뺀 티커가 그대로 보이면
+            // 목록이 적용되지 않은 것으로 읽힌다(#226). default_tickers 는 목록 없이 시작할 때 쓰는 설정 목록이다.
+            "user_tickers" to (live?.getUserTickers() ?: emptyList<String>()),
+            "entry_tickers" to (live?.getEntryTickers() ?: emptyList<String>()),
+            "accumulate_tickers" to (live?.getAccumulateTickers() ?: emptyList<String>()),
+            "exit_only_tickers" to (live?.getExitOnlyTickers() ?: emptyList<String>()),
+            "default_tickers" to tradingProperties.tickerList(),
             "positions" to (engine?.getStates()?.map { (ticker, state) ->
                 mapOf(
                     "ticker" to ticker,
@@ -394,9 +403,6 @@ class UserTradingManager(
         val tickers = existing.getUserTickers()
         val strategy = existing.getActiveStrategyName()
         existing.stop()
-        // 복귀 경로용 — stop 이 루프를 join 한 뒤라 마지막 tick 까지 반영된 메모리 상태다. 빈 맵으로 되살리면 목록 밖 잔류
-        // 포지션과 잔고 미확인 dormant 행이 빠져 청산 관리가 끊긴다.
-        val resumeStates = existing.restartSnapshot()
         // stop 이후에 읽어야 마지막 tick 의 durable flush(pending 주문 포함)까지 잡힌다 — 먼저 읽으면
         // 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending 이 된다(#20).
         val initialStates = if (wasRunning) {
@@ -407,7 +413,8 @@ class UserTradingManager(
                 // 무기한 멈추고, 이후 reload 는 wasRunning=false 로 보아 되살리지도 않는다.
                 // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다.
                 withContext(NonCancellable) {
-                    runCatching { existing.start(tickers, resumeStates) }
+                    // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
+                    runCatching { existing.resume() }
                         .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
                 }
                 throw e
@@ -416,7 +423,7 @@ class UserTradingManager(
                 // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살린다.
                 log.error("reload: user {} durable 상태 로드 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
                 try {
-                    existing.start(tickers, resumeStates)
+                    existing.resume()
                 } catch (restoreFailure: CancellationException) {
                     throw restoreFailure
                 } catch (restoreFailure: Exception) {

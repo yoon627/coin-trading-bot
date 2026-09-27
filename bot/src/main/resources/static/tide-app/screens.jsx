@@ -128,21 +128,43 @@ function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
   const strategies = useAPI(() => TideAPI.strategies().catch(() => []));
   const performance = useAPI(() => TideAPI.performance().catch(() => null));
-  const [tickers, setTickers] = React.useState('KRW-BTC');
+  // 입력칸은 서버 기본 목록으로 채운다 — 고정 기본값을 두면 그대로 눌렀을 때 목록이 그 값 하나로 줄어 저장된다(#226).
+  const [tickers, setTickers] = React.useState('');
+  const [touched, setTouched] = React.useState(false);
   const [selected, setSelected] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
+  // 마지막으로 채운 기본값 — 폴링이 한 번 실패해 status 가 비어도 "고치지 않았다"는 판정이 흔들리지 않게 따로 둔다.
+  const prefilled = React.useRef('');
+  const defaultTickers = (status.data?.default_tickers || []).join(', ');
+  const tickerList = (text) => [...new Set(text.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))];
+  const sameTickers = (a, b) => [...a].sort().join(',') === [...b].sort().join(',');
 
   React.useEffect(() => {
     if (!selected && status.data?.strategy) setSelected(status.data.strategy);
     else if (!selected && strategies.data?.[0]) setSelected(strategies.data[0].name);
   }, [status.data, strategies.data]);
 
+  // 사용자가 한 번이라도 고쳤으면 폴링이 입력을 되돌리지 않는다(빈칸으로 비운 것도 의도다).
+  React.useEffect(() => {
+    if (!touched && defaultTickers) {
+      prefilled.current = defaultTickers;
+      setTickers(defaultTickers);
+    }
+  }, [defaultTickers, touched]);
+
   const start = async () => {
     setBusy(true);
     try {
-      await TideAPI.botStart({ tickers: tickers.split(',').map(s => s.trim()), strategy: selected });
-      setToast({ msg: '봇이 시작되었습니다', tone: 'up' });
+      // 기본 목록 그대로(순서·대소문자 무관)거나 비었으면 tickers 를 보내지 않는다 — 서버가 같은 설정 목록을 쓰고,
+      // 이미 도는 봇에는 409 대신 already_running 이 된다.
+      const list = tickerList(tickers);
+      const req = { strategy: selected };
+      if (list.length && !sameTickers(list, tickerList(prefilled.current))) req.tickers = list;
+      const res = await TideAPI.botStart(req);
+      setToast(res?.status === 'already_running'
+        ? { msg: `이미 실행 중입니다 (전략: ${res.strategy})`, tone: 'warn' }
+        : { msg: '봇이 시작되었습니다', tone: 'up' });
       status.reload();
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusy(false); }
@@ -173,7 +195,8 @@ function BotPage({ user, setActive }) {
 
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 8 }}>거래쌍 (쉼표로 구분)</div>
-            <input className="tide-input" value={tickers} onChange={e => setTickers(e.target.value)} placeholder="KRW-BTC, KRW-ETH"/>
+            <input className="tide-input" value={tickers} onChange={e => { setTouched(true); setTickers(e.target.value); }}
+                   placeholder="비워 두면 서버 기본 목록 (예: KRW-BTC, KRW-ETH)"/>
           </div>
 
           <div>
@@ -207,8 +230,12 @@ function BotPage({ user, setActive }) {
                 {[
                   ['실행', status.data?.running ? '✓ Yes' : '— No'],
                   ['전략', status.data?.strategy || '—'],
-                  ['거래쌍', (status.data?.tickers || []).join(', ') || '—'],
-                ].map(([k, v]) => (
+                  // 진입 대상(비-auto 는 사용자 목록, auto 는 선정 알트) · 적립 · 청산 대기(목록에서 빠졌지만 보유·미체결 주문이
+                  // 남아 청산까지만 관리)를 나눠 보인다.
+                  ['거래쌍', (status.data?.entry_tickers || []).join(', ') || '—'],
+                  ['적립', (status.data?.accumulate_tickers || []).join(', ')],
+                  ['청산 대기', (status.data?.exit_only_tickers || []).join(', ')],
+                ].filter(([k, v]) => v).map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--ink-100)' }}>
                     <span style={{ color: 'var(--ink-500)' }}>{k}</span><span style={{ fontWeight: 600 }}>{v}</span>
                   </div>
