@@ -2,13 +2,14 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-09-23
+updated: 2026-09-27
 claim_state: current
-verified: 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
+verified: 2026-09-27 — 잔류·비-auto 정리·재기동 입력·실행 중 409 는 `TradingEngineUniverseTest`(#226 묶음 10건)·`UserTradingManagerTest`·`TradingControllerTest` 로 확인, 정리 순서·진입 게이트·사다리 제외는 각각 뮤테이션으로 실패를 확인 · 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/config/ExitParamsDeclarationCheck.kt
   - deploy/vultr/deploy.sh
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
+  - bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
   - common/src/main/kotlin/com/trading/common/config/TradingProperties.kt
@@ -44,7 +45,11 @@ sources:
 
 1~5 는 두 프로파일 공용 preamble 이고, 그 뒤 `profileOf(ticker)` 가 `runSwing`(6~8 그대로) 과 `runAccumulate` 를 가른다. `trading.accumulate.tickers` 에 든 티커만 ACCUMULATE 이며 기본은 비어 있다. 적립 경로는 손절·트레일링·익절·차트·일일리셋을 **하나도 호출하지 않고** `AccumulateLadder` 판정만 따른다 — 상세는 [[accumulate-ladder]]. 트레일링 고점 flush(preamble 의 `updatePeakPrice`)도 SWING 만 탄다.
 
-활성 티커 집합은 `start()` 가 `적립 티커 ∪ 요청 목록` 으로 만들고, `trading.universe.auto` 가 켜져 있으면 기동 시·09:00 경계에 `refreshUniverse()` → `applyTickers()` 가 알트 목록을 거래대금 상위로 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 에는 파생 집합을 되쓰지 않는다.
+활성 티커 집합은 `start()` 가 `적립 티커 ∪ 사용자 목록 ∪ 잔류` 로 만들고, `trading.universe.auto` 가 켜져 있으면 기동 시·09:00 경계에 `refreshUniverse()` → `applyTickers()` 가 알트 목록을 거래대금 상위로 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 에는 파생 집합을 되쓰지 않는다.
+
+- **잔류(#226, auto 무관)**: 사용자 목록·적립 밖이어도 진입 흔적(pending buy/sell uuid·`entryStrategy`·`buyDate`)이 있는 durable 행 — 엔진이 산 스윙 포지션·미해소 주문 — 은 활성에 싣고 청산될 때까지 관리한다. 신규 진입은 `swingUniverse`(비-auto = 사용자 목록, auto = 마지막 선정)가 막는다. 사다리 행(`rungsFilled>0`·단 매수 `pendingBuyTriggerPrice`·`entryStrategy=accumulate`)은 적립 설정에서 빠졌으면 싣지 않고 WARN — 실으면 스윙 청산(손절·09:00 보유상한)이 붙는다. 싣는 잔류 목록도 기동 WARN 으로 남는다.
+- **비-auto 정리**: 기동 동기화 직후와 09:00 flush 뒤에 사용자 목록·적립 밖이면서 더 지킬 것이 없는(보유·unsynced·pending 없음) 티커를 활성·`states` 에서 뺀다 — 엔진 밖에서 팔려 메타만 남은 행이 매 기동 실리는 것을 정리한다. 메모리만 바꾸고 던지지 않으며 durable 행은 건드리지 않는다. auto 는 `applyTickers` 가 같은 일을 한다.
+- **재기동 입력**: `start` 는 직전 실행의 `states` 를 비우고 입력만 싣는다. 재기동하는 쪽(reload)은 엔진의 사용자 목록(`getUserTickers()`)을 그대로 넘기고 — 활성 집합을 넘기면 잔류가 진입 대상으로 승격된다 — 같은 엔진으로 복귀할 때는 `restartSnapshot()`(states ∪ 잔고 미확인 dormant)을 넘긴다. 실행 중 엔진에 다른 목록으로 `startBot` 이 오면 부작용 없이 409, 같거나 없으면 `already_running`.
 
 스윙 `buy()` 는 적립이 아직 투입하지 않은 예산(`reservedKrw`)을 뺀 잔고로 사이징한다 — 알트가 적립 현금을 선점하지 못하게.
 
