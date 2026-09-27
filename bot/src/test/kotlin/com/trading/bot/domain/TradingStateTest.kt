@@ -211,6 +211,40 @@ class TradingStateTest {
     }
 
     @Test
+    fun `a pending order is identified by its uuid once known and by its identifier until then`() {
+        val state = TradingState("KRW-BTC")
+        state.beginBuyOrder("ctb-b", "combined", triggerPrice = 100.0, priorVolume = 0.5)
+        assertTrue(state.hasPendingBuy())
+
+        state.adoptBuyOrder("u-b")
+        assertEquals("u-b", state.pendingBuyUuid)
+        assertNull(state.pendingBuyIdentifier)
+        assertTrue(state.hasPendingBuy())
+
+        state.beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = java.time.Instant.EPOCH, volume = 1.0, triggerPrice = null, priorVolume = 1.0)
+        assertTrue(state.hasPendingSell())
+        state.adoptSellOrder("u-s")
+        assertEquals("u-s", state.pendingSellUuid)
+        assertNull(state.pendingSellIdentifier)
+    }
+
+    @Test
+    fun `every transition that ends a pending order also forgets its identifier`() {
+        // identifier 만 남으면 끝난 주문이 계속 pending 으로 보여 그 티커의 매매가 영영 멈춘다(#227).
+        fun pending() = TradingState("KRW-BTC", position = true, pendingBuyIdentifier = "ctb-b", pendingSellIdentifier = "ctb-s")
+        assertTrue(pending().hasPendingBuy() && pending().hasPendingSell())
+
+        val bought = pending().apply { markBought(10.0, 1.0, replace = true) }
+        assertFalse(bought.hasPendingBuy())
+        listOf(pending().apply { releaseHoldings() }, pending().apply { markSold() }).forEach {
+            assertFalse(it.hasPendingBuy())
+            assertFalse(it.hasPendingSell())
+        }
+        assertFalse(pending().apply { clearPendingBuy() }.hasPendingBuy())
+        assertFalse(pending().apply { clearPendingSell() }.hasPendingSell())
+    }
+
+    @Test
     fun `clearHalt resets halt state`() {
         val state = TradingState(
             "KRW-BTC",

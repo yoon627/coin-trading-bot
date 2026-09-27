@@ -377,7 +377,9 @@ class PositionManagerExtendedTest {
 
         val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.MANUAL)
         assertNull(result)
-        assertTrue(state.position) // state unchanged on failure
+        assertTrue(state.position)
+        // 연결 오류는 주문이 나갔는지 말해 주지 않는다 — identifier 로 확정될 때까지 다시 팔지 않는다(#227).
+        assertNotNull(state.pendingSellIdentifier)
     }
 
     @Test
@@ -1686,7 +1688,9 @@ class PositionManagerExtendedTest {
         val state = TradingState("KRW-BTC")
 
         assertThrows<CancellationException> { manager.buy("KRW-BTC", state, 50000000.0, "test") }
-        assertNull(state.pendingBuyUuid) // 주문 접수 전 취소 — pending 없음
+        // 요청이 나갔는지 모른다 — identifier 를 남겨 reconcile 이 확정한다(#227).
+        assertNull(state.pendingBuyUuid)
+        assertNotNull(state.pendingBuyIdentifier)
     }
 
     @Test
