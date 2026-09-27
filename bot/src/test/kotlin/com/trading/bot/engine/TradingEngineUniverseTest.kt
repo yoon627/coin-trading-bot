@@ -1,6 +1,12 @@
 package com.trading.bot.engine
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.AccumulateProperties
@@ -11,12 +17,17 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import java.time.LocalDate
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
 
 /** 활성 티커 집합 교체(`applyTickers`)와 자동 유니버스 갱신. 선정 규칙 자체는 UniverseSelectorTest. */
 class TradingEngineUniverseTest {
@@ -59,6 +70,24 @@ class TradingEngineUniverseTest {
     )
 
     private fun held(ticker: String) = TradingState(ticker, position = true, avgBuyPrice = 100.0, holdVolume = 1.0)
+
+    /** 엔진이 산 포지션 — 진입 메타가 있어야 재시작 때 잔류로 실린다. */
+    private fun heldEntry(ticker: String) =
+        held(ticker).apply { entryStrategy = "test_strategy"; buyDate = LocalDate.of(2026, 9, 1) }
+
+    private val engineLogger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+    private val engineLogs = ListAppender<ILoggingEvent>()
+
+    @AfterEach
+    fun detachLogs() {
+        engineLogger.detachAppender(engineLogs)
+    }
+
+    private fun captureEngineLogs(): ListAppender<ILoggingEvent> {
+        engineLogs.start()
+        engineLogger.addAppender(engineLogs)
+        return engineLogs
+    }
 
     @Test
     fun `applyTickers keeps held or pending tickers, seeds new ones and drops flat ones`() = runBlocking {
@@ -260,5 +289,194 @@ class TradingEngineUniverseTest {
         assertFalse(engine.refreshUniverse())
         assertEquals(listOf("KRW-ETH", "KRW-XRP"), engine.getActiveTickers())
         coVerify(exactly = 0) { source.select(any(), any()) }
+    }
+
+    // --- 비-auto 잔류 (#226) ---
+    // 사용자 목록에서 빠진 티커라도 엔진이 산 스윙 포지션·미해소 주문은 청산될 때까지 관리하고, 새로 사지는 않는다.
+
+    @Test
+    fun `without auto a held or pending ticker outside the requested list stays active`() = runBlocking {
+        val logs = captureEngineLogs()
+        val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-ADA"))
+        engine.start(
+            listOf("KRW-BTC"),
+            linkedMapOf(
+                "KRW-XRP" to heldEntry("KRW-XRP"),
+                "KRW-P" to TradingState("KRW-P", pendingSellUuid = "s1"),
+                "KRW-OLD" to TradingState("KRW-OLD"),
+                // 적립 설정에서 빠진 사다리 보유분 — 스윙 청산 규칙으로 시장가에 팔리지 않게 싣지 않고 알린다.
+                "KRW-LAD" to TradingState("KRW-LAD", position = true, entryStrategy = "accumulate", rungsFilled = 2),
+                // 첫 단 매수가 미체결이면 rungsFilled 는 아직 0 — 단 매수의 triggerPrice 로 사다리임을 안다.
+                "KRW-LAD0" to TradingState("KRW-LAD0", pendingBuyUuid = "b1", pendingBuyTriggerPrice = 100.0),
+                // 적립 설정 안의 사다리는 원래 활성이다 — 알릴 대상이 아니다.
+                "KRW-ADA" to TradingState("KRW-ADA", position = true, entryStrategy = "accumulate", rungsFilled = 1),
+            ),
+        )
+        engine.stop()
+
+        assertEquals(listOf("KRW-ADA", "KRW-BTC", "KRW-XRP", "KRW-P"), engine.getActiveTickers())
+        val ladderWarning = logs.list.single { it.level == Level.WARN && "사다리" in it.formattedMessage }.formattedMessage
+        assertTrue("[KRW-LAD, KRW-LAD0]" in ladderWarning, ladderWarning)
+    }
+
+    @Test
+    fun `getUserTickers is the requested list only and a no-op start does not replace it`() = runBlocking {
+        val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-BTC"))
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
+        engine.start(listOf("KRW-SOL"))
+        engine.stop()
+
+        assertEquals(listOf("KRW-ETH"), engine.getUserTickers())
+        assertTrue("KRW-XRP" in engine.getActiveTickers())
+    }
+
+    @Test
+    fun `without auto the loop still exits a retained holding and reconciles a retained pending sell`(): Unit = runBlocking {
+        val xrp = heldEntry("KRW-XRP")
+        val sold = CompletableDeferred<Unit>()
+        val reconciled = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker(any()) } returns listOf(Ticker(tradePrice = 90.0))
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+        every { positionManager.checkStopLoss(xrp, any()) } returns true
+        coEvery { positionManager.sell("KRW-XRP", xrp, any(), SellReason.STOP_LOSS) } coAnswers { sold.complete(Unit); null }
+        coEvery { positionManager.reconcilePendingSell("KRW-P", any(), any()) } coAnswers { reconciled.complete(Unit); null }
+        val engine = createEngine()
+
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to xrp, "KRW-P" to TradingState("KRW-P", pendingSellUuid = "s1")))
+        withTimeout(5_000) {
+            sold.await()
+            reconciled.await()
+        }
+        engine.stop()
+    }
+
+    @Test
+    fun `without auto a retained ticker is not bought again on a later day while a listed ticker is`() = runBlocking {
+        val xrp = heldEntry("KRW-XRP")
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to xrp))
+        engine.stop()
+        xrp.markSold()
+        xrp.boughtToday = false // 다음 거래일 — 당일 1회 게이트가 대신 막지 않게 한다
+        coEvery { upbitClient.getTicker(any()) } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles(any(), any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        val btc = TradingState("KRW-BTC")
+
+        engine.processTicker("KRW-XRP", xrp, strategy)
+        engine.processTicker("KRW-BTC", btc, strategy)
+
+        coVerify(exactly = 0) { positionManager.buy("KRW-XRP", any(), any(), any(), any()) }
+        coVerify(exactly = 1) { positionManager.buy("KRW-BTC", btc, 100.0, "test_strategy", any()) }
+    }
+
+    @Test
+    fun `without auto a retained row that turns out flat is dropped after the startup sync`() = runBlocking {
+        val firstTick = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+        // 우리 주문으로 설명 안 되는 락(releaseHoldings 뒤)은 unsynced — 실제 포지션일 수 있으니 남긴다.
+        coEvery { positionManager.syncPosition("KRW-U", any()) } coAnswers { secondArg<TradingState>().unsynced = true }
+        val engine = createEngine()
+
+        engine.start(
+            listOf("KRW-BTC"),
+            linkedMapOf(
+                // 엔진이 멈춘 사이 거래소에서 팔려 메타만 남은 행 — 매도 경로가 안 돌아 메타가 영영 안 지워진다.
+                "KRW-GONE" to TradingState("KRW-GONE", entryStrategy = "test_strategy"),
+                "KRW-XRP" to heldEntry("KRW-XRP"),
+                "KRW-U" to TradingState("KRW-U", entryStrategy = "test_strategy"),
+                "KRW-P" to TradingState("KRW-P", pendingBuyUuid = "b1"),
+            ),
+        )
+        withTimeout(5_000) { firstTick.await() }
+        engine.stop()
+
+        assertEquals(listOf("KRW-BTC", "KRW-XRP", "KRW-U", "KRW-P"), engine.getActiveTickers())
+        assertEquals(engine.getActiveTickers().toSet(), engine.getStates().keys)
+    }
+
+    @Test
+    fun `without auto the 09 00 boundary drops a retained ticker sold during the day after flushing its reset`() = runBlocking {
+        val xrp = heldEntry("KRW-XRP")
+        val firstTick = CompletableDeferred<Unit>()
+        val engine = createEngine()
+        var activeAtBoundary: List<String> = emptyList()
+        var boundaries = 0
+        every { dailyResetManager.checkAndReset(any()) } answers {
+            if (boundaries++ == 0) {
+                activeAtBoundary = engine.getActiveTickers()
+                xrp.markSold() // 낮 동안 엔진이 청산했다
+                true
+            } else {
+                false
+            }
+        }
+        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to xrp))
+        withTimeout(5_000) { firstTick.await() }
+        engine.stop()
+
+        assertTrue("KRW-XRP" in activeAtBoundary, "보유 중에는 잔류로 활성이어야 한다")
+        assertEquals(listOf("KRW-BTC"), engine.getActiveTickers())
+        coVerify { positionManager.persistState(xrp) } // 리셋을 flush 한 뒤 뺀다
+    }
+
+    @Test
+    fun `with auto the prune step does not run because applyTickers owns the active set`() = runBlocking {
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns null // 선정 실패 — 정리가 대신 돌아 선정분을 자르면 안 된다
+        val firstTick = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-ETH") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-GONE" to TradingState("KRW-GONE", entryStrategy = "test_strategy")))
+        withTimeout(5_000) { firstTick.await() }
+        engine.stop()
+
+        assertTrue("KRW-GONE" in engine.getActiveTickers())
+    }
+
+    @Test
+    fun `a restart with new inputs drops states from the previous run`() = runBlocking {
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-BTC" to TradingState("KRW-BTC")))
+        engine.stop()
+
+        engine.start(listOf("KRW-ETH"))
+        engine.stop()
+
+        assertFalse("KRW-BTC" in engine.getStates().keys)
+    }
+
+    @Test
+    fun `restartSnapshot keeps unconfirmed dormant rows`() = runBlocking {
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-A")
+        val lookedUp = CompletableDeferred<Unit>()
+        coEvery { positionManager.heldCurrencies() } coAnswers { lookedUp.complete(Unit); throw RuntimeException("accounts down") }
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-M" to TradingState("KRW-M")))
+        withTimeout(5_000) { lookedUp.await() }
+        engine.stop()
+
+        // 잔고 조회가 아직 성공 못 한 행 — 복귀 재기동이 버리면 조회가 회복돼도 되살아나지 않는다.
+        assertTrue("KRW-M" in engine.restartSnapshot())
+    }
+
+    @Test
+    fun `restarting from the snapshot keeps a retained holding active`() = runBlocking {
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
+        engine.stop()
+
+        engine.start(engine.getUserTickers(), engine.restartSnapshot())
+        engine.stop()
+
+        assertTrue("KRW-XRP" in engine.getActiveTickers())
     }
 }

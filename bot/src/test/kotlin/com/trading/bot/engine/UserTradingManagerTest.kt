@@ -60,6 +60,8 @@ class UserTradingManagerTest {
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
+    // reload 복귀가 옛 엔진의 메모리 상태를 넘기는지 가르려면 비어 있지 않아야 한다 — 빈 맵이면 emptyMap() 과 구분이 안 된다.
+    private val reloadSnapshot = mapOf("KRW-XRP" to TradingState("KRW-XRP", position = true, entryStrategy = "combined"))
 
     @BeforeEach
     fun setup() {
@@ -114,7 +116,8 @@ class UserTradingManagerTest {
         // 무기한 중단되는데, running=true 라 겉으로는 정상으로 보인다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
@@ -127,7 +130,9 @@ class UserTradingManagerTest {
 
         assertSame(mockEngine, engines()[1L], "로드 실패 시 교체 엔진이 등록되면 안 된다")
         verify(exactly = 0) { manager.createEngine(any()) }
-        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), emptyMap()) } // 옛 엔진 재기동
+        // 옛 엔진 재기동 — 메모리 상태를 넘겨야 목록 밖 잔류 포지션이 복귀 뒤에도 관리된다(#226).
+        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), reloadSnapshot) }
+        verify(exactly = 0) { mockEngine.getActiveTickers() }
     }
 
     @Test
@@ -135,7 +140,8 @@ class UserTradingManagerTest {
         // 순서가 뒤바뀌면 stop 된 엔진만 남아 PR #50 이 막으려던 결함이 되살아난다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
@@ -144,7 +150,7 @@ class UserTradingManagerTest {
 
         coVerify(ordering = Ordering.ORDERED) {
             mockEngine.stop()
-            mockEngine.start(listOf("KRW-BTC"), emptyMap())
+            mockEngine.start(listOf("KRW-BTC"), reloadSnapshot)
         }
     }
 
@@ -152,7 +158,8 @@ class UserTradingManagerTest {
     fun `reload failure carries the original cause`() = runTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val cause = RuntimeException("db down")
@@ -173,7 +180,8 @@ class UserTradingManagerTest {
         // 호출자가 다른 문구를 쓸 수 있게 구분돼야 한다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val loadFailure = RuntimeException("db down")
@@ -199,7 +207,8 @@ class UserTradingManagerTest {
         // wasRunning=false 로 보아 되살리지도 않는다. 복구는 하되 취소는 삼키지 않는다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
+        every { mockEngine.restartSnapshot() } returns reloadSnapshot
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled")
@@ -208,7 +217,7 @@ class UserTradingManagerTest {
             runBlocking { manager.reloadUserRuntime(1L) }
         }
 
-        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), emptyMap()) } // 복구는 수행
+        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), reloadSnapshot) } // 복구는 수행
         assertSame(mockEngine, engines()[1L], "취소 시 엔진이 교체되면 안 된다")
     }
 
@@ -439,6 +448,87 @@ class UserTradingManagerTest {
         manager.startBot(1L, listOf("KRW-ETH"), null)
 
         assertEquals("KRW-ETH", saved.captured.tickers)
+    }
+
+    // --- 사용자 목록과 파생 활성 집합의 분리 (#226) ---
+    // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(적립·잔류·auto 선정)을 사용자 의도로 넘기면
+    // 목록에서 뺀 티커가 신규 진입 대상으로 승격된다.
+
+    private fun userStrategies(): ConcurrentHashMap<Long, String> {
+        val f = UserTradingManager::class.java.getDeclaredField("userStrategies").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        return f.get(manager) as ConcurrentHashMap<Long, String>
+    }
+
+    @Test
+    fun `reload starts the replacement with the user list as is, never the config list or the derived active set`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        // 적립만 운용하는 엔진 — 빈 사용자 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다.
+        every { mockEngine.getUserTickers() } returns emptyList()
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        val loaded = mapOf("KRW-XRP" to TradingState("KRW-XRP"))
+        coEvery { tradingStateService.loadStates(1L) } returns loaded
+
+        manager.reloadUserRuntime(1L)
+
+        coVerify(exactly = 1) { mockEngine.start(emptyList(), loaded) }
+        verify(exactly = 0) { mockEngine.getActiveTickers() }
+    }
+
+    @Test
+    fun `startBot on a running engine with a different ticker list is refused before any side effect`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+
+        val result = manager.startBot(1L, listOf("KRW-BTC"), "combined")
+
+        assertEquals("conflict", result["code"])
+        assertTrue(result.containsKey("error"))
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) }
+        verify(exactly = 0) { mockEngine.setStrategy(any()) }
+        coVerify(exactly = 0) { tradingStateService.loadStates(any()) }
+        verify(exactly = 0) { botStateRepository.save(any()) }
+        assertNull(userStrategies()[1L])
+    }
+
+    @Test
+    fun `startBot on a running engine with the same list in another order or case reports already_running`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        // bot_state 에서 온 목록은 trim 만 돼 있다 — 요청(대문자·distinct)과 순서·대소문자만 달라도 같은 목록이다.
+        every { mockEngine.getUserTickers() } returns listOf("krw-btc", "KRW-ETH")
+        every { mockEngine.setStrategy("combined") } returns true
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = slot<BotStateEntity>()
+        every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
+
+        val result = manager.startBot(1L, listOf("KRW-ETH", "KRW-BTC"), "combined")
+
+        assertEquals("already_running", result["status"])
+        assertEquals("combined", result["strategy"])
+        assertEquals("krw-btc,KRW-ETH", saved.captured.tickers)
+        assertEquals("combined", saved.captured.strategy)
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) }
+    }
+
+    @Test
+    fun `startBot on a running engine without a list keeps the engine's list instead of the config list`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-SOL")
+        every { mockEngine.getActiveStrategyName() } returns "combined"
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = slot<BotStateEntity>()
+        every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
+
+        val result = manager.startBot(1L, null, null)
+
+        assertEquals("already_running", result["status"])
+        assertEquals("KRW-SOL", saved.captured.tickers)
     }
 
     // --- 수동 매도의 진입 전략 귀속 (#129) ---

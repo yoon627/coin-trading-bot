@@ -191,7 +191,7 @@ class TradingEngineAccumulateTest {
     }
 
     @Test
-    fun `start unions accumulate tickers with the requested list`() = runBlocking {
+    fun `start unions accumulate tickers with the requested list`(): Unit = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-ETH", "KRW-BTC"))
         assertEquals(listOf("KRW-BTC", "KRW-ETH"), engine.getActiveTickers())

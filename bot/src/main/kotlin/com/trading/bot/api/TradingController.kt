@@ -32,11 +32,14 @@ class TradingController(
         val strategy = req?.strategy?.let(requestValidators::normalizeStrategy)
         val result = userTradingManager.startBot(userId, tickers, strategy)
         // UserTradingManager returns {"error": "..."} for precondition failures
-        // (no API keys, user missing). Surface those as proper 4xx so clients
+        // (no API keys, user missing, running with another ticker list). Surface those as proper 4xx so clients
         // can branch on status instead of having to inspect the body.
         result["error"]?.let { msg ->
-            val status = if ((msg as? String)?.contains("not found", ignoreCase = true) == true)
-                HttpStatus.NOT_FOUND else HttpStatus.BAD_REQUEST
+            val status = when {
+                result["code"] == UserTradingManager.CONFLICT_CODE -> HttpStatus.CONFLICT
+                (msg as? String)?.contains("not found", ignoreCase = true) == true -> HttpStatus.NOT_FOUND
+                else -> HttpStatus.BAD_REQUEST
+            }
             throw ResponseStatusException(status, msg.toString())
         }
         return result

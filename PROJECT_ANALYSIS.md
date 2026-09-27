@@ -114,6 +114,8 @@ coin-trading-bot/
 
 **알트 유니버스 자동 선정 (`trading.universe.*`, 기본 off):** `UniverseSelector`(싱글톤, 공개 REST) 가 24h 거래대금 상위를 고르고 `TradingEngine.applyTickers` 가 활성 집합을 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 는 파생값을 되쓰지 않는다.
 
+**사용자 목록과 활성 집합 (#226):** 엔진은 사용자 목록(`getUserTickers()`)과 활성 집합(적립 ∪ 사용자 목록 ∪ 잔류 ∪ auto 선정)을 따로 든다. 목록 밖이어도 엔진이 산 스윙 포지션·미해소 주문은 auto 여부와 무관하게 청산될 때까지 잔류하고(신규 진입 없음), 적립 설정에서 빠진 사다리 보유분은 싣지 않는다. 재기동(reload)과 실행 중 `/api/bot/start` 비교는 사용자 목록을 쓴다 — 실행 중 다른 목록은 409.
+
 ---
 
 ## 6. 데이터베이스 스키마
