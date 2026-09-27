@@ -2,9 +2,9 @@
 title: 매매 루프 — processTicker 의 게이트 순서
 category: concept
 created: 2026-07-28
-updated: 2026-09-27
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-27 — 잔류·비-auto 정리(durable 메타 비우기 포함)·재기동 입력(`resume`)·화면용 분류·실행 중 409 는 `TradingEngineUniverseTest`(#226 묶음)·`UserTradingManagerTest`·`TradingControllerTest` 로 확인, 정리 순서·진입 게이트·사다리 제외·메타 비우기·직전 states 폐기는 각각 뮤테이션으로 실패를 확인, SPA·409·already_running 은 로컬 앱+브라우저로 관찰 · 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
+verified: 2026-09-28 — 응답을 못 받은 주문의 identifier 확정(선기록 순서·미접수 확정 조건·흔적 시 보류·매도 선기록 실패 시 전송·취소 중 uuid 기록·재시작 뒤 identifier 확정·빈 uuid 응답)은 `PositionManagerUnknownOrderTest` 18건, identifier-only pending 의 게이트·잔류(`applyTickers`·`start`)는 `TradingEngineTest`·`TradingEngineUniverseTest` 로 확인. 연속 끊김·흔적 고정·halt 리셋·identifier 게이트는 각각 변이로 실패를 확인 · 2026-09-27 — 잔류·비-auto 정리(durable 메타 비우기 포함)·재기동 입력(`resume`)·화면용 분류·실행 중 409 는 `TradingEngineUniverseTest`(#226 묶음)·`UserTradingManagerTest`·`TradingControllerTest` 로 확인, 정리 순서·진입 게이트·사다리 제외·메타 비우기·직전 states 폐기는 각각 뮤테이션으로 실패를 확인, SPA·409·already_running 은 로컬 앱+브라우저로 관찰 · 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/config/ExitParamsDeclarationCheck.kt
   - deploy/vultr/deploy.sh
@@ -28,7 +28,7 @@ sources:
 1. **가격 획득** — `MarketDataStore` 우선, **30초** 넘게 묵은 값이면 버리고 REST(`getTicker`) 폴백. 얼어붙은 가격으로 매매하지 않기 위함.
 2. **`unsynced` 재동기화** — 부팅 시 `syncPosition` 이 실패했거나, 조회는 됐지만 **우리 주문으로 설명되지 않는 `locked` 잔고**가 있어 그 코인이 우리 포지션인지 정하지 못한 경우 여기서 재시도. 어느 쪽이든 해소될 때까지 `buy()` 초입 가드가 신규 진입을 막는다([[upbit-api]] 의 locked 상한 규칙). 기동 뒤 **런타임에** 생긴 lock(출금 신청·수동 주문)은 이 재동기화가 돌지 않아 못 보므로, `buy()` 가 사이징을 위해 조회하는 잔고에서 같은 판정을 한 번 더 한다(추가 호출 없음) — 걸리면 그 tick 은 매수하지 않고 `unsynced` 로 이 재동기화에 넘긴다(2026-09-17, #121). 적립 `buyRung` 은 보유 중 추가 단이라 이 판정을 하지 않는다.
 3. **`pendingPersistFailed` 재기록** — pending durable 기록 실패로 매수가 막힌 상태를 푸는 유일한 경로.
-4. **미해소 매수 reconcile** — `pendingBuyUuid` 가 있으면 먼저 확정. 확정되면 그 tick 은 거기서 끝난다(막 산 포지션에 같은 tick 손절 평가 금지). 미해소면 이 tick 의 매수·매도 평가를 통째로 skip.
+4. **미해소 매수 reconcile** — `pendingBuyUuid`(응답을 못 받은 주문이면 `pendingBuyIdentifier`)가 있으면 먼저 확정. 확정되면 그 tick 은 거기서 끝난다(막 산 포지션에 같은 tick 손절 평가 금지). 미해소면 이 tick 의 매수·매도 평가를 통째로 skip.
 5. **미해소 매도 reconcile** — 같은 구조의 매도판.
 6. **보유 중이면 청산 평가** — `updatePeakPrice`(오를 때만 durable flush) → `decideSell` → `sell`. `sell` 은 거래소 free 잔고를 판다. free 가 0 이면 phantom 이다: `locked` 도 0 이면 `markSold`(진입 메타·사다리 장부까지 정리), `locked` 가 남아 있으면 그것은 우리 매도 주문의 것이 아니므로(우리 주문은 5번의 `pendingSellUuid` 가드가 먼저 걸러낸다) `releaseHoldings`(보유만 내리고 진입 메타·장부는 유지) + `unsynced` 로 2번 재동기화에 넘긴다(2026-09-16, #122). 락이 풀려 코인이 돌아오면 재편입돼 보유상한·트레일링이 이어지고, 여전히 불명이면 매수만 차단된다. 이전에는 locked 가 있으면 보류해 "정리는 sell() 몫"인 `syncPosition` 과 서로 미뤄 유령 포지션이 영구히 남았다. 역방향 위험: 코인이 실제로 사라진 뒤 사용자가 거래소에서 같은 티커를 새로 사면 남은 메타가 그 편입분에 붙는다(감수 — 봇 자신의 신규 진입은 주문 시점 `clearEntryMeta` 로 닫힌다).
 7. **당일 1회 가드** — `position || boughtToday` 면 매수 평가 자체를 생략.
@@ -94,9 +94,21 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 
 ## 주문 유실 방지 구조
 
-주문은 비멱등이라 자동 재시도하지 않는다. 대신 `placeOrder` 성공 직후 uuid 를 `pendingBuyUuid`/`pendingSellUuid` 로 잡고 **durable 로 먼저 기록**한 뒤(`NonCancellable` 안에서) 체결을 확인한다. 확인이 실패해도 uuid 가 남아 다음 tick 의 reconcile 이 이어받는다. 이 상태는 `trading_states` 테이블에 영속된다([[persistence-schema]]).
+주문은 비멱등이라 자동 재시도하지 않는다. 대신 **주문 전에** 클라이언트 identifier(`ctb-`+UUID)와 주문 의도(전략·트리거가·주문 전 보유량 등)를 `pendingBuyIdentifier`/`pendingSellIdentifier` 로 **durable 로 먼저 기록**하고, 응답의 uuid 를 받으면 `pendingBuyUuid`/`pendingSellUuid` 로 바꿔 기록한 뒤 체결을 확인한다. 선기록부터 체결 반영까지가 한 `NonCancellable` 블록이고, 정지(stop/reload)가 시작된 뒤에는 새 주문을 시작하지 않는다. 확인이 실패해도 uuid 가 남아 다음 tick 의 reconcile 이 이어받는다. 이 상태는 `trading_states` 테이블에 영속된다([[persistence-schema]]). pending 주문은 uuid 를 알면 uuid, 모르면 identifier 하나로만 식별되고, 모든 게이트는 둘 중 하나라도 있으면 미해소로 본다(`hasPendingBuy`/`hasPendingSell`).
 
-`getOrder` 와 잔고조회가 **둘 다** 실패하는 상황이 `reconcileHaltThreshold`(20회) 연속되면 해당 ticker 를 `halted` 로 두고 신규 진입만 막는다 — 매도·reconcile 은 계속 돌아야 잡힌 포지션이 갇히지 않는다.
+### 응답을 못 받은 주문 (2026-09-28, #227)
+
+타임아웃·연결 끊김·5xx·빈 응답·취소는 주문이 나갔는지 말해 주지 않는다. 이전에는 이것을 "미전송"으로 보고 pending 없이 끝내, 접수된 매수가 다음 tick 에 한 번 더 나가고(2배 포지션, 첫 매수 기록 없음) 접수된 매도는 청산 기록 없이 phantom 으로 정리됐다. 지금 규칙:
+
+- [[upbit-api]] 의 요청 검증 오류만 미접수로 보고 pending 을 지운다. 나머지는 identifier 만 남긴 pending 이다 — 그 티커는 확정될 때까지 매매 평가를 건너뛴다.
+- reconcile 은 `GET /v1/order?identifier=` 로 찾는다. 찾으면 uuid 를 이어받아 기존 uuid 경로로 확정한다(기록의 `exchange_order_id` = 그 uuid).
+- 못 찾으면(404) **주문 전 기준값**과 잔고를 비교한다 — 매수: 보유(`heldVolume`)가 `pendingBuyPriorVolume` 보다 늘었나, 매도: free 가 `pendingSellPriorVolume` 보다 줄었나. 흔적 없는 404 가 **끊김 없이 2회 이상 + 그 첫 404 뒤 60초**가 지나면 미접수로 확정해 pending 을 푼다(매도는 포지션 유지 → 다음 tick 재매도). 조회 실패나 잔고 조회 실패가 끼면 처음부터 다시 센다. 증명은 아니다 — 시장가 주문은 접수되면 곧바로 체결돼 잔고가 움직인다는 전제에 기대고, 조회 가시성 지연은 문서에 없다. 횟수는 비영속이라 재시작·reload 하면 처음부터 다시 센다.
+- **흔적이 한 번이라도 보이면 자동 처리하지 않는다** — identifier 만으로는 잔고 변화가 이 주문인지 같은 시각의 수동 매매인지 가를 수 없고, 기록의 중복 방지 키(uuid)도 없다. 흔적이 나중에 사라져도 풀지 않는다 — 단 같은 엔진 안에서만이다(비영속). 재시작·reload 뒤에는 흔적이 남아 있으면 다시 잡지만, 그 사이 사라졌으면 일반 규칙으로 풀린다. ERROR 1회로 사람을 부르고 조회는 계속한다(찾히면 정상 확정). 그동안 그 티커의 매매가 멈춘다 — 매수 흔적이면 새로 들어온 코인에 손절이 걸리지 않는다. 해제 API 는 없다: **봇 정지 → Upbit 주문 내역 확인 → `trading_states` 의 pending 정리 → 재기동** 순서로 한다. 봇이 도는 중에 DB 를 고치면 다음 tick 이 메모리 상태로 다시 덮어쓴다.
+- 선기록이 실패하면 **매수는 보내지 않고, 매도는 보낸다**(ERROR + `pendingPersistFailed`) — 기록 장애가 손절을 막으면 안 된다. 같은 엔진 안에서는 메모리 identifier 가 이중 매도를 막는다. 다만 다음 tick 의 재기록(`retryPendingPersistIfNeeded`)보다 reload 가 먼저 오면 새 엔진은 durable 에 없는 그 주문을 모른다(uuid 기록 실패에도 있던 창).
+- 스윙 매수의 `pendingBuyPriorVolume` 도 주문 직전 실제 보유량이다(이전 0). 흔적 판정과 uuid 경로의 잔고 복원이 장부 밖 잔고(수동 매수·dust)를 체결로 세지 않는다.
+- 수동 매도(`TradeExecutionService`)는 이 규칙 밖이다 — `placeOrder` 예외를 그대로 사용자에게 돌려주고 pending 을 남기지 않는다.
+
+`getOrder` 와 잔고조회가 **둘 다** 실패하는 상황이 `reconcileHaltThreshold`(20회) 연속되면 해당 ticker 를 `halted` 로 두고 신규 진입만 막는다 — 매도·reconcile 은 계속 돌아야 잡힌 포지션이 갇히지 않는다. identifier-only 매수에서는 identifier 조회 실패와 "404 인데 잔고도 못 봄"이 같은 카운터에 들어가고, 카운터는 확정(찾음·미접수)에서만 되돌린다 — 404 마다 되돌리면 간헐 장애가 해제 조건과 halt 를 둘 다 끊어 매매가 멈춘 채 알림이 없다. 매도는 경과시간 알림(`pendingSellSince`, 선기록 시각부터)이 사람을 부른다.
 
 ## 체결·감사 원자 커밋
 

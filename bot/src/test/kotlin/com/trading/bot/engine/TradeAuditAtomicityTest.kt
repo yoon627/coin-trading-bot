@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -228,7 +229,9 @@ class TradeAuditAtomicityTest {
         assertEquals(USER_ID, record!!.userId)
         assertFalse(state.position)
         assertNull(state.pendingSellUuid)
-        assertEquals(2, stagedStates.size, "주문 접수 직후 pending 저장과 원자 커밋의 상태 저장을 구분한다")
+        // 주문 전 identifier 선기록 → uuid 기록 → 원자 커밋(#227). 앞의 둘은 pending 저장이고 마지막만 전이가 반영된 사본이다.
+        assertEquals(3, stagedStates.size, "주문 경로의 pending 저장 2회와 원자 커밋의 상태 저장을 구분한다")
+        assertNotSame(state, stagedStates.last(), "원자 커밋은 전이를 적용한 사본을 싣는다")
         assertFalse(stagedStates.last().position, "트랜잭션에 실린 사본도 청산이 반영돼야 한다")
     }
 

@@ -7,12 +7,12 @@
 ## concept — 이 시스템이 무엇인가
 
 - [[architecture-overview]] — 단일 Spring Boot 프로세스 안의 봇·API·시세수집, 모듈 2개
-- [[trading-engine-loop]] — `processTicker` 게이트 순서, 청산 우선순위, 기본 리스크 파라미터
+- [[trading-engine-loop]] — `processTicker` 게이트 순서, 청산 우선순위, 기본 리스크 파라미터, 응답을 못 받은 주문의 identifier 확정
 - [[exit-gates]] — 손절·트레일링·익절·차트청산·보유상한의 판정식과 비자명한 지점
 - [[swing-strategies]] — `TradingStrategy` 인터페이스와 전략 9종(무릎 매수 2종 포함), 기본 `combined` 의 3조건
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집(M1 `count=5` 오름차순 → 집계기 분 단위 멱등 base/provisional), `MarketDataStore`, 부팅 seed prime, half-open 워치독
 - [[accumulate-ladder]] — 메이저 코인 사다리 매매(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만)와 알트 유니버스 자동 선정 — 둘 다 기본 off, 롤백은 forward-off
-- [[persistence-schema]] — Flyway V1~V27, Upbit 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속, KIS 스키마 제거(V27)
+- [[persistence-schema]] — Flyway V1~V28, Upbit 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속, KIS 스키마 제거(V27), 주문 identifier(V28)
 - [[trade-record-volume-semantics]] — `trade_records.volume` 이 엔진은 총보유량 스냅샷, 수동은 증분인 이유와 보유량 산출 규칙, 추정치가 섞인 그룹의 잔량 0 허용 오차
 - [[backtest-engine]] — 단일티커·all-in 구조와 라이브 정합의 한계
 
@@ -45,7 +45,7 @@
 
 ## entity — 외부 사실·버전
 
-- [[upbit-api]] — 잔고 필드(`locked` 의 의미와 상한 규칙), 주문 파라미터, 상태 판정, 캔들 경계(KST 09:00)
+- [[upbit-api]] — 잔고 필드(`locked` 의 의미와 상한 규칙), 주문 파라미터·identifier·미접수로 볼 오류, 상태 판정, 캔들 경계(KST 09:00)
 - [[jdk-gradle-toolchain]] — JDK 21 고정, Gradle 8.12, JDK 25 비호환 우회
 - [[deployment-stack]] — Vultr 서울 vc2-1c-2gb + Caddy TLS + GHCR, `main` 머지 = 자동 배포
 

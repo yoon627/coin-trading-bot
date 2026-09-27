@@ -138,6 +138,8 @@ class TradingStateRoundTripTest {
         pendingBuyPriorVolume = 0.00098765,
         pendingSellTriggerPrice = 71_000.0,
         pendingSellPriorVolume = 0.00456789,
+        pendingBuyIdentifier = "ctb-buy-$runId",
+        pendingSellIdentifier = "ctb-sell-$runId",
         exitParams = ExitParamsSnapshot(
             takeProfitPct = 5.0,
             maxLossPct = 3.0,
@@ -180,6 +182,8 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingBuyPriorVolume).isEqualTo(original.pendingBuyPriorVolume)
         assertThat(restored.pendingSellTriggerPrice).isEqualTo(original.pendingSellTriggerPrice)
         assertThat(restored.pendingSellPriorVolume).isEqualTo(original.pendingSellPriorVolume)
+        assertThat(restored.pendingBuyIdentifier).isEqualTo(original.pendingBuyIdentifier)
+        assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
     /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신으로 흘러야 한다 — 두 번 불러도 행이 하나다. */
