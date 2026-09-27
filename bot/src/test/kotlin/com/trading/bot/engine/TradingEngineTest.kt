@@ -85,7 +85,7 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `start sets engine to running`() = runBlocking {
+    fun `start sets engine to running`(): Unit = runBlocking {
         val engine = createEngine()
         assertFalse(engine.isRunning())
         engine.start(listOf("KRW-BTC"))
@@ -153,7 +153,7 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `start is idempotent`() = runBlocking {
+    fun `start is idempotent`(): Unit = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
         engine.start(listOf("KRW-ETH")) // second call should be no-op

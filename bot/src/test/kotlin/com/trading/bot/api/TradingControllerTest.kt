@@ -53,6 +53,17 @@ class TradingControllerTest {
     }
 
     @Test
+    fun `startBot surfaces a running-engine ticker conflict as 409`() {
+        coEvery { manager.startBot(userId, null, null) } returns
+            mapOf("error" to "Bot is already running with [KRW-BTC] — stop it before changing tickers", "code" to "conflict")
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.startBot(null) }
+        }
+        assertEquals(HttpStatus.CONFLICT, ex.statusCode)
+    }
+
+    @Test
     fun `startBot returns success map without throwing on happy path`() {
         coEvery { manager.startBot(userId, null, null) } returns
             mapOf("status" to "started", "strategy" to "volatility_breakout")

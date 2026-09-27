@@ -256,6 +256,9 @@ class UserTradingManager(
 
     suspend fun startBot(userId: Long, tickers: List<String>?, strategyName: String?): Map<String, Any> = lockFor(userId).withLock {
         if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down") // 종료 중 신규 엔진 기동 차단(M5 일관)
+        // 도는 엔진의 start 는 no-op 이라 목록이 바뀌지 않는다 — 부작용(전략·저장) 전에 판정해야 응답이 실제 상태와 맞는다(#226).
+        val running = engines[userId]?.takeIf { it.isRunning() }
+        if (running != null) return@withLock respondToRunningEngine(userId, running, tickers, strategyName)
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: return@withLock mapOf("error" to "User not found")
 
@@ -279,6 +282,33 @@ class UserTradingManager(
         mapOf("status" to "started", "strategy" to engine.getActiveStrategyName())
     }
 
+    /**
+     * 이미 도는 엔진에 start 가 온 경우. 다른 목록이면 아무것도 바꾸지 않고 거절한다 — 저장만 하고 started 로 답하면 엔진은
+     * 옛 목록으로 계속 돌다가 다음 재시작 때 새 목록이 조용히 적용된다. 목록이 없거나 같으면 전략 요청만 반영하고,
+     * 저장 목록은 엔진의 사용자 목록으로 둔다(설정 목록으로 덮지 않는다).
+     */
+    private suspend fun respondToRunningEngine(
+        userId: Long,
+        engine: TradingEngine,
+        tickers: List<String>?,
+        strategyName: String?,
+    ): Map<String, Any> {
+        val current = engine.getUserTickers()
+        if (tickers != null && normalizedTickers(tickers) != normalizedTickers(current)) {
+            return mapOf(
+                "error" to "Bot is already running with $current — stop it before changing tickers",
+                "code" to CONFLICT_CODE,
+            )
+        }
+        if (strategyName != null) engine.setStrategy(strategyName)
+        saveState(userId, true, engine.getActiveStrategyName(), current)
+        return mapOf("status" to "already_running", "strategy" to engine.getActiveStrategyName())
+    }
+
+    // 요청은 검증기가 대문자·distinct 로 만들지만 엔진 목록은 bot_state·설정에서 trim 만 된 값이다.
+    private fun normalizedTickers(tickers: List<String>): Set<String> =
+        tickers.map { it.trim().uppercase() }.filter { it.isNotEmpty() }.toSet()
+
     suspend fun stopBot(userId: Long): Map<String, Any> = lockFor(userId).withLock {
         val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
         engine.stop()
@@ -290,6 +320,8 @@ class UserTradingManager(
 
     fun getStatus(userId: Long): Map<String, Any> {
         val engine = engines[userId]
+        // 맵에는 기동 전에 실패했거나 정지된 채 남은 엔진이 있을 수 있다 — 그 옛 목록을 실행 중인 것처럼 보이지 않는다.
+        val live = engine?.takeIf { it.isRunning() }
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
             "strategy" to (engine?.getActiveStrategyName() ?: userStrategies[userId] ?: tradingProperties.strategy),
@@ -298,6 +330,13 @@ class UserTradingManager(
             // them, so reading from states here would briefly return [] right
             // after /api/bot/start.
             "tickers" to (engine?.getActiveTickers() ?: emptyList<String>()),
+            // 화면용 분류 — 활성 집합(tickers)은 사용자 목록·적립·청산 대기가 섞인 파생 집합이라, 뺀 티커가 그대로 보이면
+            // 목록이 적용되지 않은 것으로 읽힌다(#226). default_tickers 는 목록 없이 시작할 때 쓰는 설정 목록이다.
+            "user_tickers" to (live?.getUserTickers() ?: emptyList<String>()),
+            "entry_tickers" to (live?.getEntryTickers() ?: emptyList<String>()),
+            "accumulate_tickers" to (live?.getAccumulateTickers() ?: emptyList<String>()),
+            "exit_only_tickers" to (live?.getExitOnlyTickers() ?: emptyList<String>()),
+            "default_tickers" to tradingProperties.tickerList(),
             "positions" to (engine?.getStates()?.map { (ticker, state) ->
                 mapOf(
                     "ticker" to ticker,
@@ -359,7 +398,9 @@ class UserTradingManager(
         val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val wasRunning = existing.isRunning()
-        val tickers = existing.getActiveTickers()
+        // 사용자 목록 그대로 — 활성 집합(적립·잔류·auto 선정 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
+        // 빈 목록(적립만 운용)을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
+        val tickers = existing.getUserTickers()
         val strategy = existing.getActiveStrategyName()
         existing.stop()
         // stop 이후에 읽어야 마지막 tick 의 durable flush(pending 주문 포함)까지 잡힌다 — 먼저 읽으면
@@ -372,7 +413,8 @@ class UserTradingManager(
                 // 무기한 멈추고, 이후 reload 는 wasRunning=false 로 보아 되살리지도 않는다.
                 // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다.
                 withContext(NonCancellable) {
-                    runCatching { existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap()) }
+                    // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
+                    runCatching { existing.resume() }
                         .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
                 }
                 throw e
@@ -381,7 +423,7 @@ class UserTradingManager(
                 // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살린다.
                 log.error("reload: user {} durable 상태 로드 실패 — 기존 엔진으로 복귀: {}", userId, e.message, e)
                 try {
-                    existing.start(tickers.ifEmpty { tradingProperties.tickerList() }, emptyMap())
+                    existing.resume()
                 } catch (restoreFailure: CancellationException) {
                     throw restoreFailure
                 } catch (restoreFailure: Exception) {
@@ -408,7 +450,7 @@ class UserTradingManager(
         engines[userId] = replacement
         userStrategies[userId] = strategy
         if (wasRunning) {
-            replacement.start(tickers.ifEmpty { tradingProperties.tickerList() }, initialStates)
+            replacement.start(tickers, initialStates)
         }
     }
 
@@ -494,6 +536,9 @@ class UserTradingManager(
     }
 
     companion object {
+        /** `startBot` 오류 맵의 `code` — 도는 엔진에 다른 목록을 요청했다(컨트롤러가 409 로 매핑). */
+        const val CONFLICT_CODE = "conflict"
+
         private const val RESTORE_MAX_ATTEMPTS = 5
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
 
