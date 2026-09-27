@@ -2,6 +2,8 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.awaitFill
+import com.trading.bot.client.newOrderIdentifier
+import com.trading.bot.client.provesOrderNotPlaced
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.FeeBasis
@@ -25,9 +27,12 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
@@ -59,7 +64,20 @@ class PositionManager(
         private const val BUDGET_TOLERANCE_KRW = 1.0
         private const val VOLUME_SCALE = 8
         private const val VOLUME_EPSILON = 1e-8
+        // 응답을 못 받은 주문을 미접수로 확정하는 조건 — 연속으로 못 찾은 횟수와 처음 못 찾은 뒤 지난 시간(#227).
+        private const val NOT_PLACED_MISSES = 2
+        private val NOT_PLACED_AFTER: Duration = Duration.ofSeconds(60)
     }
+
+    /**
+     * identifier 조회로 못 찾은 이력. 비영속 — 재시작·reload 하면 [misses] 는 처음부터 다시 센다(더 오래 기다리는 쪽이라
+     * 안전하다). [traced] 는 잔고 흔적을 한 번이라도 봤다는 뜻이고 그 주문은 자동으로 풀지 않는다 — 단 이 엔진 안에서만이다.
+     * 재시작·reload 뒤에는 흔적이 남아 있으면 다시 잡지만, 그 사이 사라졌으면 일반 규칙으로 풀린다.
+     */
+    private data class IdentifierMiss(val misses: Int = 0, val firstMissAt: Instant? = null, val traced: Boolean = false)
+
+    // 키가 identifier 라 다른 주문의 기록이 섞이지 않는다. 확정되지 않고 풀린 항목은 남지만 불명 주문 수만큼이라 무시한다.
+    private val identifierMisses = ConcurrentHashMap<String, IdentifierMiss>()
 
     /** 거래소 계좌 목록에서 해당 통화 계좌 조회 (#21 — getAccounts().find 중복 헬퍼화). */
     private suspend fun findAccount(currency: String): Account? =
@@ -90,7 +108,7 @@ class PositionManager(
      * 로 남아 일부만 체결된 구간에서는 체결분만큼 여유가 생긴다. 체결분을 아는 호출부는 그만큼 빼서 넘긴다.
      */
     private fun ourSellLockCeiling(state: TradingState): Double =
-        if (state.pendingSellUuid == null) 0.0 else state.pendingSellVolume ?: Double.POSITIVE_INFINITY
+        if (!state.hasPendingSell()) 0.0 else state.pendingSellVolume ?: Double.POSITIVE_INFINITY
 
     /** 우리 매도 주문으로 설명되지 않는 lock — 출금 대기이거나 사용자가 직접 낸 주문이다(팔 수 없으니 보유가 아니다). */
     private fun isUnattributableLock(account: Account, state: TradingState): Boolean =
@@ -157,8 +175,8 @@ class PositionManager(
             log.debug("Skip buy for {}: already holding position", ticker)
             return true
         }
-        if (state.pendingBuyUuid != null) {
-            log.debug("Skip buy for {}: pending order {} awaiting reconcile", ticker, state.pendingBuyUuid)
+        if (state.hasPendingBuy()) {
+            log.debug("Skip buy for {}: pending order {} awaiting reconcile", ticker, state.pendingBuyRef())
             return true
         }
         if (state.unsynced) {
@@ -215,8 +233,9 @@ class PositionManager(
             log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
             return null
         }
-        // 스윙의 priorVolume 은 장부(position=false) 기준 0 이다 — 장부 밖 free 잔고(수동 매수·dust)는 여기서 보지 않는다.
-        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = 0.0)
+        // 장부 밖 잔고(수동 매수·dust)도 주문 전 보유량에 넣는다 — 체결 판정이 이 주문으로 늘어난 증분만 보게 된다.
+        val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = priorVolume)
     }
 
     /**
@@ -261,7 +280,13 @@ class PositionManager(
         return placeBuy(ticker, state, currentPrice, action.amountKrw, AccumulateLadder.STRATEGY_NAME, action.triggerPrice, priorVolume)
     }
 
-    /** 주문 발행 이후의 공용 경로 — pending durable 기록 → 체결 확인 → 확정. 가드·금액 결정은 호출부 몫. */
+    /**
+     * 주문 발행 이후의 공용 경로 — identifier 선기록 → 주문 → uuid 기록 → 체결 확인 → 확정. 가드·금액 결정은 호출부 몫.
+     *
+     * 응답을 못 받은 주문은 나갔을 수도 있다. 그 예외를 "미전송"으로 보면 다음 tick 에 한 번 더 사서 2배 포지션이 되고
+     * 첫 매수는 기록되지 않는다(#227). 그래서 identifier 를 주문 전에 durable 로 남기고, 접수 여부를 확정하지 못하면
+     * pending 을 유지해 [reconcilePendingBuy] 가 identifier 로 확정한다.
+     */
     private suspend fun placeBuy(
         ticker: String,
         state: TradingState,
@@ -271,60 +296,79 @@ class PositionManager(
         triggerPrice: Double?,
         priorVolume: Double,
     ): TradeRecord? {
-        // placeOrder 까지: 실패하면 주문이 나가지 않았으므로 그대로 종료(pending 없음 → 다음 tick 정상 재매수).
-        val order = try {
-            // Upbit market buy: ord_type=price, price=총 투자금액
-            upbitClient.placeOrder(
-                OrderRequest(
-                    market = ticker,
-                    side = "bid",
-                    ordType = "price",
-                    price = floor(investAmount).toLong().toString(),
-                )
-            )
-        } catch (e: CancellationException) {
-            throw e // 취소는 오탐 ERROR 로 로깅하지 않고 전파(Discord 스팸 방지).
-        } catch (e: Exception) {
-            log.error("Failed to place buy order {}: {}", ticker, e.message, e)
-            return null
-        }
-
-        // H8: 주문 접수 성공 → uuid 를 pending 으로 보존. 이후 체결 확인이 예외로 실패해도 uuid 를 잃지 않고
-        // 다음 tick reconcilePendingBuy 가 이어받아 position 복구/미체결 확정 → 중복매수(2배 포지션) 방지.
-        state.pendingBuyUuid = order.uuid
-        state.pendingBuyStrategy = strategyName
-        state.pendingBuyTriggerPrice = triggerPrice
-        state.pendingBuyPriorVolume = priorVolume
+        // 아래 블록은 취소를 받지 않는다 — 정지(stop/reload)가 시작된 뒤에는 새 주문을 시작하지 않는다.
+        currentCoroutineContext().ensureActive()
+        val identifier = newOrderIdentifier()
         // 신규 진입이면 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에
         // 재시작해도(syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
         // 적립 추가 단은 기존 포지션 위에 얹는다 — 지우면 미체결(cancel+0)로 끝났을 때 buyDate·entryStrategy 가 영구 유실돼
         // 프로파일을 끈 뒤 보유상한 청산이 동작하지 않는다.
         if (!state.position) state.clearEntryMeta()
-        return try {
-            // 주문은 이미 나갔다 — 체결확인·상태반영은 취소돼도 원자적으로 완주해야 한다. reload/stop 이 tick 코루틴을
-            // 취소하면 이 후처리가 중단돼 pending 이 폐기될 states 에만 남고(H8 방어망 무력화), 새 엔진이 같은 tick 을
-            // 재매수해 이중 포지션이 된다. NonCancellable 로 원자화하면 cancelAndJoin 이 완주를 기다린다.
-            withContext(NonCancellable) {
-                // #20: pending 을 durable 로 먼저 기록해야 이 시점 크래시/재시작에도 reconcile 이 이어진다.
-                // placeOrder↔기록 사이를 취소가 끊지 못하게 NonCancellable 안·awaitFill 이전에 수행.
-                persistPending(state)
+        state.beginBuyOrder(identifier, strategyName, triggerPrice, priorVolume)
+        // 선기록부터 체결 반영까지 취소가 끊지 못하게 한다. reload/stop 이 tick 을 취소하면 cancelAndJoin 이 이 블록의 완주를
+        // 기다린다. 그 대기를 넘겨 프로세스가 죽어도 선기록된 identifier 로 재시작 뒤 확정된다.
+        return withContext(NonCancellable) {
+            try {
+                upsertState(state)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // durable 흔적 없는 주문은 크래시 뒤 아무도 확정하지 못한다 — 보내지 않고 다음 신호를 기다린다.
+                state.clearPendingBuy()
+                log.warn("Buy for {} not sent — could not record order {} first: {}", ticker, identifier, e.message)
+                return@withContext null
+            }
+            val order = try {
+                // Upbit market buy: ord_type=price, price=총 투자금액
+                upbitClient.placeOrder(
+                    OrderRequest(
+                        market = ticker,
+                        side = "bid",
+                        ordType = "price",
+                        price = floor(investAmount).toLong().toString(),
+                        identifier = identifier,
+                    )
+                )
+            } catch (e: CancellationException) {
+                throw e // 전송 여부 불명 — identifier 가 남아 reconcile 이 확정한다. 취소는 ERROR 로 남기지 않는다.
+            } catch (e: Exception) {
+                if (e.provesOrderNotPlaced()) {
+                    log.error("Failed to place buy order {}: {}", ticker, e.message, e)
+                    state.clearPendingBuy()
+                    persist(state)
+                } else {
+                    log.error("Buy order {} for {} has an unknown outcome — kept pending, confirming by identifier: {}", identifier, ticker, e.message, e)
+                }
+                return@withContext null
+            }
+            if (order.uuid.isBlank()) {
+                log.error("Buy order {} for {} was answered without a uuid — kept pending, confirming by identifier", identifier, ticker)
+                return@withContext null
+            }
+            // H8: uuid 를 pending 으로 보존. 이후 체결 확인이 예외로 실패해도 다음 tick reconcilePendingBuy 가 이어받아
+            // position 복구/미체결 확정 → 중복매수(2배 포지션) 방지. 이 기록이 실패해도 선기록된 identifier 로 확정된다.
+            state.adoptBuyOrder(order.uuid)
+            persistPending(state)
+            try {
                 val filled = upbitClient.awaitFill(order.uuid)
                 applyFillOutcome(ticker, state, currentPrice, filled)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.error("Buy post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+                null // pending 유지 → 다음 tick reconcile
             }
-        } catch (e: CancellationException) {
-            throw e // 취소는 삼키지 않고 전파(구조적 동시성).
-        } catch (e: Exception) {
-            log.error("Buy post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
-            null // pending 유지 → 다음 tick reconcile
         }
     }
 
     /**
      * H8: 미해소 매수 주문(pendingBuyUuid)을 거래소 상태로 확정한다. processTicker 가 매 tick 호출.
      * getOrder 장애 시 getAccounts 실잔고로 복원(무방비보유 방지). 미해소면 pending 유지(다음 tick 재시도).
+     * uuid 없이 identifier 만 있으면(응답을 못 받은 주문) [resolveBuyByIdentifier] 가 확정한다.
      */
     suspend fun reconcilePendingBuy(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
-        val uuid = state.pendingBuyUuid ?: return null
+        val uuid = state.pendingBuyUuid
+            ?: return state.pendingBuyIdentifier?.let { resolveBuyByIdentifier(ticker, state, currentPrice, it) }
         val filled = try {
             upbitClient.getOrder(uuid)
         } catch (e: CancellationException) {
@@ -357,6 +401,141 @@ class PositionManager(
         return applyFillOutcome(ticker, state, currentPrice, filled)
     }
 
+    private sealed interface IdentifierLookup {
+        data class Found(val order: Order) : IdentifierLookup
+
+        /** 거래소가 그 identifier 를 모른다. */
+        data object NotFound : IdentifierLookup
+
+        /** 조회 자체가 실패했다 — 있는지 없는지 모른다. */
+        data object Unknown : IdentifierLookup
+    }
+
+    private suspend fun lookupByIdentifier(ticker: String, identifier: String): IdentifierLookup =
+        try {
+            val order = upbitClient.getOrderByIdentifier(identifier)
+            when {
+                order == null -> IdentifierLookup.NotFound
+                order.uuid.isBlank() -> {
+                    log.warn("identifier lookup for {} order {} returned no uuid", ticker, identifier)
+                    IdentifierLookup.Unknown
+                }
+                else -> IdentifierLookup.Found(order)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("identifier lookup failed for {} order {}: {}", ticker, identifier, e.message)
+            IdentifierLookup.Unknown
+        }
+
+    /**
+     * 응답을 못 받은 매수(identifier 만 있음)를 확정한다. 거래소가 알면 uuid 를 이어받아 기존 경로로 넘긴다.
+     * 잔고만으로는 체결을 기록하지 않는다 — uuid 없이는 이 주문의 체결인지 같은 시각의 수동 매매인지 가를 수 없고,
+     * 감사 기록의 중복 방지 키도 없다.
+     */
+    private suspend fun resolveBuyByIdentifier(ticker: String, state: TradingState, currentPrice: Double, identifier: String): TradeRecord? {
+        when (val lookup = lookupByIdentifier(ticker, identifier)) {
+            is IdentifierLookup.Found -> {
+                identifierMisses.remove(identifier)
+                state.adoptBuyOrder(lookup.order.uuid)
+                state.reconcileFailureCount = 0
+                persist(state)
+                return applyFillOutcome(ticker, state, currentPrice, lookup.order)
+            }
+            IdentifierLookup.NotFound -> {
+                val trace = buyTrace(ticker, state)
+                // 잔고도 못 봤다 — getOrder·잔고조회 동시 장애와 같은 halt 카운터로 사람을 부른다.
+                if (trace == null) recordReconcileFailure(state)
+                // 카운터는 확정(찾음·미접수)에서만 되돌린다. 404 마다 되돌리면 간헐 장애가 해제 조건과 halt 를 둘 다
+                // 계속 끊어, 매매가 멈춘 채 아무 알림도 나가지 않는다.
+                if (confirmNotPlaced(ticker, "Buy", identifier, trace)) {
+                    state.clearPendingBuy()
+                    state.reconcileFailureCount = 0
+                }
+            }
+            IdentifierLookup.Unknown -> {
+                breakMissStreak(identifier)
+                recordReconcileFailure(state)
+            }
+        }
+        persist(state)
+        return null
+    }
+
+    /** 주문 전보다 보유가 늘었나 — 시장가 매수가 접수됐다면 곧바로 체결돼 코인이 들어온다. null = 판단할 수 없다. */
+    private suspend fun buyTrace(ticker: String, state: TradingState): Boolean? {
+        val prior = state.pendingBuyPriorVolume ?: return null
+        return try {
+            val held = findAccount(ticker.substringAfter("-"))?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+            held - prior > VOLUME_EPSILON
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("balance check for {} unknown buy failed: {}", ticker, e.message)
+            null
+        }
+    }
+
+    /** 주문 전보다 free 가 줄었나 — 매도가 접수됐다면 코인이 팔렸거나 주문에 잠겼다. null = 판단할 수 없다. */
+    private suspend fun sellTrace(ticker: String, state: TradingState): Boolean? {
+        val prior = state.pendingSellPriorVolume ?: return null
+        return try {
+            val free = findAccount(ticker.substringAfter("-"))?.balanceDouble() ?: 0.0
+            prior - free > VOLUME_EPSILON
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("balance check for {} unknown sell failed: {}", ticker, e.message)
+            null
+        }
+    }
+
+    /**
+     * 거래소가 모르는 주문을 미접수로 확정해도 되는가. 흔적 없는 404 가 끊김 없이 [NOT_PLACED_MISSES] 회 이상 이어지고
+     * 그 첫 404 뒤 [NOT_PLACED_AFTER] 가 지났을 때만 true — 조회 실패·잔고 불명이 끼면 처음부터 다시 센다.
+     *
+     * 증명이 아니다 — 시장가 주문은 접수되면 곧바로 체결돼 잔고가 움직인다는 전제에 기대고, 조회 가시성 지연은 문서에 없다.
+     * 그래서 흔적이 한 번이라도 보인 주문은 끝까지 자동으로 판단하지 않고 ERROR 로 사람을 부른다(pending 유지, 조회는
+     * 계속 — 찾히면 정상 확정). 흔적이 나중에 사라져도 이 엔진 안에서는 풀지 않는다: 그 사이의 수동 매매를 이 주문과
+     * 구분할 수 없다([IdentifierMiss] 의 범위 참조).
+     *
+     * @param trace 주문 전 기준값 대비 잔고 흔적. null = 잔고를 못 봤다.
+     */
+    private fun confirmNotPlaced(ticker: String, side: String, identifier: String, trace: Boolean?): Boolean {
+        val prev = identifierMisses[identifier] ?: IdentifierMiss()
+        if (trace == true && !prev.traced) {
+            log.error(
+                "{} 주문 {}({}) 을 거래소가 찾지 못하는데 잔고가 주문 전과 다릅니다 — 자동 처리하지 않습니다(이 티커의 매매가 멈춥니다). " +
+                    "봇을 정지하고 Upbit 주문 내역을 확인한 뒤 trading_states 의 pending 을 정리하고 재기동하세요 — " +
+                    "봇이 도는 중에 DB 를 고치면 다음 tick 이 메모리 상태로 다시 덮어씁니다.",
+                side, identifier, ticker,
+            )
+        }
+        if (trace != false || prev.traced) {
+            identifierMisses[identifier] = IdentifierMiss(traced = prev.traced || trace == true)
+            return false
+        }
+        val now = clock.instant()
+        val next = prev.copy(misses = prev.misses + 1, firstMissAt = prev.firstMissAt ?: now)
+        val waited = Duration.between(next.firstMissAt, now)
+        if (next.misses >= NOT_PLACED_MISSES && waited >= NOT_PLACED_AFTER) {
+            identifierMisses.remove(identifier)
+            log.warn(
+                "{} order {} for {} was never placed (not found {} times over {}s, no balance change) — released",
+                side, identifier, ticker, next.misses, waited.seconds,
+            )
+            return true
+        }
+        identifierMisses[identifier] = next
+        return false
+    }
+
+    /** 조회 자체가 실패했다 — 못 찾음이 끊김 없이 이어졌다고 말할 수 없다. 흔적 기록은 남긴다. */
+    private fun breakMissStreak(identifier: String) {
+        identifierMisses.computeIfPresent(identifier) { _, miss -> IdentifierMiss(traced = miss.traced) }
+    }
+
     /**
      * 체결 판정 후 상태 반영 (buy 후처리·reconcile 공용). C1 과 동일하게 executedVolume>0 을 state 보다 우선 판정.
      * 전제: Upbit 시장가 매수(ord_type=price)는 즉시 체결 후 소액잔량을 환불하며 종료(done/cancel)되어 wait 로
@@ -383,10 +562,7 @@ class PositionManager(
             else -> {
                 // cancel+0 등 미체결 — 주문 무산, pending 해소
                 log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
-                state.pendingBuyUuid = null
-                state.pendingBuyStrategy = null
-                state.pendingBuyTriggerPrice = null
-                state.pendingBuyPriorVolume = null
+                state.clearPendingBuy()
                 persist(state)
                 null
             }
@@ -395,8 +571,8 @@ class PositionManager(
 
     /**
      * getOrder 장애 시 거래소 실잔고로 체결 여부 추정 복원. 주문 전 보유량(`pendingBuyPriorVolume`)을 넘는 증분이 있으면
-     * 그만큼을 이 주문의 체결로 확정, 없으면 pending 유지(다음 tick). 스윙은 position=false 에서만 주문하므로 증분 = 잔고
-     * 전체이고, 적립 추가 단은 주문 전부터 코인이 있어 증분만 센다. dust/수동매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
+     * 그만큼을 이 주문의 체결로 확정, 없으면 pending 유지(다음 tick). 스윙·적립 모두 주문 직전 보유량(장부 밖 dust·수동 매수
+     * 포함)을 기록하므로 이 주문으로 늘어난 증분만 센다. 같은 시각의 수동 매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
      */
     private sealed interface BalanceRecovery {
         data class Filled(val record: TradeRecord) : BalanceRecovery
@@ -494,7 +670,7 @@ class PositionManager(
         val applyTransition: (TradingState) -> Unit = { s ->
             // 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
             s.reconcileFailureCount = 0
-            // replace=true: 거래소 실잔고를 절대값으로 반영해 syncPosition 복원분과 이중계상되지 않게(#20). markBought 가 pendingBuy* clear.
+            // replace=true: 거래소 실잔고를 절대값으로 반영해 syncPosition 복원분과 이중계상되지 않게(#20). markBought 가 pendingBuy* 를 모두 비운다.
             s.markBought(fillPrice, volume, strategy, replace = true, now = now)
             // 진입 시점 청산 파라미터 스냅샷. markBought 뒤에 찍는다 — 신규 진입이면 markBought 가 옛 스냅샷을 비우므로
             // 여기서 현재 설정으로 새로 찍히고, 재시작 복원(기존 포지션 연장)이면 durable 값이 그대로 유지된다.
@@ -504,8 +680,6 @@ class PositionManager(
                 s.rungsFilled += 1
                 s.lastActionPrice = triggerPrice!!
             }
-            s.pendingBuyTriggerPrice = null
-            s.pendingBuyPriorVolume = null
         }
         // 전이가 반영된 사본을 감사 기록과 한 트랜잭션으로 커밋한 뒤 원본 메모리 전이를 적용한다(#52).
         commitFillAndApply(state, record, applyTransition)
@@ -638,30 +812,60 @@ class PositionManager(
     }
 
     /**
-     * 매도판 H8: 미해소 매도 주문(pendingSellUuid)을 거래소 상태로 확정. processTicker 가 매 tick 호출.
+     * 매도판 H8: 미해소 매도 주문(pendingSellUuid, 없으면 identifier — [resolveSellByIdentifier])을 거래소 상태로 확정.
+     * processTicker 가 매 tick 호출.
      * getOrder 장애 시 실잔고로 체결 추정(잔고 0 = 청산됨). 미해소면 pending 유지(다음 tick 재시도).
      */
     suspend fun reconcilePendingSell(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
-        val uuid = state.pendingSellUuid ?: return null
-        val result = try {
-            val filled = upbitClient.getOrder(uuid)
-            applySellFillOutcome(ticker, state, currentPrice, filled)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
-            recoverSellFromBalance(ticker, state, currentPrice)
+        val uuid = state.pendingSellUuid
+        val result = if (uuid != null) {
+            try {
+                val filled = upbitClient.getOrder(uuid)
+                applySellFillOutcome(ticker, state, currentPrice, filled)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
+                recoverSellFromBalance(ticker, state, currentPrice)
+            }
+        } else {
+            val identifier = state.pendingSellIdentifier ?: return null
+            resolveSellByIdentifier(ticker, state, currentPrice, identifier)
         }
         // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막는다 — 오래 끌면 보유 포지션이
         // 손절도 못 한 채 방치되므로, 매수판 halt 와 같은 상한에서 한 번 ERROR 로 올려 사람이 개입하게 한다.
         // (halt 는 신규 매수만 막는 플래그라 여기선 쓰지 않는다 — 필요한 건 차단이 아니라 알림.)
-        if (state.pendingSellUuid != null) {
-            warnIfSellStuckTooLong(ticker, state, uuid)
-        }
+        state.pendingSellRef()?.let { warnIfSellStuckTooLong(ticker, state, it) }
         // 매도 pending 전이(clearPendingSell/markSold/부분갱신) durable 반영. wait(무전이)도 upsert 무해.
         persist(state)
         return result
     }
+
+    /**
+     * 응답을 못 받은 매도(identifier 만 있음)를 확정한다. 매수판([resolveBuyByIdentifier])과 같은 규칙이다 — 거래소가 알면
+     * uuid 를 이어받고, 잔고만으로는 청산을 기록하지 않는다. 조회 실패는 pending 유지 — 경과시간 알림이 사람을 부른다.
+     */
+    private suspend fun resolveSellByIdentifier(ticker: String, state: TradingState, currentPrice: Double, identifier: String): TradeRecord? =
+        when (val lookup = lookupByIdentifier(ticker, identifier)) {
+            is IdentifierLookup.Found -> {
+                identifierMisses.remove(identifier)
+                state.adoptSellOrder(lookup.order.uuid)
+                persist(state)
+                applySellFillOutcome(ticker, state, currentPrice, lookup.order)
+            }
+            IdentifierLookup.NotFound -> {
+                if (confirmNotPlaced(ticker, "Sell", identifier, sellTrace(ticker, state))) {
+                    // 코인은 그대로다 — 포지션을 유지하고 다음 tick 에 다시 판다(무산 분기와 같은 복원).
+                    if (!state.position) syncPosition(ticker, state)
+                    state.clearPendingSell()
+                }
+                null
+            }
+            IdentifierLookup.Unknown -> {
+                breakMissStreak(identifier)
+                null
+            }
+        }
 
     /**
      * 막힌 매도를 사람에게 한 번 알린다. 카운터가 아니라 **경과시간**으로 판정하는 이유는 pending 이
@@ -671,7 +875,7 @@ class PositionManager(
      * 임계는 기존 의미(`reconcileHaltThreshold` tick)를 시간으로 환산해 유지한다.
      * (halt 는 신규 매수만 막는 플래그라 여기선 쓰지 않는다 — 필요한 건 차단이 아니라 알림.)
      */
-    private fun warnIfSellStuckTooLong(ticker: String, state: TradingState, uuid: String) {
+    private fun warnIfSellStuckTooLong(ticker: String, state: TradingState, orderRef: String) {
         if (state.pendingSellAlerted) return
         val since = state.pendingSellSince ?: run {
             // 이 마이그레이션 이전에 시작된 pending 은 시각이 없다 — 지금부터 센다.
@@ -687,7 +891,7 @@ class PositionManager(
         // 영구 유실된다 — 중복 알림이 유실보다 낫다. (전송 성공까지 보장하려면 outbox 가 필요하다.)
         log.error(
             "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요.",
-            stuckFor.seconds, ticker, uuid,
+            stuckFor.seconds, ticker, orderRef,
         )
         state.pendingSellAlerted = true
     }
@@ -736,12 +940,12 @@ class PositionManager(
     ): TradeRecord? {
         if (!state.position) return null
         // 미해소 매도 주문이 있으면 신규 매도 금지 — reconcile 로 확정될 때까지 이중 매도 방지(매수 pending 가드 미러).
-        if (state.pendingSellUuid != null) {
-            log.debug("Skip sell for {}: pending sell {} awaiting reconcile", ticker, state.pendingSellUuid)
+        if (state.hasPendingSell()) {
+            log.debug("Skip sell for {}: pending sell {} awaiting reconcile", ticker, state.pendingSellRef())
             return null
         }
 
-        // 잔고 조회·phantom 판정·placeOrder 까지: 실패하면 주문이 나가지 않았으므로 pending 없이 종료(포지션 유지 → 다음 tick 재매도).
+        // 잔고 조회·phantom 판정: 실패하면 주문 전이므로 pending 없이 종료(포지션 유지 → 다음 tick 재매도).
         // 매도 수량은 state.holdVolume(조작 가능)이 아니라 거래소 실잔고(sellable)를 사용.
         val account = try {
             findAccount(ticker.substringAfter("-"))
@@ -753,7 +957,7 @@ class PositionManager(
         }
         val sellable = account?.balanceDouble() ?: 0.0
         if (sellable <= 0.0) {
-            // M4(#122): 여기서는 pendingSellUuid 가 없으므로(위 가드) locked 는 우리 매도 주문의 것이 아니다 — 출금 대기나
+            // M4(#122): 여기서는 미해소 매도가 없으므로(위 가드) locked 는 우리 매도 주문의 것이 아니다 — 출금 대기나
             // 사용자가 직접 낸 주문이다. [heldVolume] 의 상한 규칙과 같은 판정으로 보유를 내린다. 보류하면 syncPosition
             // ("정리는 sell() 몫")과 서로 미뤄 유령 포지션이 영구히 남고 매 tick 경고만 쌓인다.
             // 진입 메타는 남기고(releaseHoldings) unsynced 를 켜 다음 tick 의 재동기화에 넘긴다: 락이 풀려 코인이 free 로
@@ -787,41 +991,49 @@ class PositionManager(
             state.accumulateSkipReason = skip
             return null
         }
-        val order = try {
-            upbitClient.placeOrder(
-                OrderRequest(
-                    market = ticker,
-                    side = "ask",
-                    ordType = "market",
-                    volume = qty.orderVolume,
+        // 매수판([placeBuy])과 같은 순서 — 정지 중이면 시작하지 않고, identifier 를 먼저 남긴 뒤 보낸다(#227).
+        currentCoroutineContext().ensureActive()
+        val identifier = newOrderIdentifier()
+        // 재시작 후에는 잔고·평단이 이미 비어 있으므로 청산 기록의 근거를 주문 시점 값으로 남긴다. 미해소가 얼마나 끌었는지는
+        // 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55). 주문 전 free 보유량은 부분 체결 뒤 unlock
+        // 지연으로 거래소 잔량이 과소일 때의 하한이자, 응답을 못 받은 주문의 흔적 판정 기준이다.
+        state.beginSellOrder(identifier, reason, clock.instant(), qty.volume, triggerPrice, sellable)
+        // 매수판과 동일 — 선기록부터 체결 반영까지 취소가 끊지 못하게 해야 청산 기록이 유실되지 않는다.
+        return withContext(NonCancellable) {
+            // 기록 장애가 손절을 막으면 안 된다 — 매수와 달리 실패해도 보낸다. 메모리 identifier 가 이 엔진의 이중
+            // 매도를 막고, 크래시 창은 pendingPersistFailed(진입 차단·매 tick 재기록)가 좁힌다.
+            persistPending(state)
+            val order = try {
+                upbitClient.placeOrder(
+                    OrderRequest(
+                        market = ticker,
+                        side = "ask",
+                        ordType = "market",
+                        volume = qty.orderVolume,
+                        identifier = identifier,
+                    )
                 )
-            )
-        } catch (e: CancellationException) {
-            throw e // 취소는 오탐 ERROR 로 로깅하지 않고 전파(Discord 스팸 방지).
-        } catch (e: Exception) {
-            log.error("Failed to place sell order {}: {}", ticker, e.message, e)
-            return null
-        }
-
-        // 매도판 H8: 주문 접수 성공 → uuid·사유 보존. 이후 체결확인이 실패/미확정이어도 uuid 를 잃지 않고
-        // 다음 tick reconcilePendingSell 이 이어받아 청산 확정·기록 → 이중매도·감사유실 방지.
-        state.pendingSellUuid = order.uuid
-        state.pendingSellReason = reason
-        // 미해소가 얼마나 끌었는지는 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55).
-        state.pendingSellSince = clock.instant()
-        state.pendingSellAlerted = false
-        // 재시작 후에는 잔고·평단이 이미 비어 있으므로, 청산 기록의 근거를 주문 시점 값으로 함께 남긴다.
-        state.pendingSellVolume = qty.volume
-        state.pendingSellAvgPrice = state.avgBuyPrice
-        state.pendingSellTriggerPrice = triggerPrice
-        // 주문 전 free 보유량 — 부분 체결 뒤 unlock 지연으로 거래소 잔량이 과소일 때의 하한. 재시작하면 holdVolume 이
-        // 이미 과소 동기화되므로 durable 로 남긴다.
-        state.pendingSellPriorVolume = sellable
-        return try {
-            // 매수판과 동일 — 주문 접수 후 체결확인·상태반영은 취소돼도 원자 완주해야 청산 기록이 유실되지 않는다.
-            withContext(NonCancellable) {
-                // 매도 pending 을 durable 로 먼저 기록(취소·크래시가 placeOrder 와 기록 사이를 끊지 못하게).
-                persistPending(state)
+            } catch (e: CancellationException) {
+                throw e // 전송 여부 불명 — identifier 가 남아 reconcile 이 확정한다. 취소는 ERROR 로 남기지 않는다.
+            } catch (e: Exception) {
+                if (e.provesOrderNotPlaced()) {
+                    log.error("Failed to place sell order {}: {}", ticker, e.message, e)
+                    state.clearPendingSell() // 코인은 그대로 — 포지션 유지, 다음 tick 재매도
+                    persist(state)
+                } else {
+                    log.error("Sell order {} for {} has an unknown outcome — kept pending, confirming by identifier: {}", identifier, ticker, e.message, e)
+                }
+                return@withContext null
+            }
+            if (order.uuid.isBlank()) {
+                log.error("Sell order {} for {} was answered without a uuid — kept pending, confirming by identifier", identifier, ticker)
+                return@withContext null
+            }
+            // 매도판 H8: uuid 보존. 이후 체결확인이 실패/미확정이어도 다음 tick reconcilePendingSell 이 이어받아
+            // 청산 확정·기록 → 이중매도·감사유실 방지.
+            state.adoptSellOrder(order.uuid)
+            persistPending(state)
+            try {
                 val filled = upbitClient.awaitFill(order.uuid)
                 if (filled?.state == "done") {
                     // 즉시 체결 — 주문량으로 기록. done 은 upbit 시장가 매도의 정상 종결.
@@ -840,17 +1052,18 @@ class PositionManager(
                     persist(state) // pending 유지 상태 durable 반영
                     null
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.error("Sell post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+                null // pending 유지 → 다음 tick reconcile
             }
-        } catch (e: CancellationException) {
-            throw e // 취소는 삼키지 않고 전파(구조적 동시성).
-        } catch (e: Exception) {
-            log.error("Sell post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
-            null // pending 유지 → 다음 tick reconcile
         }
     }
 
     /**
-     * 매도 체결 판정 후 상태 반영 (reconcile 전용). done 은 sell() 즉시경로가 처리하므로 여기로 오는 건 wait/cancel.
+     * 매도 체결 판정 후 상태 반영 — 즉시경로(sell() 의 done) 밖의 모든 응답: reconcile 의 wait/cancel/done, identifier 로
+     * 찾은 주문(대개 done).
      * wait 는 executedVolume>0(부분 진행중)이어도 terminal 이 아니다 — Upbit 는 미체결 잔량을 locked 로 묶어 free
      * balance=0 일 수 있고, 여기서 확정하면 아직 열린 주문을 markSold 로 오판해 잔여 체결분을 잃고 미정산 포지션에 새 거래를
      * 허용한다(codex P2). terminal(done/cancel)에서만 체결분을 확정한다.
