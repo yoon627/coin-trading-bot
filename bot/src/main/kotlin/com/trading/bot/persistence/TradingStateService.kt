@@ -75,6 +75,8 @@ class TradingStateService(
             pendingBuyPriorVolume = pendingBuyPriorVolume,
             pendingSellTriggerPrice = pendingSellTriggerPrice,
             pendingSellPriorVolume = pendingSellPriorVolume,
+            pendingBuyIdentifier = pendingBuyIdentifier,
+            pendingSellIdentifier = pendingSellIdentifier,
             updatedAt = Instant.now(),
         )
 
@@ -106,6 +108,8 @@ class TradingStateService(
             pendingBuyPriorVolume = pendingBuyPriorVolume,
             pendingSellTriggerPrice = pendingSellTriggerPrice,
             pendingSellPriorVolume = pendingSellPriorVolume,
+            pendingBuyIdentifier = pendingBuyIdentifier,
+            pendingSellIdentifier = pendingSellIdentifier,
         )
 
     // 손상 필드는 그 필드만 버린다 — pending uuid·halt 는 어떤 경우에도 복원돼야 한다(위 loadStates 주석).

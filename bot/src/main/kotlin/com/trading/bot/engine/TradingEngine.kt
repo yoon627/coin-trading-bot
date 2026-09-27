@@ -177,7 +177,7 @@ class TradingEngine(
                 .forEach { (ticker, state) ->
                     log.error(
                         "비활성 ticker {} 에 미해소 주문이 남아 있습니다(buy={}, sell={}) — 이 실행에서는 reconcile 되지 않습니다.",
-                        ticker, state.pendingBuyUuid, state.pendingSellUuid,
+                        ticker, state.pendingBuyRef(), state.pendingSellRef(),
                     )
                 }
             warnIfExitConfigInert()
@@ -452,7 +452,7 @@ class TradingEngine(
 
     private fun TradingState.hasEntryTrace(): Boolean = hasPendingOrder() || entryStrategy != null || buyDate != null
 
-    private fun TradingState.hasPendingOrder(): Boolean = pendingBuyUuid != null || pendingSellUuid != null
+    private fun TradingState.hasPendingOrder(): Boolean = hasPendingBuy() || hasPendingSell()
 
     // 첫 단 매수가 미체결이면 rungsFilled 는 아직 0 이다 — 단 매수만 남기는 triggerPrice·적립 전략명으로도 알아본다.
     private fun TradingState.isLadderRow(): Boolean =
@@ -513,22 +513,22 @@ class TradingEngine(
                 if (newHigh || state.peakPersistFailed) positionManager.persistPeak(state)
             }
 
-            // H8: 미해소 매수 주문(placeOrder 성공 후 체결확인 실패분)이 있으면 먼저 reconcile.
+            // H8: 미해소 매수 주문(체결확인 실패분, 또는 응답을 못 받아 identifier 만 있는 주문)이 있으면 먼저 reconcile.
             // 진행중이면 이 tick 의 매수/매도 평가는 skip(중복매수·미확정 상태 평가 방지).
-            if (state.pendingBuyUuid != null) {
+            if (state.hasPendingBuy()) {
                 // 체결이 확정되면 PositionManager 가 상태 전이와 감사 기록을 원자 커밋하고 알림까지 끝낸다(#52).
                 if (positionManager.reconcilePendingBuy(ticker, state, currentPrice) != null) {
                     // 매수 확정 tick 은 일반 buy 경로와 동일하게 종료(막 산 포지션에 같은 tick 손절·익절 평가 방지).
                     return
                 }
-                if (state.pendingBuyUuid != null) return // 아직 미해소 — 이 tick 매수/매도 평가 skip
+                if (state.hasPendingBuy()) return // 아직 미해소 — 이 tick 매수/매도 평가 skip
             }
 
-            // 매도판 H8: 미해소 매도 주문(placeOrder 성공 후 체결확인 실패/미확정분)이 있으면 매도/매수 평가 전에 reconcile.
+            // 매도판 H8: 미해소 매도 주문(체결확인 실패/미확정분, identifier 만 있는 주문 포함)이 있으면 매도/매수 평가 전에 reconcile.
             // 확정되면 청산 기록 후 종료, 미해소면 이 tick 평가 skip(같은 포지션에 이중 매도 주문 방지).
-            if (state.pendingSellUuid != null) {
+            if (state.hasPendingSell()) {
                 if (positionManager.reconcilePendingSell(ticker, state, currentPrice) != null) return
-                if (state.pendingSellUuid != null) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
+                if (state.hasPendingSell()) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
             }
 
             // 여기까지가 두 프로파일 공용 preamble. 청산·진입 규칙은 프로파일이 정한다.
