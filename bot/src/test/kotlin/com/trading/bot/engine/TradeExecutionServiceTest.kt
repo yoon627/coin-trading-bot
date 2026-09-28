@@ -638,6 +638,8 @@ class TradeExecutionServiceTest {
         assertTrue(polling.isCompleted, "취소 전에 주문 접수 → 체결 polling 까지 진입해 있어야 한다")
         job.cancel()
         advanceUntilIdle()
+        // 저장은 saveAndNotify 의 mono {} 안이라 Dispatchers.Default 에서 돈다 — 가상 시간은 그것을 기다리지 않는다.
+        job.join()
 
         coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
     }
