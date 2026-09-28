@@ -265,87 +265,7 @@ function BotPage({ user, setActive }) {
           </Card>
         </div>
       </div>
-      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
-    </Shell>
-  );
-}
-
-// ── TRADE (manual sell; buying is the bot's job) ──────────
-// recorded=false: 주문은 접수됐지만 기록/알림 후처리가 실패했거나(행 유무 불명) 체결을 확인하지 못해 행을 남기지
-// 않았다(fill=unconfirmed). 어느 쪽이든 "완료"로 보이면 사용자가 거래소와 대조할 기회를 잃는다.
-function orderToast(res, okMsg, okTone) {
-  if (res && res.recorded === false) {
-    const why = res.fill === 'not_filled' ? '체결 없이 종료(취소) — 기록 없음, 보유량 그대로'
-      : res.fill === 'unconfirmed' ? '체결 미확인 — 기록하지 않음'
-      : '기록/알림 실패';
-    // 3초 토스트는 uuid 를 옮겨 적기 전에 사라진다 — 닫을 때까지 남긴다.
-    return { msg: `주문은 접수됐으나 ${why}. 거래소에서 확인하세요 (uuid ${res.order_uuid || '-'})`, tone: 'warn', sticky: true };
-  }
-  return { msg: okMsg, tone: okTone };
-}
-
-function TradePage({ user, setActive }) {
-  const [market, setMarket] = React.useState('KRW-BTC');
-  const [volume, setVolume] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
-  const [toast, setToast] = React.useState(null);
-  const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
-  const prices = useAPI(() => TideAPI.pricesLatest().catch(() => null), [], 3000);
-
-  const sell = async (sellAll) => {
-    setBusy(true);
-    try {
-      const res = await TideAPI.sell(market, sellAll ? { sell_all: true } : { volume });
-      setToast(orderToast(res, `${market} 매도 주문 완료`, 'down'));
-      portfolio.reload();
-    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <Shell active="trade" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
-           title="차트 매매" subtitle="수동 매도 — 매수는 봇이 한다">
-      {!user?.has_upbit_keys && <div style={{ marginBottom: 16 }}><ApiKeyWarning go={() => setActive('settings')}/></div>}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 16 }}>
-        <Card padding={24}>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>실시간 가격</div>
-          {!prices.data ? <div style={{ padding: 40, textAlign: 'center' }}><span className="tide-spinner"/></div> :
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
-              {Object.entries(prices.data || {}).slice(0, 12).map(([m, price]) => (
-                <div key={m} onClick={() => setMarket(m)} style={{
-                  padding: 14, borderRadius: 10, cursor: 'pointer',
-                  background: market === m ? 'var(--tide-primary-soft)' : 'var(--ink-50)',
-                  border: '1px solid', borderColor: market === m ? 'var(--tide-primary)' : 'transparent',
-                }}>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{m}</div>
-                  <div className="num" style={{ fontSize: 16, fontWeight: 700, marginTop: 4 }}>{fmtKRW(price?.trade_price)}</div>
-                </div>
-              ))}
-              {!Object.keys(prices.data || {}).length && <Empty icon="chart" title="가격 스트림 없음" message="봇을 시작하면 가격이 수집됩니다"/>}
-            </div>
-          }
-        </Card>
-
-        <Card padding={24}>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>주문</div>
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 6 }}>거래쌍</div>
-            <input className="tide-input" value={market} onChange={e => setMarket(e.target.value.toUpperCase())}/>
-          </div>
-
-          <div style={{ padding: 14, background: 'var(--ink-50)', borderRadius: 10 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--down)', marginBottom: 8 }}>매도</div>
-            <div style={{ fontSize: 11, color: 'var(--ink-500)', marginBottom: 6 }}>수량</div>
-            <input className="tide-input" value={volume} onChange={e => setVolume(e.target.value)} placeholder="0.001" style={{ marginBottom: 8 }}/>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <Button size="md" disabled={busy || !user?.has_upbit_keys} onClick={() => sell(false)} style={{ background: 'var(--down)', flex: 1, color: '#fff' }}>매도</Button>
-              <Button size="md" variant="outline" disabled={busy || !user?.has_upbit_keys} onClick={() => sell(true)} style={{ flex: 1 }}>전량</Button>
-            </div>
-          </div>
-        </Card>
-      </div>
-      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
@@ -470,9 +390,9 @@ function OrdersPage({ user, setActive }) {
       <Card padding={0}>
         {src.loading ? <div style={{ padding: 40, textAlign: 'center' }}><span className="tide-spinner"/></div> :
          isRT ? (
-          !rtList.length ? <Empty icon="orders" title="매매 내역이 없습니다" message="봇을 실행하거나 수동 매매를 시작해보세요"/> : roundTripRows
+          !rtList.length ? <Empty icon="orders" title="매매 내역이 없습니다" message="봇을 실행해보세요"/> : roundTripRows
          ) :
-         !list.length ? <Empty icon="orders" title="거래 내역이 없습니다" message="봇을 실행하거나 수동 매매를 시작해보세요"/> :
+         !list.length ? <Empty icon="orders" title="거래 내역이 없습니다" message="봇을 실행해보세요"/> :
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '160px 110px 70px 1fr 1fr 1fr 110px',
                         padding: '14px 24px', fontSize: 11, color: 'var(--ink-500)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--ink-100)', gap: 10 }}>
@@ -608,7 +528,7 @@ function BacktestPage({ user, setActive }) {
             </>}
         </Card>
       </div>
-      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
@@ -760,14 +680,13 @@ function SettingsPage({ user, setActive, refreshUser }) {
         <div style={{ marginTop: 16, fontSize: 11.5, color: 'var(--ink-500)' }}>discord.com 도메인의 HTTPS 웹훅 URL만 허용됩니다.</div>
       </Card>
 
-      {toast && <Toast message={toast.msg} tone={toast.tone} sticky={toast.sticky} onClose={() => setToast(null)}/>}
+      {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
     </Shell>
   );
 }
 
 window.Dashboard = Dashboard;
 window.BotPage = BotPage;
-window.TradePage = TradePage;
 window.OrdersPage = OrdersPage;
 window.BacktestPage = BacktestPage;
 window.WalletPage = WalletPage;

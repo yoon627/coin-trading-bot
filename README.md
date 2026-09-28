@@ -1,6 +1,6 @@
 # Coin Trading Bot
 
-Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동·수동 매매, 백테스트, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 7개 스윙 전략을 담당합니다.
+Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동매매, 백테스트, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 7개 스윙 전략을 담당합니다.
 
 > [!WARNING]
 > 이 프로젝트는 투자 수익을 보장하지 않습니다. 실거래 전 API 키 권한, 주문 금액, 손절 조건을 확인하고 충분히 테스트하세요. Upbit API 키에는 출금 권한을 부여하지 않는 것을 권장합니다.
@@ -9,7 +9,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 
 - Upbit WebSocket ticker와 REST candle을 이용한 in-process 시세 수집
 - 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
-- 7개 스윙 전략 기반 자동매매 및 수동 주문
+- 7개 스윙 전략 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
 - 메이저 코인용 적립 프로파일(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만) 및 알트 유니버스 자동 선정 — 둘 다 기본 off
 - 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
@@ -216,7 +216,7 @@ coin-trading-bot/
 정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
 
 - `/login.html`: 회원가입과 로그인
-- `/app.html`: dashboard, bot, trade, orders, backtest, wallet, settings 화면
+- `/app.html`: dashboard, bot, orders, backtest, wallet, settings 화면
 - `/api/*`: httpOnly JWT 쿠키를 사용하는 same-origin API
 - JSON 필드명: 요청과 응답 모두 `snake_case`
 
@@ -230,7 +230,6 @@ coin-trading-bot/
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
 | 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
-| 주문 | POST | `/api/trade/sell` (수동 매도만 — 매수는 봇이 한다) | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
 | 차트 | GET | `/api/chart/candles`, `/indicators`, `/tickers`, `/compare` | 필요 |
 | 전략 | GET/POST | `/api/strategies`, `/performance`, `/backtest` | 필요 |

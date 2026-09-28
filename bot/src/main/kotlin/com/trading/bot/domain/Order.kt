@@ -79,7 +79,7 @@ data class Order(
 
     /**
      * 매도 기록의 수수료 출처 — `paid_fee` 가 있으면 실측, 없으면 **추정**. 매도의 `totalAmount` 는 이 체결의
-     * 대금이라 추정이 정당하다(매수와 달리 스냅샷 과대계상이 없다). 엔진·수동 매도가 같은 규칙을 쓴다.
+     * 대금이라 추정이 정당하다(매수와 달리 스냅샷 과대계상이 없다).
      */
     fun sellFeeBasis(): FeeBasis = feeBasis().takeIf { it is FeeBasis.Measured } ?: FeeBasis.Estimate
 
