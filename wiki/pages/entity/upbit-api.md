@@ -38,7 +38,7 @@ sources:
 | 시장가 매수 | `market`, `side=bid`, `ord_type=price`, `price=<내림한 KRW 금액>` (수량 아닌 **금액** 지정) |
 | 시장가 매도 | `market`, `side=ask`, `ord_type=market`, `volume=<거래소 원본 문자열 잔고>` |
 
-- **최소 주문 금액 5,000 KRW.** 미만이면 주문이 성립하지 않는다.
+- **최소 주문 금액 5,000 KRW.** 미만이면 주문이 성립하지 않는다 — 매수(`under_min_total_bid`)만이 아니라 **매도(`under_min_total_ask`)도**다. 그래서 그 금액 미만인 보유(dust)는 팔 수 없다(엔진 처리는 [[trading-engine-loop]] "팔 수 없는 보유"). 거래소가 시장가 매도의 금액을 어느 가격으로 판정하는지는 문서에 없다 — 엔진은 tick 가격으로 먼저 거르고, 거래소 거절도 같은 dust 로 다룬다.
 - 매도 수량은 `Double` 로 변환하지 않고 거래소가 준 문자열을 그대로 쓴다 — 부동소수 오차로 잔고를 초과하는 것을 피하기 위함이다.
 - **주문 생성은 멱등이 아니지만, 클라이언트 `identifier` 로 나중에 찾을 수 있다**(2026-09-28, #227). `identifier` 는 계정 전체에서 영구 고유(취소·실패 주문 포함 재사용 불가 — 재사용하면 `400 duplicated_identifier`)·최대 64자이고, `GET /v1/order?identifier=` 로 조회된다(모르면 `404 order_not_found`, 2024-10-18 이후 주문). 그래도 타임아웃·429 에 자동 재시도하지 않는다 — 엔진은 identifier(`ctb-`+UUID v4)를 **주문 전에** durable 로 남기고, 응답을 못 받은 주문은 다음 tick 에 identifier 로 확정한다([[trading-engine-loop]]). **문서에 없는 것**: "오류 응답이면 주문이 만들어지지 않았다"는 명시, 5xx 의 접수 여부, 접수 직후 조회 가시성 지연, identifier 조회의 보존기간.
 - **주문 생성 오류 중 "미접수"의 증거로 쓰는 것은 요청 검증 오류뿐이다**(`provesOrderNotPlaced`): `create_ask_error`·`create_bid_error`·`insufficient_funds_ask`·`insufficient_funds_bid`·`under_min_total_ask`·`under_min_total_bid`·`over_krw_funds_bid`·`validation_error`·`invalid_parameter`(에러 안내 페이지 표기는 `invaild_parameter` — 둘 다 받는다)·`notfoundmarket`·403 `market_offline`. 인증(401 `nonce_used` 등·403 `out_of_scope`)·429·418·5xx·이름 없는 응답·`duplicated_identifier`·전송 계층 오류는 접수 여부를 말해 주지 않으므로 identifier 로 확정한다.

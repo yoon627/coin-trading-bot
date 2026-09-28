@@ -72,5 +72,9 @@ private val ORDER_REJECTION_ERRORS = setOf(
 fun Throwable.provesOrderNotPlaced(): Boolean =
     this is UpbitApiException && statusCode in 400..499 && errorName in ORDER_REJECTION_ERRORS
 
+/** 거래소가 주문 금액이 최소주문(원화 5,000원) 미만이라 거절했다 — 매도였다면 그 수량은 지금 팔 수 없는 dust 다(#234). */
+fun Throwable.isRejectedAsBelowMinimumOrder(): Boolean =
+    this is UpbitApiException && (errorName == "under_min_total_ask" || errorName == "under_min_total_bid")
+
 /** 주문 identifier. Upbit 는 계정 전체에서 영구히 고유해야 하고(취소·실패 주문 포함) 64자 이하다 — `ctb-` + UUID v4 = 40자. */
 fun newOrderIdentifier(): String = "ctb-${UUID.randomUUID()}"

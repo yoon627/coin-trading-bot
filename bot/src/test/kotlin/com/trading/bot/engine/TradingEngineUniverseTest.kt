@@ -346,6 +346,23 @@ class TradingEngineUniverseTest {
     }
 
     @Test
+    fun `dust on a retained ticker outside the list is handed to release instead of staying forever`() = runBlocking {
+        // 목록 밖은 새로 사지 않으므로(#226) 흡수될 길이 없다 — 팔 수도 없으니 잔류가 영구화된다(#234).
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"), linkedMapOf("KRW-XRP" to heldEntry("KRW-XRP")))
+        engine.stop()
+        val xrp = engine.getStates().getValue("KRW-XRP") // 1코인
+        coEvery { upbitClient.getTicker("KRW-XRP") } returns listOf(Ticker(tradePrice = 1_000.0)) // 1,000원어치
+
+        engine.processTicker("KRW-XRP", xrp, strategy)
+        coVerify(exactly = 1) { positionManager.releaseDust("KRW-XRP", xrp, 1_000.0) }
+
+        coEvery { upbitClient.getTicker("KRW-XRP") } returns listOf(Ticker(tradePrice = 10_000.0)) // 1만원 — 팔 수 있다
+        engine.processTicker("KRW-XRP", xrp, strategy)
+        coVerify(exactly = 1) { positionManager.releaseDust(any(), any(), any()) }
+    }
+
+    @Test
     fun `getUserTickers is the requested list only and a no-op start does not replace it`() = runBlocking {
         val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-BTC"))
         engine.start(listOf("KRW-ETH"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))

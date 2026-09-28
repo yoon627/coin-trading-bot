@@ -544,11 +544,15 @@ class TradingEngine(
     }
 
     private suspend fun runSwing(ticker: String, state: TradingState, strategy: TradingStrategy, currentPrice: Double) {
+        // 거래소 최소주문 미만이라 팔 수 없는 보유(dust)는 진입을 막지 않는다(#234). 청산 평가는 그대로 돈다 — 기록상 수량이
+        // 낡았을 수 있어 여기서 끄면 실제로는 팔 수 있는 포지션이 손절을 잃는다. 주문 여부는 PositionManager 가 실잔고로 정한다.
+        val dust = state.isDustAt(currentPrice)
         if (state.position) {
             val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
             // 라이브 판정 **뒤에** 관측한다 — decideSell 이 peak 을 갱신한 뒤라야 같은 tick 을 본다.
             // (손절이 먼저 걸린 tick 은 peak 갱신을 건너뛰지만, 그 구간은 진입가 아래라 후보도 발동하지 않는다.)
-            shadowExitObserver?.onTick(ticker, state, currentPrice)
+            // dust 는 관측 대상 포지션이 아니다 — 흡수 뒤의 새 포지션이 옛 관측과 짝지어지지 않게 흘린다.
+            if (dust) shadowExitObserver?.forget(ticker) else shadowExitObserver?.onTick(ticker, state, currentPrice)
             val sold = if (reason != null) positionManager.sell(ticker, state, currentPrice, reason) else null
             if (sold != null) {
                 // 실체결 단가를 함께 넘긴다 — currentPrice 와의 차이가 실행 슬리피지이고 백테에는 없는 항목이다.
@@ -560,10 +564,14 @@ class TradingEngine(
             shadowExitObserver?.forget(ticker)
         }
 
-        // 당일 1회 진입: 이미 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
-        if (state.position || state.boughtToday) return
+        // 당일 1회 진입: 이미 (팔 수 있는) 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
+        if ((state.position && !dust) || state.boughtToday) return
         // 사용자 목록·자동 선정에서 빠졌는데 보유 때문에 잔류했던 티커 — 청산됐으면 새로 사지 않는다(auto 는 다음 갱신, 아니면 09:00 에 빠진다).
-        if (isExitOnly(ticker)) return
+        // 그런 티커의 dust 는 흡수될 길도 팔 길도 없어 잔류가 영구화되므로 장부에서 내린다(실잔고 확인은 PositionManager).
+        if (isExitOnly(ticker)) {
+            if (dust) positionManager.releaseDust(ticker, state, currentPrice)
+            return
+        }
 
         // 매수도 청산과 동일: store 에 충분한 D1 이 있으면 store, 부족하면(부팅 직후/신규 마켓) REST 폴백.
         // 구 `size>=2` 게이트는 오염(중복 누적)에 가려 늘 store 를 탔고, 오염 제거 후엔 warm-up 동안 적은 캔들로

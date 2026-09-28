@@ -279,6 +279,20 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `sellVolume below the minimum order is skipped with a visible reason, not treated as swing dust`() = runTest {
+        // 장부는 한 단을 팔 수 있다고 봤지만 free 가 줄어 실제 주문이 5,000원 미만 — 사다리 skip 창구로 드러낸다.
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.00005", "50000000"))
+        val state = holding4()
+
+        assertNull(manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.00025, 52_000_000.0, isFinal = false)))
+
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
+        assertTrue(state.accumulateSkipReason!!.startsWith("sell:"))
+        assertFalse(state.dustWarned)
+        assertEquals(4, state.rungsFilled)
+    }
+
+    @Test
     fun `sellVolume formats the quantity as a plain decimal`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(btc("0.0002", "50000000"))
         val orderSlot = slot<OrderRequest>()
@@ -472,16 +486,17 @@ class PositionManagerAccumulateTest {
     @Test
     fun `swing buy sizes from the balance net of reserved krw`() = runTest {
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
-            listOf(krw("200000")),
-            listOf(Account(currency = "ETH", balance = "0.002", avgBuyPrice = "2500000")),
+            listOf(krw("220000")),
+            listOf(Account(currency = "ETH", balance = "0.0028", avgBuyPrice = "2500000")),
         )
         val orderSlot = slot<OrderRequest>()
         coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "swing")
-        coEvery { upbitClient.getOrder("swing") } returns Order(uuid = "swing", state = "done", executedVolume = "0.002")
+        coEvery { upbitClient.getOrder("swing") } returns Order(uuid = "swing", state = "done", executedVolume = "0.0028")
 
         val state = TradingState("KRW-ETH")
         manager.buy("KRW-ETH", state, 2_500_000.0, "combined", reservedKrw = 150_000.0)
 
-        assertEquals("5000", orderSlot.captured.price) // (200,000 − 150,000) × 0.1
+        // (220,000 − 150,000) × 0.1. 5,000원이면 손절 시점 가치가 최소주문 미만이라 사지 않는다(#234 사이징 하한).
+        assertEquals("7000", orderSlot.captured.price)
     }
 }

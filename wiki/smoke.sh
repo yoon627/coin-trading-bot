@@ -27,7 +27,9 @@ check() { # $1=질문  $2=페이지경로  $3=근거 정규식
   if ! grep -qF "[[$stem]]" wiki/index.md; then
     echo "FAIL | $q → $stem (index.md 에 [[$stem]] 등재 없음)"; fail=$((fail+1)); return
   fi
-  if ! body "$f" | grep -qE "$re"; then
+  # grep -q 는 첫 매칭에서 끝나 awk 가 SIGPIPE 를 받고, pipefail 이 그걸 실패로 센다 — 본문이 길면 매칭이 있어도
+  # 간헐적으로 FAIL 이 난다. 끝까지 읽게 한다.
+  if ! body "$f" | grep -E "$re" >/dev/null; then
     echo "FAIL | $q → $stem (본문에 근거 '$re' 없음)"; fail=$((fail+1)); return
   fi
   echo "PASS | $q → $stem"; pass=$((pass+1))

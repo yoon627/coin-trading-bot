@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-09-28
 claim_state: current
-verified: 2026-09-28 — 응답을 못 받은 주문의 identifier 확정(선기록 순서·미접수 확정 조건·흔적 시 보류·매도 선기록 실패 시 전송·취소 중 uuid 기록·재시작 뒤 identifier 확정·빈 uuid 응답)은 `PositionManagerUnknownOrderTest` 18건, identifier-only pending 의 게이트·잔류(`applyTickers`·`start`)는 `TradingEngineTest`·`TradingEngineUniverseTest` 로 확인. 연속 끊김·흔적 고정·halt 리셋·identifier 게이트는 각각 변이로 실패를 확인 · 2026-09-27 — 잔류·비-auto 정리(durable 메타 비우기 포함)·재기동 입력(`resume`)·화면용 분류·실행 중 409 는 `TradingEngineUniverseTest`(#226 묶음)·`UserTradingManagerTest`·`TradingControllerTest` 로 확인, 정리 순서·진입 게이트·사다리 제외·메타 비우기·직전 states 폐기는 각각 뮤테이션으로 실패를 확인, SPA·409·already_running 은 로컬 앱+브라우저로 관찰 · 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
+verified: 2026-09-28 — 팔 수 없는 dust 처리(매수 게이트·실잔고 재확인·흡수 새 진입·매도 가드·거래소 거절 WARN·목록 밖 해제·사이징 하한)는 `PositionManagerDustTest` 14건·`TradingEngineTest` 3건·`TradingEngineUniverseTest`·`PositionManagerAccumulateTest`(적립 불변) 로 확인, 가드 14종은 각각 변이로 실패를 확인 · 2026-09-28 — 응답을 못 받은 주문의 identifier 확정(선기록 순서·미접수 확정 조건·흔적 시 보류·매도 선기록 실패 시 전송·취소 중 uuid 기록·재시작 뒤 identifier 확정·빈 uuid 응답)은 `PositionManagerUnknownOrderTest` 18건, identifier-only pending 의 게이트·잔류(`applyTickers`·`start`)는 `TradingEngineTest`·`TradingEngineUniverseTest` 로 확인. 연속 끊김·흔적 고정·halt 리셋·identifier 게이트는 각각 변이로 실패를 확인 · 2026-09-27 — 잔류·비-auto 정리(durable 메타 비우기 포함)·재기동 입력(`resume`)·화면용 분류·실행 중 409 는 `TradingEngineUniverseTest`(#226 묶음)·`UserTradingManagerTest`·`TradingControllerTest` 로 확인, 정리 순서·진입 게이트·사다리 제외·메타 비우기·직전 states 폐기는 각각 뮤테이션으로 실패를 확인, SPA·409·already_running 은 로컬 앱+브라우저로 관찰 · 2026-09-17 — `buy()` 의 귀속 불명 lock 가드는 `PositionManagerExtendedTest` 2건(#121)으로 확인 · 2026-09-16 — `sell` 의 M4(귀속 불명 locked → phantom 정리 + unsynced)는 `PositionManagerExtendedTest` 2건(#122)으로 확인 · 2026-09-08 — 경계 stale-window 가드(`hasCurrentDayCandle`)를 `TradingEngineTest` 재현 테스트(가드 전 Red → 후 Green)로 확인, 원인은 `MarketDataIngestionService`(M1 60초 폴링)·`CandleAggregator`(D1 = UTC 자정 정렬) 전문. 같은 날 청산 파라미터 선언 검사 2종을 실측(`preflight_exit_params` 를 실제 `deploy/vultr/.env` + 결손/빈값 케이스로 실행, `ExitParamsDeclarationCheckTest` 통과). 이전 확인분: 2026-09-02 — processTicker 의 프로파일 dispatch(runSwing/runAccumulate)·applyTickers·refreshUniverse 를 TradingEngine.kt 전문으로 확인, TradingEngineAccumulateTest·TradingEngineUniverseTest 통과. 이전 확인분: 2026-08-23 — TradingProperties.kt 전 필드 대조(takeProfitPct 5.0·trailingArmPct 3.0 로 교정), BacktestEngine.run 가드 off-by-one 수정 확인. 같은 날 #56 로 확장된 `unsynced` 트리거를 PositionManager.syncPosition 실측 + :bot:test 실행. 21 은 게이트가 아니라 store/REST 소스 선택자임을 확인하고 전략 minCandles 계약(#109) 반영
 sources:
   - bot/src/main/kotlin/com/trading/bot/config/ExitParamsDeclarationCheck.kt
   - deploy/vultr/deploy.sh
@@ -31,7 +31,7 @@ sources:
 4. **미해소 매수 reconcile** — `pendingBuyUuid`(응답을 못 받은 주문이면 `pendingBuyIdentifier`)가 있으면 먼저 확정. 확정되면 그 tick 은 거기서 끝난다(막 산 포지션에 같은 tick 손절 평가 금지). 미해소면 이 tick 의 매수·매도 평가를 통째로 skip.
 5. **미해소 매도 reconcile** — 같은 구조의 매도판.
 6. **보유 중이면 청산 평가** — `updatePeakPrice`(오를 때만 durable flush) → `decideSell` → `sell`. `sell` 은 거래소 free 잔고를 판다. free 가 0 이면 phantom 이다: `locked` 도 0 이면 `markSold`(진입 메타·사다리 장부까지 정리), `locked` 가 남아 있으면 그것은 우리 매도 주문의 것이 아니므로(우리 주문은 5번의 `pendingSellUuid` 가드가 먼저 걸러낸다) `releaseHoldings`(보유만 내리고 진입 메타·장부는 유지) + `unsynced` 로 2번 재동기화에 넘긴다(2026-09-16, #122). 락이 풀려 코인이 돌아오면 재편입돼 보유상한·트레일링이 이어지고, 여전히 불명이면 매수만 차단된다. 이전에는 locked 가 있으면 보류해 "정리는 sell() 몫"인 `syncPosition` 과 서로 미뤄 유령 포지션이 영구히 남았다. 역방향 위험: 코인이 실제로 사라진 뒤 사용자가 거래소에서 같은 티커를 새로 사면 남은 메타가 그 편입분에 붙는다(감수 — 봇 자신의 신규 진입은 주문 시점 `clearEntryMeta` 로 닫힌다).
-7. **당일 1회 가드** — `position || boughtToday` 면 매수 평가 자체를 생략.
+7. **당일 1회 가드** — (팔 수 있는) 보유 중이거나 `boughtToday` 면 매수 평가 자체를 생략. 보유가 팔 수 없는 **dust** 면 막지 않는다(아래 "팔 수 없는 보유").
 8. **매수 평가** — D1 캔들이 store 에 전략이 요구하는 만큼(`max(MIN_DAILY_CANDLES, strategy.minCandles)`) store 에 있으면 store, 아니면 REST 60개로 폴백해 [[swing-strategies]] 의 `shouldBuy` 판정.
    **두 경로 모두 최신 D1 이 오늘 거래일 봉일 때만 평가한다**(2026-09-08, `isCurrentDay`). 09:00 직후 새 날 첫 1분봉이
    폴링되기까지(약 60~120초 — 60초 주기 + 마켓 간 150ms 간격, 한 라운드 실패 시 2주기, [[marketdata-pipeline]]) store 의 최신 D1 은 어제 봉이고,
@@ -91,6 +91,19 @@ STOP_LOSS  >  TRAILING_STOP  >  TAKE_PROFIT  >  CHART_EXIT  >  DAILY_RESET
 > 확인은 `docker compose exec app printenv | grep TRADING_TRAILING`.
 > 코드 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`default-golden.txt` 핀·기본 생성자를 쓰는 테스트 76곳이
 > 2.0/3.0 을 전제한다. 이전은 골든 재생성을 동반한 별도 작업이다.
+
+## 팔 수 없는 보유 — dust (2026-09-28, #234)
+
+Upbit 는 주문 금액이 5,000원 미만이면 매수도 매도도 받지 않는다([[upbit-api]]). 그 금액 아래인 스윙 보유는 팔 수 없는 **dust** 다 — 수동 부분매도 잔량, 부분체결 잔량, 손실로 5,000원 아래가 된 소액 포지션. 이전에는 잔고가 0 보다 크면 보유로 봐서 그 티커의 진입이 영영 막히고, 청산 사유가 걸릴 때마다 거래소 거절 ERROR 가 반복됐다.
+
+- **판정은 현재가 기준** — `holdVolume × 현재가 < 5,000원`(`isBelowMinOrder`, 정확히 5,000원은 팔 수 있다). 매 tick 판정하므로 가격이 회복하면 자동으로 dust 가 아니게 된다. 수량 미상(0)은 dust 로 보지 않는다.
+- **청산 평가는 그대로 돈다** — `holdVolume` 은 마지막 동기화 값이라 낡았을 수 있어, 여기서 끄면 실제로 팔 수 있는 포지션이 손절을 잃는다. 주문 여부는 `placeSell` 이 **실잔고(free)** 로 정한다: 최소주문 미만이면 보내지 않고(선기록·ERROR 없음, WARN 은 포지션당 1회), `holdVolume` 을 실측으로 고친다. 거래소가 `under_min_total_ask` 로 거절해도(tick 가격과 판정 가격 차이) 같은 WARN 이다 — 이 경우는 tick 가격으로는 dust 가 아니라 매수 게이트가 열리지 않고, 청산 사유가 참인 동안 선기록·거절이 조용히 반복된다(거래소가 어느 가격으로 판정하는지 문서에 없어 감수).
+- **매수 게이트만 연다** — dust 면 매수 평가를 한다. `buy()` 가 실잔고로 다시 확인해 팔 수 있는 보유면 사지 않고 재동기화하고(그 위에 사면 이중 포지션), dust 가 맞으면 **진입 메타만 지우고** 산다. 체결 확정이 실잔고로 수량·평단을 덮고(replace) 빈 메타를 오늘 날짜·이번 전략·새 청산 스냅샷·체결 뒤 평단을 고점으로 채워 **새 진입**이 된다. 주문이 무산돼도 dust 는 그대로 관리된다. 같은 tick 에 낸 매도가 결과 불명으로 남았으면 사지 않는다 — 미해소 매도 중에는 어떤 경로로도 매수하지 않는다(`entryBlocked`).
+- **평단 오염은 감수한다** — 체결 뒤 평단은 계좌 평단이라 dust 원가가 섞인다. 오염 ≈ |dust 평가액 − dust 원가| ÷ (dust 원가 + 이번 매수액)이라 매수액에 비해 dust 가 작으면 작고(1,000원 잔량 + 5만원 매수 → 1% 안팎), 둘이 비슷하면 크다(봇의 5,300원 포지션이 4,900원 dust 가 된 것을 5,300원으로 흡수 → 약 3.9%). 손실 dust 는 손절선을, 싸게 산 dust 는 익절선을 당겨 흡수 직후 곧바로 청산될 수 있다 — 그러면 dust 까지 전량 팔려 정리되고 왕복 비용만 든다. 그 손익은 새 진입 전략 몫으로 기록된다.
+- **목록 밖(exit-only) 티커의 dust** 는 새로 살 수 없어(#226) 흡수될 길이 없다 → `releaseDust` 가 실잔고를 확인한 뒤 장부에서 내리고 진입 메타를 지운다(기록 없음, 코인은 계좌에 남는다). 미해소 매도가 있거나 계좌에 잠긴 코인(사용자 지정가 등 — 풀리면 돌아온다)이 있으면 내리지 않는다. 비-auto 재시작에서는 다시 실리지 않고, auto 재시작에서는 dormant revive 로 되살아났다가 다시 해제된다.
+- **사이징 하한** — 스윙 매수는 `investAmount × (1 − maxLossPct/100) < 5,000원` 이면 하지 않는다(기본 5% 면 약 5,264원 미만). 그보다 작게 사면 손절 시점에 팔 수 없는 포지션을 봇이 직접 연다.
+- **적립 프로파일은 이 규칙 밖**이다 — 사다리 매도는 기존대로 최소주문 미만이면 `accumulateSkipReason` 으로 건너뛰고, 단 매수는 보유와 무관하게 계속 된다.
+- 라운드트립 표시: 봇 자신의 손실 dust(사이에 SELL 없음)를 흡수하면 새 BUY 가 옛 그룹에 합쳐진다([[trade-record-volume-semantics]]).
 
 ## 주문 유실 방지 구조
 
