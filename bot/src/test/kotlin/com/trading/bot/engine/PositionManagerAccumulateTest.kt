@@ -430,6 +430,23 @@ class PositionManagerAccumulateTest {
     }
 
     @Test
+    fun `a rung sell confirmed later is recorded at the price it was decided at`() = runTest {
+        // 기록 price 는 그 단을 판 tick 가격(trigger)이다 — 확정 tick 이 달라도 같다(#235).
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.001", "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "late-rung")
+        coEvery { upbitClient.getOrder("late-rung") } returns Order(uuid = "late-rung", state = "wait", executedVolume = "0")
+        val state = holding4()
+        manager.sellVolume("KRW-BTC", state, 52_000_000.0, LadderAction.Sell(0.00025, 52_000_000.0, isFinal = false))
+
+        coEvery { upbitClient.getOrder("late-rung") } returns Order(uuid = "late-rung", state = "done", executedVolume = "0.00025")
+        coEvery { upbitClient.getAccounts() } returns listOf(btc("0.00075", "50000000"))
+        val record = manager.reconcilePendingSell("KRW-BTC", state, 55_000_000.0)
+
+        assertEquals(52_000_000.0, record!!.price)
+        assertEquals(52_000_000.0, state.lastActionPrice) // 사다리 기준가도 trigger 그대로
+    }
+
+    @Test
     fun `the pre-sell holding floor survives a restart`() = runTest {
         // 재시작 후 holdVolume 은 이미 과소(0.75) 동기화돼 있다 — 하한은 durable 인 주문 전 보유량(1.0)에서 와야 한다.
         val state = TradingState(

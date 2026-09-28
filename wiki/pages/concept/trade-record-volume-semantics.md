@@ -4,7 +4,7 @@ category: concept
 created: 2026-08-24
 updated: 2026-09-28
 claim_state: current
-verified: 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt
@@ -129,6 +129,10 @@ sources:
   의미가 경로마다 달라(엔진 매수=원가 스냅샷, 매도=평가액, 수동 매수=요청액) 한 단어로 이름 붙일 수 없다.
 
 매도의 `total_amount` 도 판단 tick 가격 × 수량 **평가액**이지 체결 대금이 아니라서 매도에도 같은 규칙을 적용한다.
+reconcile 로 늦게 확정된 매도(체결 확인 창을 넘김·응답을 못 받음·재시작)도 판단 tick 가격으로 기록한다 — 주문할 때 `pending_sell_trigger_price` 에 남긴 값이다.
+이 규칙은 **#235 판단가 기록이 배포된 뒤 시작된 매도**부터다(`fix(engine): reconcile 로 확정된 매도를 청산을 결정한 tick 가격으로 기록한다` 커밋을 담은 main 배포, 2026-09-28).
+그 전의 reconcile 행, 그리고 **배포 시점에 이미 열려 있던** pending 이 배포 뒤 확정된 행은 확정 tick 가격이다(판단가가 없어 폴백한다) — `created_at` 만으로는 둘을 가를 수 없고, 확정 경로 컬럼도 없다.
+`created_at` 은 여전히 확정 시각이라 price 와 최대 reconcile 지연만큼 어긋난다. 추정 수수료 행(잔고복원, `paid_fee` 가 없는 reconcile)의 기준 금액도 판단가 × 수량이다.
 `TradeRoundTrip` 의 조립은 스냅샷 규칙 위에 서 있어 그대로 `total_amount` 를 쓴다.
 
 ## 수수료 기준도 같은 뿌리다
