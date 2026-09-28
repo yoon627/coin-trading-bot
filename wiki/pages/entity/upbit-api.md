@@ -10,6 +10,7 @@ sources:
   - bot/src/main/kotlin/com/trading/bot/client/UpbitClient.kt
   - bot/src/main/kotlin/com/trading/bot/client/UpbitClientImpl.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
+  - bot/src/main/kotlin/com/trading/bot/engine/BalanceInterpretation.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt
 ---
 
@@ -29,7 +30,7 @@ sources:
 `locked` 를 "미체결 주문에 묶인 수량"으로만 읽으면 안 된다 — **출금 대기와 사용자가 거래소에서 직접 낸
 주문까지 섞인다**. 봇이 매도에 쓸 수 있는 건 `balance`(free) 뿐이므로, 설명되지 않는 `locked` 를 보유로
 세면 팔 수 없는 유령 포지션이 된다. 그래서 `holdVolume` 은 `free + min(locked, 우리 주문의 미체결 잔량)`
-으로 상한을 둔다(`PositionManager.heldVolume` — 이 산식이 유일한 정의다).
+으로 상한을 둔다(engine `heldVolume`, `BalanceInterpretation.kt` — 이 산식이 유일한 정의다).
 
 ## 주문
 
