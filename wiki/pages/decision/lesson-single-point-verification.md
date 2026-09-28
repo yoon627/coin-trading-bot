@@ -1,14 +1,15 @@
 ---
-title: lesson — 한 곳에서 통과한 검증을 일반화하지 말 것 (SG 단일 IP · 코드 분기)
+title: lesson — 한 곳에서 통과한 검증을 일반화하지 말 것 (SG 단일 IP · 코드 분기 · 테스트 범위)
 category: decision
 created: 2026-07-28
-updated: 2026-08-24
+updated: 2026-09-28
 claim_state: current
-verified: 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 331426f) 이관분 유지
+verified: 2026-09-28 — 테스트 범위 사례는 #227 작업에서 실제로 겪은 건: 대상 패턴 339건 통과 뒤 전체 `:bot:test` 1109건 중 `TradeAuditAtomicityTest` 1건 실패(매도 상태 저장 2→3회), 수정 후 전체 1082 통과/32 skip. · 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 331426f) 이관분 유지
 sources:
   - docs/lessons.md
   - deploy/aws/deploy.sh
   - bot/src/main/kotlin/com/trading/bot/domain/TradingState.kt
+  - bot/src/test/kotlin/com/trading/bot/engine/TradeAuditAtomicityTest.kt
 ---
 
 # lesson: 한 곳에서 통과한 검증을 일반화하지 말 것
@@ -62,3 +63,15 @@ entryStrategy = if (resuming) entryStrategy ?: strategy else strategy
 가장 위험한 대목은 **결과가 우연히 같았다**는 것이다. 운영 데이터는 포지션당 엔진 BUY 가 1건뿐이라 어느 규칙으로 돌려도 집계가 `combined` 29 / `rsi_bounce` 1 로 나왔다. 잘못된 근거가 맞는 숫자를 내면 검증된 것처럼 보인다 — 여기서는 숫자가 아니라 **규칙**이 산출물이었으므로 결과 일치는 검증이 아니었다.
 
 **적용**: 조건식을 근거로 "항상 ~이다"라고 쓰기 전에 **그 식의 모든 분기에 도달하는 호출 경로를 세어본다.** 도달 불가를 주장하려면 호출부 전수로 보여야 한다. 실제로 같은 함수의 `position && !replace` 가지는 프로덕션에서 도달하지 않는데(`completeBuy` 가 항상 `replace = true`), 그 역시 호출부를 전수로 확인해야만 말할 수 있는 사실이다.
+
+## 같은 실수, 이번엔 테스트 범위에서
+
+**언제**: 2026-09-28 (#227)
+
+테스트 실행도 검증 지점이다. **돌린 테스트 묶음 안의 통과를 "전체 Green"으로 일반화한 것도 같은 실수다.**
+
+매도 주문 경로에 "주문 전 identifier 선기록" 상태 저장을 하나 더했다. 반복을 빠르게 하려고 `PositionManager*`·`TradingEngine*`·`domain.*`·`persistence.*`·`client.*` 패턴으로 339건만 돌렸고, 그 통과를 Green 으로 적고 커밋했다. 그러나 이름이 그 패턴에 걸리지 않는 `TradeAuditAtomicityTest` 가 매도 한 건의 상태 저장 횟수를 2회로 단언하고 있었다 — 선기록이 더해져 3회가 됐으므로 전체 `:bot:test`(1109건)는 1건 실패였다. 리뷰어가 전체 실행으로 잡았다. 그대로 머지됐다면 CI 의 test 잡이 막아 배포가 멈췄을 것이다.
+
+바뀐 프로덕션 코드를 쓰는 테스트는 **파일 이름으로 다 찾아지지 않는다** — 감사 원자성처럼 관심사 이름으로 묶인 테스트가 같은 경로를 밟는다.
+
+**적용**: 대상 패턴 실행은 반복용이다. 커밋·"통과" 보고 직전에는 `:bot:test` 전체를 돌리고 실행/실패/skip 건수를 적는다(skip 을 통과로 읽지 않는 규칙은 [[lesson-skip-is-not-pass]]).
