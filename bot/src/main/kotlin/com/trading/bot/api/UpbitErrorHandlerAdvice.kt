@@ -49,10 +49,6 @@ class UpbitErrorHandlerAdvice {
             // 418: Upbit IP 차단 — generic 400 과 구분되게 별도 매핑.
             ex.statusCode == 418 ->
                 HttpStatus.FORBIDDEN to "Upbit가 요청 IP를 차단했습니다(418). 잠시 후 다시 시도하거나 허용 IP 설정을 확인해주세요."
-            name != null && name.startsWith("insufficient_funds") ->
-                HttpStatus.BAD_REQUEST to "주문 가능 잔액이 부족합니다 ($name)."
-            name != null && name.startsWith("under_min_total") ->
-                HttpStatus.BAD_REQUEST to "최소 주문 금액(보통 5,000원) 미만입니다 ($name)."
             ex.statusCode in 400..499 ->
                 HttpStatus.BAD_REQUEST to "Upbit가 요청을 거부했습니다 (${name ?: "error ${ex.statusCode}"})."
             else ->

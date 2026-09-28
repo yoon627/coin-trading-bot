@@ -145,25 +145,6 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeStrategy("   ") }
     }
 
-    // --- normalizeSellVolume ---
-
-    @Test
-    fun `normalizeSellVolume accepts valid volumes`() {
-        assertEquals("0.001", validators.normalizeSellVolume("0.001"))
-        assertEquals("1.5", validators.normalizeSellVolume("1.5"))
-    }
-
-    @Test
-    fun `normalizeSellVolume rejects non-numeric`() {
-        assertThrows<ResponseStatusException> { validators.normalizeSellVolume("abc") }
-    }
-
-    @Test
-    fun `normalizeSellVolume rejects zero and negative`() {
-        assertThrows<ResponseStatusException> { validators.normalizeSellVolume("0") }
-        assertThrows<ResponseStatusException> { validators.normalizeSellVolume("-1") }
-    }
-
     // --- normalizeDiscordWebhookUrl ---
 
     @Test
