@@ -12,7 +12,7 @@ data class TradingState(
     /**
      * 봇이 자기 포지션으로 통제하는 수량. 거래소 free 잔고에 **우리 매도 주문이 잠그고 있을 수 있는 만큼**만
      * 더한다 — Upbit 의 locked 는 출금 대기·수동 주문까지 섞인 값이라 그대로 쓰면 팔 수 없는 수량을 보유로
-     * 세게 된다. 거래소 잔고에서 채우는 경로는 모두 `PositionManager.heldVolume` 하나를 쓴다.
+     * 세게 된다. 거래소 잔고에서 채우는 경로는 모두 engine 의 `heldVolume`(BalanceInterpretation.kt) 하나를 쓴다.
      */
     var holdVolume: Double = 0.0,
     var peakPrice: Double = 0.0,
