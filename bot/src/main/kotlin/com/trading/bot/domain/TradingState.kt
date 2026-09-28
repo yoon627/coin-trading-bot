@@ -49,7 +49,7 @@ data class TradingState(
     var pendingSellSince: Instant? = null,
     // 위 임계를 넘겨 이미 알린 pending 인지. durable 이라 재시작해도 중복 발화하지 않는다.
     var pendingSellAlerted: Boolean = false,
-    // 진입 시점 청산 파라미터 스냅샷. 저장·복원 전용 — 소비(진입 시점 값으로 청산)는 strategy-evolution Phase 2.
+    // 진입 시점 청산 파라미터 스냅샷 — 청산 게이트·보유상한이 engine 의 exitParamsOrGlobal 로 읽는다(없으면 전역).
     var exitParams: ExitParamsSnapshot? = null,
     // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
     var pendingPersistFailed: Boolean = false,

@@ -6,7 +6,6 @@ import com.trading.bot.client.newOrderIdentifier
 import com.trading.bot.client.isRejectedAsBelowMinimumOrder
 import com.trading.bot.client.provesOrderNotPlaced
 import com.trading.bot.domain.Account
-import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
@@ -255,7 +254,8 @@ class PositionManager(
             return null
         }
         // 손절 시점에도 최소주문 이상이어야 팔 수 있다 — 아니면 봇이 처음부터 손절 못 할 포지션을 연다(#234).
-        if (investAmount * (1 - tradingProperties.maxLossPct / 100) < MIN_ORDER_AMOUNT_KRW) {
+        // 손절폭은 이 진입이 스냅샷으로 가져갈 값이다.
+        if (investAmount * (1 - tradingProperties.exitParamsSnapshot().maxLossPct / 100) < MIN_ORDER_AMOUNT_KRW) {
             log.debug("Skip buy for {}: investAmount={} would be unsellable at the stop-loss", ticker, investAmount)
             return null
         }
@@ -703,7 +703,7 @@ class PositionManager(
         )
         // #52: 전이를 한 곳에 모아 사본과 원본에 각각 적용한다. `now` 를 고정해 두 적용이 동일한 결과를 낸다.
         val now = LocalDateTime.now(TradingDay.KST)
-        val snapshot = snapshotExitParams()
+        val snapshot = tradingProperties.exitParamsSnapshot()
         val applyTransition: (TradingState) -> Unit = { s ->
             // 체결 확정 = reconcile 진전이므로 실패 카운터 해소.
             s.reconcileFailureCount = 0
@@ -747,25 +747,6 @@ class PositionManager(
             log.warn("Trade notification failed after commit for {}: {}", record.ticker, e.message)
         }
     }
-
-    private fun snapshotExitParams() = ExitParamsSnapshot(
-        takeProfitPct = tradingProperties.takeProfitPct,
-        maxLossPct = tradingProperties.maxLossPct,
-        trailingStopPct = tradingProperties.trailingStopPct,
-        trailingArmPct = tradingProperties.trailingArmPct,
-        maxHoldDays = tradingProperties.maxHoldDays,
-    )
-
-    /**
-     * 이 포지션에 적용할 청산 파라미터 — **진입 시점 스냅샷**이 있으면 그것, 없으면 현재 전역값.
-     *
-     * 보유 중 전역 설정이 바뀌어도 그 포지션의 규칙은 진입 때 그대로다. 그러지 않으면 진입은 옛 규칙,
-     * 청산은 새 규칙인 거래가 생겨 **성과 귀속이 깨진다**(2026-09-06 트레일링 승격에서 실제로 발생, #177).
-     *
-     * 폴백이 전역인 이유: 이 변경 이전에 열린 포지션·복원 실패분에는 스냅샷이 없다. 그때는 기존 동작을 그대로 둔다.
-     * `chartExitEnabled` 는 스냅샷에 없다 — 임계가 아니라 모드 스위치라 전역이 소유한다.
-     */
-    private fun exitParamsOf(state: TradingState): ExitParamsSnapshot = state.exitParams ?: snapshotExitParams()
 
     private fun recordReconcileFailure(state: TradingState) {
         state.reconcileFailureCount++
@@ -1400,19 +1381,19 @@ class PositionManager(
 
     fun checkTakeProfit(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
-        return state.pnlPercent(currentPrice) >= exitParamsOf(state).takeProfitPct
+        return state.pnlPercent(currentPrice) >= state.exitParamsOrGlobal(tradingProperties).takeProfitPct
     }
 
     fun checkStopLoss(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
-        return state.pnlPercent(currentPrice) <= -exitParamsOf(state).maxLossPct
+        return state.pnlPercent(currentPrice) <= -state.exitParamsOrGlobal(tradingProperties).maxLossPct
     }
 
     fun checkTrailingStop(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
         // Update peak price
         state.updatePeakPrice(currentPrice)
-        val params = exitParamsOf(state)
+        val params = state.exitParamsOrGlobal(tradingProperties)
         return ExitGates.isTrailingStopTriggered(
             pnlPct = state.pnlPercent(currentPrice),
             peakPnlPct = state.pnlPercent(state.peakPrice),
