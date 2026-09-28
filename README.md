@@ -50,7 +50,7 @@ $env:DB_PORT = "5432"
 .\gradlew.bat :bot:bootRun
 ```
 
-브라우저에서 <http://localhost:8080>에 접속해 회원가입한 뒤, 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능, 백테스트 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
+브라우저에서 <http://localhost:8080>에 접속해 첫 계정을 만든 뒤(회원가입은 계정이 하나도 없는 서버에서만 열립니다), 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능, 백테스트 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
 
 > 개발 환경에서 `JWT_SECRET`과 `APP_ENCRYPTION_SECRET`이 비어 있으면 실행 시 임시 키가 생성됩니다. 재시작 후 세션과 저장된 Upbit 키를 유지하려면 두 값을 고정하세요. `prod` 프로필에서는 두 값이 필수입니다.
 
@@ -215,7 +215,7 @@ coin-trading-bot/
 
 정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
 
-- `/login.html`: 회원가입과 로그인
+- `/login.html`: 로그인(회원가입은 계정이 없는 서버에서 첫 계정을 만들 때만)
 - `/app.html`: dashboard, bot, orders, backtest, wallet, settings 화면
 - `/api/*`: httpOnly JWT 쿠키를 사용하는 same-origin API
 - JSON 필드명: 요청과 응답 모두 `snake_case`
@@ -226,7 +226,7 @@ coin-trading-bot/
 
 | 영역 | Method | Path | 인증 |
 |---|---|---|---|
-| 인증 | POST | `/api/auth/register`, `/login`, `/logout` | Public |
+| 인증 | POST | `/api/auth/register`(계정이 하나도 없을 때만, 있으면 403), `/login`, `/logout` | Public |
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
 | 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
