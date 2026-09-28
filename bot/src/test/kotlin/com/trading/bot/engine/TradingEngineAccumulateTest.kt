@@ -1,7 +1,10 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Ticker
+import com.trading.bot.domain.TradeRecord
+import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.AccumulateProperties
@@ -53,7 +56,7 @@ class TradingEngineAccumulateTest {
 
     private val clock = MutableClock(1_000_000L)
 
-    private fun createEngine(props: AccumulateProperties = accumulate) = TradingEngine(
+    private fun createEngine(props: AccumulateProperties = accumulate, observer: ShadowExitObserver? = null) = TradingEngine(
         upbitClient = upbitClient,
         positionManager = positionManager,
         dailyResetManager = dailyResetManager,
@@ -64,6 +67,7 @@ class TradingEngineAccumulateTest {
         marketDataStore = marketDataStore,
         accumulateProperties = props,
         clock = clock,
+        shadowExitObserver = observer,
     )
 
     private fun price(ticker: String, price: Double) {
@@ -117,6 +121,28 @@ class TradingEngineAccumulateTest {
         engine.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 2) { positionManager.syncPosition("KRW-BTC", state, clearWhenEmpty = true) }
+    }
+
+    @Test
+    fun `an accumulate sell confirmed by reconcile is not reported to the shadow observer`() = runTest {
+        // 그림자 관측은 스윙 청산 규칙끼리의 비교다 — 적립 단 매도는 대상이 아니다(#235).
+        val observer = mockk<ShadowExitObserver>(relaxed = true)
+        val engine = createEngine(observer = observer)
+        price("KRW-BTC", 110.0)
+        val state = TradingState("KRW-BTC", position = true, holdVolume = 1.0, pendingSellUuid = "ladder-sell")
+        coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
+            state.clearPendingSell()
+            state.markSold()
+            TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.SELL, price = 110.0, volume = 1.0, totalAmount = 110.0,
+                pnlPercent = null, pnlAmount = null, strategy = "accumulate", fee = FeeBasis.Estimate, orderAmount = null,
+                reason = "ACCUMULATE_STEP",
+            )
+        }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 0) { observer.onLiveExit(any(), any(), any(), any(), any()) }
     }
 
     @Test
