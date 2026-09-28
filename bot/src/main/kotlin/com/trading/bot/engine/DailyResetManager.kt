@@ -40,7 +40,7 @@ class DailyResetManager(
     fun shouldSellForDailyReset(state: TradingState): Boolean {
         if (!state.position) return false
         val buyDate = state.buyDate ?: return false
-        val configured = state.exitParams?.maxHoldDays ?: tradingProperties.maxHoldDays
+        val configured = state.exitParamsOrGlobal(tradingProperties).maxHoldDays
         val holdLimit = ExitGates.effectiveMaxHoldDays(configured)
         val heldDays = ChronoUnit.DAYS.between(buyDate, getTradingDate())
         if (heldDays > holdLimit) warnOverrunOnce(state.ticker, buyDate, heldDays, holdLimit)
