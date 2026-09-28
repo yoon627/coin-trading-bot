@@ -142,24 +142,19 @@ class PositionManagerExtendedTest {
         coVerify(exactly = 1) { upbitClient.getAccounts() } // 사이징 조회를 재사용 — 추가 호출 없음
     }
 
-    // 현재 프로덕션 경로에서는 도달하지 않는다(processTicker 가 pendingSellUuid 면 buy 전에 return) — syncPosition 과 같은
-    // 판정식(우리 주문 상한)을 buy 도 쓴다는 정책 일관성을 고정한다.
+    // processTicker 는 tick 시작에 pending 매도면 매수 전에 return 하지만, dust 흡수 매수는 같은 tick 에 낸 매도가 결과 불명으로
+    // 남은 뒤에 buy 에 닿을 수 있다(#234) — 매도 확정이 새 코인과 섞이지 않게 buy 자체가 막는다.
     @Test
-    fun `buy is not blocked by a lock that our own pending sell explains`() = runTest {
-        coEvery { upbitClient.getAccounts() } returnsMany listOf(
-            listOf(
-                Account(currency = "KRW", balance = "200000"),
-                Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
-            ),
-            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")),
+    fun `buy is blocked while our own sell is still pending`() = runTest {
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "KRW", balance = "200000"),
+            Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
         )
-        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-123")
-        coEvery { upbitClient.getOrder("buy-123") } returns Order(uuid = "buy-123", state = "done", executedVolume = "0.00038")
         val state = TradingState("KRW-BTC", position = false, pendingSellUuid = "sell-1", pendingSellVolume = 0.001)
 
-        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
+        assertNull(manager.buy("KRW-BTC", state, 50000000.0, "test"))
 
-        assertNotNull(result)
+        coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
         assertFalse(state.unsynced)
     }
 
@@ -324,14 +319,14 @@ class PositionManagerExtendedTest {
     fun `sell submits actual balance not the recorded holdVolume`() = runTest {
         // state 는 1.0 보유로 알지만 거래소 실잔고는 0.5
         coEvery { upbitClient.getAccounts() } returns listOf(
-            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "100")
+            Account(currency = "BTC", balance = "0.5", avgBuyPrice = "10000")
         )
         val orderSlot = slot<OrderRequest>()
         coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "s2")
         coEvery { upbitClient.getOrder("s2") } returns Order(uuid = "s2", state = "done")
 
-        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, holdVolume = 1.0)
-        val result = manager.sell("KRW-BTC", state, 110.0, SellReason.MANUAL)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 10_000.0, holdVolume = 1.0)
+        val result = manager.sell("KRW-BTC", state, 11_000.0, SellReason.MANUAL) // 5,500원 — 최소주문 이상
 
         assertEquals("0.5", orderSlot.captured.volume)
         assertEquals(0.5, result!!.volume)
@@ -1273,13 +1268,13 @@ class PositionManagerExtendedTest {
         // 이 PR 의 핵심 불변식: 청산 게이트는 gross(행동 불변), 기록만 net.
         val mgr = PositionManager(upbitClient, TradingProperties(takeProfitPct = 2.0), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getAccounts() } returns listOf(
-            Account(currency = "BTC", balance = "0.001", avgBuyPrice = "100000")
+            Account(currency = "BTC", balance = "0.1", avgBuyPrice = "100000")
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "sell-edge")
         coEvery { upbitClient.getOrder("sell-edge") } returns Order(uuid = "sell-edge", state = "done")
 
         val state = TradingState("KRW-BTC")
-        state.markBought(100000.0, 0.001)
+        state.markBought(100000.0, 0.1) // 10,205원 매도 — 최소주문 이상
 
         assertTrue(mgr.checkTakeProfit(state, 102050.0)) // gross 2.05% ≥ 2.0 — 게이트는 수수료 미차감
         val result = mgr.sell("KRW-BTC", state, 102050.0, SellReason.TAKE_PROFIT)
