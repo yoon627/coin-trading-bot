@@ -15,6 +15,7 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
+import io.mockk.clearMocks
 import io.mockk.coVerify
 import io.mockk.mockk
 import java.time.Clock
@@ -476,5 +477,99 @@ class PositionManagerUnknownOrderTest {
         assertEquals(1, sent.size)
         assertTrue(state.pendingPersistFailed)
         assertNotNull(state.pendingSellIdentifier)
+    }
+
+    // --- 확정 규칙의 관측 가능한 계약 (#235) ---
+    // 규칙을 PositionManager 밖으로 옮겨도 아래가 그대로여야 한다. 기존 테스트가 우연히 가리지 못하던 것만 고정한다.
+
+    /** 응답을 못 받아 identifier 만 남은 매수. */
+    private suspend fun unknownBuy(): Pair<TradingState, String> {
+        coEvery { upbit.getAccounts() } returns listOf(krw())
+        placeOrderAnswers { throw RuntimeException("connection reset") }
+        val state = TradingState("KRW-BTC")
+        manager.buy("KRW-BTC", state, 50_000_000.0, "test")
+        return state to state.pendingBuyIdentifier!!
+    }
+
+    @Test
+    fun `an unknown sell never counts toward the halt`() = runTest {
+        // 매도는 경과시간 알림이 사람을 부른다 — halt 는 신규 매수만 막는 플래그라 매도 판정은 세지 않는다.
+        coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
+        placeOrderAnswers { throw RuntimeException("connection reset") }
+        val state = held()
+        manager.sell("KRW-BTC", state, 52_000_000.0, SellReason.STOP_LOSS)
+        val identifier = state.pendingSellIdentifier!!
+
+        coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("order lookup down")
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns null
+        coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertEquals(0, state.reconcileFailureCount)
+        assertFalse(state.halted)
+    }
+
+    @Test
+    fun `finding a buy by identifier clears the halt counter even before it fills`() = runTest {
+        val (state, identifier) = unknownBuy()
+        state.reconcileFailureCount = 3
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns Order(uuid = "u-wait", state = "wait", executedVolume = "0")
+
+        assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
+
+        assertEquals("u-wait", state.pendingBuyUuid) // 아직 체결 전 — 이어받은 uuid 로 다음 tick 에 확정한다
+        assertEquals(0, state.reconcileFailureCount) // 주문 상태를 봤으니 조회 장애 카운트는 끊긴다
+    }
+
+    @Test
+    fun `a released sell resyncs the position while the lock ceiling still sees the order`() = runTest {
+        // 재시작 뒤처럼 position=false 로 복원된 행. 해제 전에 동기화해야 잔고 해석이 이 주문의 락 상한을 쓴다
+        // (clear 뒤에 동기화하면 상한이 0 이 되어 locked 가 빠진다) — 지금 동작을 그대로 고정한다.
+        val state = TradingState("KRW-BTC").apply {
+            beginSellOrder("ctb-restored", SellReason.STOP_LOSS, since = clock.instant(), volume = 0.001, triggerPrice = 52_000_000.0, priorVolume = 0.0005)
+        }
+        coEvery { upbit.getOrderByIdentifier("ctb-restored") } returns null
+        coEvery { upbit.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.0005", locked = "0.0005", avgBuyPrice = "50000000"))
+
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+        advance(70)
+        manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+
+        assertFalse(state.hasPendingSell())
+        assertTrue(state.position)
+        assertEquals(0.001, state.holdVolume, 1e-12)
+        assertTrue(logs.list.any { it.level == Level.WARN && "Sell order ctb-restored for KRW-BTC was never placed" in it.formattedMessage })
+    }
+
+    @Test
+    fun `the balance is read only when the exchange does not know the order`() = runTest {
+        val (state, identifier) = unknownBuy()
+
+        clearMocks(upbit, answers = false)
+        coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("order lookup down")
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        coVerify(exactly = 0) { upbit.getAccounts() } // 조회가 실패하면 흔적을 보지 않는다
+
+        clearMocks(upbit, answers = false)
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns null
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        coVerify(exactly = 1) { upbit.getAccounts() } // 404 면 흔적 판정 한 번
+    }
+
+    @Test
+    fun `an unknown buy is released exactly sixty seconds after the first miss`() = runTest {
+        val (state, identifier) = unknownBuy()
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns null
+
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        advance(59)
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        assertEquals(identifier, state.pendingBuyIdentifier)
+
+        advance(1)
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        assertFalse(state.hasPendingBuy())
+        assertTrue(logs.list.any { it.level == Level.WARN && "Buy order $identifier for KRW-BTC was never placed" in it.formattedMessage })
     }
 }
