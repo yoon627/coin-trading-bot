@@ -59,6 +59,21 @@ class ShadowExitObserverTest {
         // 실행 슬리피지의 입력 — 판단가(105.0)와 실체결가(104.7)를 **둘 다** 남겨야 차이를 잴 수 있다.
         assertEquals(105.0, e.liveExitPrice)
         assertEquals(104.7, e.liveExitVwap)
+        assertEquals(clock.instant(), e.liveExitAt) // 시각을 주지 않으면 보고 시각
+    }
+
+    @Test
+    fun `stamps a late-confirmed exit with the time it was decided`() = runBlocking {
+        val repo = mockk<ShadowExitObservationRepository>()
+        val captured = slot<ShadowExitObservationEntity>()
+        every { repo.save(capture(captured)) } returns Mono.empty()
+        val o = observer(repo)
+        o.onTick("KRW-BTC", armedState(), 108.0)
+        val decidedAt = Instant.parse("2026-09-04T23:50:00Z") // 확정(지금)보다 10분 앞
+
+        o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "STOP_LOSS", exitAt = decidedAt)
+
+        assertEquals(decidedAt, captured.captured.liveExitAt)
     }
 
     @Test
