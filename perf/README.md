@@ -11,14 +11,15 @@ brew install k6
 ## 실행
 
 ```bash
-# 로컬 서버 대상 (기본)
-k6 run perf/load-test.js
+# 로컬 일회용 서버 대상(아래 "로컬 대상 띄우기") — smoke 뒤 load. 빈 DB 첫 실행이면 K6_REGISTER=1 로 k6 계정을 만든다
+k6 run -e LOCAL_CLIENT_IPS=1 -e K6_REGISTER=1 -e BASE_URL=http://localhost:18080 perf/load-test.js
 
-# smoke 만 (공개 GET 3종·check 4개·1 VU·30s) — 운영 도메인에 돌려도 되는 유일한 시나리오
+# smoke 만 (공개 GET 2종·check 3개·1 VU·30s) — 운영 도메인에 돌려도 되는 유일한 시나리오
 # (k6 에는 시나리오 선택 플래그가 없어 스크립트가 ONLY 환경변수로 고른다 — grafana/k6#3054)
 k6 run -e ONLY=smoke -e BASE_URL=https://do-anything.cloud perf/load-test.js
 
-# load 만 (로컬 전용) — LOCAL_CLIENT_IPS=1 로 iteration 마다 다른 client IP 를 줘야 rate limit 에 안 막힌다(아래 경고)
+# load 만 (로컬 전용) — LOCAL_CLIENT_IPS=1 로 iteration 마다 다른 client IP 를 줘야 rate limit 에 안 막힌다(아래 경고).
+# k6 계정이 이미 있는 DB(두 번째 실행부터)라 K6_REGISTER 를 뺀다
 k6 run -e ONLY=load -e LOCAL_CLIENT_IPS=1 -e BASE_URL=http://localhost:18080 perf/load-test.js
 ```
 
@@ -36,21 +37,25 @@ SERVER_PORT=18080 DB_PORT=55433 DB_PASSWORD=k6local UPBIT_ACCESS_KEY= UPBIT_SECR
 # 끝나면: docker stop k6-baseline-pg
 ```
 
-> ⚠️ `load` 시나리오는 **iteration 마다** `/api/auth/register` 로 계정을 만들고(`k6user_*`) 인증 엔드포인트를 친다.
-> **운영 도메인에는 돌리지 않는다** — 로컬(`docker-compose.yml`)이나 일회용 인스턴스에서만.
+> ⚠️ `load` 는 `K6_USERNAME`/`K6_PASSWORD`(기본 `k6user`/`k6-local-password`) 계정으로 `setup()` 에서 한 번, 그 뒤
+> iteration 마다 로그인해 인증 엔드포인트를 친다. 회원가입은 계정이 하나도 없는 서버에서만 열리므로(첫 계정 = 소유자)
+> 계정은 `K6_REGISTER=1` 을 줬을 때만 만든다 — **빈 일회용 DB 의 첫 실행 전용**이고, 그 외 서버에서는 가입이 403 이라 바로 중단한다.
+> 로그인이 안 되거나 그 계정에 Upbit 키가 있어도 중단한다(키가 있으면 `/api/portfolio` 가 실제 Upbit 를 반복 호출한다).
+> **운영 도메인에는 돌리지 않는다** — 로컬 일회용 DB 에서만. `ONLY=smoke` 이면 `setup()` 이 아무것도 하지 않아 인증 경로에 요청이 가지 않는다.
 >
 > 현행 `RateLimitFilter` 는 `/api/auth` 30/min, 그 외 60/min 을 **클라이언트 IP 단위**로 센다(버킷 키는 (인증/일반) × 프록시가 부여한 client IP — 두 카운터는 따로 돈다,
 > `/actuator`·`/api/prices` 만 제외). 한 머신에서 뜬 VU 전부가 같은 두 버킷을 공유하므로 그대로면 `load` 는 VU 수와 무관하게 429 로
 > 에러율 임계를 넘는다. 로컬은 프록시가 없어 앱이 `X-Forwarded-For` 를 그대로 믿으므로, `LOCAL_CLIENT_IPS=1` 이 iteration 마다
 > 다른 주소를 붙여 버킷을 나눈다(rate limit 필터 자체는 켜진 채로 측정된다). **운영에서는 Caddy 가 이 헤더를 실제 peer IP 로
 > 덮어써 아무 효과가 없다** — 우회 수단이 아니라 로컬 측정용이다.
-> `/api/portfolio` 는 Upbit 키 없는 k6 유저에게 400 이 정상이라 check 가 그 값을 허용한다(`http_req_failed` 에는 잡힌다).
+> `/api/portfolio` 는 Upbit 키 없는 k6 유저에게 400 이 정상이라 check 가 그 값을 허용하고, `http.expectedStatuses(200, 400)` 로
+> `http_req_failed` 에서도 뺀다(빼지 않으면 iteration 당 1건씩 쌓여 에러율 임계를 항상 넘는다).
 
 ## 시나리오
 
 | 시나리오 | VU | 시간 | 설명 |
 |---------|-----|------|------|
-| smoke | 1 | 30s | 공개 GET 3종 (`/actuator/health`, `/api/leaderboard`, `/api/prices/status`), check 4개 |
+| smoke | 1 | 30s | 공개 GET 2종 (`/actuator/health`, `/api/prices/status`), check 3개 — 2026-09-28 리더보드 제거 전 기준선은 3종·4개 |
 | load | 0→50 | 8m | 점진적 부하 증가, 인증 포함 (`/api/user/me`, `/api/bot/status`, `/api/strategies`, `/api/trades`, `/api/portfolio`) |
 
 ## Threshold
@@ -69,10 +74,13 @@ SERVER_PORT=18080 DB_PORT=55433 DB_PASSWORD=k6local UPBIT_ACCESS_KEY= UPBIT_SECR
 
 | 2026-09-18 | 로컬 `bootRun`(M-series Mac, 일회용 Postgres 17, Redis 없음 = in-memory rate limit, 시세 수집 13마켓 동시 가동) | smoke (1 VU·30s) | 30 / 90 | 120 통과 / 0 실패 | 0% | 5.7 / 10.1 / 62.5 | 전부 통과 |
 | 2026-09-18 | 위와 같음, `LOCAL_CLIENT_IPS=1` | load (0→50 VU·8m) | 6,136 / 61,360 (118.8 req/s) | 55,224 통과 / 0 실패 | 0% | 23.9 / 119.3 / 305.1 (p99 170.8) | 전부 통과 |
+| 2026-09-28 | 로컬 `bootRun`(같은 Mac, 일회용 Postgres, 리더보드 제거 후) | smoke (1 VU·30s) | 30 / 60 | 90 통과 / 0 실패 | 0% | 1.9 / 3.6 / 6.6 | 전부 통과 |
+| 2026-09-28 | 위와 같음, `LOCAL_CLIENT_IPS=1`, iteration 마다 로그인만 | load (0→50 VU·8m) | 6,473 / 51,787 (100.2 req/s) | 51,785 통과 / 0 실패 | 0% (1건 = `K6_REGISTER` 도입 전 스크립트의 setup 가입 403) | 14.2 / 75.5 / 216.1 (p99 131.9) | 전부 통과 |
 
-load 메모: 중앙값 1.3ms 에 p90 79ms — 꼬리는 iteration 마다 도는 register+login 의 비밀번호 해시(login avg 77 / p95 136ms)다. JVM RSS 는
+load 메모(2026-09-18 — 그때 스크립트는 iteration 마다 가입+로그인, 2026-09-28 부터는 로그인만): 중앙값 1.3ms 에 p90 79ms — 꼬리는 iteration 마다 도는 register+login 의 비밀번호 해시(login avg 77 / p95 136ms)다. JVM RSS 는
 452~454MB 로 8분간 평탄(누수 징후 없음), CPU 피크 ≈ 460%(코어 4.6개분 — 50 VU 에서 해시가 CPU 를 다 쓴다). 첫 실행에서는 login 1건이
 6.2초(JVM 워밍업성, 재실행에서 미재현)였다. **운영 인스턴스(2 vCPU·2GB)의 한계치는 이 수치로 추정하지 말 것** — 코어 수가 다르다.
+2026-09-28 load 는 iteration 당 요청이 10→8건(가입·리더보드 제거)이라 http_reqs·avg·p95 가 내려갔고, login avg 86 / p95 135ms 는 09-18 과 같은 수준이다.
 
 미측정(#25 잔여): 이 스크립트는 REST 만 친다. 시세 수집 파이프라인 backpressure·다종목×다유저 tick 평가·고빈도 DB write 는 합성 ticker 주입
 하네스가 있어야 잰다.

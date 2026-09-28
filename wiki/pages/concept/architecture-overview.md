@@ -2,9 +2,9 @@
 title: 아키텍처 개관 — 단일 Spring Boot 프로세스 안의 Upbit 봇·API·시세수집
 category: concept
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
+verified: 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
 sources:
   - settings.gradle.kts
   - PROJECT_ANALYSIS.md
@@ -38,6 +38,6 @@ Gradle 멀티모듈이지만 배포 단위는 **JVM 프로세스 하나**다. `s
 
 ## 이 구조에서 나오는 성질
 
-- **멀티유저·단일 인스턴스**: 사용자마다 `TradingEngine` 인스턴스가 뜨고(`UserTradingManager`), 프로세스는 하나다. 분산 배포를 전제한 lease·락은 없다.
+- **사용자별 엔진·단일 인스턴스**: 사용자마다 `TradingEngine` 인스턴스가 뜨고(`UserTradingManager`), 프로세스는 하나다. 분산 배포를 전제한 lease·락은 없다. 구조는 사용자별이지만 가입은 계정이 하나도 없을 때만 받아(`AuthController.register`) 실제로는 소유자 한 명이 쓴다.
 - **비동기 일관**: WebFlux + Coroutines + R2DBC. 블로킹 JDBC 를 섞으면 이벤트 루프가 막히므로 persistence 는 R2DBC 로 유지된다.
 - **시세 수집이 같은 프로세스 안에 있다**: 봇 프로세스 안에서 시세를 수집·캐시한다. 수집이 죽으면 매매도 같이 눈이 멀 수 있어 엔진에 신선도 체크와 REST 폴백이 있다([[trading-engine-loop]]).
