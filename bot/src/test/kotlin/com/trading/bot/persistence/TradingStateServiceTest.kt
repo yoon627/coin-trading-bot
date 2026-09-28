@@ -42,7 +42,7 @@ class TradingStateServiceTest {
         assertEquals("pending-1", state.pendingBuyUuid)
         assertEquals("volatility_breakout", state.pendingBuyStrategy)
         assertEquals(true, state.halted)
-        assertNull(state.exitParams) // 스냅샷만 버린다(소비는 Phase 2 라 당장 영향 없음)
+        assertNull(state.exitParams) // 스냅샷만 버린다 — 이 포지션은 전역 청산값으로 폴백한다
     }
 
     @Test
