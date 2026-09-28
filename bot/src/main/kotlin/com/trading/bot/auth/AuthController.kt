@@ -6,6 +6,8 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.springframework.core.env.Environment
 import org.springframework.core.env.Profiles
 import org.springframework.http.HttpStatus
@@ -30,32 +32,38 @@ class AuthController(
     private val userSecretsService: UserSecretsService,
     private val environment: Environment,
 ) {
+    // 계정 수 확인부터 저장까지 한 구간이어야 동시 두 요청이 둘 다 0 을 보지 못한다. 앱 한 인스턴스 기준(운영 compose app 1개).
+    private val registrationLock = Mutex()
+
+    /** 계정이 하나도 없는 서버에서 첫 계정을 만들 때만 받는다 — 이 봇은 한 명만 쓰고 인터넷에 열려 있다. */
     @PostMapping("/register")
     suspend fun register(@RequestBody req: AuthRequest, request: ServerHttpRequest, response: ServerHttpResponse): AuthResponse {
-        val username = requestValidators.normalizeUsername(req.username)
-        requestValidators.validatePassword(req.password)
-        val existing = userRepository.findByUsername(username).awaitSingleOrNull()
-        if (existing != null) {
-            throw ResponseStatusException(HttpStatus.CONFLICT, "Username already exists")
+        val user = registrationLock.withLock {
+            // 입력 검증보다 먼저 닫는다 — 닫힌 서버가 사용자명 규칙을 알려 주거나 해시 비용을 쓸 이유가 없다.
+            if (userRepository.count().awaitSingle() > 0) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "Registration is closed")
+            }
+            val username = requestValidators.normalizeUsername(req.username)
+            requestValidators.validatePassword(req.password)
+            val accessKey = req.upbitAccessKey?.takeIf { it.isNotBlank() }?.let {
+                requestValidators.normalizeApiKey(it, "accessKey")
+            }
+            val secretKey = req.upbitSecretKey?.takeIf { it.isNotBlank() }?.let {
+                requestValidators.normalizeApiKey(it, "secretKey")
+            }
+            if ((accessKey == null) != (secretKey == null)) {
+                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Both accessKey and secretKey must be provided together")
+            }
+            val (encryptedAccessKey, encryptedSecretKey) = userSecretsService.encryptUpbitKeys(accessKey, secretKey)
+            userRepository.save(
+                UserEntity(
+                    username = username,
+                    password = passwordEncoder.encode(req.password),
+                    upbitAccessKey = encryptedAccessKey,
+                    upbitSecretKey = encryptedSecretKey,
+                )
+            ).awaitSingle()
         }
-        val accessKey = req.upbitAccessKey?.takeIf { it.isNotBlank() }?.let {
-            requestValidators.normalizeApiKey(it, "accessKey")
-        }
-        val secretKey = req.upbitSecretKey?.takeIf { it.isNotBlank() }?.let {
-            requestValidators.normalizeApiKey(it, "secretKey")
-        }
-        if ((accessKey == null) != (secretKey == null)) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Both accessKey and secretKey must be provided together")
-        }
-        val (encryptedAccessKey, encryptedSecretKey) = userSecretsService.encryptUpbitKeys(accessKey, secretKey)
-        val user = userRepository.save(
-            UserEntity(
-                username = username,
-                password = passwordEncoder.encode(req.password),
-                upbitAccessKey = encryptedAccessKey,
-                upbitSecretKey = encryptedSecretKey,
-            )
-        ).awaitSingle()
         val token = jwtProvider.generateToken(user.id!!, user.username)
         writeAuthCookie(request, response, token)
         return AuthResponse(token = token, username = user.username)
