@@ -12,6 +12,7 @@ import java.time.Clock
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -75,6 +76,17 @@ class ExitParamsSnapshotConsumptionTest {
         // 스냅샷이 없으면 전역(익절 10%)을 따른다 — 이 변경 이전에 열린 포지션의 동작 보존.
         assertFalse(manager.checkTakeProfit(state, 103.0)) { "스냅샷이 없으면 전역을 따라야 한다" }
         assertTrue(manager.checkTakeProfit(state, 111.0))
+    }
+
+    @Test
+    fun `a snapshot taken from the global config carries each field in place`() {
+        // 새 진입의 스냅샷과 스냅샷 없는 포지션의 폴백이 모두 이 매핑을 탄다 — 필드가 뒤바뀌면 두 경로가 함께 틀린다.
+        val global = TradingProperties(takeProfitPct = 1.0, maxLossPct = 2.0, trailingStopPct = 3.0, trailingArmPct = 4.0, maxHoldDays = 5)
+
+        assertEquals(
+            ExitParamsSnapshot(takeProfitPct = 1.0, maxLossPct = 2.0, trailingStopPct = 3.0, trailingArmPct = 4.0, maxHoldDays = 5),
+            global.exitParamsSnapshot(),
+        )
     }
 
     @Test
