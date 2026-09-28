@@ -180,7 +180,7 @@ class TradeAuditAtomicityTest {
         val record = succeedingManager().reconcilePendingBuy(TICKER, state, PRICE)
 
         assertNotNull(record)
-        assertEquals(USER_ID, record!!.userId, "감사 기록에 userId 가 없으면 리더보드·PnL 집계에서 누락된다")
+        assertEquals(USER_ID, record!!.userId, "감사 기록에 userId 가 없으면 사용자별 조회·PnL 집계에서 누락된다")
         assertEquals(BUY_UUID, record.exchangeOrderId, "멱등 dedup 키가 실려야 재시도 시 중복 insert 를 막는다")
         // 메모리 전이
         assertTrue(state.position)

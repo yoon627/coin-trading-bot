@@ -50,7 +50,7 @@ $env:DB_PORT = "5432"
 .\gradlew.bat :bot:bootRun
 ```
 
-브라우저에서 <http://localhost:8080>에 접속해 회원가입한 뒤, 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능, 백테스트 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
+브라우저에서 <http://localhost:8080>에 접속해 첫 계정을 만든 뒤(회원가입은 계정이 하나도 없는 서버에서만 열립니다), 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능, 백테스트 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
 
 > 개발 환경에서 `JWT_SECRET`과 `APP_ENCRYPTION_SECRET`이 비어 있으면 실행 시 임시 키가 생성됩니다. 재시작 후 세션과 저장된 Upbit 키를 유지하려면 두 값을 고정하세요. `prod` 프로필에서는 두 값이 필수입니다.
 
@@ -195,7 +195,7 @@ coin-trading-bot/
 - **켜는 순간 편입**: 같은 티커를 이미 스윙으로 보유 중이면 그 보유가 실측 원가 기준 N단으로 사다리에 편입됩니다(로그 WARN).
 - **끄기**: 값을 비우고 재기동합니다. 남은 포지션은 즉시 스윙 규칙(손절 −5%·09:00 청산)을 받으므로, 끄기 전에 수동 정리하거나 그 결과를 감수해야 합니다.
 - **현금 경쟁**: 적립이 아직 투입하지 않은 예산은 스윙 매수 사이징에서 미리 빠집니다. 적립 단이 예산·KRW 부족으로 건너뛰어지면 `/api/bot/status` 의 `accumulate_skip` 에 사유가 보입니다.
-- **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다(리더보드 집계에서는 제외). 손익은 `pnl_amount`(원)로 읽으세요.
+- **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다. 손익은 `pnl_amount`(원)로 읽으세요.
 - **거래대금 정의(2026-09-14)**: 같은 응답의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다. 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓입니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
 - **백테 근거**: 2026-09 fixture(하락장 4·상승장 3)에서 후보 기본값은 "하락장에서 단순 보유보다 덜 잃고(−20% vs −29%), 상승장에서 훨씬 덜 번다(+27% vs +96%)"는 프로파일을 보였습니다. 수익성 우월의 근거가 아니라 성격 확인입니다(`AccumulateBacktestTest`).
 
@@ -215,7 +215,7 @@ coin-trading-bot/
 
 정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
 
-- `/login.html`: 회원가입과 로그인
+- `/login.html`: 로그인(회원가입은 계정이 없는 서버에서 첫 계정을 만들 때만)
 - `/app.html`: dashboard, bot, orders, backtest, wallet, settings 화면
 - `/api/*`: httpOnly JWT 쿠키를 사용하는 same-origin API
 - JSON 필드명: 요청과 응답 모두 `snake_case`
@@ -226,7 +226,7 @@ coin-trading-bot/
 
 | 영역 | Method | Path | 인증 |
 |---|---|---|---|
-| 인증 | POST | `/api/auth/register`, `/login`, `/logout` | Public |
+| 인증 | POST | `/api/auth/register`(계정이 하나도 없을 때만, 있으면 403), `/login`, `/logout` | Public |
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
 | 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
@@ -235,7 +235,6 @@ coin-trading-bot/
 | 전략 | GET/POST | `/api/strategies`, `/performance`, `/backtest` | 필요 |
 | 관심 목록 | GET | `/api/watchlist` | 필요 |
 | 실시간 가격 | GET | `/api/prices/stream`, `/latest`, `/status` | Public |
-| 커뮤니티 | GET | `/api/leaderboard`, `/api/user/{userId}/profile` | Public |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
 
 ## 환경변수
