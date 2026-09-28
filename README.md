@@ -258,7 +258,7 @@ coin-trading-bot/
 | `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` | 없음 | 선택적 전역 fallback 키. 일반적으로 UI에서 사용자별 키 등록 |
 | `TRADING_TICKERS` | `KRW-BTC` | 쉼표로 구분한 기본 거래 종목 |
 | `TRADING_STRATEGY` | `combined` | 기본 전략 |
-| `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율 |
+| `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
 | `TRADING_ACCUMULATE_TICKERS` | 없음(off) | 적립 프로파일로 매매할 티커. 예산·단수·간격은 [적립 프로파일](#적립-프로파일-메이저-코인용-기본-off) 참고 |

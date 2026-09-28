@@ -76,6 +76,9 @@ data class TradingState(
     var pendingSellPriorVolume: Double? = null,
     // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 상태 API 노출용, 비영속.
     var accumulateSkipReason: String? = null,
+    // 스윙 보유가 최소주문 미만 dust 라고 이미 알렸는지(비영속). 포지션이 바뀔 때만 풀린다 — 가격이 경계를 오갈 때마다
+    // 다시 알리지 않는다(#234).
+    var dustWarned: Boolean = false,
     // 주문 전에 durable 로 남기는 클라이언트 identifier. 응답(uuid)을 받기 전에 끊긴 주문을 거래소에서 찾는 유일한
     // 근거다(#227). uuid 를 알게 되면 비운다 — pending 주문은 uuid 또는 identifier 중 하나로만 식별된다(둘 다 있으면 uuid 가 우선).
     var pendingBuyIdentifier: String? = null,
@@ -201,6 +204,7 @@ data class TradingState(
         lastTradeTime = now
         // H8: 체결 확정 = pending 주문 해소.
         clearPendingBuy()
+        dustWarned = false
     }
 
     fun markSold(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
@@ -222,6 +226,7 @@ data class TradingState(
         lastTradeTime = now
         // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
         clearPendingBuy()
+        dustWarned = false
         // 매도 확정 = 매도 pending 해소.
         clearPendingSell()
     }
