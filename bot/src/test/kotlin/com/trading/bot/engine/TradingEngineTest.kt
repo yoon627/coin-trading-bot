@@ -363,6 +363,67 @@ class TradingEngineTest {
         coVerify { positionManager.buy("KRW-BTC", state, 51_000_000.0, "test_strategy") }
     }
 
+    // --- 매도 불가 dust (#234) ---
+    // 거래소 최소주문(5,000원) 미만 보유는 팔 수 없다 — 그 티커의 진입을 막지 않는다. 주문 여부는 PositionManager 가 실잔고로 정한다.
+
+    private fun dustEngine(observer: ShadowExitObserver) = TradingEngine(
+        upbitClient = upbitClient,
+        positionManager = positionManager,
+        dailyResetManager = dailyResetManager,
+        strategies = listOf(strategy),
+        tradingProperties = tradingProperties,
+        userId = 1L,
+        username = "testuser",
+        discordWebhookUrl = null,
+        marketDataStore = marketDataStore,
+        shadowExitObserver = observer,
+    )
+
+    @Test
+    fun `a dust holding does not block a new entry and is not observed as a position`() = runTest {
+        val observer = mockk<ShadowExitObserver>(relaxed = true)
+        val engine = dustEngine(observer)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 12_000_000.0, holdVolume = 0.0001) // 1,000원
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 10_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy", any()) }
+        coVerify(exactly = 0) { observer.onTick(any(), any(), any()) }
+    }
+
+    @Test
+    fun `a dust holding still goes through exit evaluation`() = runTest {
+        // 기록상 수량이 낡았을 수 있다 — 청산 평가를 끄면 실제로 팔 수 있는 포지션이 손절을 잃는다.
+        val engine = createEngine()
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 12_000_000.0, holdVolume = 0.0001)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 10_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+        every { positionManager.checkStopLoss(any(), any()) } returns true
+        coEvery { positionManager.sell(any(), any(), any(), any()) } returns null // 가드가 주문하지 않았다
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify { positionManager.sell("KRW-BTC", state, 10_000_000.0, SellReason.STOP_LOSS) }
+        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy", any()) }
+    }
+
+    @Test
+    fun `a sellable or unknown-size holding keeps the entry gate closed`() = runTest {
+        val engine = createEngine()
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 10_000_000.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
+
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true, holdVolume = 0.01), strategy) // 10만원
+        engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true), strategy) // 수량 미상
+
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any(), any()) }
+    }
+
     @Test
     fun `processTicker sells then returns without evaluating buy in same tick`() = runTest {
         val engine = createEngine()

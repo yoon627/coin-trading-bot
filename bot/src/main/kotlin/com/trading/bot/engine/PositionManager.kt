@@ -3,6 +3,7 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.awaitFill
 import com.trading.bot.client.newOrderIdentifier
+import com.trading.bot.client.isRejectedAsBelowMinimumOrder
 import com.trading.bot.client.provesOrderNotPlaced
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.ExitParamsSnapshot
@@ -36,6 +37,18 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
+/**
+ * 이 수량을 이 가격에 팔면 거래소 최소주문(원화 5,000원)에 못 미치는가 — 그런 보유는 팔 수 없는 dust 다(#234).
+ * 정확히 최소주문이면 팔 수 있다. 엔진 테스트는 PositionManager 를 mock 하므로 판정은 멤버가 아니라 여기 둔다.
+ */
+internal fun isBelowMinOrder(volume: Double, price: Double): Boolean = volume * price < AccumulateLadder.MIN_ORDER_KRW
+
+/**
+ * 기록상 보유가 이 가격에서 팔 수 없는 dust 인가. 기록(`holdVolume`)은 마지막 동기화 값이라 진입 게이트를 여는 데만 쓰고,
+ * 주문은 실잔고로 다시 판정한다. 수량 미상(0)은 dust 로 보지 않는다 — 모르면 관리하는 쪽이 안전하다.
+ */
+internal fun TradingState.isDustAt(price: Double): Boolean = position && holdVolume > 0.0 && isBelowMinOrder(holdVolume, price)
+
 class PositionManager(
     private val upbitClient: UpbitClient,
     private val tradingProperties: TradingProperties,
@@ -57,7 +70,7 @@ class PositionManager(
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        private const val MIN_ORDER_AMOUNT_KRW = 5000.0
+        private const val MIN_ORDER_AMOUNT_KRW = AccumulateLadder.MIN_ORDER_KRW
         // 적립 단 매도는 요청 대비 이 비율 이상 체결됐을 때만 rung 을 소모한다 — 10% 체결로 한 단을 지우면 사다리가 어긋난다.
         // 원가 정합(LadderStateMapper)의 허용치와 짝이라 common 에 둔다.
         private const val RUNG_FILL_RATIO = AccumulateLadder.SELL_FILL_RATIO
@@ -179,6 +192,12 @@ class PositionManager(
             log.debug("Skip buy for {}: pending order {} awaiting reconcile", ticker, state.pendingBuyRef())
             return true
         }
+        if (state.hasPendingSell()) {
+            // 같은 tick 에 낸 매도가 결과 불명으로 남았는데 사면, 그 매도의 확정(잔량·잔고 흔적)이 새 코인과 섞인다 —
+            // dust 흡수 매수가 이 게이트에 닿을 수 있다(#234).
+            log.debug("Skip buy for {}: pending sell {} awaiting reconcile", ticker, state.pendingSellRef())
+            return true
+        }
         if (state.unsynced) {
             // 보유 여부가 불확실 — 잔고 조회 실패이거나, 우리 주문으로 설명 안 되는 locked 가 있는 경우다.
             // 어느 쪽이든 신규 매수는 이미 보유분과 이중 포지션 위험. skip(processTicker 가 재시도).
@@ -207,7 +226,9 @@ class PositionManager(
         strategyName: String,
         reservedKrw: Double = 0.0,
     ): TradeRecord? {
-        if (entryBlocked(ticker, state, allowExisting = false)) return null
+        // 팔 수 없는 dust 보유는 진입을 막지 않는다 — 사면 합쳐서 새 진입이 된다(#234). 아래에서 실잔고로 다시 판정한다.
+        val onDust = state.isDustAt(currentPrice)
+        if (entryBlocked(ticker, state, allowExisting = onDust)) return null
         val accounts = try {
             upbitClient.getAccounts()
         } catch (e: CancellationException) {
@@ -233,9 +254,22 @@ class PositionManager(
             log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
             return null
         }
+        // 손절 시점에도 최소주문 이상이어야 팔 수 있다 — 아니면 봇이 처음부터 손절 못 할 포지션을 연다(#234).
+        if (investAmount * (1 - tradingProperties.maxLossPct / 100) < MIN_ORDER_AMOUNT_KRW) {
+            log.debug("Skip buy for {}: investAmount={} would be unsellable at the stop-loss", ticker, investAmount)
+            return null
+        }
         // 장부 밖 잔고(수동 매수·dust)도 주문 전 보유량에 넣는다 — 체결 판정이 이 주문으로 늘어난 증분만 보게 된다.
         val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = priorVolume)
+        if (onDust && !isBelowMinOrder(priorVolume, currentPrice)) {
+            // 기록이 낡았다(그 사이 앱에서 더 샀거나 락이 풀렸다) — 실제로는 팔 수 있는 보유라 그 위에 사면 이중 포지션이다.
+            // 실측으로 고쳐 다음 tick 부터 보유로 관리되게 한다.
+            log.info("Skip buy for {}: holding is sellable on the exchange (volume={}) — resyncing", ticker, priorVolume)
+            state.holdVolume = priorVolume
+            coin?.let { state.avgBuyPrice = it.avgBuyPriceDouble() }
+            return null
+        }
+        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = priorVolume, freshEntry = onDust)
     }
 
     /**
@@ -295,6 +329,7 @@ class PositionManager(
         strategyName: String,
         triggerPrice: Double?,
         priorVolume: Double,
+        freshEntry: Boolean = false,
     ): TradeRecord? {
         // 아래 블록은 취소를 받지 않는다 — 정지(stop/reload)가 시작된 뒤에는 새 주문을 시작하지 않는다.
         currentCoroutineContext().ensureActive()
@@ -303,7 +338,9 @@ class PositionManager(
         // 재시작해도(syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
         // 적립 추가 단은 기존 포지션 위에 얹는다 — 지우면 미체결(cancel+0)로 끝났을 때 buyDate·entryStrategy 가 영구 유실돼
         // 프로파일을 끈 뒤 보유상한 청산이 동작하지 않는다.
-        if (!state.position) state.clearEntryMeta()
+        // dust 흡수(freshEntry)도 새 진입이다 — 장부(position·수량)는 그대로 두고 메타만 지운다. 체결 확정은 실잔고로
+        // 수량·평단을 덮고(replace) 빈 메타를 오늘 날짜·이번 전략으로 채운다. 주문이 무산돼도 dust 는 계속 관리된다.
+        if (!state.position || freshEntry) state.clearEntryMeta()
         state.beginBuyOrder(identifier, strategyName, triggerPrice, priorVolume)
         // 선기록부터 체결 반영까지 취소가 끊지 못하게 한다. reload/stop 이 tick 을 취소하면 cancelAndJoin 이 이 블록의 완주를
         // 기다린다. 그 대기를 넘겨 프로세스가 죽어도 선기록된 identifier 로 재시작 뒤 확정된다.
@@ -780,6 +817,44 @@ class PositionManager(
     /** 메타 변경 후 durable 반영(best-effort) — 실패해도 다음 전이에서 재기록된다. */
     internal suspend fun persistState(state: TradingState) = persist(state)
 
+    /** 스윙 보유가 팔 수 없는 크기라 매도하지 않는다고 포지션당 한 번 알린다(ERROR 가 아니다 — 사람이 할 일이 없다). */
+    private fun warnDustOnce(ticker: String, state: TradingState, detail: String) {
+        if (state.dustWarned) return
+        log.warn(
+            "Swing holding on {} is dust below the {} KRW minimum order ({}) — not selling it",
+            ticker, MIN_ORDER_AMOUNT_KRW.toLong(), detail,
+        )
+        state.dustWarned = true
+    }
+
+    /**
+     * 더는 새로 살 수 없는 티커(목록 밖 잔류, #226)의 dust 를 장부에서 내린다 — 흡수될 길도 팔 길도 없어 잔류가 영구화된다(#234).
+     * 기록이 아니라 **실잔고**로 판정한다: 팔 수 있는 보유를 내리면 기록 없이 관리 밖으로 떨어진다. 판 것이 아니므로 거래
+     * 기록은 남기지 않고(코인은 계좌에 남는다), 진입 메타까지 지워 재시작 때 잔류로 다시 실리지 않게 한다.
+     */
+    suspend fun releaseDust(ticker: String, state: TradingState, currentPrice: Double) {
+        // 같은 tick 에 낸 매도가 결과 불명으로 남았으면 내리지 않는다 — markSold 가 그 매도의 확정 근거(pending)를 지운다.
+        if (state.hasPendingSell()) return
+        val account = try {
+            findAccount(ticker.substringAfter("-"))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Failed to read balance before releasing dust on {}: {}", ticker, e.message)
+            return
+        }
+        // 사용자 지정가 등으로 잠긴 코인이 있으면 풀려서 돌아올 수 있다 — 여기서 내리면 목록 밖이라 다시 편입할 길이 없다.
+        if (account != null && account.lockedDouble() > 0.0) return
+        val held = account?.let { heldVolume(it, 0.0) } ?: 0.0
+        if (!isBelowMinOrder(held, currentPrice)) {
+            state.holdVolume = held // 기록이 낡았다 — 팔 수 있는 보유로 계속 관리한다
+            return
+        }
+        log.warn("Releasing unsellable dust on {} (volume={}) — the ticker is outside the list, so nothing can absorb it", ticker, held)
+        state.markSold()
+        persist(state)
+    }
+
     /** durable 복원본. 런타임에 새로 활성화되는 티커가 빈 상태로 시딩돼 pending uuid·halt 를 덮어쓰지 않게 한다. */
     internal suspend fun loadState(ticker: String): TradingState? = tradingStateService.loadState(userId, ticker)
 
@@ -983,12 +1058,20 @@ class PositionManager(
 
         // Upbit market sell: ord_type=market. 전량이면 거래소 원본 문자열, 부분이면 plain decimal.
         val qty = quantity(account!!)
-        // 사다리 판정은 장부 수량으로 최소주문을 봤다 — free 로 축소된 실제 주문이 5,000원 아래면 거래소가 매 tick 거부한다.
-        if (reason == SellReason.ACCUMULATE_STEP && qty.volume * currentPrice < MIN_ORDER_AMOUNT_KRW) {
-            // 매수 skip 과 같은 창구로 드러낸다 — 조용히 멈추면 운영자가 사다리가 왜 안 파는지 모른다.
-            val skip = "sell: %s × %.0f < min order".format(qty.orderVolume, currentPrice)
-            if (state.accumulateSkipReason != skip) log.warn("Accumulate sell skipped for {}: {}", ticker, skip)
-            state.accumulateSkipReason = skip
+        // 실제 주문이 최소주문 아래면 거래소가 매 tick 거부한다 — 보내지 않는다.
+        if (isBelowMinOrder(qty.volume, currentPrice)) {
+            if (reason == SellReason.ACCUMULATE_STEP) {
+                // 사다리 판정은 장부 수량으로 최소주문을 봤다 — free 로 축소된 실제 주문이 여기 걸린다. 매수 skip 과 같은
+                // 창구로 드러낸다 — 조용히 멈추면 운영자가 사다리가 왜 안 파는지 모른다.
+                val skip = "sell: %s × %.0f < min order".format(qty.orderVolume, currentPrice)
+                if (state.accumulateSkipReason != skip) log.warn("Accumulate sell skipped for {}: {}", ticker, skip)
+                state.accumulateSkipReason = skip
+            } else {
+                // 스윙 dust(#234) — 팔 수 없다. 실측 수량을 남겨 엔진이 dust 로 보고 진입을 열게 한다(사면 합쳐져 새 진입).
+                // 청산 평가는 매 tick 계속 돌므로 락이 풀려 free 가 돌아오면 다음 청산 사유에서 정상으로 판다.
+                state.holdVolume = heldVolume(account, ourSellLockCeiling(state))
+                warnDustOnce(ticker, state, "%s × %.0f".format(qty.orderVolume, currentPrice))
+            }
             return null
         }
         // 매수판([placeBuy])과 같은 순서 — 정지 중이면 시작하지 않고, identifier 를 먼저 남긴 뒤 보낸다(#227).
@@ -1017,7 +1100,12 @@ class PositionManager(
                 throw e // 전송 여부 불명 — identifier 가 남아 reconcile 이 확정한다. 취소는 ERROR 로 남기지 않는다.
             } catch (e: Exception) {
                 if (e.provesOrderNotPlaced()) {
-                    log.error("Failed to place sell order {}: {}", ticker, e.message, e)
+                    if (e.isRejectedAsBelowMinimumOrder()) {
+                        // tick 가격으론 가드를 넘었지만 거래소 판정 가격으론 최소주문 미만 — 거래소 판정이 기준이다(#234).
+                        warnDustOnce(ticker, state, "rejected by the exchange as below the minimum order")
+                    } else {
+                        log.error("Failed to place sell order {}: {}", ticker, e.message, e)
+                    }
                     state.clearPendingSell() // 코인은 그대로 — 포지션 유지, 다음 tick 재매도
                     persist(state)
                 } else {
