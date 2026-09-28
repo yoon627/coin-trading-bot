@@ -29,7 +29,7 @@ sources:
 2. **`unsynced` 재동기화** — 부팅 시 `syncPosition` 이 실패했거나, 조회는 됐지만 **우리 주문으로 설명되지 않는 `locked` 잔고**가 있어 그 코인이 우리 포지션인지 정하지 못한 경우 여기서 재시도. 어느 쪽이든 해소될 때까지 `buy()` 초입 가드가 신규 진입을 막는다([[upbit-api]] 의 locked 상한 규칙). 기동 뒤 **런타임에** 생긴 lock(출금 신청·수동 주문)은 이 재동기화가 돌지 않아 못 보므로, `buy()` 가 사이징을 위해 조회하는 잔고에서 같은 판정을 한 번 더 한다(추가 호출 없음) — 걸리면 그 tick 은 매수하지 않고 `unsynced` 로 이 재동기화에 넘긴다(2026-09-17, #121). 적립 `buyRung` 은 보유 중 추가 단이라 이 판정을 하지 않는다.
 3. **`pendingPersistFailed` 재기록** — pending durable 기록 실패로 매수가 막힌 상태를 푸는 유일한 경로.
 4. **미해소 매수 reconcile** — `pendingBuyUuid`(응답을 못 받은 주문이면 `pendingBuyIdentifier`)가 있으면 먼저 확정. 확정되면 그 tick 은 거기서 끝난다(막 산 포지션에 같은 tick 손절 평가 금지). 미해소면 이 tick 의 매수·매도 평가를 통째로 skip.
-5. **미해소 매도 reconcile** — 같은 구조의 매도판.
+5. **미해소 매도 reconcile** — 같은 구조의 매도판. 확정 기록의 price·pnl 은 확정 tick 이 아니라 주문을 결정한 tick 가격이다(주문 때 `pending_sell_trigger_price` 에 남긴다, #235).
 6. **보유 중이면 청산 평가** — `updatePeakPrice`(오를 때만 durable flush) → `decideSell` → `sell`. `sell` 은 거래소 free 잔고를 판다. free 가 0 이면 phantom 이다: `locked` 도 0 이면 `markSold`(진입 메타·사다리 장부까지 정리), `locked` 가 남아 있으면 그것은 우리 매도 주문의 것이 아니므로(우리 주문은 5번의 `pendingSellUuid` 가드가 먼저 걸러낸다) `releaseHoldings`(보유만 내리고 진입 메타·장부는 유지) + `unsynced` 로 2번 재동기화에 넘긴다(2026-09-16, #122). 락이 풀려 코인이 돌아오면 재편입돼 보유상한·트레일링이 이어지고, 여전히 불명이면 매수만 차단된다. 이전에는 locked 가 있으면 보류해 "정리는 sell() 몫"인 `syncPosition` 과 서로 미뤄 유령 포지션이 영구히 남았다. 역방향 위험: 코인이 실제로 사라진 뒤 사용자가 거래소에서 같은 티커를 새로 사면 남은 메타가 그 편입분에 붙는다(감수 — 봇 자신의 신규 진입은 주문 시점 `clearEntryMeta` 로 닫힌다).
 7. **당일 1회 가드** — (팔 수 있는) 보유 중이거나 `boughtToday` 면 매수 평가 자체를 생략. 보유가 팔 수 없는 **dust** 면 막지 않는다(아래 "팔 수 없는 보유").
 8. **매수 평가** — D1 캔들이 store 에 전략이 요구하는 만큼(`max(MIN_DAILY_CANDLES, strategy.minCandles)`) store 에 있으면 store, 아니면 REST 60개로 폴백해 [[swing-strategies]] 의 `shouldBuy` 판정.
