@@ -571,15 +571,12 @@ function WalletPage({ user, setActive }) {
   );
 }
 
-// ── SETTINGS (API keys + profile visibility + Discord webhook) ────────────
+// ── SETTINGS (API keys + Discord webhook) ────────────
 function SettingsPage({ user, setActive, refreshUser }) {
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
-  const [publicProfile, setPublicProfile] = React.useState(!!user?.public_profile);
-  const [publicStrategy, setPublicStrategy] = React.useState(!!user?.public_strategy);
   const [discordUrl, setDiscordUrl] = React.useState('');
   const [busyKeys, setBusyKeys] = React.useState(false);
-  const [busyProfile, setBusyProfile] = React.useState(false);
   const [busyDiscord, setBusyDiscord] = React.useState(false);
   const [toast, setToast] = React.useState(null);
 
@@ -595,16 +592,6 @@ function SettingsPage({ user, setActive, refreshUser }) {
     finally { setBusyKeys(false); }
   };
 
-  const saveProfile = async () => {
-    setBusyProfile(true);
-    try {
-      await TideAPI.updateSettings({ public_profile: publicProfile, public_strategy: publicStrategy });
-      setToast({ msg: '프로필 설정이 저장되었습니다', tone: 'up' });
-      await refreshUser();
-    } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
-    finally { setBusyProfile(false); }
-  };
-
   const saveDiscord = async (clear = false) => {
     setBusyDiscord(true);
     try {
@@ -618,7 +605,7 @@ function SettingsPage({ user, setActive, refreshUser }) {
 
   return (
     <Shell active="settings" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
-           title="설정" subtitle="API 키, 프로필 공개, Discord 알림">
+           title="설정" subtitle="API 키, Discord 알림">
       <Card padding={28} style={{ maxWidth: 640 }}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Upbit API 키</div>
         <div style={{ fontSize: 13, color: 'var(--ink-500)', marginBottom: 20 }}>
@@ -641,25 +628,6 @@ function SettingsPage({ user, setActive, refreshUser }) {
         <div style={{ marginTop: 24, padding: 16, background: 'var(--tide-primary-soft)', borderRadius: 10, fontSize: 12.5, color: 'var(--tide-primary-ink)' }}>
           🛡 API 키는 AES-GCM으로 암호화되어 저장됩니다. <strong>출금 권한은 절대 부여하지 마세요.</strong>
         </div>
-      </Card>
-
-      <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>프로필 공개</div>
-        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, cursor: 'pointer' }}>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>리더보드 공개</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginTop: 2 }}>다른 사용자가 내 거래 통계를 볼 수 있습니다</div>
-          </div>
-          <input type="checkbox" checked={publicProfile} onChange={e => setPublicProfile(e.target.checked)} style={{ width: 18, height: 18 }}/>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, cursor: 'pointer' }}>
-          <div>
-            <div style={{ fontSize: 13.5, fontWeight: 600 }}>전략 공개</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ink-500)', marginTop: 2 }}>현재 사용 중인 전략을 노출합니다 (리더보드 공개와 별개)</div>
-          </div>
-          <input type="checkbox" checked={publicStrategy} onChange={e => setPublicStrategy(e.target.checked)} style={{ width: 18, height: 18 }}/>
-        </label>
-        <Button onClick={saveProfile} disabled={busyProfile} size="lg">{busyProfile ? '저장 중…' : '프로필 저장'}</Button>
       </Card>
 
       <Card padding={28} style={{ maxWidth: 640, marginTop: 16 }}>

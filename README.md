@@ -195,7 +195,7 @@ coin-trading-bot/
 - **켜는 순간 편입**: 같은 티커를 이미 스윙으로 보유 중이면 그 보유가 실측 원가 기준 N단으로 사다리에 편입됩니다(로그 WARN).
 - **끄기**: 값을 비우고 재기동합니다. 남은 포지션은 즉시 스윙 규칙(손절 −5%·09:00 청산)을 받으므로, 끄기 전에 수동 정리하거나 그 결과를 감수해야 합니다.
 - **현금 경쟁**: 적립이 아직 투입하지 않은 예산은 스윙 매수 사이징에서 미리 빠집니다. 적립 단이 예산·KRW 부족으로 건너뛰어지면 `/api/bot/status` 의 `accumulate_skip` 에 사유가 보입니다.
-- **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다(리더보드 집계에서는 제외). 손익은 `pnl_amount`(원)로 읽으세요.
+- **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다. 손익은 `pnl_amount`(원)로 읽으세요.
 - **거래대금 정의(2026-09-14)**: 같은 응답의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다. 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓입니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
 - **백테 근거**: 2026-09 fixture(하락장 4·상승장 3)에서 후보 기본값은 "하락장에서 단순 보유보다 덜 잃고(−20% vs −29%), 상승장에서 훨씬 덜 번다(+27% vs +96%)"는 프로파일을 보였습니다. 수익성 우월의 근거가 아니라 성격 확인입니다(`AccumulateBacktestTest`).
 
@@ -235,7 +235,6 @@ coin-trading-bot/
 | 전략 | GET/POST | `/api/strategies`, `/performance`, `/backtest` | 필요 |
 | 관심 목록 | GET | `/api/watchlist` | 필요 |
 | 실시간 가격 | GET | `/api/prices/stream`, `/latest`, `/status` | Public |
-| 커뮤니티 | GET | `/api/leaderboard`, `/api/user/{userId}/profile` | Public |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
 
 ## 환경변수
