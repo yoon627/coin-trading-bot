@@ -2,17 +2,25 @@ package com.trading.bot.api
 
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
+import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
+import io.mockk.CapturingSlot
 import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.reactor.mono
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.http.HttpStatus
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.web.server.ResponseStatusException
+import reactor.core.publisher.Mono
 
 class TradingControllerTest {
 
@@ -90,5 +98,62 @@ class TradingControllerTest {
         val result = authed { controller.changeStrategy(StrategyRequest("volatility_breakout")) }
         assertEquals("changed", result["status"])
         assertEquals("volatility_breakout", result["strategy"])
+    }
+
+    // --- 설정 저장(Discord webhook) ---
+
+    private val webhook = "https://discord.com/api/webhooks/1/token"
+
+    private fun stubSettingsUser(storedWebhook: String?): CapturingSlot<UserEntity> {
+        every { userRepo.findById(userId) } returns
+            Mono.just(UserEntity(id = userId, username = "u", password = "p", discordWebhookUrl = storedWebhook))
+        val saved = slot<UserEntity>()
+        every { userRepo.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        coEvery { manager.reloadUserRuntime(userId) } returns Unit
+        return saved
+    }
+
+    @Test
+    fun `settings stores the Discord webhook and reports it`() {
+        val saved = stubSettingsUser(storedWebhook = null)
+
+        val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = "  $webhook ")) }
+
+        assertEquals(webhook, saved.captured.discordWebhookUrl)
+        assertEquals(true, res["has_discord_webhook"])
+        coVerify(exactly = 1) { manager.reloadUserRuntime(userId) }
+    }
+
+    @Test
+    fun `settings without the webhook field changes nothing and does not restart the engine`() {
+        // 필드가 없는 요청이 저장된 webhook 을 지우면 알림이 조용히 끊기고, 저장하면 쓸데없이 엔진을 재기동한다.
+        stubSettingsUser(storedWebhook = webhook)
+
+        val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = null)) }
+
+        assertEquals(true, res["has_discord_webhook"])
+        verify(exactly = 0) { userRepo.save(any()) }
+        coVerify(exactly = 0) { manager.reloadUserRuntime(any()) }
+    }
+
+    @Test
+    fun `settings answers 401 when the session's user no longer exists`() {
+        every { userRepo.findById(userId) } returns Mono.empty()
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = webhook)) }
+        }
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.statusCode)
+        verify(exactly = 0) { userRepo.save(any()) }
+    }
+
+    @Test
+    fun `settings clears the webhook on an empty string`() {
+        val saved = stubSettingsUser(storedWebhook = webhook)
+
+        val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = "")) }
+
+        assertNull(saved.captured.discordWebhookUrl)
+        assertEquals(false, res["has_discord_webhook"])
     }
 }
