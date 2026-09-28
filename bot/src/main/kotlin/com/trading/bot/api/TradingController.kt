@@ -104,6 +104,25 @@ class TradingController(
         return mapOf("status" to "saved")
     }
 
+    @PostMapping("/user/settings")
+    suspend fun updateSettings(@RequestBody req: UserSettingsRequest): Map<String, Any> {
+        val userId = currentUserId()
+        val user = userRepository.findById(userId).awaitSingleOrNull()
+            ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found")
+        // 필드가 없으면 바꿀 것이 없다 — 저장도 엔진 재기동(reloadUserRuntime)도 하지 않는다(캐시된 옛 화면이 보내는 공개 설정 등).
+        val requested = req.discordWebhookUrl
+            ?: return mapOf("has_discord_webhook" to !user.discordWebhookUrl.isNullOrBlank())
+        // 해제는 빈 문자열이다(normalizeDiscordWebhookUrl 이 null 로 만든다).
+        val nextWebhook = requestValidators.normalizeDiscordWebhookUrl(requested)
+        val saved = userRepository.save(user.copy(discordWebhookUrl = nextWebhook)).awaitSingle()
+        try {
+            userTradingManager.reloadUserRuntime(userId)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
+        return mapOf("has_discord_webhook" to !saved.discordWebhookUrl.isNullOrBlank())
+    }
+
     @GetMapping("/user/me")
     suspend fun getMe(): Map<String, Any?> {
         val userId = currentUserId()
@@ -113,8 +132,6 @@ class TradingController(
             "id" to user.id,
             "username" to user.username,
             "has_upbit_keys" to (!user.upbitAccessKey.isNullOrBlank()),
-            "public_profile" to user.publicProfile,
-            "public_strategy" to user.publicStrategy,
             "has_discord_webhook" to (!user.discordWebhookUrl.isNullOrBlank()),
         )
     }
@@ -123,4 +140,5 @@ class TradingController(
 data class StartBotRequest(val tickers: List<String>? = null, val strategy: String? = null)
 data class StrategyRequest(val strategy: String)
 data class ClearHaltRequest(val ticker: String)
+data class UserSettingsRequest(val discordWebhookUrl: String? = null)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)

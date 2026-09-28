@@ -104,12 +104,6 @@ export function smokeTest() {
       'health is UP': (r) => r.json('status') === 'UP',
     }) || errorRate.add(1);
 
-    // Leaderboard (public)
-    const leaderboard = http.get(`${BASE_URL}/api/leaderboard`);
-    check(leaderboard, {
-      'leaderboard is 200': (r) => r.status === 200,
-    }) || errorRate.add(1);
-
     // Price status (public)
     const priceStatus = http.get(`${BASE_URL}/api/prices/status`);
     check(priceStatus, {
@@ -128,9 +122,6 @@ export function loadTest() {
   group('Public Endpoints', () => {
     const health = http.get(`${BASE_URL}/actuator/health`, { headers: clientIpHeader() });
     check(health, { 'health 200': (r) => r.status === 200 }) || errorRate.add(1);
-
-    const leaderboard = http.get(`${BASE_URL}/api/leaderboard`, { headers: clientIpHeader() });
-    check(leaderboard, { 'leaderboard 200': (r) => r.status === 200 }) || errorRate.add(1);
 
     const latest = http.get(`${BASE_URL}/api/prices/latest`, { headers: clientIpHeader() });
     check(latest, { 'latest prices 200': (r) => r.status === 200 }) || errorRate.add(1);

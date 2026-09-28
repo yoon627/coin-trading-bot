@@ -7,6 +7,5 @@ import reactor.core.publisher.Mono
 
 interface UserRepository : R2dbcRepository<UserEntity, Long> {
     fun findByUsername(username: String): Mono<UserEntity>
-    fun findByPublicProfileTrue(): Flux<UserEntity>
     fun findByAdminTrue(): Flux<UserEntity>
 }

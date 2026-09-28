@@ -55,7 +55,7 @@ coin-trading-bot/
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
 │   └── src/main/kotlin/com/trading/bot/
-│       ├── api/                     # REST 컨트롤러 10개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
+│       ├── api/                     # REST 컨트롤러 8개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
@@ -211,12 +211,11 @@ bot_configs
 | 인증 | AuthController | `/api/auth/{register,login,logout}` |
 | 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy,halt/clear}` |
 | 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
-| 사용자 | TradingController/LeaderboardController | `/api/user/{me,keys,settings}` |
+| 사용자 | TradingController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
 | 차트 | ChartController | `/api/chart/{candles,indicators,tickers,compare}` |
 | 전략 | StrategyController | `/api/strategies/{,performance,backtest}` |
 | 가격(SSE) | PriceStreamController | `/api/prices/{stream,latest,status}` |
-| 리더보드 | LeaderboardController | `/api/leaderboard`, `/api/user/{id}/profile` |
 | 관심종목 | WatchlistController | `/api/watchlist` |
 
 ### 에러 응답 정책

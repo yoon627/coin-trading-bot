@@ -14,7 +14,7 @@ brew install k6
 # 로컬 서버 대상 (기본)
 k6 run perf/load-test.js
 
-# smoke 만 (공개 GET 3종·check 4개·1 VU·30s) — 운영 도메인에 돌려도 되는 유일한 시나리오
+# smoke 만 (공개 GET 2종·check 3개·1 VU·30s) — 운영 도메인에 돌려도 되는 유일한 시나리오
 # (k6 에는 시나리오 선택 플래그가 없어 스크립트가 ONLY 환경변수로 고른다 — grafana/k6#3054)
 k6 run -e ONLY=smoke -e BASE_URL=https://do-anything.cloud perf/load-test.js
 
@@ -50,7 +50,7 @@ SERVER_PORT=18080 DB_PORT=55433 DB_PASSWORD=k6local UPBIT_ACCESS_KEY= UPBIT_SECR
 
 | 시나리오 | VU | 시간 | 설명 |
 |---------|-----|------|------|
-| smoke | 1 | 30s | 공개 GET 3종 (`/actuator/health`, `/api/leaderboard`, `/api/prices/status`), check 4개 |
+| smoke | 1 | 30s | 공개 GET 2종 (`/actuator/health`, `/api/prices/status`), check 3개 — 2026-09-28 리더보드 제거 전 기준선은 3종·4개 |
 | load | 0→50 | 8m | 점진적 부하 증가, 인증 포함 (`/api/user/me`, `/api/bot/status`, `/api/strategies`, `/api/trades`, `/api/portfolio`) |
 
 ## Threshold
