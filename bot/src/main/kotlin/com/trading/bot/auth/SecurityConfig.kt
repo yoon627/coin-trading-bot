@@ -35,8 +35,6 @@ class SecurityConfig(
             .authorizeExchange {
                 it.pathMatchers("/", "/index.html", "/app.html", "/login.html", "/tide-app/**").permitAll()
                     .pathMatchers("/api/auth/**").permitAll()
-                    .pathMatchers("/api/leaderboard").permitAll()
-                    .pathMatchers("/api/user/*/profile").permitAll()
                     .pathMatchers("/api/prices/**").permitAll()
                     .pathMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
                     .anyExchange().authenticated()
