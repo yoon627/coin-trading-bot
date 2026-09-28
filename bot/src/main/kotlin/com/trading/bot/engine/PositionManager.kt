@@ -622,30 +622,30 @@ class PositionManager(
     }
 
     private suspend fun recoverFromBalance(ticker: String, state: TradingState, currentPrice: Double): BalanceRecovery {
-        return try {
-            val account = findAccount(ticker.substringAfter("-"))
-            val balance = account?.balanceDouble() ?: 0.0
-            // 적립 추가 단은 주문 전부터 코인이 있다 — 주문 시점 보유량을 넘는 증분만 이 주문의 체결로 본다.
-            // 그 값이 없는 옛 pending 은 종전대로 잔고 전체(스윙은 position=false 였으므로 0 과 같다).
-            val prior = state.pendingBuyPriorVolume ?: 0.0
-            val executed = balance - prior
-            if (executed > VOLUME_EPSILON) {
-                // 주문 응답이 없어 실제 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거이지
-                // 수수료 복원의 근거가 아니므로, 틀린 추정 대신 미기록으로 남긴다(#133).
-                BalanceRecovery.Filled(
-                    // 주문 응답이 없다 — 수수료도 이 주문의 금액도 실측 불가.
-                    completeBuy(ticker, state, currentPrice, executed, account, FeeBasis.Unrecorded, orderAmount = null)
-                )
-            } else {
-                log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
-                BalanceRecovery.NoBalance
-            }
+        val account = try {
+            findAccount(ticker.substringAfter("-"))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log.warn("reconcile balance recovery failed for {} ({}) — pending kept", ticker, e.message)
-            BalanceRecovery.LookupFailed
+            return BalanceRecovery.LookupFailed
         }
+        val balance = account?.balanceDouble() ?: 0.0
+        // 적립 추가 단은 주문 전부터 코인이 있다 — 주문 시점 보유량을 넘는 증분만 이 주문의 체결로 본다.
+        // 그 값이 없는 옛 pending 은 종전대로 잔고 전체(스윙은 position=false 였으므로 0 과 같다).
+        val prior = state.pendingBuyPriorVolume ?: 0.0
+        val executed = balance - prior
+        if (executed <= VOLUME_EPSILON) {
+            log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
+            return BalanceRecovery.NoBalance
+        }
+        // 주문 응답이 없어 실제 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거이지
+        // 수수료 복원의 근거가 아니므로, 틀린 추정 대신 미기록으로 남긴다(#133).
+        // 커밋 실패는 기본 경로처럼 호출부로 올라간다 — 조회 장애가 아니라 halt 카운터에 세지 않는다.
+        return BalanceRecovery.Filled(
+            // 주문 응답이 없다 — 수수료도 이 주문의 금액도 실측 불가.
+            completeBuy(ticker, state, currentPrice, executed, account, FeeBasis.Unrecorded, orderAmount = null)
+        )
     }
 
     /**
@@ -890,22 +890,25 @@ class PositionManager(
      * 매도판 H8: 미해소 매도 주문(pendingSellUuid, 없으면 identifier — [resolveSellByIdentifier])을 거래소 상태로 확정.
      * processTicker 가 매 tick 호출.
      * getOrder 장애 시 실잔고로 체결 추정(잔고 0 = 청산됨). 미해소면 pending 유지(다음 tick 재시도).
+     * 주문 결과를 받은 뒤 반영하지 못하면(체결 커밋·계좌 재조회 실패) 추정으로 넘기지 않고 pending 을 둔다.
      */
     suspend fun reconcilePendingSell(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
         val uuid = state.pendingSellUuid
-        val result = if (uuid != null) {
-            try {
-                val filled = upbitClient.getOrder(uuid)
-                applySellFillOutcome(ticker, state, currentPrice, filled)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
-                recoverSellFromBalance(ticker, state, currentPrice)
+        val identifier = state.pendingSellIdentifier
+        val result = try {
+            when {
+                uuid != null -> confirmSellByUuid(ticker, state, currentPrice, uuid)
+                identifier != null -> resolveSellByIdentifier(ticker, state, currentPrice, identifier)
+                else -> return null
             }
-        } else {
-            val identifier = state.pendingSellIdentifier ?: return null
-            resolveSellByIdentifier(ticker, state, currentPrice, identifier)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 조회 실패는 각 단계가 먼저 받는다 — 여기 오는 것은 조회 뒤 기록 단계의 실패다(주문 결과 반영의 계좌 재조회·커밋,
+            // 잔고복원의 커밋 — 커밋 원인은 commitFill 이 ERROR 로 남긴다). 주문 결과가 있는데 잔고 추정으로 넘기면 실측 체결을
+            // 추정치로 영구 기록한다. 전이가 적용되지 않아 pending 이 남고 다음 tick 이 다시 확정한다.
+            log.warn("reconcile sell for {} was resolved but could not be recorded ({}) — pending kept", ticker, e.message, e)
+            null
         }
         // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막는다 — 오래 끌면 보유 포지션이
         // 손절도 못 한 채 방치되므로, 매수판 halt 와 같은 상한에서 한 번 ERROR 로 올려 사람이 개입하게 한다.
@@ -914,6 +917,19 @@ class PositionManager(
         // 매도 pending 전이(clearPendingSell/markSold/부분갱신) durable 반영. wait(무전이)도 upsert 무해.
         persist(state)
         return result
+    }
+
+    /** uuid 로 매도를 확정한다. 잔고 추정은 getOrder 가 실패했을 때만이다 — 기록 단계의 실패는 호출부가 받는다. */
+    private suspend fun confirmSellByUuid(ticker: String, state: TradingState, currentPrice: Double, uuid: String): TradeRecord? {
+        val filled = try {
+            upbitClient.getOrder(uuid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
+            return recoverSellFromBalance(ticker, state, currentPrice)
+        }
+        return applySellFillOutcome(ticker, state, currentPrice, filled)
     }
 
     /**
@@ -1192,7 +1208,7 @@ class PositionManager(
                 // locked 0.15 → 0.75)라 원가 정합이 rung 을 조기에 줄인다 — 주문 전 보유 − 체결량을 하한으로 둔다(60초 주기
                 // 동기화가 이후 실측으로 다시 맞춘다). 스윙은 종전 규칙 그대로.
                 val priorVolume = state.pendingSellPriorVolume ?: state.holdVolume
-                // 계좌 행이 없으면(null = 조회 성공 + 잔고 0 — 실패는 예외로 recoverSellFromBalance 로 간다) 확인된 0 이라 하한을 쓰지 않는다.
+                // 계좌 행이 없으면(null = 조회 성공 + 잔고 0 — 실패는 예외로 올라가 pending 이 남는다) 확인된 0 이라 하한을 쓰지 않는다.
                 val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && account != null && priorVolume > 0.0) {
                     maxOf(exchangeRemaining, priorVolume - executed)
                 } else {
@@ -1228,34 +1244,33 @@ class PositionManager(
      * (잔고가 남아 보이면 pending 을 유지해 사람이 확인하게 둔다). 상세는 #56 Deferred.
      */
     private suspend fun recoverSellFromBalance(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
-        return try {
-            val total = findAccount(ticker.substringAfter("-"))?.totalBalance() ?: 0.0
-            if (total <= 0.0) {
-                // 주문 시점 수량이 우선 — 재시작 후 holdVolume 은 이미 0 으로 동기화돼 있다.
-                val volume = state.pendingSellVolume ?: state.holdVolume
-                if (volume <= 0.0) {
-                    // 근거 없이 잔고 0 만으로 확정하면 수량 0 의 유령 SELL 이 감사에 남는다 — pending 을 유지해
-                    // getOrder 복구나 사람 개입으로 확정하게 둔다.
-                    log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept for manual review", ticker)
-                    return null
-                }
-                // 주문 응답이 없어 실측할 수 없다 — 매도 대금 기준 추정이 이 경로의 최선이다.
-                val record = buildSellRecord(ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate, orderAmount = null)
-                val now = LocalDateTime.now(TradingDay.KST)
-                // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패 시 pending 이 남아 다음 tick 이 재시도한다.
-                commitFillAndApply(state, record, sellTransition(state, volume, remaining = 0.0, recoveredAvg = 0.0, now = now))
-                log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, volume)
-                record
-            } else {
-                log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, total)
-                null
-            }
+        val total = try {
+            findAccount(ticker.substringAfter("-"))?.totalBalance() ?: 0.0
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             log.warn("reconcile sell balance recovery failed for {} ({}) — pending kept", ticker, e.message)
-            null
+            return null
         }
+        if (total > 0.0) {
+            log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, total)
+            return null
+        }
+        // 주문 시점 수량이 우선 — 재시작 후 holdVolume 은 이미 0 으로 동기화돼 있다.
+        val volume = state.pendingSellVolume ?: state.holdVolume
+        if (volume <= 0.0) {
+            // 근거 없이 잔고 0 만으로 확정하면 수량 0 의 유령 SELL 이 감사에 남는다 — pending 을 유지해
+            // getOrder 복구나 사람 개입으로 확정하게 둔다.
+            log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept for manual review", ticker)
+            return null
+        }
+        // 주문 응답이 없어 실측할 수 없다 — 매도 대금 기준 추정이 이 경로의 최선이다.
+        val record = buildSellRecord(ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate, orderAmount = null)
+        val now = LocalDateTime.now(TradingDay.KST)
+        // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패는 호출부가 받고 pending 이 남아 다음 tick 이 재시도한다.
+        commitFillAndApply(state, record, sellTransition(state, volume, remaining = 0.0, recoveredAvg = 0.0, now = now))
+        log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, volume)
+        return record
     }
 
     /** 매도 전량 확정 — 기록 생성 후 markSold. sell() 즉시경로(done) 전용. */
