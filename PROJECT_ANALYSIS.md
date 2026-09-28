@@ -59,7 +59,7 @@ coin-trading-bot/
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
-│       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager, BacktestEngine
+│       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager(+UnknownOrderResolver·BalanceInterpretation), BacktestEngine
 │       ├── stream/                  # CandleAggregator, MarketDataPersistenceService, DataRetentionService
 │       ├── config/                  # AppConfig, StrategyConfig, RedisConfig, RateLimitFilter 등
 │       ├── persistence/             # R2DBC Entity/Repository
