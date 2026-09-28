@@ -4,14 +4,12 @@ category: concept
 created: 2026-08-24
 updated: 2026-09-28
 claim_state: current
-verified: 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-09-28 — 수동 매도 경로 제거(`ManualTradeController`·`executeSell*` 삭제, grep 0건) 뒤 수동 매도 서술을 과거 행 서술로 · 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
-  - bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt
   - bot/src/main/kotlin/com/trading/bot/persistence/TradeRecordRepository.kt
   - bot/src/main/kotlin/com/trading/bot/notification/DiscordNotifier.kt
   - bot/src/main/kotlin/com/trading/bot/engine/TradeExecutionService.kt
-  - bot/src/main/kotlin/com/trading/bot/api/ManualTradeController.kt
   - bot/src/main/kotlin/com/trading/bot/api/TradeRoundTrip.kt
 ---
 
@@ -31,11 +29,10 @@ sources:
 
 ## 구분 키
 
-`strategy` 컬럼. 과거 수동 매수 행은 `"manual"` 이다. **수동 매도**는 2026-09-16 부터 포지션의 진입 전략
-(`UserTradingManager.resolveEntryStrategy` — 엔진 메모리 상태 우선, 없으면 durable `trading_states` 행)으로 귀속하고,
-모르면 `"manual"` 이다(#129). 사유는 별도로 `reason=MANUAL`. 값이 비어 있으면 출처를 알 수 없으므로 합산하는 쪽(보수적)으로 둔다.
-전량 청산이 확인되면 durable 행의 진입 메타를 비워 다음 포지션이 옛 전략에 귀속되지 않게 한다. 적립 포지션의 수동 매도는
-`accumulate` 로 귀속돼 리더보드 집계(`strategy <> 'accumulate'`)에서 빠진다 — 엔진 청산과 같은 규칙.
+`strategy` 컬럼. 과거 수동 매수 행은 `"manual"` 이다. 과거 **수동 매도** 행(2026-09-16~09-28)은 포지션의 진입 전략으로
+귀속됐고 모르면 `"manual"` 이다(#129) — 수동 매도는 2026-09-28 제거됐다. 사유는 별도로 `reason=MANUAL`. 값이 비어 있으면
+출처를 알 수 없으므로 합산하는 쪽(보수적)으로 둔다. 적립 포지션의 청산은 `accumulate` 로 귀속돼 리더보드 집계
+(`strategy <> 'accumulate'`)에서 빠진다.
 
 ## 보유량 산출 규칙
 
@@ -59,12 +56,10 @@ sources:
 매도는 반대다 — 전부 거래소 실측이다.
 
 - 엔진 청산 — 즉시 `done` 은 주문량, reconcile 은 terminal 응답의 `executed_volume`
-- 수동 `executeSellAll`·`executeSellVolume` — 주문 접수 후 `awaitFill`(엔진과 같은 폴링)로 **terminal(done/cancel) 응답의
-  `executed_volume`** 만 기록한다(#105). `wait` 로 남거나 체결 0·조회 실패면 **행을 남기지 않고** `fill=unconfirmed` 로
-  SPA 토스트·Discord 경고를 보낸다 — 요청 수량으로 폴백하지 않는다. 미확정 주문의 이후 체결분은 수동 경로에 reconcile 이
-  없어 기록되지 않으며, 사용자가 uuid 로 거래소에서 대조한다(알려진 한계).
+- 과거 수동 매도(2026-09-28 제거) — terminal(done/cancel) 응답의 `executed_volume` 만 기록했다(#105). 체결을 확정하지
+  못한 주문은 행을 남기지 않았다.
 
-그래서 수동 매수(추정) → `sellAll`(실측) 조합에서는 이전 포지션이 없어도 매도 수량이 매수보다 많게
+그래서 과거 수동 매수(추정) → 수동 전량 매도(실측) 조합에서는 이전 포지션이 없어도 매도 수량이 매수보다 많게
 기록될 수 있다. 조회 측은 이 경우 초과분의 원가를 알 수 없어 gross 손익(`pnl_amount_gross`)을 비운다 — 매도 행의
 실현 손익 합(`pnl_amount_net`, #115)은 기록 시점 평단으로 계산돼 매수 조립과 무관하므로 그대로 낸다.
 
@@ -103,8 +98,8 @@ sources:
 - **부작용**: 허용 오차 안에서 조기 청산된 뒤 그 dust 를 실제로 팔면, 매수 없는 고아 SELL 행이
   목록에 하나 더 생긴다(`partial=true`, 진입 정보 없음).
 
-수동 **매도**는 실제 체결 수량을 기록하게 됐다(#105). 허용 오차가 남는 이유는 수동 **매수**가 여전히 추정이기 때문이고,
-그쪽까지 실측이 되면 이 허용 오차는 사라져야 한다.
+수동 매수(2026-09-16, #129)와 수동 매도(2026-09-28)는 제거돼 추정 행은 더 생기지 않는다. 허용 오차가 남는 이유는
+과거 수동 **매수** 행이 추정이기 때문이다.
 
 ## 이 주문의 체결 금액 — `order_amount` (V26, #146)
 
@@ -116,7 +111,7 @@ sources:
 | 엔진 매수·매도, 응답 terminal | Σfunds |
 | 엔진 매수, `wait`+부분체결로 확정(폴링 소진) | NULL — 진행 중 합은 최종값이 아니고 `completeBuy` 뒤에 갱신할 길이 없다 |
 | 엔진 잔고복원(매수·매도) | NULL — 주문 응답 없음 |
-| 수동 매도, 응답 terminal | Σfunds (#105) |
+| 과거 수동 매도(2026-09-28 제거), 응답 terminal | Σfunds (#105) |
 | 과거 수동 매수 | NULL — 요청액은 실측이 아니다 |
 | V26 이전 행 | NULL — 소급 불가 |
 
@@ -145,7 +140,7 @@ reconcile 로 늦게 확정된 매도(체결 확인 창을 넘김·응답을 못
 | 출처 | 경로 | 저장값 |
 |---|---|---|
 | 실측 | 엔진 매수·매도 정상 — `getOrder` 응답의 `paid_fee` (매도는 2026-09-14, #148) | 그 값 |
-| 추정 | 과거 수동 매수, 그리고 `paid_fee` 가 없는 매도(엔진 잔고복원·수동 포함) — `totalAmount` 가 그 체결의 대금이다 | `대금 × 요율 / 2` |
+| 추정 | 과거 수동 매수, 그리고 `paid_fee` 가 없는 매도(엔진 잔고복원·과거 수동 매도 포함) — `totalAmount` 가 그 체결의 대금이다 | `대금 × 요율 / 2` |
 | 미기록 | 엔진 **매수** 복구(`recoverFromBalance`) · 매수의 `paid_fee` 부재·파싱 실패 | `0` |
 
 **`0 = 미기록`** 은 V21 이 세운 규약이다("fee 는 소급하지 않는다. 이전 행은 0(미기록)으로 남는다").
@@ -157,10 +152,8 @@ reconcile 로 늦게 확정된 매도(체결 확인 창을 넘김·응답을 못
 
 매도 쪽 유보 두 가지:
 
-- 수동 매도는 terminal 응답의 체결량으로 `totalAmount`(틱 가격 × 체결량, 틱을 못 읽으면 실측 Σ`funds`)를 만들고,
-  `paid_fee` 가 있으면 실측·없으면 추정, `order_amount` 는 Σ`funds` 다 — 엔진 매도와 같은 규칙(#105). 틱도 `trades` 도
-  없으면 0 을 적지 않고 미확정으로 알린다(0 은 라운드트립에서 전액 손실로 읽힌다). `executed_vwap` 은 `TradeRecord` 에 실리지만
-  `trade_records` 투영 밖이라 영속되지 않는다(엔진과 동일).
+- 과거 수동 매도(2026-09-28 제거)도 엔진 매도와 같은 규칙으로 기록됐다 — terminal 응답의 체결량, `paid_fee` 가 있으면
+  실측·없으면 추정, `order_amount` 는 Σ`funds`(#105).
 - 엔진 매도는 `paid_fee` 가 없으면 **미기록이 아니라 추정**으로 떨어진다(`PositionManager.sellFeeBasis`). 매도의
   `totalAmount` 는 이 체결의 대금이라 추정이 정당하고, 매수처럼 스냅샷 과대계상이 없기 때문이다. 즉시 done 과
   reconcile terminal 은 `paid_fee` 가 있을 때 실측·없으면 추정이고, 주문 응답이 없는 잔고복원은 언제나 추정이다.
@@ -172,7 +165,7 @@ reconcile 로 늦게 확정된 매도(체결 확인 창을 넘김·응답을 못
 
 팔 수 없는 dust 위에 엔진이 사면([[trading-engine-loop]] "팔 수 없는 보유") 그 BUY 행도 위 규칙 그대로다 — `volume` 은 dust 를 포함한 총보유 스냅샷, `total_amount` 는 계좌 평단(dust 원가가 섞임) × 총보유, `order_amount` 는 이번 주문의 체결 대금뿐이다.
 
-**라운드트립 표시 한계**: `assembleRoundTrips` 는 SELL 없이 이어지는 BUY 를 한 그룹으로 묶는다. 봇 자신의 포지션이 손실로 dust 가 된 경우(사이에 SELL 이 없다) 흡수 BUY 가 옛 그룹에 합쳐져 진입 시각·전략이 옛 값으로 보인다. SELL 기록의 전략은 새 진입 전략이라 둘이 갈린다. 봇 화면(수동 매도 API)으로 판 잔량·부분체결 잔량은 사이에 SELL 이 있어 따로 묶인다. 거래소 앱에서 직접 판 잔량은 SELL 기록이 없어(봇은 거래소 주문 내역을 가져오지 않는다) 합쳐진다.
+**라운드트립 표시 한계**: `assembleRoundTrips` 는 SELL 없이 이어지는 BUY 를 한 그룹으로 묶는다. 봇 자신의 포지션이 손실로 dust 가 된 경우(사이에 SELL 이 없다) 흡수 BUY 가 옛 그룹에 합쳐져 진입 시각·전략이 옛 값으로 보인다. SELL 기록의 전략은 새 진입 전략이라 둘이 갈린다. 부분체결 잔량(과거에는 봇 화면의 수동 매도로 판 잔량도)은 사이에 SELL 이 있어 따로 묶인다. 거래소 앱에서 직접 판 잔량은 SELL 기록이 없어(봇은 거래소 주문 내역을 가져오지 않는다) 합쳐진다.
 
 ## 왜 중요한가
 
