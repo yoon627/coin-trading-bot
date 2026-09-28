@@ -33,7 +33,7 @@ const val FILL_POLL_DELAY_MS = 300L
 
 /**
  * 주문 체결 폴링. terminal(done/cancel)이면 즉시 반환, 아니면 최대 [FILL_POLL_ATTEMPTS] 회 조회한 마지막 응답을 돌려준다.
- * 엔진·수동 주문이 같은 조회 동작을 쓰기 위한 확장이다 — 인터페이스 멤버로 두면 strict mock 이 깨진다.
+ * 인터페이스 멤버가 아니라 확장이다 — 멤버로 두면 strict mock 이 깨진다.
  */
 suspend fun UpbitClient.awaitFill(uuid: String): Order? {
     if (uuid.isBlank()) return null

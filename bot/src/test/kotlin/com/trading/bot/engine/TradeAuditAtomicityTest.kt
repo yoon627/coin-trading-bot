@@ -133,6 +133,28 @@ class TradeAuditAtomicityTest {
         assertNull(state.pendingBuyUuid)
     }
 
+    @Test
+    fun `이미 기록된 체결(멱등 skip)은 메모리 전이만 적용하고 알림을 다시 보내지 않는다`() = runTest {
+        // 재시작 후 reconcile 이 같은 주문을 다시 확정하면 commitFill 이 false 를 돌려준다(#20) — 알림이 두 번 나가면 안 된다.
+        stubFilledBuy()
+        val state = buyPendingState()
+        var notified = 0
+        val manager = managerWithCommitFill(
+            commitFill = { persistState, _ ->
+                persistState()
+                false
+            },
+            notifyTrade = { notified++ },
+        )
+
+        val record = manager.reconcilePendingBuy(TICKER, state, PRICE)
+
+        assertNotNull(record)
+        assertTrue(state.position)
+        assertNull(state.pendingBuyUuid)
+        assertEquals(0, notified)
+    }
+
     // --- 매수 체결 ---
 
     @Test

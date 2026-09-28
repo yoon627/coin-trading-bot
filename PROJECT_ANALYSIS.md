@@ -212,7 +212,7 @@ bot_configs
 | 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy,halt/clear}` |
 | 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
 | 사용자 | TradingController/LeaderboardController | `/api/user/{me,keys,settings}` |
-| 트레이딩 | Portfolio/ManualTrade/TradeHistory | `/api/{portfolio,account,trade/sell,trades}` (수동 매수는 2026-09-16 제거, #129) |
+| 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
 | 차트 | ChartController | `/api/chart/{candles,indicators,tickers,compare}` |
 | 전략 | StrategyController | `/api/strategies/{,performance,backtest}` |
 | 가격(SSE) | PriceStreamController | `/api/prices/{stream,latest,status}` |

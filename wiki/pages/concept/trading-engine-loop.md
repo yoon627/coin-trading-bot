@@ -51,7 +51,7 @@ sources:
 
 - **잔류(#226, auto 무관)**: 사용자 목록·적립 밖이어도 진입 흔적(pending buy/sell uuid·`entryStrategy`·`buyDate`)이 있는 durable 행 — 엔진이 산 스윙 포지션·미해소 주문 — 은 활성에 싣고 청산될 때까지 관리한다. 신규 진입은 `swingUniverse`(비-auto = 사용자 목록, auto = 마지막 선정)가 막는다. 사다리 행(`rungsFilled>0`·단 매수 `pendingBuyTriggerPrice`·`entryStrategy=accumulate`)은 적립 설정에서 빠졌으면 싣지 않고 WARN — 실으면 스윙 청산(손절·09:00 보유상한)이 붙는다. 싣는 잔류 목록도 기동 WARN 으로 남는다.
 - **비-auto 정리**: 기동 동기화 직후와 09:00 flush 뒤에 청산 대기(`isExitOnly` — 진입 허용 집합 밖 스윙 티커) 중 더 지킬 것이 없는(보유·unsynced·pending 없음) 티커를 활성·`states` 에서 빼고, 그 행의 durable 진입 메타도 비운다 — 엔진 밖에서 팔려 메타만 남은 행이 매 기동 실리고, 그 위에 사람이 다시 산 코인이 옛 `buyDate` 로 보유상한 매도되는 것을 막는다. unsynced 가 아니라 귀속 불명 락이 없으므로 #122 가 메타를 남기는 이유(락이 풀리면 코인이 돌아옴)는 해당하지 않는다. `persistState` 는 실패를 삼키므로 던지지 않는다. auto 는 `applyTickers` 가 같은 일을 한다. 남는 틈: 엔진이 멈춘 사이 팔고 **다시 산** 경우는 기동 때 잔류로 실려 옛 `buyDate` 로 관리된다(잔류 WARN 이 `buyDate` 를 함께 찍는다).
-- **재기동 입력**: `start` 는 입력 상태를 먼저 싣고 나머지 키를 빼서 직전 실행의 `states` 를 버린다(비우고 채우면 그 사이 `tracks()` 가 false 가 되어 수동 매도 후처리가 durable 행을 덮을 수 있다). 재기동하는 쪽(reload)은 엔진의 사용자 목록(`getUserTickers()`)을 그대로 넘기고 — 활성 집합을 넘기면 잔류가 진입 대상으로 승격된다 — 같은 엔진으로 복귀할 때는 `resume()`(직전 사용자 목록 + states ∪ 잔고 미확인 dormant)을 쓴다. 실행 중 엔진에 다른 목록으로 `startBot` 이 오면 부작용 없이 409, 같거나 없으면 `already_running`.
+- **재기동 입력**: `start` 는 입력 상태를 먼저 싣고 나머지 키를 빼서 직전 실행의 `states` 를 버린다(순서는 정확성과 무관하다 — 같은 엔진을 다시 start 할 때(주로 `resume()`) 잠금 없이 읽는 `getStates()`(상태 API)에서 전후 모두 활성인 티커가 잠깐 사라지지 않게 할 뿐이다). 재기동하는 쪽(reload)은 엔진의 사용자 목록(`getUserTickers()`)을 그대로 넘기고 — 활성 집합을 넘기면 잔류가 진입 대상으로 승격된다 — 같은 엔진으로 복귀할 때는 `resume()`(직전 사용자 목록 + states ∪ 잔고 미확인 dormant)을 쓴다. 실행 중 엔진에 다른 목록으로 `startBot` 이 오면 부작용 없이 409, 같거나 없으면 `already_running`.
 - **화면용 분류**: 활성 집합 = 적립 ∪ 진입 허용(`getEntryTickers` — 비-auto 는 사용자 목록, auto 는 선정 알트) ∪ 청산 대기(`getExitOnlyTickers`). 진입 게이트·정리 단계·분류가 같은 `isExitOnly` 를 쓴다.
 
 스윙 `buy()` 는 적립이 아직 투입하지 않은 예산(`reservedKrw`)을 뺀 잔고로 사이징한다 — 알트가 적립 현금을 선점하지 못하게.
@@ -122,7 +122,6 @@ Upbit 는 주문 금액이 5,000원 미만이면 매수도 매도도 받지 않�
 - **흔적이 한 번이라도 보이면 자동 처리하지 않는다** — identifier 만으로는 잔고 변화가 이 주문인지 같은 시각의 수동 매매인지 가를 수 없고, 기록의 중복 방지 키(uuid)도 없다. 흔적이 나중에 사라져도 풀지 않는다 — 단 같은 엔진 안에서만이다(비영속). 재시작·reload 뒤에는 흔적이 남아 있으면 다시 잡지만, 그 사이 사라졌으면 일반 규칙으로 풀린다. ERROR 1회로 사람을 부르고 조회는 계속한다(찾히면 정상 확정). 그동안 그 티커의 매매가 멈춘다 — 매수 흔적이면 새로 들어온 코인에 손절이 걸리지 않는다. 해제 API 는 없다: **봇 정지 → Upbit 주문 내역 확인 → `trading_states` 의 pending 정리 → 재기동** 순서로 한다. 봇이 도는 중에 DB 를 고치면 다음 tick 이 메모리 상태로 다시 덮어쓴다.
 - 선기록이 실패하면 **매수는 보내지 않고, 매도는 보낸다**(ERROR + `pendingPersistFailed`) — 기록 장애가 손절을 막으면 안 된다. 같은 엔진 안에서는 메모리 identifier 가 이중 매도를 막는다. 다만 다음 tick 의 재기록(`retryPendingPersistIfNeeded`)보다 reload 가 먼저 오면 새 엔진은 durable 에 없는 그 주문을 모른다(uuid 기록 실패에도 있던 창).
 - 스윙 매수의 `pendingBuyPriorVolume` 도 주문 직전 실제 보유량이다(이전 0). 흔적 판정과 uuid 경로의 잔고 복원이 장부 밖 잔고(수동 매수·dust)를 체결로 세지 않는다.
-- 수동 매도(`TradeExecutionService`)는 이 규칙 밖이다 — `placeOrder` 예외를 그대로 사용자에게 돌려주고 pending 을 남기지 않는다.
 
 `getOrder` 와 잔고조회가 **둘 다** 실패하는 상황이 `reconcileHaltThreshold`(20회) 연속되면 해당 ticker 를 `halted` 로 두고 신규 진입만 막는다 — 매도·reconcile 은 계속 돌아야 잡힌 포지션이 갇히지 않는다. identifier-only 매수에서는 identifier 조회 실패와 "404 인데 잔고도 못 봄"이 같은 카운터에 들어가고, 카운터는 확정(찾음·미접수)에서만 되돌린다 — 404 마다 되돌리면 간헐 장애가 해제 조건과 halt 를 둘 다 끊어 매매가 멈춘 채 알림이 없다. 매도는 경과시간 알림(`pendingSellSince`, 선기록 시각부터)이 사람을 부른다.
 

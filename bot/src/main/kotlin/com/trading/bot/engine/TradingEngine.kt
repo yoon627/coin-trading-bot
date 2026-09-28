@@ -79,7 +79,7 @@ class TradingEngine(
     @Volatile
     private var dormantStates: Map<String, TradingState> = emptyMap()
 
-    // 적립 티커의 주기 재동기화 시각. 수동 매매(/api/trade)는 TradingState 를 건드리지 않아 장부가 낡는다.
+    // 적립 티커의 주기 재동기화 시각. 거래소(앱·웹)에서 직접 한 매매는 TradingState 를 건드리지 않아 장부가 낡는다.
     private val ladderSyncedAtMs = ConcurrentHashMap<String, Long>()
 
     internal fun profileOf(ticker: String): TickerProfile =
@@ -153,8 +153,9 @@ class TradingEngine(
             if (!universeProperties.auto) swingUniverse = tickers.toSet()
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
             // 이번 실행의 활성 ticker 만 — 직전 실행(같은 엔진의 재기동)이나 과거 ticker 까지 남기면 tick 이 안 도는 상태가
-            // getStates·일일 리셋에 섞이고 applyTickers 의 보호 집합으로 되살아난다. 비우고 채우지 않고 채운 뒤 나머지를 뺀다 —
-            // 비는 순간 tracks() 가 false 가 되어 수동 매도 후처리가 엔진 몫인 durable 행을 read-modify-write 할 수 있다.
+            // getStates·일일 리셋에 섞이고 applyTickers 의 보호 집합으로 되살아난다. 채운 뒤 나머지를 빼는 순서는 정확성과
+            // 무관하다(최종 상태 동일) — 같은 엔진을 다시 start 할 때(주로 resume) 잠금 없이 읽는 getStates()(상태 API)에서
+            // 전후 모두 활성인 티커가 잠깐 사라지지 않게 할 뿐이다(표시 전용).
             val seeded = initialStates.filterKeys { it in active }
             seeded.forEach { (ticker, state) -> states[ticker] = state }
             states.keys.retainAll(seeded.keys)
@@ -226,15 +227,6 @@ class TradingEngine(
 
     /** #19: halt 된 ticker 목록(status 노출용). */
     fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
-
-    /** 이 엔진이 그 티커의 상태를 메모리에 들고 있는가 — 그러면 durable 행은 이 엔진의 사본이라 밖에서 쓰면 안 된다(#129). */
-    fun tracks(ticker: String): Boolean = states.containsKey(ticker)
-
-    /**
-     * 메모리 상태의 진입 전략(수동 매도 귀속용, #129). 상태가 없으면 null — [tracks] 로 "없음"과 "메타 없음"을 구분한다.
-     * 무락 읽기다: 최악이 직전 전략명 하나이고 주문 경로엔 영향이 없어 tick 루프와의 경합을 허용한다.
-     */
-    fun entryStrategyOf(ticker: String): String? = states[ticker]?.entryStrategy
 
     /**
      * #19: halt 수동 해제 — state 를 clear 하고 durable 반영(재시작 후 halt 재발 방지). 해제되면 true, halt 가 아니었으면 false.
@@ -627,7 +619,7 @@ class TradingEngine(
      */
     private suspend fun runAccumulate(ticker: String, state: TradingState, currentPrice: Double) {
         if (state.unsynced) return
-        // 수동 매매(/api/trade)는 TradingState 를 갱신하지 않으므로 주기적으로 계좌를 다시 읽어 장부 정합의 입력을 최신화한다.
+        // 거래소에서 직접 한 매매는 TradingState 를 갱신하지 않으므로 주기적으로 계좌를 다시 읽어 장부 정합의 입력을 최신화한다.
         val now = clock.millis()
         if (now - (ladderSyncedAtMs[ticker] ?: 0L) >= LADDER_SYNC_INTERVAL_MS) {
             positionManager.syncPosition(ticker, state, clearWhenEmpty = true)
