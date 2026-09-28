@@ -45,7 +45,7 @@ check "청산 조건 우선순위"                 "$P/concept/trading-engine-lo
 check "push 가 막히면"                     "$P/decision/prepush-codex-review.md"       "paths-ignore|자기제외"
 # 2026-09-06: 답이 뒤집혔다(#177). 그전에는 "즉시 적용된다" 가 정답이었고 지금은 "진입 시점 스냅샷을 따른다" 다.
 # 기대 문구를 옛 동작에 맞춰 두면 문서가 옳게 갱신될 때 오히려 실패한다 — 검사도 함께 옮긴다.
-check "보유 중 설정을 바꾸면 청산 기준은"  "$P/concept/exit-gates.md"                  "진입 시점 스냅샷을 따른다|exitParamsOf"
+check "보유 중 설정을 바꾸면 청산 기준은"  "$P/concept/exit-gates.md"                  "진입 시점 스냅샷을 따른다|exitParamsOrGlobal"
 
 # 음성 검사: 진행 중 작업의 상태는 plan·이슈 소유다(WIKI.md §1).
 #
