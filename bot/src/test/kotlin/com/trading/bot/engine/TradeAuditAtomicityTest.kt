@@ -1,8 +1,14 @@
 package com.trading.bot.engine
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
+import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
+import com.trading.bot.domain.OrderTrade
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
@@ -15,6 +21,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -24,6 +31,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.slf4j.LoggerFactory
 
 /**
  * #52: 체결 확정 시 pending 해소(durable)와 감사 기록이 원자적인지 검증한다.
@@ -42,6 +50,9 @@ class TradeAuditAtomicityTest {
     private val stagedStates = mutableListOf<TradingState>()
     private val committedRecords = mutableListOf<TradeRecord>()
 
+    private val logger = LoggerFactory.getLogger(PositionManager::class.java) as Logger
+    private val logs = ListAppender<ILoggingEvent>().apply { start() }
+
     @BeforeEach
     fun setup() {
         upbitClient = mockk(relaxed = true)
@@ -50,7 +61,15 @@ class TradeAuditAtomicityTest {
         committedRecords.clear()
         // persistState 가 트랜잭션에 싣는 "전이 반영 사본" 을 잡는다.
         coEvery { stateService.upsert(any(), capture(stagedStates)) } returns Unit
+        logger.addAppender(logs)
     }
+
+    @AfterEach
+    fun teardown() {
+        logger.detachAppender(logs)
+    }
+
+    private fun warns() = logs.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
 
     /** 커밋이 성공하는 배선 — persistState 를 실행해 staged 사본을 캡처한다. */
     private fun managerWithCommitFill(
@@ -235,11 +254,146 @@ class TradeAuditAtomicityTest {
         assertFalse(stagedStates.last().position, "트랜잭션에 실린 사본도 청산이 반영돼야 한다")
     }
 
+    // --- reconcile: 주문 결과를 받은 뒤의 실패는 조회 실패가 아니다 (#235) ---
+
+    /** 첫 커밋만 실패하고 이후는 성공하는 배선 — 한 번의 커밋 실패 뒤 같은 tick 에 무엇이 기록되는지 본다. */
+    private fun firstCommitFailsManager(): PositionManager {
+        var calls = 0
+        return managerWithCommitFill(
+            commitFill = { persistState, record ->
+                if (calls++ == 0) throw IllegalStateException("audit store unavailable")
+                committedRecords += record
+                persistState()
+                true
+            },
+        )
+    }
+
+    private fun sellPendingState() = TradingState(
+        ticker = TICKER,
+        position = true,
+        avgBuyPrice = 50_000_000.0,
+        holdVolume = 0.01,
+        pendingSellUuid = SELL_UUID,
+        pendingSellReason = SellReason.TAKE_PROFIT,
+        pendingSellVolume = 0.012, // 체결량(0.01)과 달라야 요청량으로 쓰인 추정 기록을 구분한다
+    )
+
+    /** 전량 체결된 매도 — 실측 수수료·체결 내역이 있다. */
+    private fun doneSell(uuid: String = SELL_UUID) = Order(
+        uuid = uuid,
+        state = "done",
+        executedVolume = "0.01",
+        paidFee = "255",
+        trades = listOf(OrderTrade(volume = "0.01", funds = "510000")),
+    )
+
+    @Test
+    fun `reconcile 매도 커밋이 실패해도 잔고 추정으로 기록하지 않고 다음 tick 에 실측으로 확정한다`() = runTest {
+        coEvery { upbitClient.getOrder(SELL_UUID) } returns doneSell()
+        coEvery { upbitClient.getAccounts() } returns emptyList() // 전량 체결 뒤라 계좌 행이 없다
+        val manager = firstCommitFailsManager()
+        val state = sellPendingState()
+
+        assertNull(manager.reconcilePendingSell(TICKER, state, PRICE))
+        assertTrue(committedRecords.isEmpty(), "주문 결과를 받았는데 잔고 추정으로 넘어가면 실측 대신 추정치가 영구 기록된다")
+        assertEquals(SELL_UUID, state.pendingSellUuid, "pending 이 남아야 다음 tick 이 같은 주문을 다시 확정한다")
+        assertTrue(state.position)
+
+        val record = manager.reconcilePendingSell(TICKER, state, PRICE)
+
+        assertNotNull(record)
+        assertEquals(listOf(record), committedRecords)
+        assertEquals(0.01, record!!.volume)
+        assertEquals(FeeBasis.Measured(255.0), record.fee)
+        assertEquals(51_000_000.0, record.executedVwap)
+        assertEquals(510_000.0, record.orderAmount)
+        assertFalse(state.position)
+    }
+
+    @Test
+    fun `reconcile 매도의 확정 단계 계좌 조회가 실패하면 잔고 추정으로 넘기지 않는다`() = runTest {
+        coEvery { upbitClient.getOrder(SELL_UUID) } returns doneSell()
+        // 확정 단계의 조회는 실패하고, 잔고 추정 경로가 다시 조회하면 0 을 본다(조회 장애가 막 풀린 경우).
+        coEvery { upbitClient.getAccounts() } throws IllegalStateException("accounts down") andThen emptyList()
+        val state = sellPendingState()
+
+        assertNull(succeedingManager().reconcilePendingSell(TICKER, state, PRICE))
+
+        assertTrue(committedRecords.isEmpty(), "주문 결과가 있는데 추정치로 기록하면 안 된다")
+        assertEquals(SELL_UUID, state.pendingSellUuid)
+        assertTrue(state.position)
+    }
+
+    @Test
+    fun `identifier 로 찾은 매도의 커밋이 실패하면 pending 을 두고 막힌 매도 경과를 계속 잰다`() = runTest {
+        coEvery { upbitClient.getOrderByIdentifier(SELL_IDENTIFIER) } returns doneSell()
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        val state = sellPendingState().apply {
+            pendingSellUuid = null
+            pendingSellIdentifier = SELL_IDENTIFIER
+        }
+
+        assertNull(failingManager().reconcilePendingSell(TICKER, state, PRICE))
+
+        assertEquals(SELL_UUID, state.pendingSellUuid, "찾은 주문의 uuid 를 이어받은 채 남아야 다음 tick 이 확정한다")
+        assertTrue(state.position)
+        assertNotNull(state.pendingSellSince, "커밋 실패로 경과 판정을 건너뛰면 막힌 매도 알림이 늦어진다")
+    }
+
+    @Test
+    fun `매도 잔고복원의 커밋 실패를 잔고 조회 실패로 적지 않는다`() = runTest {
+        coEvery { upbitClient.getOrder(SELL_UUID) } throws IllegalStateException("getOrder down")
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        val state = sellPendingState()
+
+        assertNull(failingManager().reconcilePendingSell(TICKER, state, PRICE))
+
+        assertEquals(SELL_UUID, state.pendingSellUuid)
+        assertTrue(state.position)
+        val warns = warns()
+        assertTrue(warns.none { "balance recovery failed" in it }, "잔고는 읽었다 — 조회 장애로 적으면 원인을 잘못 찾는다: $warns")
+        assertTrue(warns.any { "could not be recorded" in it }, "기록 실패로 남아야 한다: $warns")
+    }
+
+    @Test
+    fun `매도 getOrder 와 잔고조회가 둘 다 실패하면 잔고 조회 실패로 적고 pending 을 둔다`() = runTest {
+        coEvery { upbitClient.getOrder(SELL_UUID) } throws IllegalStateException("getOrder down")
+        coEvery { upbitClient.getAccounts() } throws IllegalStateException("accounts down")
+        val state = sellPendingState()
+
+        assertNull(succeedingManager().reconcilePendingSell(TICKER, state, PRICE))
+
+        assertTrue(committedRecords.isEmpty())
+        assertEquals(SELL_UUID, state.pendingSellUuid)
+        val warns = warns()
+        assertTrue(warns.any { "balance recovery failed" in it }, "조회 장애는 조회 장애로 남아야 한다: $warns")
+    }
+
+    @Test
+    fun `매수 잔고복원의 커밋 실패는 조회 장애로 세지 않는다`() = runTest {
+        coEvery { upbitClient.getOrder(BUY_UUID) } throws IllegalStateException("getOrder down")
+        coEvery { upbitClient.getAccounts() } returns listOf(
+            Account(currency = "BTC", balance = "0.01", avgBuyPrice = "50000000"),
+        )
+        val state = buyPendingState()
+
+        assertThrows<IllegalStateException> {
+            failingManager().reconcilePendingBuy(TICKER, state, PRICE)
+        }
+
+        assertEquals(0, state.reconcileFailureCount, "halt 카운터는 주문 상태를 볼 수단이 없을 때만 센다")
+        assertFalse(state.halted)
+        assertEquals(BUY_UUID, state.pendingBuyUuid)
+        assertFalse(state.position)
+    }
+
     private companion object {
         const val TICKER = "KRW-BTC"
         const val USER_ID = 7L
         const val BUY_UUID = "buy-uuid-1"
         const val SELL_UUID = "sell-uuid-1"
+        const val SELL_IDENTIFIER = "ctb-sell-1"
         const val PRICE = 51_000_000.0
     }
 }
