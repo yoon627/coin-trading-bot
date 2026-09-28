@@ -4,7 +4,6 @@ import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import org.springframework.web.server.ResponseStatusException
 import java.net.URI
-import kotlin.math.absoluteValue
 
 @Component
 class RequestValidators {
@@ -66,23 +65,6 @@ class RequestValidators {
         return normalized
     }
 
-    fun normalizeSellVolume(volume: String): String {
-        val normalized = volume.trim()
-        val numeric = normalized.toDoubleOrNull()
-            ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid volume format")
-        if (!numeric.isFinite() || numeric <= 0.0) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Volume must be greater than 0")
-        }
-        if (numeric.absoluteValue < 1e-6) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Volume is too small")
-        }
-        // 상한 — '1e100' 같은 finite 거대값을 컨트롤러 계층에서 차단.
-        if (numeric > MAX_SELL_VOLUME) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Volume is too large")
-        }
-        return normalized
-    }
-
     fun normalizeDiscordWebhookUrl(url: String?): String? {
         val normalized = url?.trim().orEmpty()
         if (normalized.isBlank()) {
@@ -112,6 +94,5 @@ class RequestValidators {
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
         private const val MIN_PASSWORD_LENGTH = 10
         private const val MAX_PASSWORD_LENGTH = 72  // bcrypt 입력 한계
-        private const val MAX_SELL_VOLUME = 1_000_000_000.0
     }
 }
