@@ -257,6 +257,8 @@ aws s3 cp s3://<버킷>/db-backups/trading-<TS>.sql.gz - | gunzip \
 - 수동 배포 SSH는 `StrictHostKeyChecking=accept-new`, Actions 배포는 추적 중인
   `deploy/vultr/known_hosts`와 `StrictHostKeyChecking=yes`를 사용한다.
 - PostgreSQL/Redis는 호스트에 노출하지 않는다(compose 내부망 전용).
+- **회원가입은 계정이 하나도 없는 서버에서만 열린다**(첫 계정 = 소유자). 새 서버를 빈 DB 로 띄우면 443 이 열린 순간
+  먼저 가입한 사람이 유일한 사용자가 된다 — DB 를 백업에서 복원한 뒤 공개하거나, 배포 직후 곧바로 가입한다.
 - `.env`는 로컬·서버 모두 `600`. 절대 커밋하지 말 것(`.gitignore` 처리됨).
 
 ## 8. 트러블슈팅

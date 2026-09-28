@@ -2,7 +2,6 @@ package com.trading.bot.persistence
 
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.persistence.entity.TradeRecordEntity
-import com.trading.common.strategy.AccumulateLadder
 import kotlinx.coroutines.reactor.awaitSingle
 import org.springframework.data.domain.Sort
 import org.springframework.data.r2dbc.repository.Query
@@ -10,14 +9,6 @@ import org.springframework.data.r2dbc.repository.R2dbcRepository
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-
-/** 리더보드용 유저별 SELL 집계 (DB 측 GROUP BY 결과). */
-data class UserTradeStats(
-    val userId: Long = 0,
-    val totalTrades: Long = 0,
-    val winTrades: Long = 0,
-    val totalPnl: Double = 0.0,
-)
 
 /**
  * 전략별 성과 집계 행(DB 측 GROUP BY 결과). 전략 미상 거래는 strategy=null 그룹으로 온다.
@@ -42,21 +33,6 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
     fun findByTicker(ticker: String, sort: Sort): Flux<TradeRecordEntity>
     fun findByUserId(userId: Long, sort: Sort): Flux<TradeRecordEntity>
     fun countByUserId(userId: Long): Mono<Long>
-
-    // 전 유저 SELL 레코드를 메모리에 로드하지 않고 DB 에서 유저별로 집계.
-    @Query(
-        """
-        SELECT user_id,
-               COUNT(*) AS total_trades,
-               COUNT(*) FILTER (WHERE pnl_percent > 0) AS win_trades,
-               COALESCE(SUM(pnl_percent), 0) AS total_pnl
-        FROM trade_records
-        WHERE side = 'SELL' AND pnl_percent IS NOT NULL
-          AND (strategy IS NULL OR strategy <> '${AccumulateLadder.STRATEGY_NAME}')
-        GROUP BY user_id
-        """
-    )
-    fun aggregateSellStatsByUser(): Flux<UserTradeStats>
 
     // 전략별 성과. 거래건수·거래대금은 BUY+SELL, 승률·손익은 SELL 만 센다(매수는 실현 손익이 없다).
     // 페이지를 메모리에 올려 groupBy 하면 원화 손익이 조용히 잘리므로 DB 에서 전 구간을 집계한다.
@@ -135,11 +111,4 @@ class TradeRecordRepository(
 
     suspend fun aggregateByStrategy(userId: Long): List<StrategyPerformance> =
         r2dbcRepository.aggregateByStrategy(userId).collectList().awaitSingle()
-
-    suspend fun aggregateSellStatsByUser(): Map<Long, UserTradeStats> {
-        return r2dbcRepository.aggregateSellStatsByUser()
-            .collectList()
-            .awaitSingle()
-            .associateBy { it.userId }
-    }
 }

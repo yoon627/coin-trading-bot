@@ -30,8 +30,7 @@ class RateLimitFilter(
 
     companion object {
         private const val MAX_REQUESTS_PER_MINUTE = 60
-        // Auth flows include register+login pairs (2 calls/success) and natural
-        // retries on validation failure; 10/min was too tight for legitimate SPA use.
+        // Auth flows see natural retries on a mistyped password; 10/min was too tight for legitimate SPA use.
         // Client IP is now resolved from Caddy's X-Forwarded-For (see clientIp()),
         // so 30/min is a per-client brute-force ceiling rather than a shared bucket.
         private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30

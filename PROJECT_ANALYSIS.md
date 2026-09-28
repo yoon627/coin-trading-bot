@@ -55,7 +55,7 @@ coin-trading-bot/
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
 │   └── src/main/kotlin/com/trading/bot/
-│       ├── api/                     # REST 컨트롤러 10개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
+│       ├── api/                     # REST 컨트롤러 8개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
@@ -211,12 +211,11 @@ bot_configs
 | 인증 | AuthController | `/api/auth/{register,login,logout}` |
 | 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy,halt/clear}` |
 | 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
-| 사용자 | TradingController/LeaderboardController | `/api/user/{me,keys,settings}` |
+| 사용자 | TradingController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
 | 차트 | ChartController | `/api/chart/{candles,indicators,tickers,compare}` |
 | 전략 | StrategyController | `/api/strategies/{,performance,backtest}` |
 | 가격(SSE) | PriceStreamController | `/api/prices/{stream,latest,status}` |
-| 리더보드 | LeaderboardController | `/api/leaderboard`, `/api/user/{id}/profile` |
 | 관심종목 | WatchlistController | `/api/watchlist` |
 
 ### 에러 응답 정책
@@ -252,5 +251,5 @@ bot_configs
 4. **리액티브 아키텍처** — WebFlux + Coroutines + R2DBC 논블로킹 I/O
 5. **멀티 타임프레임** — 캔들을 자동 집계하여 모든 타임프레임 지원
 6. **저장 시 암호화** — AES-GCM으로 DB 내 Upbit API 키 보호
-7. **멀티유저** — 사용자별 독립 엔진 + API 키 + 종목/전략 설정
+7. **사용자별 엔진** — 사용자별 독립 엔진 + API 키 + 종목/전략 설정 (가입은 계정이 없을 때 첫 계정만 받아 실제 사용자는 한 명)
 8. **리서치-라이브 공유** — 스윙 전략 9개를 `:common`에 두어 라이브/백테스트 양쪽에서 재사용

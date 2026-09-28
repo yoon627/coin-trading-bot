@@ -38,7 +38,7 @@ class ReloadFailureResponseWebFluxTest {
         )
     }
 
-    private fun keysClient(): WebTestClient = WebTestClient
+    private fun userClient(): WebTestClient = WebTestClient
         .bindToController(
             TradingController(userTradingManager, userRepository, requestValidators, userSecretsService),
         )
@@ -53,7 +53,7 @@ class ReloadFailureResponseWebFluxTest {
         coEvery { userTradingManager.reloadUserRuntime(1L) } throws
             RuntimeReloadFailedException(1L, RuntimeException("db down"), engineRestored = true)
 
-        keysClient().post().uri("/api/user/keys")
+        userClient().post().uri("/api/user/keys")
             .header("Content-Type", "application/json")
             .bodyValue(mapOf("accessKey" to "A".repeat(32), "secretKey" to "B".repeat(32)))
             .exchange()
@@ -61,6 +61,20 @@ class ReloadFailureResponseWebFluxTest {
         // 이 reason 이 응답 body 의 message 로 노출되는 것은 SafeErrorAttributesTest
         // (`ResponseStatusException reason is exposed as message`)가 보장한다.
         // 여기서는 예외가 WebFlux 파이프라인을 거쳐 503 이 되는지만 확인한다.
+    }
+
+    @Test
+    fun `설정 저장 후 런타임 교체가 실패하면 503 이 나온다`() {
+        every { userRepository.findById(1L) } returns Mono.just(user())
+        every { userRepository.save(any()) } returns Mono.just(user())
+        coEvery { userTradingManager.reloadUserRuntime(1L) } throws
+            RuntimeReloadFailedException(1L, RuntimeException("db down"), engineRestored = true)
+
+        userClient().post().uri("/api/user/settings")
+            .header("Content-Type", "application/json")
+            .bodyValue(mapOf("discordWebhookUrl" to "https://discord.com/api/webhooks/1/token"))
+            .exchange()
+            .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
     }
 
     @Test
@@ -94,7 +108,7 @@ class ReloadFailureResponseWebFluxTest {
         every { userSecretsService.encryptUpbitKeys(any(), any()) } returns ("enc-a" to "enc-s")
         coEvery { userTradingManager.reloadUserRuntime(1L) } returns Unit
 
-        keysClient().post().uri("/api/user/keys")
+        userClient().post().uri("/api/user/keys")
             .header("Content-Type", "application/json")
             .bodyValue(mapOf("accessKey" to "A".repeat(32), "secretKey" to "B".repeat(32)))
             .exchange()
