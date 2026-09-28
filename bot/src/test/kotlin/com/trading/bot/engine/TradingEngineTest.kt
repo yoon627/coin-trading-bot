@@ -12,6 +12,8 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.persistence.ShadowExitObservationRepository
+import com.trading.bot.persistence.entity.ShadowExitObservationEntity
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
@@ -366,7 +368,7 @@ class TradingEngineTest {
     // --- 매도 불가 dust (#234) ---
     // 거래소 최소주문(5,000원) 미만 보유는 팔 수 없다 — 그 티커의 진입을 막지 않는다. 주문 여부는 PositionManager 가 실잔고로 정한다.
 
-    private fun dustEngine(observer: ShadowExitObserver) = TradingEngine(
+    private fun observedEngine(observer: ShadowExitObserver) = TradingEngine(
         upbitClient = upbitClient,
         positionManager = positionManager,
         dailyResetManager = dailyResetManager,
@@ -382,7 +384,7 @@ class TradingEngineTest {
     @Test
     fun `a dust holding does not block a new entry and is not observed as a position`() = runTest {
         val observer = mockk<ShadowExitObserver>(relaxed = true)
-        val engine = dustEngine(observer)
+        val engine = observedEngine(observer)
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 12_000_000.0, holdVolume = 0.0001) // 1,000원
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 10_000_000.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
@@ -540,6 +542,97 @@ class TradingEngineTest {
 
         coVerify { positionManager.reconcilePendingSell("KRW-BTC", state, 100.0) }
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
+    }
+
+    // reconcile 로 늦게 확정된 청산도 그림자 관측에 보고한다 — 빠지면 #178 표본이 체결 확인 창 안에 끝난 매도만 담는다(#235).
+
+    @Test
+    fun `a swing exit filled at once is reported to the shadow observer at the tick price`() = runTest {
+        val observer = mockk<ShadowExitObserver>(relaxed = true)
+        val engine = observedEngine(observer)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 120.0, holdVolume = 1_000.0)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        every { positionManager.checkStopLoss(any(), any()) } returns true
+        coEvery { positionManager.sell("KRW-BTC", state, 100.0, SellReason.STOP_LOSS) } returns
+            tradeRec(TradeSide.SELL).copy(reason = "STOP_LOSS", executedVwap = 99.0)
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 1) { observer.onLiveExit("KRW-BTC", 100.0, "STOP_LOSS", 99.0, any()) }
+    }
+
+    @Test
+    fun `a swing exit confirmed by reconcile is reported to the shadow observer at its decision price and time`() = runTest {
+        val observer = mockk<ShadowExitObserver>(relaxed = true)
+        val engine = observedEngine(observer)
+        val decidedAt = Instant.parse("2026-09-28T00:00:00Z")
+        val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell", pendingSellSince = decidedAt)
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 90.0))
+        coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
+            state.clearPendingSell()
+            state.markSold()
+            tradeRec(TradeSide.SELL).copy(price = 100.0, reason = "STOP_LOSS", executedVwap = 99.5)
+        }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 1) { observer.onLiveExit("KRW-BTC", 100.0, "STOP_LOSS", 99.5, decidedAt) }
+    }
+
+    @Test
+    fun `a trailing fired before a late-confirmed exit is saved with the decision price and time`() = runTest {
+        // 발동 기록이 pending 동안 살아 있다가 reconcile 확정에서 저장되는지 — 실제 관측기로 두 tick 을 잇는다.
+        val repo = mockk<ShadowExitObservationRepository>()
+        val saved = slot<ShadowExitObservationEntity>()
+        every { repo.save(capture(saved)) } returns reactor.core.publisher.Mono.empty()
+        val decidedAt = Instant.parse("2026-09-28T00:00:00Z")
+        val observer = ShadowExitObserver(
+            repo, userId = 1L, trailingStopPct = 1.5, trailingArmPct = 0.0,
+            clock = Clock.fixed(decidedAt.plusSeconds(3_600), ZoneOffset.UTC), // 확정은 한 시간 뒤
+        )
+        val engine = observedEngine(observer)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 100.0, peakPrice = 110.0, holdVolume = 1_000.0)
+        coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
+        every { positionManager.checkStopLoss(any(), any()) } returns true
+        coEvery { positionManager.sell("KRW-BTC", state, 108.0, SellReason.STOP_LOSS) } answers {
+            state.pendingSellUuid = "late" // 체결 확인 창을 넘겼다
+            state.pendingSellSince = decidedAt
+            null
+        }
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 108.0)) // 고점 대비 −1.8% — 후보 발동
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 95.0))
+        coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
+            state.clearPendingSell()
+            state.markSold()
+            tradeRec(TradeSide.SELL).copy(price = 108.0, reason = "STOP_LOSS", executedVwap = 107.6)
+        }
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        assertEquals(108.0, saved.captured.observedTickPrice)
+        assertEquals(108.0, saved.captured.liveExitPrice)
+        assertEquals(107.6, saved.captured.liveExitVwap)
+        assertEquals(decidedAt, saved.captured.liveExitAt)
+    }
+
+    @Test
+    fun `a partial fill confirmed by reconcile is not reported as the exit`() = runTest {
+        // 포지션이 남았다 — 발동 기록을 여기서 쓰면 원 포지션의 청산과 짝이 깨진다. 잔량이 팔리는 확정에서 보고한다.
+        val observer = mockk<ShadowExitObserver>(relaxed = true)
+        val engine = observedEngine(observer)
+        val state = TradingState("KRW-BTC", position = true, holdVolume = 1.0, pendingSellUuid = "uuid-sell")
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 90.0))
+        coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
+            state.clearPendingSell()
+            state.holdVolume = 0.4
+            tradeRec(TradeSide.SELL).copy(reason = "STOP_LOSS")
+        }
+
+        engine.processTicker("KRW-BTC", state, strategy)
+
+        coVerify(exactly = 0) { observer.onLiveExit(any(), any(), any(), any(), any()) }
     }
 
     @Test

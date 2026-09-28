@@ -843,6 +843,74 @@ class PositionManagerExtendedTest {
         assertNotNull(record.pnlPercent) // 주문 시점 평단으로 손익이 계산돼야 한다
     }
 
+    // 기록 price 는 청산을 결정한 tick 가격이다(TradeRecord 정의) — 확정이 몇 tick·재시작 뒤여도 같다(#235).
+
+    @Test
+    fun `a sell confirmed later by reconcile is recorded at the price it was decided at`() = runTest {
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
+        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "late")
+        var settled = false
+        coEvery { upbitClient.getOrder("late") } answers {
+            if (settled) Order(uuid = "late", state = "done", executedVolume = "0.001") else Order(uuid = "late", state = "wait")
+        }
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001)
+
+        assertNull(mgr.sell("KRW-BTC", state, 52_000_000.0, SellReason.TAKE_PROFIT)) // 체결 확인 창 안에 끝나지 않았다
+        assertEquals(52_000_000.0, state.pendingSellTriggerPrice)
+
+        settled = true
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        val record = mgr.reconcilePendingSell("KRW-BTC", state, 48_000_000.0)
+
+        assertEquals(52_000_000.0, record!!.price)
+        assertEquals(52_000.0, record.totalAmount, 1e-6)
+        assertEquals(TradePnl.netPercent(52_000_000.0, 50_000_000.0, TradingProperties().roundTripFeeRate), record.pnlPercent)
+    }
+
+    @Test
+    fun `each late-confirmed sell is recorded at its own decision price`() = runTest {
+        // 부분 체결 뒤 남은 수량을 다른 가격에서 다시 팔면, 두 번째 확정의 기록가는 두 번째 판단가다 — 앞 주문 값이 남지 않는다.
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.placeOrder(any()) } returnsMany listOf(Order(uuid = "p1"), Order(uuid = "p2"))
+        val done = mutableMapOf("p1" to false, "p2" to false)
+        coEvery { upbitClient.getOrder(any()) } answers {
+            val uuid = firstArg<String>()
+            when {
+                done[uuid] != true -> Order(uuid = uuid, state = "wait")
+                uuid == "p1" -> Order(uuid = uuid, state = "cancel", executedVolume = "0.001") // 0.002 중 절반만
+                else -> Order(uuid = uuid, state = "done", executedVolume = "0.001")
+            }
+        }
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.002)
+
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.002", avgBuyPrice = "50000000"))
+        mgr.sell("KRW-BTC", state, 52_000_000.0, SellReason.TAKE_PROFIT)
+        done["p1"] = true
+        coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"))
+        assertEquals(52_000_000.0, mgr.reconcilePendingSell("KRW-BTC", state, 51_000_000.0)!!.price)
+        assertTrue(state.position) // 잔량이 남았다
+
+        mgr.sell("KRW-BTC", state, 49_000_000.0, SellReason.STOP_LOSS)
+        done["p2"] = true
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        assertEquals(49_000_000.0, mgr.reconcilePendingSell("KRW-BTC", state, 47_000_000.0)!!.price)
+    }
+
+    @Test
+    fun `a pending sell without a decision price is recorded at the reconcile tick`() = runTest {
+        // 판단가를 남기기 전에 생긴 pending — 지금처럼 확정 tick 가격으로 떨어진다.
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
+        coEvery { upbitClient.getOrder("old") } returns Order(uuid = "old", state = "done", executedVolume = "0.001")
+        coEvery { upbitClient.getAccounts() } returns emptyList()
+        val state = TradingState(
+            "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001,
+            pendingSellUuid = "old", pendingSellReason = SellReason.TAKE_PROFIT, pendingSellVolume = 0.001,
+        )
+
+        assertEquals(48_000_000.0, mgr.reconcilePendingSell("KRW-BTC", state, 48_000_000.0)!!.price)
+    }
+
     @Test
     fun `sell recovery keeps pending when there is no recorded volume to justify it`() = runTest {
         val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
