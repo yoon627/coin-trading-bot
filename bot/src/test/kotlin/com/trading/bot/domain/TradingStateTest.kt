@@ -221,7 +221,7 @@ class TradingStateTest {
         assertNull(state.pendingBuyIdentifier)
         assertTrue(state.hasPendingBuy())
 
-        state.beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = java.time.Instant.EPOCH, volume = 1.0, triggerPrice = null, priorVolume = 1.0)
+        state.beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = java.time.Instant.EPOCH, volume = 1.0, triggerPrice = 100.0, priorVolume = 1.0)
         assertTrue(state.hasPendingSell())
         state.adoptSellOrder("u-s")
         assertEquals("u-s", state.pendingSellUuid)

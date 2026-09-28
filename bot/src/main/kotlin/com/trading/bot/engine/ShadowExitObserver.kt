@@ -76,8 +76,10 @@ class ShadowExitObserver(
      *
      * @param executedVwap 거래소 실체결 단가. [exitPrice](판단 시점 tick)와의 차이가 **실행 슬리피지**다.
      *   얻지 못하면 null 로 남긴다 — 추정하면 마찰을 과소평가한다.
+     * @param exitAt 청산을 결정한 시각. reconcile 로 늦게 확정된 청산은 판단 시각을 넘긴다(확정은 몇 시간 늦을 수 있다).
+     *   없으면 지금 — 즉시 체결 경로는 판단 뒤 체결 확인 창만큼만 늦다.
      */
-    suspend fun onLiveExit(ticker: String, exitPrice: Double, reason: String, executedVwap: Double? = null) {
+    suspend fun onLiveExit(ticker: String, exitPrice: Double, reason: String?, executedVwap: Double? = null, exitAt: Instant? = null) {
         val f = fired.remove(ticker) ?: return
         try {
             repository.save(
@@ -94,7 +96,7 @@ class ShadowExitObserver(
                     liveExitPrice = exitPrice,
                     liveExitVwap = executedVwap,
                     liveExitReason = reason,
-                    liveExitAt = clock.instant(),
+                    liveExitAt = exitAt ?: clock.instant(),
                 ),
             ).awaitFirstOrNull()
         } catch (e: CancellationException) {

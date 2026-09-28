@@ -527,7 +527,17 @@ class TradingEngine(
             // 매도판 H8: 미해소 매도 주문(체결확인 실패/미확정분, identifier 만 있는 주문 포함)이 있으면 매도/매수 평가 전에 reconcile.
             // 확정되면 청산 기록 후 종료, 미해소면 이 tick 평가 skip(같은 포지션에 이중 매도 주문 방지).
             if (state.hasPendingSell()) {
-                if (positionManager.reconcilePendingSell(ticker, state, currentPrice) != null) return
+                val decidedAt = state.pendingSellSince // 확정 전이가 pending 을 지우기 전에 읽는다
+                val settled = positionManager.reconcilePendingSell(ticker, state, currentPrice)
+                if (settled != null) {
+                    // 늦게 확정된 스윙 청산도 그림자 관측에 보고한다 — 빠지면 #178 표본이 체결 확인 창 안에 끝난 매도만 담는다.
+                    // 기록 price 가 판단가다. 부분 체결(포지션 유지)은 보고하지 않는다 — 발동 기록을 여기서 쓰면 잔량에서
+                    // 다시 발동해 한 포지션에 관측이 둘 생긴다. 잔량이 팔리는 확정에서 보고한다.
+                    if (!state.position && profileOf(ticker) == TickerProfile.SWING) {
+                        shadowExitObserver?.onLiveExit(ticker, settled.price, settled.reason, settled.executedVwap, decidedAt)
+                    }
+                    return
+                }
                 if (state.hasPendingSell()) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
             }
 

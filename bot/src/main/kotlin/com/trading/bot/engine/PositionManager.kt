@@ -988,7 +988,8 @@ class PositionManager(
     }
 
     suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? =
-        placeSell(ticker, state, currentPrice, reason, triggerPrice = null) { account ->
+        // 판단가를 pending 에 남긴다 — 체결이 reconcile 로 늦게 확정돼도 기록은 이 가격으로 한다(#235).
+        placeSell(ticker, state, currentPrice, reason, triggerPrice = currentPrice) { account ->
             SellQuantity(account.balance, account.balanceDouble())
         }
 
@@ -1026,7 +1027,7 @@ class PositionManager(
         state: TradingState,
         currentPrice: Double,
         reason: SellReason,
-        triggerPrice: Double?,
+        triggerPrice: Double,
         quantity: (Account) -> SellQuantity,
     ): TradeRecord? {
         if (!state.position) return null
@@ -1218,9 +1219,12 @@ class PositionManager(
                 val now = LocalDateTime.now(TradingDay.KST)
                 commitFillAndApply(state, record, sellTransition(state, executed, remaining, recoveredAvg, now))
                 if (remaining > 0.0) {
-                    log.info("SELL {} partial via reconcile: executed={}, remaining={} — position kept", ticker, executed, remaining)
+                    log.info(
+                        "SELL {} partial via reconcile: executed={}, remaining={}, price={} (tick {}) — position kept",
+                        ticker, executed, remaining, record.price, currentPrice,
+                    )
                 } else {
-                    log.info("SELL {} filled via reconcile: volume={}, reason={}", ticker, executed, record.reason)
+                    log.info("SELL {} filled via reconcile: volume={}, price={} (tick {}), reason={}", ticker, executed, record.price, currentPrice, record.reason)
                 }
                 record
             }
@@ -1295,7 +1299,7 @@ class PositionManager(
         commitFillAndApply(state, record, sellTransition(state, volume, remaining, state.avgBuyPrice, now))
         log.info(
             "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
-            ticker, currentPrice, volume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", record.reason,
+            ticker, record.price, volume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", record.reason,
         )
         return record
     }
@@ -1305,6 +1309,9 @@ class PositionManager(
      * 평단 미상(외부 입금분 syncPosition 복원 등)이면 pnl null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
      * markSold 이전에 호출해야 avgBuyPrice·entryStrategy 가 살아있어 손익과 전략 귀속이 복원된다.
      * reason 미지정 시 state.pendingSellReason 사용.
+     *
+     * 가격은 이 주문을 결정한 tick 의 가격(`pendingSellTriggerPrice`)이다 — reconcile 이 몇 tick·재시작 뒤에 확정해도
+     * 기록의 price·pnl 이 확정 tick 시세로 바뀌지 않는다. 그 값이 없는 옛 pending 만 [currentPrice] 로 떨어진다.
      */
     private fun buildSellRecord(
         ticker: String,
@@ -1318,14 +1325,15 @@ class PositionManager(
     ): TradeRecord {
         // 재시작 복원 경로에서는 avgBuyPrice 가 이미 0 으로 동기화돼 있으므로 주문 시점 평단을 쓴다.
         val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
-        val pnl = TradePnl.netPercent(currentPrice, basisPrice, tradingProperties.roundTripFeeRate)
+        val decisionPrice = state.pendingSellTriggerPrice ?: currentPrice
+        val pnl = TradePnl.netPercent(decisionPrice, basisPrice, tradingProperties.roundTripFeeRate)
         return TradeRecord(
             userId = userId,
             ticker = ticker,
             side = TradeSide.SELL,
-            price = currentPrice,
+            price = decisionPrice,
             volume = volume,
-            totalAmount = currentPrice * volume,
+            totalAmount = decisionPrice * volume,
             executedVwap = executedVwap,
             pnlPercent = pnl,
             pnlAmount = TradePnl.amount(pnl, basisPrice, volume),

@@ -389,6 +389,22 @@ class PositionManagerUnknownOrderTest {
     }
 
     @Test
+    fun `a sell found by identifier later is recorded at the price it was decided at`() = runTest {
+        coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
+        placeOrderAnswers { throw RuntimeException("connection reset") }
+        val state = held()
+        manager.sell("KRW-BTC", state, 52_000_000.0, SellReason.STOP_LOSS)
+        assertEquals(52_000_000.0, saved.first().pendingSellTriggerPrice) // 보내기 전 선기록에 실린다(재시작에도 남는다)
+
+        coEvery { upbit.getOrderByIdentifier(state.pendingSellIdentifier!!) } returns filled("s-2", "0.001")
+        coEvery { upbit.getAccounts() } returns listOf(krw())
+        val record = manager.reconcilePendingSell("KRW-BTC", state, 45_000_000.0)
+
+        assertEquals(52_000_000.0, record!!.price)
+        assertEquals(52_000.0, record.totalAmount, 1e-6)
+    }
+
+    @Test
     fun `a missing sell whose coins are gone is neither recorded nor released`() = runTest {
         coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
         placeOrderAnswers { throw RuntimeException("connection reset") }
