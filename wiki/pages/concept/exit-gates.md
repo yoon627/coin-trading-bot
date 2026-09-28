@@ -2,11 +2,13 @@
 title: 청산 게이트 — 손절·트레일링·익절·차트·보유상한
 category: concept
 created: 2026-07-28
-updated: 2026-09-23
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
+verified: 2026-09-28 — 청산 파라미터 해석이 `exitParamsOrGlobal` 한 함수(engine/ExitParams.kt)로 모였고 익절·손절·트레일링·보유상한이 모두 이를 읽음을 `ExitParamsSnapshotConsumptionTest`(매핑 1건 추가)로 확인, 변이 3종(스냅샷 무시·필드 교환·보유상한 우회) 검출 · 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/DailyResetManager.kt
+  - bot/src/main/kotlin/com/trading/bot/engine/ExitParams.kt
+  - bot/src/main/kotlin/com/trading/bot/domain/ExitParamsSnapshot.kt
   - common/src/main/kotlin/com/trading/common/strategy/ExitGates.kt
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/TradingEngine.kt
@@ -61,13 +63,14 @@ sources:
 이미 열린 포지션의 청산 기준은 바뀌지 않는다.
 
 ```kotlin
-// PositionManager.exitParamsOf
-private fun exitParamsOf(state: TradingState): ExitParamsSnapshot = state.exitParams ?: snapshotExitParams()
+// engine/ExitParams.kt — 청산 게이트와 보유상한이 함께 읽는 단 하나의 해석
+internal fun TradingState.exitParamsOrGlobal(global: TradingProperties): ExitParamsSnapshot =
+    exitParams ?: global.exitParamsSnapshot()
 ```
 
-- 소비처: `checkTakeProfit` · `checkStopLoss` · `checkTrailingStop`(`PositionManager`), `shouldSellForDailyReset`(`DailyResetManager`).
+- 소비처: `checkTakeProfit` · `checkStopLoss` · `checkTrailingStop`(`PositionManager`), `shouldSellForDailyReset`(`DailyResetManager`) — 모두 `exitParamsOrGlobal` 를 거친다(`maxHoldDays` 는 보정 전 값 — 판정은 `ExitGates.effectiveMaxHoldDays`). 폴백이 두 곳에 있으면 한쪽만 바뀌었을 때 보유상한만 옛 규칙을 따르는 포지션이 생긴다(#235). 새 진입이 찍는 스냅샷도 같은 `exitParamsSnapshot()` 매핑이다.
 - **늦은 보유상한 발동은 WARN 으로 드러난다**: `shouldSellForDailyReset` 이 경과 거래일 > 상한을 보면 프로세스 수명 동안 포지션(ticker·buyDate)당 1회 `Hold limit overrun` 을 남긴다 — 정상 발동(== 상한)은 침묵. 리셋이 밀린 구간(2026-07 3건, 원인 미확정, #131)의 재발 감지용이다. 한계: 손절·익절 등 앞선 게이트가 같은 tick 에 먼저 걸리면 이 판정에 도달하지 않아 남지 않고, 스윙 경로 전용이다(`runAccumulate` 는 `decideSell` 을 거치지 않는다).
-- **스냅샷이 없으면 전역값으로 폴백**한다 — 이 변경 이전에 열린 포지션·복원 실패분의 동작을 보존한다.
+- **스냅샷이 없으면 전역값으로 폴백**한다 — 스냅샷 도입(#177) 이전에 열린 포지션·복원 실패·봇 밖 보유의 편입·무산된 dust 흡수의 동작을 보존한다.
 - **`chartExitEnabled` 는 스냅샷에 없다.** 임계가 아니라 모드 스위치라 전역이 소유한다.
 - 생명주기: 진입 시 기록(`markBought` 가 신규 진입에서 옛 값을 비우고 호출부가 다시 찍는다) → `exit_params_json` 으로 durable →
   청산 시 `markSold` 가 비운다. 재시작 복원은 durable 값을 그대로 쓴다.
