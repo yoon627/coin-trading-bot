@@ -67,10 +67,13 @@ data class TradingState(
     var lastActionPrice: Double = 0.0,
     // 무포지션 구간의 최고가 — 첫 단 진입 기준. 0 = 미관측.
     var flatPeak: Double = 0.0,
-    // 주문 시점 트리거가. 체결 확정(즉시·reconcile 어느 경로든)에서 lastActionPrice 로 옮긴다.
+    // 적립 단 매수의 트리거가 — 값이 있으면 사다리 매수라는 표식이기도 하다(엔진 isLadderRow·completeBuy).
+    // 체결 확정(즉시·reconcile 어느 경로든)에서 lastActionPrice 로 옮긴다.
     var pendingBuyTriggerPrice: Double? = null,
     // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 "주문 전부터 있던 코인"을 체결로 오판하지 않게 한다.
     var pendingBuyPriorVolume: Double? = null,
+    // 매도를 결정한 tick 가격 — 스윙·적립 공통이라 사다리 표식이 아니다(적립 여부는 pendingSellReason 으로 가른다).
+    // 매도 기록의 price·pnl 기준이고, 적립은 확정 때 사다리 기준가(lastActionPrice·flatPeak)로도 쓴다.
     var pendingSellTriggerPrice: Double? = null,
     // 매도 주문 직전 free 보유량. 부분 체결 뒤 unlock 지연으로 거래소 잔량이 과소일 때 잔량의 하한.
     var pendingSellPriorVolume: Double? = null,
@@ -114,7 +117,7 @@ data class TradingState(
         reason: SellReason,
         since: Instant,
         volume: Double,
-        triggerPrice: Double?,
+        triggerPrice: Double,
         priorVolume: Double,
     ) {
         pendingSellUuid = null
