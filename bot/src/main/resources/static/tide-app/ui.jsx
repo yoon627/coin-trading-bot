@@ -22,7 +22,6 @@ const Icon = ({ d, size = 20, stroke = 'currentColor' }) => (
 const Icons = {
   dashboard: 'M3 13 L 12 4 L 21 13 M5 11 V 20 H 19 V 11',
   bot: ['M12 2 V 5','M5 8 H 19 V 18 H 5 Z','M9 13 H 9.01','M15 13 H 15.01','M9 17 H 15'],
-  chart: 'M3 20 H 21 M6 16 V 10 M11 16 V 6 M16 16 V 12 M21 16 V 8',
   orders: ['M4 6 H 20','M4 12 H 20','M4 18 H 14'],
   backtest: ['M3 3 H 21 V 21 H 3 Z','M3 9 H 21','M9 9 V 21'],
   bell: ['M6 8 A 6 6 0 0 1 18 8 V 13 L 20 16 H 4 L 6 13 Z','M10 19 A 2 2 0 0 0 14 19'],
@@ -94,7 +93,6 @@ function Sidebar({ active, onSelect, user, onLogout }) {
   const items = [
     { id: 'dashboard', label: '대시보드', icon: 'dashboard' },
     { id: 'bot', label: '봇 / 전략', icon: 'bot' },
-    { id: 'trade', label: '차트 매매', icon: 'chart' },
     { id: 'orders', label: '주문·내역', icon: 'orders' },
     { id: 'backtest', label: '백테스팅', icon: 'backtest' },
     { id: 'wallet', label: '지갑', icon: 'wallet' },
@@ -175,12 +173,12 @@ function Empty({ icon = 'wallet', title, message, action }) {
   );
 }
 
-function Toast({ message, tone = 'primary', sticky = false, onClose }) {
+function Toast({ message, tone = 'primary', onClose }) {
   React.useEffect(() => {
-    if (!message || sticky) return;
+    if (!message) return;
     const t = setTimeout(onClose, 3000);
     return () => clearTimeout(t);
-  }, [message, sticky, onClose]);
+  }, [message, onClose]);
   if (!message) return null;
   const tones = { primary: 'var(--ink-900)', up: 'var(--up)', down: 'var(--down)', warn: '#A35E00' };
   return (
@@ -188,10 +186,7 @@ function Toast({ message, tone = 'primary', sticky = false, onClose }) {
       position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
       background: tones[tone], color: '#fff', padding: '12px 20px', borderRadius: 10,
       fontSize: 13, fontWeight: 600, boxShadow: 'var(--shadow-lg)', zIndex: 1000, userSelect: 'text',
-    }}>{message}{sticky && (
-      // 닫기는 ✕ 에만 — 본문 클릭으로 닫으면 uuid 를 드래그 선택하는 순간 사라진다.
-      <span onClick={onClose} title="닫기" style={{ marginLeft: 12, cursor: 'pointer', opacity: 0.8 }}>✕</span>
-    )}</div>
+    }}>{message}</div>
   );
 }
 
