@@ -2,9 +2,9 @@
 title: trade_records.volume 의 두 의미 — 엔진은 스냅샷, 수동은 증분
 category: concept
 created: 2026-08-24
-updated: 2026-09-16
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/UserTradingManager.kt
@@ -163,6 +163,12 @@ sources:
   DB 행에는 출처 마커가 없어 매도의 실측/추정은 SQL 로 구분할 수 없다.
 
 외부 API 쪽 사실은 [[upbit-api]] 의 수수료 절에 있다.
+
+## dust 흡수 매수 (2026-09-28, #234)
+
+팔 수 없는 dust 위에 엔진이 사면([[trading-engine-loop]] "팔 수 없는 보유") 그 BUY 행도 위 규칙 그대로다 — `volume` 은 dust 를 포함한 총보유 스냅샷, `total_amount` 는 계좌 평단(dust 원가가 섞임) × 총보유, `order_amount` 는 이번 주문의 체결 대금뿐이다.
+
+**라운드트립 표시 한계**: `assembleRoundTrips` 는 SELL 없이 이어지는 BUY 를 한 그룹으로 묶는다. 봇 자신의 포지션이 손실로 dust 가 된 경우(사이에 SELL 이 없다) 흡수 BUY 가 옛 그룹에 합쳐져 진입 시각·전략이 옛 값으로 보인다. SELL 기록의 전략은 새 진입 전략이라 둘이 갈린다. 봇 화면(수동 매도 API)으로 판 잔량·부분체결 잔량은 사이에 SELL 이 있어 따로 묶인다. 거래소 앱에서 직접 판 잔량은 SELL 기록이 없어(봇은 거래소 주문 내역을 가져오지 않는다) 합쳐진다.
 
 ## 왜 중요한가
 
