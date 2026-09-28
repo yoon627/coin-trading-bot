@@ -2,9 +2,9 @@
 title: 트레일링 1축 변경 — 이 repo 최초의 사전고정 확증 결과 (신규 7국면)
 category: query
 created: 2026-09-05
-updated: 2026-09-16
+updated: 2026-09-28
 claim_state: current
-verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_REGIME_EXPANSION=true ./gradlew :bot:test --tests "*RegimeExpansionTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`a25096d`). fixture `p2020h1`~`p2023h1` D1 + `intraday240/`(7창 67,193봉, 수집 2026-09-05)
+verified: 2026-09-28 — reconcile 로 늦게 확정된 스윙 전량 청산이 그림자 관측에 판단가·판단 시각으로 보고되고 부분 체결·적립은 보고되지 않음을 `TradingEngineTest`·`TradingEngineAccumulateTest`·`ShadowExitObserverTest` 로 확인, 변이 6종 검출 · 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — `LiveSemanticsArm` 에 `entryBarStopOnClose`·`keepWinnersUntilDays`·`pessimisticTrailing` 옵션·돌파선 하루 1회 계산(window 지연 생성)·진단 필드가 추가됐으나 기본값은 종전 동작(`RUN_TRAILING_WIDTH` 리포트 md5 동일로 계기 불변 확인). 이전 확인분: 2026-09-05 — `RUN_REGIME_EXPANSION=true ./gradlew :bot:test --tests "*RegimeExpansionTest*" --rerun-tasks` (JDK 21.0.9). 판정 규칙은 결과를 보기 전에 커밋(`a25096d`). fixture `p2020h1`~`p2023h1` D1 + `intraday240/`(7창 67,193봉, 수집 2026-09-05)
 sources:
   - bot/src/test/kotlin/com/trading/bot/engine/RegimeExpansionTest.kt
   - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
@@ -88,6 +88,7 @@ E 는 **익절 상한을 아예 없앤** 설정이라 크게 오른 생존자가
 
 **그림자 관측의 역할이 바뀌었다** — 후보와 라이브가 이제 같은 설정이므로 "승격 전 검증"이 아니라
 **모델↔현실 상시 감시**다. 사전고정한 임계(`N≥30 & 평균 과대추정 상한 < 0.18%p`)는 그대로 건강검진 기준으로 쓴다.
+표본 범위: **#235 관측 보고 배포(2026-09-28) 뒤부터** 체결 확인 창(약 3초)을 넘겨 reconcile 로 늦게 확정된 스윙 청산도 관측에 들어오고, 그때 `live_exit_at` 은 청산을 결정한 시각이다(즉시 체결 경로는 보고 시각 — 판단 뒤 체결 확인·기록 커밋·알림만큼 늦다). 그 전 표본은 창 안에 끝난 매도만 담는다(⚠️ 느린 체결이 슬리피지 꼬리 쪽일 가능성 — 미확인). 재시작 뒤 확정(발동 기록이 메모리라 사라진다)과 부분 체결 뒤 잔량이 dust 가 된 포지션은 여전히 빠진다.
 상한을 넘으면 백테가 라이브를 과대평가하고 있다는 뜻이므로 되돌림을 검토한다.
 
 **되돌리는 법**: `VULTR_DEPLOY_ENV` 시크릿의 두 줄을 `2.0`/`3.0` 으로 되돌리고 재배포(1회).

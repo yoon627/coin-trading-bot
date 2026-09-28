@@ -45,7 +45,10 @@ data class LadderInput(
 sealed interface LadderAction {
     data class Buy(val amountKrw: Double, val triggerPrice: Double) : LadderAction
 
-    /** @param isFinal 마지막 단 — 호출부는 분할 수량 대신 거래소 잔고 전량을 주문한다. */
+    /**
+     * @param triggerPrice 이 단을 판 tick 가격이어야 한다 — 라이브 매도 기록의 price 로 쓰인다(임계가로 바꾸면 기록가도 바뀐다).
+     * @param isFinal 마지막 단 — 호출부는 분할 수량 대신 거래소 잔고 전량을 주문한다.
+     */
     data class Sell(val volume: Double, val triggerPrice: Double, val isFinal: Boolean) : LadderAction
 
     data object Hold : LadderAction
