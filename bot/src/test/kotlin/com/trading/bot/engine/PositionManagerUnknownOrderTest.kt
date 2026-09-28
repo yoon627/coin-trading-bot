@@ -62,7 +62,7 @@ class PositionManagerUnknownOrderTest {
     private val saved = mutableListOf<TradingState>()
     private val sent = mutableListOf<OrderRequest>()
 
-    private val logger = LoggerFactory.getLogger(PositionManager::class.java) as Logger
+    private val logger = LoggerFactory.getLogger("com.trading.bot.engine") as Logger // 확정 규칙은 UnknownOrderResolver 가 로그를 남긴다
     private val logs = ListAppender<ILoggingEvent>().apply { start() }
 
     @BeforeEach
@@ -523,9 +523,9 @@ class PositionManagerUnknownOrderTest {
     }
 
     @Test
-    fun `a released sell resyncs the position while the lock ceiling still sees the order`() = runTest {
-        // 재시작 뒤처럼 position=false 로 복원된 행. 해제 전에 동기화해야 잔고 해석이 이 주문의 락 상한을 쓴다
-        // (clear 뒤에 동기화하면 상한이 0 이 되어 locked 가 빠진다) — 지금 동작을 그대로 고정한다.
+    fun `a released sell resyncs the position before dropping the order, as it does today`() = runTest {
+        // 재시작 뒤처럼 position=false 로 복원된 행. 현행 순서(동기화 → pending 해제)를 고정한다. 실제로는 요청량 ≤ 주문 전 보유라
+        // 순서가 결과를 바꾸지 않는다 — 순서를 드러내려고 요청량(0.001)이 주문 전 보유(0.0005)보다 큰, 운영에서 생기지 않는 행을 쓴다.
         val state = TradingState("KRW-BTC").apply {
             beginSellOrder("ctb-restored", SellReason.STOP_LOSS, since = clock.instant(), volume = 0.001, triggerPrice = 52_000_000.0, priorVolume = 0.0005)
         }
@@ -571,5 +571,42 @@ class PositionManagerUnknownOrderTest {
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertFalse(state.hasPendingBuy())
         assertTrue(logs.list.any { it.level == Level.WARN && "Buy order $identifier for KRW-BTC was never placed" in it.formattedMessage })
+    }
+
+    @Test
+    fun `an unseen balance counts toward the halt even after a trace was seen`() = runTest {
+        // 흔적을 봤어도 이번에 잔고를 못 봤으면 주문 상태를 볼 수단이 없는 것이다 — 조회 장애로 센다.
+        val (state, identifier) = unknownBuy()
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns null
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.002")) // 주문 전엔 없던 코인
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        assertEquals(0, state.reconcileFailureCount)
+
+        coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        assertEquals(1, state.reconcileFailureCount)
+    }
+
+    @Test
+    fun `a trace keeps an unknown buy held through a lookup failure and a vanished balance`() = runTest {
+        // 흔적을 한 번 봤으면 조회가 한 번 실패해 연속 횟수가 끊겨도 흔적 기록은 남는다 — 그 뒤 흔적이 사라져도 풀지 않는다.
+        val (state, identifier) = unknownBuy()
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns null
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.002"))
+        logs.list.clear()
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+
+        coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("order lookup down")
+        manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns null
+        coEvery { upbit.getAccounts() } returns listOf(krw())
+        repeat(3) {
+            advance(70)
+            manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
+        }
+
+        assertEquals(identifier, state.pendingBuyIdentifier)
+        assertEquals(1, traceAlerts(identifier))
     }
 }
