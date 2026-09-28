@@ -25,9 +25,7 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Clock
 import java.time.Duration
-import java.time.Instant
 import java.time.LocalDateTime
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -63,20 +61,10 @@ class PositionManager(
         private const val RUNG_FILL_RATIO = AccumulateLadder.SELL_FILL_RATIO
         private const val BUDGET_TOLERANCE_KRW = 1.0
         private const val VOLUME_SCALE = 8
-        // 응답을 못 받은 주문을 미접수로 확정하는 조건 — 연속으로 못 찾은 횟수와 처음 못 찾은 뒤 지난 시간(#227).
-        private const val NOT_PLACED_MISSES = 2
-        private val NOT_PLACED_AFTER: Duration = Duration.ofSeconds(60)
     }
 
-    /**
-     * identifier 조회로 못 찾은 이력. 비영속 — 재시작·reload 하면 [misses] 는 처음부터 다시 센다(더 오래 기다리는 쪽이라
-     * 안전하다). [traced] 는 잔고 흔적을 한 번이라도 봤다는 뜻이고 그 주문은 자동으로 풀지 않는다 — 단 이 엔진 안에서만이다.
-     * 재시작·reload 뒤에는 흔적이 남아 있으면 다시 잡지만, 그 사이 사라졌으면 일반 규칙으로 풀린다.
-     */
-    private data class IdentifierMiss(val misses: Int = 0, val firstMissAt: Instant? = null, val traced: Boolean = false)
-
-    // 키가 identifier 라 다른 주문의 기록이 섞이지 않는다. 확정되지 않고 풀린 항목은 남지만 불명 주문 수만큼이라 무시한다.
-    private val identifierMisses = ConcurrentHashMap<String, IdentifierMiss>()
+    // 응답을 못 받은 주문의 판정(#227). 못 찾은 이력의 수명이 이 엔진과 같아야 해서 여기서 만든다 — 주입하지 않는다.
+    private val unknownOrders = UnknownOrderResolver(upbitClient, clock)
 
     /** 거래소 계좌 목록에서 해당 통화 계좌 조회 (#21 — getAccounts().find 중복 헬퍼화). */
     private suspend fun findAccount(currency: String): Account? =
@@ -394,139 +382,34 @@ class PositionManager(
         return applyFillOutcome(ticker, state, currentPrice, filled)
     }
 
-    private sealed interface IdentifierLookup {
-        data class Found(val order: Order) : IdentifierLookup
-
-        /** 거래소가 그 identifier 를 모른다. */
-        data object NotFound : IdentifierLookup
-
-        /** 조회 자체가 실패했다 — 있는지 없는지 모른다. */
-        data object Unknown : IdentifierLookup
-    }
-
-    private suspend fun lookupByIdentifier(ticker: String, identifier: String): IdentifierLookup =
-        try {
-            val order = upbitClient.getOrderByIdentifier(identifier)
-            when {
-                order == null -> IdentifierLookup.NotFound
-                order.uuid.isBlank() -> {
-                    log.warn("identifier lookup for {} order {} returned no uuid", ticker, identifier)
-                    IdentifierLookup.Unknown
-                }
-                else -> IdentifierLookup.Found(order)
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("identifier lookup failed for {} order {}: {}", ticker, identifier, e.message)
-            IdentifierLookup.Unknown
-        }
-
     /**
      * 응답을 못 받은 매수(identifier 만 있음)를 확정한다. 거래소가 알면 uuid 를 이어받아 기존 경로로 넘긴다.
      * 잔고만으로는 체결을 기록하지 않는다 — uuid 없이는 이 주문의 체결인지 같은 시각의 수동 매매인지 가를 수 없고,
      * 감사 기록의 중복 방지 키도 없다.
      */
     private suspend fun resolveBuyByIdentifier(ticker: String, state: TradingState, currentPrice: Double, identifier: String): TradeRecord? {
-        when (val lookup = lookupByIdentifier(ticker, identifier)) {
-            is IdentifierLookup.Found -> {
-                identifierMisses.remove(identifier)
-                state.adoptBuyOrder(lookup.order.uuid)
+        when (val verdict = unknownOrders.resolve(ticker, TradeSide.BUY, state, identifier)) {
+            is UnknownOrderVerdict.Found -> {
+                state.adoptBuyOrder(verdict.order.uuid)
                 state.reconcileFailureCount = 0
                 persist(state)
-                return applyFillOutcome(ticker, state, currentPrice, lookup.order)
+                return applyFillOutcome(ticker, state, currentPrice, verdict.order)
             }
-            IdentifierLookup.NotFound -> {
-                val trace = buyTrace(ticker, state)
-                // 잔고도 못 봤다 — getOrder·잔고조회 동시 장애와 같은 halt 카운터로 사람을 부른다.
-                if (trace == null) recordReconcileFailure(state)
+            UnknownOrderVerdict.NotPlaced -> {
+                state.clearPendingBuy()
+                state.reconcileFailureCount = 0
+            }
+            is UnknownOrderVerdict.Undecided -> when (verdict.reason) {
+                // 주문 상태를 볼 수단이 없다(조회 실패, 또는 404 인데 잔고도 못 봄) — getOrder·잔고조회 동시 장애와 같은
+                // halt 카운터로 사람을 부른다.
+                UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED, UnknownOrderVerdict.Reason.BALANCE_UNSEEN -> recordReconcileFailure(state)
                 // 카운터는 확정(찾음·미접수)에서만 되돌린다. 404 마다 되돌리면 간헐 장애가 해제 조건과 halt 를 둘 다
                 // 계속 끊어, 매매가 멈춘 채 아무 알림도 나가지 않는다.
-                if (confirmNotPlaced(ticker, "Buy", identifier, trace)) {
-                    state.clearPendingBuy()
-                    state.reconcileFailureCount = 0
-                }
-            }
-            IdentifierLookup.Unknown -> {
-                breakMissStreak(identifier)
-                recordReconcileFailure(state)
+                UnknownOrderVerdict.Reason.TRACED, UnknownOrderVerdict.Reason.AWAITING_CONFIRMATION -> Unit
             }
         }
         persist(state)
         return null
-    }
-
-    /** 주문 전보다 보유가 늘었나 — 시장가 매수가 접수됐다면 곧바로 체결돼 코인이 들어온다. null = 판단할 수 없다. */
-    private suspend fun buyTrace(ticker: String, state: TradingState): Boolean? {
-        val prior = state.pendingBuyPriorVolume ?: return null
-        return try {
-            val held = findAccount(ticker.substringAfter("-"))?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-            held - prior > VOLUME_EPSILON
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("balance check for {} unknown buy failed: {}", ticker, e.message)
-            null
-        }
-    }
-
-    /** 주문 전보다 free 가 줄었나 — 매도가 접수됐다면 코인이 팔렸거나 주문에 잠겼다. null = 판단할 수 없다. */
-    private suspend fun sellTrace(ticker: String, state: TradingState): Boolean? {
-        val prior = state.pendingSellPriorVolume ?: return null
-        return try {
-            val free = findAccount(ticker.substringAfter("-"))?.balanceDouble() ?: 0.0
-            prior - free > VOLUME_EPSILON
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("balance check for {} unknown sell failed: {}", ticker, e.message)
-            null
-        }
-    }
-
-    /**
-     * 거래소가 모르는 주문을 미접수로 확정해도 되는가. 흔적 없는 404 가 끊김 없이 [NOT_PLACED_MISSES] 회 이상 이어지고
-     * 그 첫 404 뒤 [NOT_PLACED_AFTER] 가 지났을 때만 true — 조회 실패·잔고 불명이 끼면 처음부터 다시 센다.
-     *
-     * 증명이 아니다 — 시장가 주문은 접수되면 곧바로 체결돼 잔고가 움직인다는 전제에 기대고, 조회 가시성 지연은 문서에 없다.
-     * 그래서 흔적이 한 번이라도 보인 주문은 끝까지 자동으로 판단하지 않고 ERROR 로 사람을 부른다(pending 유지, 조회는
-     * 계속 — 찾히면 정상 확정). 흔적이 나중에 사라져도 이 엔진 안에서는 풀지 않는다: 그 사이의 수동 매매를 이 주문과
-     * 구분할 수 없다([IdentifierMiss] 의 범위 참조).
-     *
-     * @param trace 주문 전 기준값 대비 잔고 흔적. null = 잔고를 못 봤다.
-     */
-    private fun confirmNotPlaced(ticker: String, side: String, identifier: String, trace: Boolean?): Boolean {
-        val prev = identifierMisses[identifier] ?: IdentifierMiss()
-        if (trace == true && !prev.traced) {
-            log.error(
-                "{} 주문 {}({}) 을 거래소가 찾지 못하는데 잔고가 주문 전과 다릅니다 — 자동 처리하지 않습니다(이 티커의 매매가 멈춥니다). " +
-                    "봇을 정지하고 Upbit 주문 내역을 확인한 뒤 trading_states 의 pending 을 정리하고 재기동하세요 — " +
-                    "봇이 도는 중에 DB 를 고치면 다음 tick 이 메모리 상태로 다시 덮어씁니다.",
-                side, identifier, ticker,
-            )
-        }
-        if (trace != false || prev.traced) {
-            identifierMisses[identifier] = IdentifierMiss(traced = prev.traced || trace == true)
-            return false
-        }
-        val now = clock.instant()
-        val next = prev.copy(misses = prev.misses + 1, firstMissAt = prev.firstMissAt ?: now)
-        val waited = Duration.between(next.firstMissAt, now)
-        if (next.misses >= NOT_PLACED_MISSES && waited >= NOT_PLACED_AFTER) {
-            identifierMisses.remove(identifier)
-            log.warn(
-                "{} order {} for {} was never placed (not found {} times over {}s, no balance change) — released",
-                side, identifier, ticker, next.misses, waited.seconds,
-            )
-            return true
-        }
-        identifierMisses[identifier] = next
-        return false
-    }
-
-    /** 조회 자체가 실패했다 — 못 찾음이 끊김 없이 이어졌다고 말할 수 없다. 흔적 기록은 남긴다. */
-    private fun breakMissStreak(identifier: String) {
-        identifierMisses.computeIfPresent(identifier) { _, miss -> IdentifierMiss(traced = miss.traced) }
     }
 
     /**
@@ -874,25 +757,21 @@ class PositionManager(
      * uuid 를 이어받고, 잔고만으로는 청산을 기록하지 않는다. 조회 실패는 pending 유지 — 경과시간 알림이 사람을 부른다.
      */
     private suspend fun resolveSellByIdentifier(ticker: String, state: TradingState, currentPrice: Double, identifier: String): TradeRecord? =
-        when (val lookup = lookupByIdentifier(ticker, identifier)) {
-            is IdentifierLookup.Found -> {
-                identifierMisses.remove(identifier)
-                state.adoptSellOrder(lookup.order.uuid)
+        when (val verdict = unknownOrders.resolve(ticker, TradeSide.SELL, state, identifier)) {
+            is UnknownOrderVerdict.Found -> {
+                state.adoptSellOrder(verdict.order.uuid)
                 persist(state)
-                applySellFillOutcome(ticker, state, currentPrice, lookup.order)
+                applySellFillOutcome(ticker, state, currentPrice, verdict.order)
             }
-            IdentifierLookup.NotFound -> {
-                if (confirmNotPlaced(ticker, "Sell", identifier, sellTrace(ticker, state))) {
-                    // 코인은 그대로다 — 포지션을 유지하고 다음 tick 에 다시 판다(무산 분기와 같은 복원).
-                    if (!state.position) syncPosition(ticker, state)
-                    state.clearPendingSell()
-                }
+            UnknownOrderVerdict.NotPlaced -> {
+                // 코인은 그대로다 — 포지션을 유지하고 다음 tick 에 다시 판다(무산 분기와 같은 복원·같은 순서). 미접수면 요청량 ≤
+                // 주문 전 free ≤ 지금 free 라 락 상한이 0 에 가까워, 동기화를 pending 해제 앞뒤 어디서 해도 결과가 같다.
+                if (!state.position) syncPosition(ticker, state)
+                state.clearPendingSell()
                 null
             }
-            IdentifierLookup.Unknown -> {
-                breakMissStreak(identifier)
-                null
-            }
+            // 매도는 halt 를 세지 않는다 — halt 는 신규 매수만 막는 플래그이고 경과시간 알림이 사람을 부른다.
+            is UnknownOrderVerdict.Undecided -> null
         }
 
     /**
