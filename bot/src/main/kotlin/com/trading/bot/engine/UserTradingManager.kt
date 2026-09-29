@@ -181,13 +181,25 @@ class UserTradingManager(
         }
     }
 
-    /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도하고 최종 실패만 ERROR alert(→Discord). */
+    /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도한다. ERROR alert(→Discord)는 최종 실패와 종료 밖의 취소에만 낸다. */
     internal suspend fun restoreAllRunningBots() {
+        try {
+            restoreWithRetries()
+        } catch (e: CancellationException) {
+            // 종료가 취소한 복원은 실패가 아니다. 그 밖의 취소는 남은 재시도 없이 복원을 끝내므로 알린다.
+            if (!shuttingDown) log.error("봇 미복원: 복원이 취소로 중단됐다 — 복원되지 않은 봇이 있을 수 있다", e)
+            throw e
+        }
+    }
+
+    private suspend fun restoreWithRetries() {
         var pendingUserIds: List<Long> = emptyList()
         var lastQueryFailed = false
         for (attempt in 1..RESTORE_MAX_ATTEMPTS) {
             val states = try {
                 botStateRepository.findByRunningTrueAndExchange(EXCHANGE).collectList().awaitSingle()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 log.warn("restore: bot state 조회 실패 (attempt {}/{}): {}", attempt, RESTORE_MAX_ATTEMPTS, e.message)
                 lastQueryFailed = true
@@ -251,6 +263,8 @@ class UserTradingManager(
             userStrategies[userId] = activeStrategy
             log.info("Restored bot for user {}: strategy={}, tickers={}", userId, activeStrategy, tickers)
             true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("restore: user {} 복원 실패 — 재시도 대상: {}", userId, e.message)
             false
