@@ -180,10 +180,63 @@ class TradingEngineTest {
         engine.stop()
         dbUp.set(true)
 
-        engine.flushUnpersistedPending()
+        engine.flushUnpersisted()
 
         assertEquals(setOf("KRW-BTC", "KRW-SOL", "KRW-ETH"), rewritten)
         assertEquals(listOf("KRW-SOL"), engine.unpersistedSells().map { it.ticker })
+    }
+
+    @Test
+    fun `flush after stop rewrites every pending before peaks and writes each state at most once`() = runBlocking {
+        // 고점 재기록도 다음 tick 몫이다 — 멈춘 엔진의 states 를 DB 값으로 덮으면 트레일링 기준선이 뒤로 물러난다(#54).
+        // 고점은 pending 을 모두 쓴 뒤에 쓴다: 고점 쓰기가 호출자의 시간 상한을 먹어 매도 기록이 밀리면 안 된다.
+        // 맵 순회 순서는 SOL·BTC·XRP·ETH 다 — 고점만 남은 BTC 가 pending 인 XRP 보다 앞서, state 마다 번갈아 쓰면 순서 단언이 잡는다.
+        val dbUp = AtomicBoolean(false)
+        val writes = mutableListOf<String>()
+        coEvery { positionManager.retryPendingPersistIfNeeded(any()) } coAnswers {
+            val state = firstArg<TradingState>()
+            if (dbUp.get() && state.pendingPersistFailed) {
+                writes += "pending:${state.ticker}"
+                // 스냅샷 쓰기라 성공하면 고점 플래그도 내려간다(upsertState). XRP 행만 계속 실패한다.
+                if (state.ticker != "KRW-XRP") {
+                    state.pendingPersistFailed = false
+                    state.peakPersistFailed = false
+                }
+            }
+        }
+        coEvery { positionManager.persistPeak(any()) } coAnswers {
+            val state = firstArg<TradingState>()
+            if (dbUp.get()) {
+                writes += "peak:${state.ticker}"
+                state.peakPersistFailed = false
+            }
+        }
+        val engine = createEngine()
+        engine.start(
+            listOf("KRW-BTC", "KRW-ETH", "KRW-SOL", "KRW-XRP"),
+            mapOf(
+                "KRW-BTC" to TradingState("KRW-BTC", position = true, peakPersistFailed = true),
+                "KRW-ETH" to TradingState("KRW-ETH", peakPersistFailed = true),
+                "KRW-SOL" to TradingState(
+                    "KRW-SOL", position = true, pendingSellIdentifier = "ctb-sol", pendingPersistFailed = true, peakPersistFailed = true,
+                ),
+                "KRW-XRP" to TradingState(
+                    "KRW-XRP", position = true, pendingSellIdentifier = "ctb-xrp", pendingPersistFailed = true, peakPersistFailed = true,
+                ),
+            ),
+        )
+        engine.stop()
+        dbUp.set(true)
+
+        engine.flushUnpersisted()
+
+        assertEquals(listOf("pending:KRW-SOL", "pending:KRW-XRP"), writes.filter { it.startsWith("pending:") }.sorted())
+        // SOL 은 재기록이 고점까지 썼다. XRP 는 같은 스냅샷을 한 flush 에서 두 번 시도하지 않는다.
+        assertEquals(listOf("peak:KRW-BTC", "peak:KRW-ETH"), writes.filter { it.startsWith("peak:") }.sorted())
+        assertTrue(
+            writes.indexOfLast { it.startsWith("pending:") } < writes.indexOfFirst { it.startsWith("peak:") },
+            "pending 을 모두 쓴 뒤에 고점을 써야 한다: $writes",
+        )
     }
 
     @Test
