@@ -59,7 +59,8 @@ data class TradingState(
     // wait 중 부분체결 관측 로그의 직전 값(executed/remaining) — 값이 바뀔 때만 찍는다(비영속, #120).
     var partialSellFillLogged: String? = null,
     // 신고점 flush 가 실패하면 true — 갱신 tick 에만 flush 하므로 그대로 두면 재시도 기회가
-    // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서 재기록한다(비영속).
+    // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서, 멈춘 엔진이면 그 states 를 버리거나 덮기 전의
+    // flush 에서 재기록한다(비영속).
     // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
     var peakPersistFailed: Boolean = false,
     // 적립 프로파일 사다리 장부(durable). 잔고·평단은 거래소가 진실이고 이 둘은 분할 단위·기준가만 담당한다.

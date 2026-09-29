@@ -683,8 +683,8 @@ class PositionManager(
         upbitClient.getAccounts().filter { it.currency != "KRW" && it.totalBalance() > 0.0 }.map { it.currency }.toSet()
 
     /**
-     * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다음 tick 이 재시도하게 한다 —
-     * flush 가 갱신 tick 에만 걸리므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다(#54).
+     * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다시 쓰게 한다(도는 엔진은 다음 tick, 멈춘 엔진은
+     * [TradingEngine.flushUnpersisted]) — flush 가 갱신 tick 에만 걸리므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다(#54).
      * 진입 게이트는 건드리지 않는다.
      */
     internal suspend fun persistPeak(state: TradingState) {
@@ -694,7 +694,7 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             state.peakPersistFailed = true
-            log.warn("peak persist failed for {} — retry next tick: {}", state.ticker, e.message)
+            log.warn("peak persist failed for {} — the stored peak lags until a later write succeeds: {}", state.ticker, e.message)
         }
     }
 

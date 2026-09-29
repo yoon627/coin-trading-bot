@@ -275,11 +275,15 @@ class TradingEngine(
     internal fun restartSnapshot(): Map<String, TradingState> = dormantStates + states
 
     /**
-     * 루프가 기록하지 못한 pending([TradingState.pendingPersistFailed])을 한 번 더 기록한다. 재기록은 다음 tick 몫이라 멈춘
-     * 엔진에서는 일어나지 않고, 이 엔진의 states 를 버리거나 DB 값으로 덮는 쪽은 그 주문을 모르게 된다. stop 이 루프를 join 한 뒤에 부른다.
+     * 루프가 기록하지 못한 pending([TradingState.pendingPersistFailed])과 고점([TradingState.peakPersistFailed], #54)을 한 번 더
+     * 기록한다. 재기록은 다음 tick 몫이라 멈춘 엔진에서는 일어나지 않고, 이 엔진의 states 를 버리거나 DB 값으로 덮는 쪽은 그
+     * 주문을 모르고 뒤처진 고점으로 트레일링한다. stop 이 루프를 join 한 뒤에 부른다.
      */
-    internal suspend fun flushUnpersistedPending() {
+    internal suspend fun flushUnpersisted() {
+        // pending 을 모두 먼저 — 고점 쓰기가 호출자의 시간 상한을 먹어 매도 기록이 밀리면 안 된다.
         states.values.forEach { positionManager.retryPendingPersistIfNeeded(it) }
+        // 재기록이 성공한 state 는 전체 스냅샷이라 고점도 이미 썼다. 실패한 state 는 건너뛴다 — 같은 스냅샷을 한 flush 에서 두 번 시도하지 않는다.
+        states.values.filter { it.peakPersistFailed && !it.pendingPersistFailed }.forEach { positionManager.persistPeak(it) }
     }
 
     /**

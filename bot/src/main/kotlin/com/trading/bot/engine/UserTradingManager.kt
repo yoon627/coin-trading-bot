@@ -116,7 +116,7 @@ class UserTradingManager(
      * graceful shutdown: SmartLifecycle.stop 은 @PreDestroy 와 달리 `timeout-per-shutdown-phase`(30s) 예산을 실제로
      * 받아 무한 hang 을 막는다(@PreDestroy 엔 미적용 — 리뷰 arch Major). 진행 중 restore 를 먼저 취소해(M5) shutdown
      * 이후 엔진 기동을 막고, 모든 엔진을 동시 stop(cancelAndJoin — runBlocking 이벤트루프의 협조적 동시)해 tick 후처리
-     * 완주를 기다린 뒤 루프가 기록하지 못한 pending 을 한 번 더 남긴다(매도가 남으면 ERROR). NonCancellable 후처리가 예산을
+     * 완주를 기다린 뒤 루프가 기록하지 못한 pending·고점을 한 번 더 남긴다(매도가 남으면 ERROR). NonCancellable 후처리가 예산을
      * 넘기면 self-bound(withTimeoutOrNull)로 끊고 — 잔여 daemon 코루틴은 JVM 종료로 정리되고 — 기록된 pending 은 재시작 후
      * durable reconcile(#20) 이 잇지만 기록하지 못한 매도는 유실된다. 정지 저장이 확인되지 않은 사용자는 엔진 정지와 동시에
      * 한 번 더 저장한다([saveUnpersistedStops]).
@@ -464,7 +464,7 @@ class UserTradingManager(
         // 주문을 모르므로 교체하지 않고 아래 복귀 경로를 탄다 — 옛 엔진이 메모리의 그 주문을 다음 tick 에 다시 기록한다.
         val initialStates = if (wasRunning) {
             try {
-                val unrecorded = flushPending(userId, existing)
+                val unrecorded = flushStoppedEngine(userId, existing)
                 check(unrecorded.isEmpty()) { "매도 주문 기록을 DB 에 남기지 못함: ${sellRefs(unrecorded)}" }
                 tradingStateService.loadStates(userId)
             } catch (e: CancellationException) {
@@ -622,23 +622,23 @@ class UserTradingManager(
             throw BotControlPersistFailedException(userMessage, e)
         }
 
-    /** 멈춘 엔진의 미기록 pending(매수 포함)을 상한 안에서 한 번 더 남기고, 그래도 DB 에 없을 수 있는 매도를 돌려준다. */
-    private suspend fun flushPending(userId: Long, engine: TradingEngine): List<TradingState> {
+    /** 멈춘 엔진의 미기록 pending(매수 포함)·고점을 상한 안에서 한 번 더 남기고, 그래도 DB 에 없을 수 있는 매도를 돌려준다. */
+    private suspend fun flushStoppedEngine(userId: Long, engine: TradingEngine): List<TradingState> {
         // withTimeout 이 아니다 — 시간 초과가 취소로 번지면 reload 가 옛 엔진 복귀를 503 으로 알리지 못한다.
-        if (withTimeoutOrNull(PENDING_FLUSH_TIMEOUT_MS) { engine.flushUnpersistedPending() } == null) {
-            log.warn("user {} 의 미기록 주문 재기록이 {}ms 안에 끝나지 않았다", userId, PENDING_FLUSH_TIMEOUT_MS)
+        if (withTimeoutOrNull(FLUSH_TIMEOUT_MS) { engine.flushUnpersisted() } == null) {
+            log.warn("user {} 의 미기록 주문·고점 재기록이 {}ms 안에 끝나지 않았다", userId, FLUSH_TIMEOUT_MS)
         }
         return engine.unpersistedSells()
     }
 
-    /** [flushPending] 과 같되 취소 외의 예외는 올리지 않는다(ERROR 로 남긴다) — 뒤따르는 정지 저장·로드가 이 결과에 달리면 안 된다. */
+    /** [flushStoppedEngine] 과 같되 취소 외의 예외는 올리지 않는다(ERROR 로 남긴다) — 뒤따르는 정지 저장·로드가 이 결과에 달리면 안 된다. */
     private suspend fun flushOrLog(userId: Long, engine: TradingEngine): List<TradingState> =
         try {
-            flushPending(userId, engine)
+            flushStoppedEngine(userId, engine)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.error("user {} 의 미기록 주문을 다시 남기지 못함", userId, e)
+            log.error("user {} 의 미기록 주문·고점을 다시 남기지 못함", userId, e)
             engine.unpersistedSells()
         }
 
@@ -647,7 +647,7 @@ class UserTradingManager(
 
     /**
      * 시작·복원의 초기 상태를 DB 에서 읽는다. 맵에 남은 정지 엔진은 재사용되고 start 가 그 states 를 이 값으로 덮으므로 읽기 전에
-     * 미기록 주문을 남긴다. 알림은 읽기가 성공한 뒤에만 낸다 — 실패하면 덮은 것이 없고, 엔진이 남아 다음 시도가 다시 기록한다.
+     * 미기록 주문·고점을 남긴다. 알림은 읽기가 성공한 뒤에만 낸다 — 실패하면 덮은 것이 없고, 엔진이 남아 다음 시도가 다시 기록한다.
      */
     private suspend fun loadInitialStates(userId: Long): Map<String, TradingState> {
         val unrecorded = engines[userId]?.let { flushOrLog(userId, it) }.orEmpty()
@@ -682,7 +682,7 @@ class UserTradingManager(
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
         private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L
         private const val STOP_SAVE_TIMEOUT_MS = 10_000L
-        private const val PENDING_FLUSH_TIMEOUT_MS = 5_000L
+        private const val FLUSH_TIMEOUT_MS = 5_000L
 
         // bot_state 는 (user_id, exchange) 별 1행(V17) — 현재 거래소는 Upbit 뿐이다.
         private const val EXCHANGE = "UPBIT"
