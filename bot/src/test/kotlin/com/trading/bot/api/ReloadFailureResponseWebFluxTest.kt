@@ -1,6 +1,8 @@
 package com.trading.bot.api
 
+import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.RuntimeReloadFailedException
+import com.trading.bot.engine.STOP_UNPERSISTED_MESSAGE
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
@@ -17,7 +19,7 @@ import org.springframework.web.server.WebFilter
 import reactor.core.publisher.Mono
 
 /**
- * 런타임 교체 실패가 **실제 WebFlux 파이프라인에서** 503 + 안내 문구로 나오는지 검증한다.
+ * 런타임 교체 실패·봇 제어 상태 저장 실패가 **실제 WebFlux 파이프라인에서** 503 + 안내 문구로 나오는지 검증한다.
  * 단위 테스트로는 상태코드를 보증할 수 없다 — 예외가 프레임워크를 거쳐야 응답이 정해진다.
  */
 class ReloadFailureResponseWebFluxTest {
@@ -73,6 +75,16 @@ class ReloadFailureResponseWebFluxTest {
         userClient().post().uri("/api/user/settings")
             .header("Content-Type", "application/json")
             .bodyValue(mapOf("discordWebhookUrl" to "https://discord.com/api/webhooks/1/token"))
+            .exchange()
+            .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
+    }
+
+    @Test
+    fun `봇 정지의 상태 저장이 실패하면 500 이 아니라 503 이 나온다`() {
+        coEvery { userTradingManager.stopBot(1L) } throws
+            BotControlPersistFailedException(STOP_UNPERSISTED_MESSAGE, RuntimeException("db down"))
+
+        userClient().post().uri("/api/bot/stop")
             .exchange()
             .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
     }

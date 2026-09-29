@@ -1,6 +1,7 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
+import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.reloadFailureMessage
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
@@ -30,13 +31,15 @@ class TradingController(
         val userId = currentUserId()
         val tickers = req?.tickers?.let(requestValidators::normalizeMarkets)
         val strategy = req?.strategy?.let(requestValidators::normalizeStrategy)
-        val result = userTradingManager.startBot(userId, tickers, strategy)
+        val result = persisting { userTradingManager.startBot(userId, tickers, strategy) }
         // UserTradingManager returns {"error": "..."} for precondition failures
-        // (no API keys, user missing, running with another ticker list). Surface those as proper 4xx so clients
-        // can branch on status instead of having to inspect the body.
+        // (no API keys, user missing, unknown strategy, running with another ticker list). Surface those as proper 4xx
+        // so clients can branch on status instead of having to inspect the body. Codes go first — the message can carry
+        // user input (a strategy name) that would otherwise trip the "not found" match.
         result["error"]?.let { msg ->
             val status = when {
                 result["code"] == UserTradingManager.CONFLICT_CODE -> HttpStatus.CONFLICT
+                result["code"] == UserTradingManager.UNKNOWN_STRATEGY_CODE -> HttpStatus.BAD_REQUEST
                 (msg as? String)?.contains("not found", ignoreCase = true) == true -> HttpStatus.NOT_FOUND
                 else -> HttpStatus.BAD_REQUEST
             }
@@ -47,7 +50,7 @@ class TradingController(
 
     @PostMapping("/bot/stop")
     suspend fun stopBot(): Map<String, Any> {
-        return userTradingManager.stopBot(currentUserId())
+        return persisting { userTradingManager.stopBot(currentUserId()) }
     }
 
     @GetMapping("/bot/status")
@@ -58,7 +61,7 @@ class TradingController(
     @PostMapping("/bot/strategy")
     suspend fun changeStrategy(@RequestBody request: StrategyRequest): Map<String, Any> {
         val strategy = requestValidators.normalizeStrategy(request.strategy)
-        val success = userTradingManager.setStrategy(currentUserId(), strategy)
+        val success = persisting { userTradingManager.setStrategy(currentUserId(), strategy) }
         if (!success) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown strategy: $strategy")
         }
@@ -70,7 +73,7 @@ class TradingController(
         // currentUserId() 로 자기 봇만 대상 — 타인 봇 halt 해제 불가.
         val ticker = requestValidators.normalizeMarkets(listOf(request.ticker)).firstOrNull()
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid ticker: ${request.ticker}")
-        return userTradingManager.clearHalt(currentUserId(), ticker)
+        return persisting { userTradingManager.clearHalt(currentUserId(), ticker) }
     }
 
     @GetMapping("/account")
@@ -136,6 +139,14 @@ class TradingController(
         )
     }
 }
+
+/** 봇 제어의 상태 저장 실패를 503 + 매니저의 안내 문구로 — 런타임 교체 실패(`setUpbitKeys`)와 같은 변환. */
+private inline fun <T> persisting(block: () -> T): T =
+    try {
+        block()
+    } catch (e: BotControlPersistFailedException) {
+        throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.message, e)
+    }
 
 data class StartBotRequest(val tickers: List<String>? = null, val strategy: String? = null)
 data class StrategyRequest(val strategy: String)
