@@ -630,7 +630,7 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             state.pendingPersistFailed = true
-            log.error("pending persist failed for {} — blocking new entries (retry next tick): {}", state.ticker, e.message, e)
+            log.error("pending persist failed for {} — blocking new entries until it is recorded: {}", state.ticker, e.message, e)
         }
     }
 
