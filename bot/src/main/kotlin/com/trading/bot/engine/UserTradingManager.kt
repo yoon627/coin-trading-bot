@@ -232,10 +232,8 @@ class UserTradingManager(
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             // 등록되지 않은 이름(전략 제거·rename 뒤)은 캐시하지 않는다 — 복원이 끝내 실패하면 그 이름이 상태 API 로 나가 시작 요청이 400 이 된다.
             if (isRegisteredStrategy(state.strategy)) userStrategies[userId] = state.strategy
-            // 맵에 남은 정지 엔진은 아래에서 재사용되고 start 가 그 states 를 DB 값으로 덮는다 — 읽기 전에 미기록 주문을 남긴다.
-            engines[userId]?.let { flushOrAlert(userId, it) }
-            // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 engines 에 아무것도 남기지 않는다.
-            val initialStates = tradingStateService.loadStates(userId)
+            // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 새 엔진을 등록하지 않는다.
+            val initialStates = loadInitialStates(userId)
             val engine = engines.computeIfAbsent(userId) {
                 createEngine(userSecretsService.decryptUserSecrets(user))
             }
@@ -280,10 +278,8 @@ class UserTradingManager(
         }
 
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
-        // 맵에 남은 정지 엔진은 아래에서 재사용되고 start 가 그 states 를 DB 값으로 덮는다 — 읽기 전에 미기록 주문을 남긴다.
-        engines[userId]?.let { flushOrAlert(userId, it) }
-        // restoreOne 과 같은 이유로 durable 로드를 엔진 등록 앞에 둔다(실패 시 미기동 엔진 잔류 방지).
-        val initialStates = tradingStateService.loadStates(userId)
+        // restoreOne 과 같은 이유로 durable 로드를 엔진 등록 앞에 둔다(실패 시 새로 만든 엔진이 기동되지 않은 채 남지 않게).
+        val initialStates = loadInitialStates(userId)
         val engine = engines.computeIfAbsent(userId) { createEngine(decryptedUser) }
 
         val strategy = strategyName ?: userStrategies[userId]
@@ -610,12 +606,9 @@ class UserTradingManager(
         return engine.unpersistedSells()
     }
 
-    /**
-     * 엔진의 states 를 버리거나 DB 값으로 덮기 전에 부른다. 취소 외의 예외는 올리지 않는다(ERROR 로 남기고 남은 매도를 알린다) —
-     * 뒤따르는 정지 저장 등이 이 결과에 달리면 안 된다.
-     */
-    private suspend fun flushOrAlert(userId: Long, engine: TradingEngine) {
-        val unrecorded = try {
+    /** [flushPending] 과 같되 취소 외의 예외는 올리지 않는다(ERROR 로 남긴다) — 뒤따르는 정지 저장·로드가 이 결과에 달리면 안 된다. */
+    private suspend fun flushOrLog(userId: Long, engine: TradingEngine): List<TradingState> =
+        try {
             flushPending(userId, engine)
         } catch (e: CancellationException) {
             throw e
@@ -623,7 +616,19 @@ class UserTradingManager(
             log.error("user {} 의 미기록 주문을 다시 남기지 못함", userId, e)
             engine.unpersistedSells()
         }
+
+    /** 엔진의 states 를 버리기 전에 부른다. */
+    private suspend fun flushOrAlert(userId: Long, engine: TradingEngine) = alertDroppedSells(userId, flushOrLog(userId, engine))
+
+    /**
+     * 시작·복원의 초기 상태를 DB 에서 읽는다. 맵에 남은 정지 엔진은 재사용되고 start 가 그 states 를 이 값으로 덮으므로 읽기 전에
+     * 미기록 주문을 남긴다. 알림은 읽기가 성공한 뒤에만 낸다 — 실패하면 덮은 것이 없고, 엔진이 남아 다음 시도가 다시 기록한다.
+     */
+    private suspend fun loadInitialStates(userId: Long): Map<String, TradingState> {
+        val unrecorded = engines[userId]?.let { flushOrLog(userId, it) }.orEmpty()
+        val loaded = tradingStateService.loadStates(userId)
         alertDroppedSells(userId, unrecorded)
+        return loaded
     }
 
     /**
