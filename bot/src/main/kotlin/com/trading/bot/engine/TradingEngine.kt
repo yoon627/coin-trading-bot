@@ -274,6 +274,21 @@ class TradingEngine(
     /** 재기동 입력용 상태 사본 — dormant ∪ states(같은 티커는 states 우선). start 가 states 를 바꾸므로 live view 가 아니라 사본이다. */
     internal fun restartSnapshot(): Map<String, TradingState> = dormantStates + states
 
+    /**
+     * 루프가 기록하지 못한 pending([TradingState.pendingPersistFailed])을 한 번 더 기록한다. 재기록은 다음 tick 몫이라 멈춘
+     * 엔진에서는 일어나지 않고, 이 엔진의 states 를 버리거나 DB 값으로 덮는 쪽은 그 주문을 모르게 된다. stop 이 루프를 join 한 뒤에 부른다.
+     */
+    internal suspend fun flushUnpersistedPending() {
+        states.values.forEach { positionManager.retryPendingPersistIfNeeded(it) }
+    }
+
+    /**
+     * DB 에 없을 수 있는 매도 pending. 매도만 선기록이 실패해도 주문을 보낸다 — 매수는 선기록이 성공해야 보내므로 uuid 기록이
+     * 실패해도 DB 의 identifier 로 확정된다.
+     */
+    internal fun unpersistedSells(): List<TradingState> =
+        states.values.filter { it.pendingPersistFailed && it.hasPendingSell() }
+
     fun getActiveStrategyName(): String = activeStrategy?.name ?: "none"
 
     fun setStrategy(strategyName: String): Boolean {

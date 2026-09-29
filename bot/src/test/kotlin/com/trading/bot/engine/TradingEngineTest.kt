@@ -155,6 +155,38 @@ class TradingEngineTest {
     }
 
     @Test
+    fun `flush after stop rewrites pending the loop could not record and reports the sells still unwritten`() = runBlocking {
+        // 재기록은 다음 tick 몫이라 멈춘 엔진에서는 일어나지 않는다 — 그 뒤 DB 만 읽는 reload·재시작이 그 매도를 모른다(#244).
+        // 루프가 도는 동안은 DB 가 죽어 있고 stop 뒤에만 살아나게 해, 플래그가 내려갔다면 flush 가 내린 것이다.
+        val dbUp = AtomicBoolean(false)
+        val rewritten = mutableSetOf<String>()
+        coEvery { positionManager.retryPendingPersistIfNeeded(any()) } coAnswers {
+            val state = firstArg<TradingState>()
+            if (dbUp.get()) {
+                rewritten += state.ticker
+                if (state.ticker == "KRW-BTC") state.pendingPersistFailed = false
+            }
+        }
+        val engine = createEngine()
+        engine.start(
+            listOf("KRW-BTC", "KRW-SOL", "KRW-ETH"),
+            mapOf(
+                "KRW-BTC" to TradingState("KRW-BTC", position = true, pendingSellIdentifier = "ctb-btc", pendingPersistFailed = true),
+                "KRW-SOL" to TradingState("KRW-SOL", position = true, pendingSellUuid = "u-sol", pendingPersistFailed = true),
+                // 매수는 선기록이 성공해야 보내므로 DB 에 identifier 가 있다 — 기록 실패로 남아도 새 엔진이 확정한다.
+                "KRW-ETH" to TradingState("KRW-ETH", pendingBuyUuid = "u-eth", pendingPersistFailed = true),
+            ),
+        )
+        engine.stop()
+        dbUp.set(true)
+
+        engine.flushUnpersistedPending()
+
+        assertEquals(setOf("KRW-BTC", "KRW-SOL", "KRW-ETH"), rewritten)
+        assertEquals(listOf("KRW-SOL"), engine.unpersistedSells().map { it.ticker })
+    }
+
+    @Test
     fun `start is idempotent`(): Unit = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
