@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -336,6 +337,60 @@ class UserTradingManagerTest {
         } finally {
             logger.detachAppender(appender)
         }
+    }
+
+    // 종료는 shuttingDown 을 세운 뒤 복원을 취소한다. 마지막(5번째) 시도는 뒤에 backoff 가 없다 — 그 도중의 취소를 삼키면 곧장
+    // '봇 미복원' 판정으로 간다. 앞 시도에서는 backoff 의 delay 가 취소를 다시 던져 드러나지 않는다.
+    private fun markShuttingDown() =
+        UserTradingManager::class.java.getDeclaredField("shuttingDown").apply { isAccessible = true }.setBoolean(manager, true)
+
+    private suspend fun TestScope.cancelRestoreDuringLastAttempt() {
+        val restore = launch { manager.restoreAllRunningBots() }
+        advanceTimeBy(15_500) // 시도 시각 0·1·3·7·15초 — 5번째 시도 도중
+        markShuttingDown()
+        restore.cancelAndJoin()
+    }
+
+    @Test
+    fun `restore cancelled by shutdown while recording a stopped engine's pending is not reported as unrestored`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+        var flushes = 0
+        coEvery { mockEngine.flushUnpersistedPending() } coAnswers { if (++flushes == 5) delay(1_000) }
+
+        val errors = errorsDuring { cancelRestoreDuringLastAttempt() }
+
+        assertEquals(5, flushes, "5번째 시도의 기록 중에 취소해야 한다")
+        assertTrue(errors.none { it.contains("봇 미복원") }, "종료가 취소한 복원을 미복원으로 알렸다: $errors")
+    }
+
+    @Test
+    fun `restore cancelled by shutdown while querying running bots is not reported as unrestored`() = runTest {
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returnsMany
+            List(4) { Flux.error<BotStateEntity>(RuntimeException("db down")) } + Flux.never<BotStateEntity>()
+
+        val errors = errorsDuring { cancelRestoreDuringLastAttempt() }
+
+        verify(exactly = 5) { botStateRepository.findByRunningTrueAndExchange("UPBIT") }
+        assertTrue(errors.none { it.contains("봇 미복원") }, "종료가 취소한 복원을 미복원으로 알렸다: $errors")
+    }
+
+    @Test
+    fun `restore ended by a cancellation outside shutdown is reported`() = runTest {
+        // 종료가 아닌 취소는 남은 재시도 없이 복원을 끝낸다 — 알리지 않으면 봇이 복원되지 않은 것을 아무도 모른다.
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.never()
+
+        val errors = errorsDuring {
+            val restore = launch { manager.restoreAllRunningBots() }
+            advanceTimeBy(100)
+            restore.cancelAndJoin()
+        }
+
+        assertTrue(errors.any { it.contains("봇 미복원") && it.contains("취소로 중단") }, "취소로 끝난 복원을 알려야 한다: $errors")
     }
 
     @Test
