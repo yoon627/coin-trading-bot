@@ -616,11 +616,13 @@ function SettingsPage({ user, setActive, refreshUser }) {
 
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Access Key</div>
-          <input className="tide-input mono" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="••••••••••••••••"/>
+          <input className="tide-input mono" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="••••••••••••••••" autoComplete="off"/>
         </div>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Secret Key</div>
-          <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="••••••••••••••••"/>
+          {/* 비밀번호 관리자가 이 칸을 로그인 비밀번호로 다루지 않게 한다 — Chromium 은 one-time-code 칸을 비밀번호 후보에서 빼
+              자동 채움·생성·저장 제안이 붙지 않는다. off 는 password 칸에서 무시되고, new-password 는 생성 제안 대상이 된다. */}
+          <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="••••••••••••••••" autoComplete="one-time-code"/>
         </div>
 
         <Button onClick={saveKeys} disabled={busyKeys || !accessKey || !secretKey} size="lg">{busyKeys ? '저장 중…' : 'API 키 저장'}</Button>
