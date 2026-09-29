@@ -454,7 +454,11 @@ class UserTradingManager(
         // 빈 목록(적립만 운용)을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
         val tickers = existing.getUserTickers()
         val strategy = existing.getActiveStrategyName()
-        existing.stop()
+        // 요청이 끊겨도 루프 join 까지 기다린다 — 취소가 여기서 새면 정지된 엔진만 남고(#262), join 전에 복귀하면 옛 루프의
+        // 꼬리와 되살린 루프가 겹친다. 도는 엔진이었으면 취소는 아래 첫 취소 확인(기록의 시간 상한)에서 드러나 복귀 경로를 탄다.
+        withContext(NonCancellable) { existing.stop() }
+        // 종료가 이 엔진을 멈추고 기록한다 — 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
+        if (shuttingDown) return@withLock
         // stop 이후에 읽어야 마지막 tick 의 기록까지 잡힌다 — 먼저 읽으면 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending
         // 이 된다(#20). tick 안에서 기록하지 못한 매도는 flush 가 한 번 더 남기고, 그래도 못 남기면 새 엔진은 DB 에 없는 그
         // 주문을 모르므로 교체하지 않고 아래 복귀 경로를 탄다 — 옛 엔진이 메모리의 그 주문을 다음 tick 에 다시 기록한다.
@@ -470,6 +474,13 @@ class UserTradingManager(
                 withContext(NonCancellable) {
                     // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
                     runCatching { existing.resume() }
+                        // 응답을 받지 못한 사용자는 새 설정이 반영된 줄 안다(#51 의 503 이 전달되지 않는다).
+                        .onSuccess {
+                            log.error(
+                                "reload: user {} 요청이 끊겨 이전 설정(자격증명·웹훅)의 엔진으로 복귀했다 — 저장된 새 설정은 반영되지 않았으니 다시 저장해야 한다",
+                                userId,
+                            )
+                        }
                         .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
                 }
                 throw e

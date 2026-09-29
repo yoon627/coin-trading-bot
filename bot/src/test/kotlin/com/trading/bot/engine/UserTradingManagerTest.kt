@@ -1050,6 +1050,45 @@ class UserTradingManagerTest {
     }
 
     @Test
+    fun `a reload cancelled while the old engine is stopping waits for the stop and brings the old engine back`() = runTest {
+        // stop 의 join 중 취소가 복귀 경로 밖으로 새면 정지된 엔진만 남아 손절이 멈춘다(#262). join 전에 복귀하면 옛 루프의 꼬리와
+        // 새 루프가 겹치므로, stop 을 끝까지 기다린 뒤에 복귀해야 한다.
+        runningEngineToReload()
+        val stopFinished = AtomicBoolean(false)
+        coEvery { mockEngine.stop() } coAnswers { delay(1_000); stopFinished.set(true) }
+        val stopSettledAtResume = mutableListOf<Boolean>()
+        every { mockEngine.resume() } answers { stopSettledAtResume += stopFinished.get() }
+
+        val errors = errorsDuring {
+            val reload = launch { manager.reloadUserRuntime(1L) }
+            advanceTimeBy(500)
+            reload.cancelAndJoin()
+        }
+
+        assertEquals(listOf(true), stopSettledAtResume, "stop 을 마친 뒤 한 번 복귀해야 한다")
+        verify(exactly = 0) { manager.createEngine(any()) }
+        assertSame(mockEngine, engines()[1L])
+        // 응답을 못 받은 사용자는 새 키·웹훅이 반영된 줄 안다 — 이전 설정으로 거래 중임을 알린다.
+        assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
+    }
+
+    @Test
+    fun `a reload cancelled while stopping the old engine during shutdown leaves it to the shutdown`() = runTest {
+        // 종료가 이 엔진을 멈추고 기록한다 — 멈춘 뒤 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
+        runningEngineToReload()
+        coEvery { mockEngine.stop() } coAnswers { delay(1_000) }
+
+        val reload = launch { manager.reloadUserRuntime(1L) }
+        advanceTimeBy(500)
+        markShuttingDown()
+        reload.cancelAndJoin()
+
+        verify(exactly = 0) { mockEngine.resume() }
+        verify(exactly = 0) { manager.createEngine(any()) }
+        assertSame(mockEngine, engines()[1L], "종료의 정지 대상에 남아 있어야 한다")
+    }
+
+    @Test
     fun `stop records pending after the stop is settled and reports a sell it could not record`() = runTest {
         engines()[1L] = mockEngine
         val saved = stoppableRow()
