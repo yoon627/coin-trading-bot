@@ -1,5 +1,6 @@
 package com.trading.bot.api
 
+import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
@@ -98,6 +99,51 @@ class TradingControllerTest {
         val result = authed { controller.changeStrategy(StrategyRequest("volatility_breakout")) }
         assertEquals("changed", result["status"])
         assertEquals("volatility_breakout", result["strategy"])
+    }
+
+    // --- 봇 제어의 상태 저장 실패는 503 (#228) — 엔드포인트마다 변환하므로 네 곳을 모두 본다 ---
+
+    private val persistFailure = BotControlPersistFailedException("저장 실패 안내", RuntimeException("db down"))
+
+    private fun assertServiceUnavailable(block: suspend () -> Any) {
+        val ex = assertThrows<ResponseStatusException> { authed { block() } }
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.statusCode)
+        assertEquals("저장 실패 안내", ex.reason)
+    }
+
+    @Test
+    fun `stopBot persistence failure is 503 with the manager's message`() {
+        coEvery { manager.stopBot(userId) } throws persistFailure
+        assertServiceUnavailable { controller.stopBot() }
+    }
+
+    @Test
+    fun `startBot persistence failure is 503 with the manager's message`() {
+        coEvery { manager.startBot(userId, null, null) } throws persistFailure
+        assertServiceUnavailable { controller.startBot(null) }
+    }
+
+    @Test
+    fun `changeStrategy persistence failure is 503 with the manager's message`() {
+        coEvery { manager.setStrategy(userId, "combined") } throws persistFailure
+        assertServiceUnavailable { controller.changeStrategy(StrategyRequest("combined")) }
+    }
+
+    @Test
+    fun `clearHalt persistence failure is 503 with the manager's message`() {
+        coEvery { manager.clearHalt(userId, "KRW-BTC") } throws persistFailure
+        assertServiceUnavailable { controller.clearHalt(ClearHaltRequest("KRW-BTC")) }
+    }
+
+    @Test
+    fun `startBot maps an unknown strategy to 400 even when the name says not found`() {
+        coEvery { manager.startBot(userId, null, "x not found") } returns
+            mapOf("error" to "Unknown strategy: x not found", "code" to UserTradingManager.UNKNOWN_STRATEGY_CODE)
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.startBot(StartBotRequest(strategy = "x not found")) }
+        }
+        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
     }
 
     // --- 설정 저장(Discord webhook) ---

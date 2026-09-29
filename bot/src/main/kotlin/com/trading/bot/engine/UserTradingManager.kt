@@ -76,6 +76,9 @@ class UserTradingManager(
     // CAS (remove(k,v) / replace(k,old,new)) 만으로는 computeIfAbsent 직후 start() 호출 전에
     // stop 이 끼어드는 race window 를 닫지 못함.
     private val userLocks = ConcurrentHashMap<Long, Mutex>()
+    // 정지는 됐는데 bot_state.running=false 를 쓰지 못한 사용자 — 이 집합이 DB 행보다 우선하고, 여기 있는 사용자에게는 엔진이 없다.
+    // 복원은 건너뛰고, 시작이 저장을 마치면 빠지며, 정상 종료 때 저장을 한 번 더 시도한다.
+    private val unpersistedStops: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     private val scope = CoroutineScope(Dispatchers.Default)
     // SmartLifecycle 상태 + shutdown 진행 플래그(신규 엔진 기동 차단). restoreJob 은 shutdown 시 취소 대상(M5).
     @Volatile private var lifecycleRunning = false
@@ -113,7 +116,8 @@ class UserTradingManager(
      * 받아 무한 hang 을 막는다(@PreDestroy 엔 미적용 — 리뷰 arch Major). 진행 중 restore 를 먼저 취소해(M5) shutdown
      * 이후 엔진 기동을 막고, 모든 엔진을 동시 stop(cancelAndJoin — runBlocking 이벤트루프의 협조적 동시)해 tick 후처리
      * 완주를 기다린다. NonCancellable 후처리가 예산을 넘기면 self-bound(withTimeoutOrNull)로 끊고 — 잔여 daemon 코루틴은
-     * JVM 종료로 정리되고 — 미완 pending 은 재시작 후 durable reconcile(#20) 소관으로 남긴다.
+     * JVM 종료로 정리되고 — 미완 pending 은 재시작 후 durable reconcile(#20) 소관으로 남긴다. 정지 저장이 확인되지 않은
+     * 사용자는 엔진 정지와 동시에 한 번 더 저장한다([saveUnpersistedStops]).
      */
     override fun stop() {
         lifecycleRunning = false
@@ -121,6 +125,9 @@ class UserTradingManager(
         runBlocking {
             val completed = withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
                 restoreJob?.cancelAndJoin()
+                // 정지 저장이 실패한 사용자에게는 엔진이 없어 엔진 정지와 서로 기다릴 것이 없다 — 동시에 돌려 걸린 저장이
+                // 엔진 정지(tick 주문 후처리 대기)의 예산을 먹지 않게 한다.
+                val finalStopSaves = async { saveUnpersistedStops() }
                 if (engines.isNotEmpty()) {
                     log.info("Graceful shutdown: stopping {} running engine(s)", engines.size)
                     engines.values.toList().map { engine ->
@@ -135,10 +142,38 @@ class UserTradingManager(
                         }
                     }.awaitAll()
                 }
+                finalStopSaves.await()
                 true
             }
             if (completed == null) {
                 log.warn("Graceful shutdown: {}ms 예산 초과 — 일부 엔진 미완 정지(잔여는 재시작 후 durable reconcile 소관)", SHUTDOWN_TIMEOUT_MS)
+            }
+        }
+    }
+
+    /** 정상 종료 때 정지 저장이 확인되지 않은 사용자를 한 번 더 저장한다 — 못 쓰면 재시작 때 멈춘 봇이 다시 뜬다. */
+    internal suspend fun saveUnpersistedStops() {
+        for (userId in unpersistedStops.toList()) {
+            val saved = try {
+                withTimeoutOrNull(FINAL_STOP_SAVE_TIMEOUT_MS) {
+                    lockFor(userId).withLock {
+                        // 스냅샷 뒤에 시작이 저장을 마쳐 집합에서 빠졌으면 도는 봇의 행을 running=false 로 덮으면 안 된다.
+                        if (userId !in unpersistedStops) return@withLock false
+                        markStopped(userId)
+                        unpersistedStops.remove(userId)
+                        true
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.error("종료 전 정지 상태 저장 실패 user={} — 재시작 때 봇이 다시 시작될 수 있다", userId, e)
+                continue
+            }
+            when (saved) {
+                null -> log.error("종료 전 정지 상태 저장 시간 초과 user={} — 재시작 때 봇이 다시 시작될 수 있다", userId)
+                true -> log.info("종료 전 정지 상태 저장 완료 user={}", userId)
+                false -> Unit
             }
         }
     }
@@ -160,7 +195,7 @@ class UserTradingManager(
             if (attempt == 1) log.info("Restoring {} running bot(s) from DB", states.size)
             val failed = mutableListOf<Long>()
             for (state in states) {
-                if (!restoreOne(state)) failed.add(state.userId)
+                if (!restoreOne(state.userId)) failed.add(state.userId)
             }
             pendingUserIds = failed
             if (pendingUserIds.isEmpty()) return
@@ -177,20 +212,26 @@ class UserTradingManager(
     /**
      * 한 유저 복원. per-user lock 으로 start/stop 과 직렬화하고, lock 획득 후 engines 를 재확인해 사용자가 이미
      * 개입(start/stop)했으면 skip — restoreOnStartup 만 lockFor 를 우회하던 유령 엔진 경합을 차단한다.
-     * 반환: true=복원 완료 또는 재시도 무의미(유저/키 없음·이미 개입), false=일시적 실패(재시도 대상).
+     * 판정은 lock 안에서 다시 읽은 행으로 한다 — 조회(후보 목록)와 lock 획득 사이에 정지가 끼면 옛 행으로 실자금 엔진이 뜬다.
+     * 반환: true=복원 완료 또는 재시도 무의미(유저/키 없음·이미 개입·정지됨), false=일시적 실패(재시도 대상).
      */
-    private suspend fun restoreOne(state: BotStateEntity): Boolean = lockFor(state.userId).withLock {
+    private suspend fun restoreOne(userId: Long): Boolean = lockFor(userId).withLock {
         if (shuttingDown) return@withLock true // 종료 중 — 신규 엔진 기동 안 함(M5)
         // containsKey 가 아니라 isRunning — 기동 전에 실패해 map 에 남은 엔진은 재시도 대상이어야 한다.
-        if (engines[state.userId]?.isRunning() == true) return@withLock true
+        if (engines[userId]?.isRunning() == true) return@withLock true
+        // 정지는 됐지만 저장하지 못한 사용자 — 행은 아직 running=true 여도 멈춘 상태가 우선이다.
+        if (userId in unpersistedStops) return@withLock true
         try {
-            val user = userRepository.findById(state.userId).awaitSingleOrNull() ?: return@withLock true
+            val state = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
+            if (state == null || !state.running) return@withLock true
+            val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock true
             if (user.upbitAccessKey.isNullOrBlank()) return@withLock true
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            userStrategies[state.userId] = state.strategy
+            // 등록되지 않은 이름(전략 제거·rename 뒤)은 캐시하지 않는다 — 복원이 끝내 실패하면 그 이름이 상태 API 로 나가 시작 요청이 400 이 된다.
+            if (isRegisteredStrategy(state.strategy)) userStrategies[userId] = state.strategy
             // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 engines 에 아무것도 남기지 않는다.
-            val initialStates = tradingStateService.loadStates(state.userId)
-            val engine = engines.computeIfAbsent(state.userId) {
+            val initialStates = tradingStateService.loadStates(userId)
+            val engine = engines.computeIfAbsent(userId) {
                 createEngine(userSecretsService.decryptUserSecrets(user))
             }
             if (!engine.setStrategy(state.strategy)) {
@@ -199,16 +240,16 @@ class UserTradingManager(
                 // 것을 모른다.
                 log.warn(
                     "restore: user {} 의 전략 '{}' 을 찾지 못해 '{}' 로 폴백했다 — 설정을 확인해야 한다",
-                    state.userId, state.strategy, engine.getActiveStrategyName(),
+                    userId, state.strategy, engine.getActiveStrategyName(),
                 )
             }
             engine.start(tickers, initialStates)
             val activeStrategy = engine.getActiveStrategyName()
-            userStrategies[state.userId] = activeStrategy
-            log.info("Restored bot for user {}: strategy={}, tickers={}", state.userId, activeStrategy, tickers)
+            userStrategies[userId] = activeStrategy
+            log.info("Restored bot for user {}: strategy={}, tickers={}", userId, activeStrategy, tickers)
             true
         } catch (e: Exception) {
-            log.warn("restore: user {} 복원 실패 — 재시도 대상: {}", state.userId, e.message)
+            log.warn("restore: user {} 복원 실패 — 재시도 대상: {}", userId, e.message)
             false
         }
     }
@@ -219,6 +260,10 @@ class UserTradingManager(
 
     suspend fun startBot(userId: Long, tickers: List<String>?, strategyName: String?): Map<String, Any> = lockFor(userId).withLock {
         if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down") // 종료 중 신규 엔진 기동 차단(M5 일관)
+        // 입력 검증이 상태 충돌(409)보다 먼저다 — 없는 이름을 받아 조용히 폴백하면 사용자는 고른 전략으로 도는 줄 안다.
+        if (strategyName != null && !isRegisteredStrategy(strategyName)) {
+            return@withLock mapOf("error" to "Unknown strategy: $strategyName", "code" to UNKNOWN_STRATEGY_CODE)
+        }
         // 도는 엔진의 start 는 no-op 이라 목록이 바뀌지 않는다 — 부작용(전략·저장) 전에 판정해야 응답이 실제 상태와 맞는다(#226).
         val running = engines[userId]?.takeIf { it.isRunning() }
         if (running != null) return@withLock respondToRunningEngine(userId, running, tickers, strategyName)
@@ -235,13 +280,22 @@ class UserTradingManager(
         val engine = engines.computeIfAbsent(userId) { createEngine(decryptedUser) }
 
         val strategy = strategyName ?: userStrategies[userId]
-        if (strategy != null) engine.setStrategy(strategy)
+        if (strategy != null && !engine.setStrategy(strategy)) {
+            // 요청한 이름은 위에서 걸렀으니 여기서 실패하는 것은 캐시에 남은 이름뿐이다 — 폴백하되 알린다.
+            log.warn("start: user {} 의 전략 '{}' 을 찾지 못해 '{}' 로 폴백했다", userId, strategy, engine.getActiveStrategyName())
+        }
 
         val tickerList = tickers ?: tradingProperties.tickerList()
         exitParamsDeclarationCheck?.report("수동 기동 user=$userId")
+        // 저장은 기동 바로 앞, 실패할 수 있는 마지막 단계 — 기동 뒤에 저장하면 실패해도 봇이 돌고 재시작 때 복원되지 않는다.
+        try {
+            persistOrFail(userId, START_UNPERSISTED_MESSAGE) { saveRunningState(userId, engine.getActiveStrategyName(), tickerList) }
+        } catch (e: BotControlPersistFailedException) {
+            engines.remove(userId, engine) // 기동하지 않은 엔진을 남기지 않는다(restoreOne·reload 선례)
+            throw e
+        }
+        unpersistedStops.remove(userId)
         engine.start(tickerList, initialStates)
-
-        saveState(userId, true, engine.getActiveStrategyName(), tickerList)
         mapOf("status" to "started", "strategy" to engine.getActiveStrategyName())
     }
 
@@ -263,8 +317,13 @@ class UserTradingManager(
                 "code" to CONFLICT_CODE,
             )
         }
+        val nextStrategy = strategyName ?: engine.getActiveStrategyName()
+        val changing = nextStrategy != engine.getActiveStrategyName()
+        // 저장이 먼저 — 엔진 전략을 먼저 바꾸고 저장이 실패하면 오류 응답인데 전략은 이미 바뀌어 있다.
+        persistOrFail(userId, if (changing) STRATEGY_UNPERSISTED_MESSAGE else RUNNING_UNPERSISTED_MESSAGE) {
+            saveRunningState(userId, nextStrategy, current)
+        }
         if (strategyName != null) engine.setStrategy(strategyName)
-        saveState(userId, true, engine.getActiveStrategyName(), current)
         return mapOf("status" to "already_running", "strategy" to engine.getActiveStrategyName())
     }
 
@@ -272,13 +331,28 @@ class UserTradingManager(
     private fun normalizedTickers(tickers: List<String>): Set<String> =
         tickers.map { it.trim().uppercase() }.filter { it.isNotEmpty() }.toSet()
 
+    /**
+     * 엔진을 멈추고 bot_state 의 running 을 내린다. 저장이 실패해도 엔진은 멈춘다 — 운영자가 누른 정지를 DB 장애가 막으면
+     * 안 된다. 엔진이 없어도 행이 running 이면 내린다(복원이 실패해 엔진 없이 DB 만 running 인 경우 — 두면 재시작 때 복원된다).
+     * 저장이 확인될 때까지 사용자는 [unpersistedStops] 에 있다 — 저장이 실패하든 걸리든 요청이 끊기든 종료 저장·복원이 이 정지를 안다.
+     */
     suspend fun stopBot(userId: Long): Map<String, Any> = lockFor(userId).withLock {
-        val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
-        engine.stop()
-        saveState(userId, false, engine.getActiveStrategyName(), emptyList())
-        engines.remove(userId)
-        userStrategies.remove(userId)
-        mapOf("status" to "stopped")
+        val engine = engines[userId]
+        // 정지와 표시까지는 요청이 취소돼도 마친다 — 엔진만 멈추고 표시가 빠지면 재시작 때 이 봇이 다시 뜬다(reload 의 NonCancellable 선례).
+        withContext(NonCancellable) {
+            if (engine != null) {
+                engine.stop()
+                engines.remove(userId)
+                userStrategies.remove(userId)
+            }
+            unpersistedStops.add(userId)
+        }
+        // 저장은 취소·상한이 있게 둔다 — 걸린 DB 호출이 이 사용자의 lock 을 무기한 쥐지 않게. 실패·시간 초과면 표시가 남아 종료 저장이 이어받는다.
+        persistOrFail(userId, STOP_UNPERSISTED_MESSAGE) {
+            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { markStopped(userId) } ?: throw IllegalStateException("bot_state 저장 시간 초과")
+        }
+        unpersistedStops.remove(userId)
+        mapOf("status" to if (engine != null) "stopped" else "not_running")
     }
 
     fun getStatus(userId: Long): Map<String, Any> {
@@ -323,26 +397,22 @@ class UserTradingManager(
     /** #19: halt 된 ticker 수동 해제 — 다음 tick 부터 reconcile/매매 재개. */
     suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
         val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
-        val cleared = try {
-            engine.clearHalt(ticker)
-        } catch (e: Exception) {
-            // durable 반영 실패 — 해제되지 않았음을 그대로 알린다(재시도는 사용자 몫).
-            log.error("halt 해제 실패 user={} ticker={}: {}", userId, ticker, e.message, e)
-            return@withLock mapOf("error" to "Failed to clear halt — state not persisted")
-        }
+        // durable 반영이 실패하면 엔진이 메모리 해제를 되돌린다 — 해제되지 않았음을 그대로 알린다(재시도는 사용자 몫).
+        val cleared = persistOrFail(userId, HALT_CLEAR_UNPERSISTED_MESSAGE) { engine.clearHalt(ticker) }
         mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 
     suspend fun setStrategy(userId: Long, strategyName: String): Boolean = lockFor(userId).withLock {
-        val valid = strategies.any { it.name == strategyName }
-        if (!valid) return@withLock false
+        if (!isRegisteredStrategy(strategyName)) return@withLock false
+        // 저장이 먼저 — 메모리를 먼저 바꾸고 저장이 실패하면 오류 응답인데 전략은 이미 바뀌어 있다.
+        persistOrFail(userId, STRATEGY_UNPERSISTED_MESSAGE) {
+            val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
+            if (existing != null && existing.strategy != strategyName) {
+                botStateRepository.save(existing.copy(strategy = strategyName, updatedAt = LocalDateTime.now())).awaitSingle()
+            }
+        }
         userStrategies[userId] = strategyName
         engines[userId]?.setStrategy(strategyName)
-
-        val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
-        if (existing != null) {
-            botStateRepository.save(existing.copy(strategy = strategyName, updatedAt = LocalDateTime.now())).awaitSingle()
-        }
         true
     }
 
@@ -478,32 +548,55 @@ class UserTradingManager(
         )
     }
 
-    private suspend fun saveState(userId: Long, running: Boolean, strategy: String, tickers: List<String>) {
-        try {
-            val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
-            val tickersStr = tickers.joinToString(",").ifEmpty {
-                existing?.tickers ?: tradingProperties.tickers
-            }
-            if (existing != null) {
-                botStateRepository.save(
-                    existing.copy(running = running, strategy = strategy, tickers = tickersStr, updatedAt = LocalDateTime.now())
-                ).awaitSingle()
-            } else {
-                botStateRepository.save(
-                    BotStateEntity(userId = userId, exchange = EXCHANGE, running = running, strategy = strategy, tickers = tickersStr)
-                ).awaitSingle()
-            }
-        } catch (e: Exception) {
-            log.error("Failed to save bot state for user {}: {}", userId, e.message)
+    /** 실행 중 상태를 bot_state 에 쓴다 — 기존 행과 running·전략·목록이 같으면 쓰지 않는다. 실패는 호출자에게 올린다. */
+    private suspend fun saveRunningState(userId: Long, strategy: String, tickers: List<String>) {
+        val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
+        val tickersStr = tickers.joinToString(",").ifEmpty {
+            existing?.tickers ?: tradingProperties.tickers
+        }
+        if (existing != null) {
+            if (existing.running && existing.strategy == strategy && existing.tickers == tickersStr) return
+            botStateRepository.save(
+                existing.copy(running = true, strategy = strategy, tickers = tickersStr, updatedAt = LocalDateTime.now())
+            ).awaitSingle()
+        } else {
+            botStateRepository.save(
+                BotStateEntity(userId = userId, exchange = EXCHANGE, running = true, strategy = strategy, tickers = tickersStr)
+            ).awaitSingle()
         }
     }
+
+    /** bot_state 가 running 이면 내린다. 행이 없거나 이미 내려가 있으면 쓸 것이 없다(응답이 유실된 재호출도 멱등). */
+    private suspend fun markStopped(userId: Long) {
+        val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull() ?: return
+        if (!existing.running) return
+        botStateRepository.save(existing.copy(running = false, updatedAt = LocalDateTime.now())).awaitSingle()
+    }
+
+    private fun isRegisteredStrategy(name: String): Boolean = strategies.any { it.name == name }
+
+    /** 제어 상태 저장 실패를 사용자 문구를 담은 [BotControlPersistFailedException] 으로 바꾼다 — 삼키면 실패가 성공 응답이 된다(#228). */
+    private inline fun <T> persistOrFail(userId: Long, userMessage: String, block: () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("봇 제어 상태 저장 실패 user={} — {}", userId, userMessage, e)
+            throw BotControlPersistFailedException(userMessage, e)
+        }
 
     companion object {
         /** `startBot` 오류 맵의 `code` — 도는 엔진에 다른 목록을 요청했다(컨트롤러가 409 로 매핑). */
         const val CONFLICT_CODE = "conflict"
 
+        /** `startBot` 오류 맵의 `code` — 등록되지 않은 전략 이름을 요청했다(컨트롤러가 400 으로 매핑). */
+        const val UNKNOWN_STRATEGY_CODE = "unknown_strategy"
+
         private const val RESTORE_MAX_ATTEMPTS = 5
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
+        private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L
+        private const val STOP_SAVE_TIMEOUT_MS = 10_000L
 
         // bot_state 는 (user_id, exchange) 별 1행(V17) — 현재 거래소는 Upbit 뿐이다.
         private const val EXCHANGE = "UPBIT"
