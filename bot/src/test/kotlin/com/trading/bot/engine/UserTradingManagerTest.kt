@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.TestScope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -336,6 +337,60 @@ class UserTradingManagerTest {
         } finally {
             logger.detachAppender(appender)
         }
+    }
+
+    // 종료는 shuttingDown 을 세운 뒤 복원을 취소한다. 마지막(5번째) 시도는 뒤에 backoff 가 없다 — 그 도중의 취소를 삼키면 곧장
+    // '봇 미복원' 판정으로 간다. 앞 시도에서는 backoff 의 delay 가 취소를 다시 던져 드러나지 않는다.
+    private fun markShuttingDown() =
+        UserTradingManager::class.java.getDeclaredField("shuttingDown").apply { isAccessible = true }.setBoolean(manager, true)
+
+    private suspend fun TestScope.cancelRestoreDuringLastAttempt() {
+        val restore = launch { manager.restoreAllRunningBots() }
+        advanceTimeBy(15_500) // 시도 시각 0·1·3·7·15초 — 5번째 시도 도중
+        markShuttingDown()
+        restore.cancelAndJoin()
+    }
+
+    @Test
+    fun `restore cancelled by shutdown while recording a stopped engine's pending is not reported as unrestored`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+        var flushes = 0
+        coEvery { mockEngine.flushUnpersisted() } coAnswers { if (++flushes == 5) delay(1_000) }
+
+        val errors = errorsDuring { cancelRestoreDuringLastAttempt() }
+
+        assertEquals(5, flushes, "5번째 시도의 기록 중에 취소해야 한다")
+        assertTrue(errors.none { it.contains("봇 미복원") }, "종료가 취소한 복원을 미복원으로 알렸다: $errors")
+    }
+
+    @Test
+    fun `restore cancelled by shutdown while querying running bots is not reported as unrestored`() = runTest {
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returnsMany
+            List(4) { Flux.error<BotStateEntity>(RuntimeException("db down")) } + Flux.never<BotStateEntity>()
+
+        val errors = errorsDuring { cancelRestoreDuringLastAttempt() }
+
+        verify(exactly = 5) { botStateRepository.findByRunningTrueAndExchange("UPBIT") }
+        assertTrue(errors.none { it.contains("봇 미복원") }, "종료가 취소한 복원을 미복원으로 알렸다: $errors")
+    }
+
+    @Test
+    fun `restore ended by a cancellation outside shutdown is reported`() = runTest {
+        // 종료가 아닌 취소는 남은 재시도 없이 복원을 끝낸다 — 알리지 않으면 봇이 복원되지 않은 것을 아무도 모른다.
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.never()
+
+        val errors = errorsDuring {
+            val restore = launch { manager.restoreAllRunningBots() }
+            advanceTimeBy(100)
+            restore.cancelAndJoin()
+        }
+
+        assertTrue(errors.any { it.contains("봇 미복원") && it.contains("취소로 중단") }, "취소로 끝난 복원을 알려야 한다: $errors")
     }
 
     @Test
@@ -944,7 +999,7 @@ class UserTradingManagerTest {
 
         coVerify(ordering = Ordering.ORDERED) {
             mockEngine.stop()
-            mockEngine.flushUnpersistedPending()
+            mockEngine.flushUnpersisted()
             tradingStateService.loadStates(1L)
         }
     }
@@ -970,7 +1025,7 @@ class UserTradingManagerTest {
     @Test
     fun `a stuck recording during reload falls back to the old engine within the bound`() = runTest {
         runningEngineToReload()
-        coEvery { mockEngine.flushUnpersistedPending() } coAnswers { delay(60_000) }
+        coEvery { mockEngine.flushUnpersisted() } coAnswers { delay(60_000) }
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
 
         val thrown = runCatching { manager.reloadUserRuntime(1L) }.exceptionOrNull()
@@ -984,7 +1039,7 @@ class UserTradingManagerTest {
     @Test
     fun `a reload cancelled while recording pending still brings the old engine back`() = runTest {
         runningEngineToReload()
-        coEvery { mockEngine.flushUnpersistedPending() } throws CancellationException("cancelled")
+        coEvery { mockEngine.flushUnpersisted() } throws CancellationException("cancelled")
 
         assertThrows(CancellationException::class.java) {
             runBlocking { manager.reloadUserRuntime(1L) }
@@ -995,11 +1050,50 @@ class UserTradingManagerTest {
     }
 
     @Test
+    fun `a reload cancelled while the old engine is stopping waits for the stop and brings the old engine back`() = runTest {
+        // stop 의 join 중 취소가 복귀 경로 밖으로 새면 정지된 엔진만 남아 손절이 멈춘다(#262). join 전에 복귀하면 옛 루프의 꼬리와
+        // 새 루프가 겹치므로, stop 을 끝까지 기다린 뒤에 복귀해야 한다.
+        runningEngineToReload()
+        val stopFinished = AtomicBoolean(false)
+        coEvery { mockEngine.stop() } coAnswers { delay(1_000); stopFinished.set(true) }
+        val stopSettledAtResume = mutableListOf<Boolean>()
+        every { mockEngine.resume() } answers { stopSettledAtResume += stopFinished.get() }
+
+        val errors = errorsDuring {
+            val reload = launch { manager.reloadUserRuntime(1L) }
+            advanceTimeBy(500)
+            reload.cancelAndJoin()
+        }
+
+        assertEquals(listOf(true), stopSettledAtResume, "stop 을 마친 뒤 한 번 복귀해야 한다")
+        verify(exactly = 0) { manager.createEngine(any()) }
+        assertSame(mockEngine, engines()[1L])
+        // 응답을 못 받은 사용자는 새 키·웹훅이 반영된 줄 안다 — 이전 설정으로 거래 중임을 알린다.
+        assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
+    }
+
+    @Test
+    fun `a reload cancelled while stopping the old engine during shutdown leaves it to the shutdown`() = runTest {
+        // 종료가 이 엔진을 멈추고 기록한다 — 멈춘 뒤 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
+        runningEngineToReload()
+        coEvery { mockEngine.stop() } coAnswers { delay(1_000) }
+
+        val reload = launch { manager.reloadUserRuntime(1L) }
+        advanceTimeBy(500)
+        markShuttingDown()
+        reload.cancelAndJoin()
+
+        verify(exactly = 0) { mockEngine.resume() }
+        verify(exactly = 0) { manager.createEngine(any()) }
+        assertSame(mockEngine, engines()[1L], "종료의 정지 대상에 남아 있어야 한다")
+    }
+
+    @Test
     fun `stop records pending after the stop is settled and reports a sell it could not record`() = runTest {
         engines()[1L] = mockEngine
         val saved = stoppableRow()
         val settledAtRecording = mutableListOf<Boolean>()
-        coEvery { mockEngine.flushUnpersistedPending() } coAnswers {
+        coEvery { mockEngine.flushUnpersisted() } coAnswers {
             settledAtRecording += engines()[1L] == null && 1L in unpersistedStops()
         }
         every { mockEngine.unpersistedSells() } returns
@@ -1020,7 +1114,7 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         stoppableRow()
         val recorded = AtomicBoolean(false)
-        coEvery { mockEngine.flushUnpersistedPending() } coAnswers { delay(1_000); recorded.set(true) }
+        coEvery { mockEngine.flushUnpersisted() } coAnswers { delay(1_000); recorded.set(true) }
 
         val request = launch { manager.stopBot(1L) }
         advanceTimeBy(500)
@@ -1034,7 +1128,7 @@ class UserTradingManagerTest {
     fun `a stop whose pending recording fails unexpectedly still stops and saves`() = runTest {
         engines()[1L] = mockEngine
         val saved = stoppableRow()
-        coEvery { mockEngine.flushUnpersistedPending() } throws IllegalStateException("boom")
+        coEvery { mockEngine.flushUnpersisted() } throws IllegalStateException("boom")
 
         lateinit var result: Map<String, Any>
         val errors = errorsDuring { result = manager.stopBot(1L) }
@@ -1050,7 +1144,7 @@ class UserTradingManagerTest {
         // 정지의 기록은 요청 취소를 받지 않는다 — 상한이 없으면 걸린 DB 호출이 이 사용자의 lock 을 무기한 쥔다(#228).
         engines()[1L] = mockEngine
         val saved = stoppableRow()
-        coEvery { mockEngine.flushUnpersistedPending() } coAnswers { delay(60_000) }
+        coEvery { mockEngine.flushUnpersisted() } coAnswers { delay(60_000) }
 
         val result = manager.stopBot(1L)
 
@@ -1073,7 +1167,7 @@ class UserTradingManagerTest {
         val errors = errorsDuring { manager.startBot(1L, listOf("KRW-BTC"), null) }
 
         coVerify(ordering = Ordering.ORDERED) {
-            mockEngine.flushUnpersistedPending()
+            mockEngine.flushUnpersisted()
             tradingStateService.loadStates(1L)
         }
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
@@ -1081,7 +1175,8 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore records a stopped engine's pending before the database state replaces it`() = runTest {
-        // 복원 재시도도 맵에 남은 정지 엔진을 재사용한다(재시도 사이에 사용자가 시작한 엔진의 reload 가 취소되고 복귀도 실패한 경우 등).
+        // 복원도 맵에 남은 정지 엔진을 재사용한다 — 회차와 무관하다(복원이 이 사용자에 닿기 전에 사용자가 시작한 엔진이, 취소된
+        // reload 뒤 옛 엔진으로 돌아오지 못해 정지된 채 남은 경우 등).
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
@@ -1092,10 +1187,47 @@ class UserTradingManagerTest {
         val errors = errorsDuring { manager.restoreAllRunningBots() }
 
         coVerify(ordering = Ordering.ORDERED) {
-            mockEngine.flushUnpersistedPending()
+            mockEngine.flushUnpersisted()
             tradingStateService.loadStates(1L)
         }
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
+    }
+
+    @Test
+    fun `restore reports a stopped engine's unrecorded sell only on the attempt that read the database state`() = runTest {
+        // 로드가 실패한 시도는 아무것도 덮지 않았다 — 엔진은 맵에 남아 다음 시도가 다시 기록한다. 그때 알리면 재시도마다 오경보다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down") andThen emptyMap()
+
+        val errors = errorsDuring { manager.restoreAllRunningBots() }
+
+        assertEquals(1, errors.count { it.contains("ctb-sell-1") }, "로드가 성공한 시도에서만 알려야 한다: $errors")
+        coVerify(exactly = 2) { mockEngine.flushUnpersisted() }
+        coVerify(exactly = 1) { mockEngine.start(any(), any()) }
+        verify(exactly = 0) { manager.createEngine(any()) }
+    }
+
+    @Test
+    fun `start that cannot read the database state keeps the stopped engine without reporting a dropped sell`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+
+        val errors = errorsDuring {
+            val thrown = runCatching { manager.startBot(1L, listOf("KRW-BTC"), null) }.exceptionOrNull()
+            assertEquals("db down", thrown?.message)
+        }
+
+        assertTrue(errors.none { it.contains("ctb-sell-1") }, "덮은 것이 없는데 버린다고 알렸다: $errors")
+        coVerify(exactly = 1) { mockEngine.flushUnpersisted() }
+        assertSame(mockEngine, engines()[1L], "기록한 엔진을 남겨야 다음 시작이 다시 기록한다")
     }
 
     @Test
@@ -1129,7 +1261,7 @@ class UserTradingManagerTest {
 
         val errors = errorsDuring { manager.reloadUserRuntime(1L) }
 
-        coVerify(exactly = 1) { mockEngine.flushUnpersistedPending() }
+        coVerify(exactly = 1) { mockEngine.flushUnpersisted() }
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
         // 알림은 교체를 막지 않는다 — 이 엔진은 돌고 있지 않아 새 설정의 엔진으로 바꾸는 것뿐이다.
         verify(exactly = 1) { manager.createEngine(any()) }
@@ -1145,7 +1277,7 @@ class UserTradingManagerTest {
 
         coVerify(ordering = Ordering.ORDERED) {
             engine.stop()
-            engine.flushUnpersistedPending()
+            engine.flushUnpersisted()
         }
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
     }

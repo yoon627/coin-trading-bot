@@ -116,7 +116,7 @@ class UserTradingManager(
      * graceful shutdown: SmartLifecycle.stop 은 @PreDestroy 와 달리 `timeout-per-shutdown-phase`(30s) 예산을 실제로
      * 받아 무한 hang 을 막는다(@PreDestroy 엔 미적용 — 리뷰 arch Major). 진행 중 restore 를 먼저 취소해(M5) shutdown
      * 이후 엔진 기동을 막고, 모든 엔진을 동시 stop(cancelAndJoin — runBlocking 이벤트루프의 협조적 동시)해 tick 후처리
-     * 완주를 기다린 뒤 루프가 기록하지 못한 pending 을 한 번 더 남긴다(매도가 남으면 ERROR). NonCancellable 후처리가 예산을
+     * 완주를 기다린 뒤 루프가 기록하지 못한 pending·고점을 한 번 더 남긴다(매도가 남으면 ERROR). NonCancellable 후처리가 예산을
      * 넘기면 self-bound(withTimeoutOrNull)로 끊고 — 잔여 daemon 코루틴은 JVM 종료로 정리되고 — 기록된 pending 은 재시작 후
      * durable reconcile(#20) 이 잇지만 기록하지 못한 매도는 유실된다. 정지 저장이 확인되지 않은 사용자는 엔진 정지와 동시에
      * 한 번 더 저장한다([saveUnpersistedStops]).
@@ -181,13 +181,25 @@ class UserTradingManager(
         }
     }
 
-    /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도하고 최종 실패만 ERROR alert(→Discord). */
+    /** running bot 을 복원하되, 일시적 실패(DB/API)는 유한 backoff 로 재시도한다. ERROR alert(→Discord)는 최종 실패와 종료 밖의 취소에만 낸다. */
     internal suspend fun restoreAllRunningBots() {
+        try {
+            restoreWithRetries()
+        } catch (e: CancellationException) {
+            // 종료가 취소한 복원은 실패가 아니다. 그 밖의 취소는 남은 재시도 없이 복원을 끝내므로 알린다.
+            if (!shuttingDown) log.error("봇 미복원: 복원이 취소로 중단됐다 — 복원되지 않은 봇이 있을 수 있다", e)
+            throw e
+        }
+    }
+
+    private suspend fun restoreWithRetries() {
         var pendingUserIds: List<Long> = emptyList()
         var lastQueryFailed = false
         for (attempt in 1..RESTORE_MAX_ATTEMPTS) {
             val states = try {
                 botStateRepository.findByRunningTrueAndExchange(EXCHANGE).collectList().awaitSingle()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 log.warn("restore: bot state 조회 실패 (attempt {}/{}): {}", attempt, RESTORE_MAX_ATTEMPTS, e.message)
                 lastQueryFailed = true
@@ -232,10 +244,8 @@ class UserTradingManager(
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             // 등록되지 않은 이름(전략 제거·rename 뒤)은 캐시하지 않는다 — 복원이 끝내 실패하면 그 이름이 상태 API 로 나가 시작 요청이 400 이 된다.
             if (isRegisteredStrategy(state.strategy)) userStrategies[userId] = state.strategy
-            // 맵에 남은 정지 엔진은 아래에서 재사용되고 start 가 그 states 를 DB 값으로 덮는다 — 읽기 전에 미기록 주문을 남긴다.
-            engines[userId]?.let { flushOrAlert(userId, it) }
-            // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 engines 에 아무것도 남기지 않는다.
-            val initialStates = tradingStateService.loadStates(userId)
+            // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 새 엔진을 등록하지 않는다.
+            val initialStates = loadInitialStates(userId)
             val engine = engines.computeIfAbsent(userId) {
                 createEngine(userSecretsService.decryptUserSecrets(user))
             }
@@ -253,6 +263,8 @@ class UserTradingManager(
             userStrategies[userId] = activeStrategy
             log.info("Restored bot for user {}: strategy={}, tickers={}", userId, activeStrategy, tickers)
             true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             log.warn("restore: user {} 복원 실패 — 재시도 대상: {}", userId, e.message)
             false
@@ -280,10 +292,8 @@ class UserTradingManager(
         }
 
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
-        // 맵에 남은 정지 엔진은 아래에서 재사용되고 start 가 그 states 를 DB 값으로 덮는다 — 읽기 전에 미기록 주문을 남긴다.
-        engines[userId]?.let { flushOrAlert(userId, it) }
-        // restoreOne 과 같은 이유로 durable 로드를 엔진 등록 앞에 둔다(실패 시 미기동 엔진 잔류 방지).
-        val initialStates = tradingStateService.loadStates(userId)
+        // restoreOne 과 같은 이유로 durable 로드를 엔진 등록 앞에 둔다(실패 시 새로 만든 엔진이 기동되지 않은 채 남지 않게).
+        val initialStates = loadInitialStates(userId)
         val engine = engines.computeIfAbsent(userId) { createEngine(decryptedUser) }
 
         val strategy = strategyName ?: userStrategies[userId]
@@ -444,13 +454,17 @@ class UserTradingManager(
         // 빈 목록(적립만 운용)을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
         val tickers = existing.getUserTickers()
         val strategy = existing.getActiveStrategyName()
-        existing.stop()
+        // 요청이 끊겨도 루프 join 까지 기다린다 — 취소가 여기서 새면 정지된 엔진만 남고(#262), join 전에 복귀하면 옛 루프의
+        // 꼬리와 되살린 루프가 겹친다. 도는 엔진이었으면 취소는 아래 첫 취소 확인(기록의 시간 상한)에서 드러나 복귀 경로를 탄다.
+        withContext(NonCancellable) { existing.stop() }
+        // 종료가 이 엔진을 멈추고 기록한다 — 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
+        if (shuttingDown) return@withLock
         // stop 이후에 읽어야 마지막 tick 의 기록까지 잡힌다 — 먼저 읽으면 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending
         // 이 된다(#20). tick 안에서 기록하지 못한 매도는 flush 가 한 번 더 남기고, 그래도 못 남기면 새 엔진은 DB 에 없는 그
         // 주문을 모르므로 교체하지 않고 아래 복귀 경로를 탄다 — 옛 엔진이 메모리의 그 주문을 다음 tick 에 다시 기록한다.
         val initialStates = if (wasRunning) {
             try {
-                val unrecorded = flushPending(userId, existing)
+                val unrecorded = flushStoppedEngine(userId, existing)
                 check(unrecorded.isEmpty()) { "매도 주문 기록을 DB 에 남기지 못함: ${sellRefs(unrecorded)}" }
                 tradingStateService.loadStates(userId)
             } catch (e: CancellationException) {
@@ -460,6 +474,13 @@ class UserTradingManager(
                 withContext(NonCancellable) {
                     // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
                     runCatching { existing.resume() }
+                        // 응답을 받지 못한 사용자는 새 설정이 반영된 줄 안다(#51 의 503 이 전달되지 않는다).
+                        .onSuccess {
+                            log.error(
+                                "reload: user {} 요청이 끊겨 이전 설정(자격증명·웹훅)의 엔진으로 복귀했다 — 저장된 새 설정은 반영되지 않았으니 다시 저장해야 한다",
+                                userId,
+                            )
+                        }
                         .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
                 }
                 throw e
@@ -601,29 +622,38 @@ class UserTradingManager(
             throw BotControlPersistFailedException(userMessage, e)
         }
 
-    /** 멈춘 엔진의 미기록 pending(매수 포함)을 상한 안에서 한 번 더 남기고, 그래도 DB 에 없을 수 있는 매도를 돌려준다. */
-    private suspend fun flushPending(userId: Long, engine: TradingEngine): List<TradingState> {
+    /** 멈춘 엔진의 미기록 pending(매수 포함)·고점을 상한 안에서 한 번 더 남기고, 그래도 DB 에 없을 수 있는 매도를 돌려준다. */
+    private suspend fun flushStoppedEngine(userId: Long, engine: TradingEngine): List<TradingState> {
         // withTimeout 이 아니다 — 시간 초과가 취소로 번지면 reload 가 옛 엔진 복귀를 503 으로 알리지 못한다.
-        if (withTimeoutOrNull(PENDING_FLUSH_TIMEOUT_MS) { engine.flushUnpersistedPending() } == null) {
-            log.warn("user {} 의 미기록 주문 재기록이 {}ms 안에 끝나지 않았다", userId, PENDING_FLUSH_TIMEOUT_MS)
+        if (withTimeoutOrNull(FLUSH_TIMEOUT_MS) { engine.flushUnpersisted() } == null) {
+            log.warn("user {} 의 미기록 주문·고점 재기록이 {}ms 안에 끝나지 않았다", userId, FLUSH_TIMEOUT_MS)
         }
         return engine.unpersistedSells()
     }
 
-    /**
-     * 엔진의 states 를 버리거나 DB 값으로 덮기 전에 부른다. 취소 외의 예외는 올리지 않는다(ERROR 로 남기고 남은 매도를 알린다) —
-     * 뒤따르는 정지 저장 등이 이 결과에 달리면 안 된다.
-     */
-    private suspend fun flushOrAlert(userId: Long, engine: TradingEngine) {
-        val unrecorded = try {
-            flushPending(userId, engine)
+    /** [flushStoppedEngine] 과 같되 취소 외의 예외는 올리지 않는다(ERROR 로 남긴다) — 뒤따르는 정지 저장·로드가 이 결과에 달리면 안 된다. */
+    private suspend fun flushOrLog(userId: Long, engine: TradingEngine): List<TradingState> =
+        try {
+            flushStoppedEngine(userId, engine)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.error("user {} 의 미기록 주문을 다시 남기지 못함", userId, e)
+            log.error("user {} 의 미기록 주문·고점을 다시 남기지 못함", userId, e)
             engine.unpersistedSells()
         }
+
+    /** 엔진의 states 를 버리기 전에 부른다. */
+    private suspend fun flushOrAlert(userId: Long, engine: TradingEngine) = alertDroppedSells(userId, flushOrLog(userId, engine))
+
+    /**
+     * 시작·복원의 초기 상태를 DB 에서 읽는다. 맵에 남은 정지 엔진은 재사용되고 start 가 그 states 를 이 값으로 덮으므로 읽기 전에
+     * 미기록 주문·고점을 남긴다. 알림은 읽기가 성공한 뒤에만 낸다 — 실패하면 덮은 것이 없고, 엔진이 남아 다음 시도가 다시 기록한다.
+     */
+    private suspend fun loadInitialStates(userId: Long): Map<String, TradingState> {
+        val unrecorded = engines[userId]?.let { flushOrLog(userId, it) }.orEmpty()
+        val loaded = tradingStateService.loadStates(userId)
         alertDroppedSells(userId, unrecorded)
+        return loaded
     }
 
     /**
@@ -652,7 +682,7 @@ class UserTradingManager(
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
         private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L
         private const val STOP_SAVE_TIMEOUT_MS = 10_000L
-        private const val PENDING_FLUSH_TIMEOUT_MS = 5_000L
+        private const val FLUSH_TIMEOUT_MS = 5_000L
 
         // bot_state 는 (user_id, exchange) 별 1행(V17) — 현재 거래소는 Upbit 뿐이다.
         private const val EXCHANGE = "UPBIT"
