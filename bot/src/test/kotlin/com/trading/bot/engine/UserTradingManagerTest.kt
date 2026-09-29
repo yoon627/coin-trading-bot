@@ -1081,7 +1081,8 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore records a stopped engine's pending before the database state replaces it`() = runTest {
-        // 복원 재시도도 맵에 남은 정지 엔진을 재사용한다(재시도 사이에 사용자가 시작한 엔진의 reload 가 취소되고 복귀도 실패한 경우 등).
+        // 복원도 맵에 남은 정지 엔진을 재사용한다 — 회차와 무관하다(복원이 이 사용자에 닿기 전에 사용자가 시작한 엔진이, 취소된
+        // reload 뒤 옛 엔진으로 돌아오지 못해 정지된 채 남은 경우 등).
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
@@ -1096,6 +1097,43 @@ class UserTradingManagerTest {
             tradingStateService.loadStates(1L)
         }
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
+    }
+
+    @Test
+    fun `restore reports a stopped engine's unrecorded sell only on the attempt that read the database state`() = runTest {
+        // 로드가 실패한 시도는 아무것도 덮지 않았다 — 엔진은 맵에 남아 다음 시도가 다시 기록한다. 그때 알리면 재시도마다 오경보다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down") andThen emptyMap()
+
+        val errors = errorsDuring { manager.restoreAllRunningBots() }
+
+        assertEquals(1, errors.count { it.contains("ctb-sell-1") }, "로드가 성공한 시도에서만 알려야 한다: $errors")
+        coVerify(exactly = 2) { mockEngine.flushUnpersistedPending() }
+        coVerify(exactly = 1) { mockEngine.start(any(), any()) }
+        verify(exactly = 0) { manager.createEngine(any()) }
+    }
+
+    @Test
+    fun `start that cannot read the database state keeps the stopped engine without reporting a dropped sell`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+
+        val errors = errorsDuring {
+            val thrown = runCatching { manager.startBot(1L, listOf("KRW-BTC"), null) }.exceptionOrNull()
+            assertEquals("db down", thrown?.message)
+        }
+
+        assertTrue(errors.none { it.contains("ctb-sell-1") }, "덮은 것이 없는데 버린다고 알렸다: $errors")
+        coVerify(exactly = 1) { mockEngine.flushUnpersistedPending() }
+        assertSame(mockEngine, engines()[1L], "기록한 엔진을 남겨야 다음 시작이 다시 기록한다")
     }
 
     @Test
