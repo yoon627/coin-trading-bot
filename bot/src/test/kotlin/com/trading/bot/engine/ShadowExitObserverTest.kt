@@ -51,7 +51,7 @@ class ShadowExitObserverTest {
         val e = captured.captured
         assertEquals(110.0, e.peakPrice)
         assertEquals(108.0, e.observedTickPrice)
-        // 백테가 체결됐다고 보는 값 = peak × (1 − 1.5/100)
+        // 모델이 체결됐다고 보는 값(트레일링 임계선) = peak × (1 − 1.5/100)
         assertTrue(abs(e.modeledExitPrice - 110.0 * 0.985) < 1e-9)
         // 모델은 실제 발동 tick 이상이다 — 이 부등호가 깨지면 "모델 과대추정폭" 이라는 해석 자체가 무너진다.
         assertTrue(e.modeledExitPrice >= e.observedTickPrice)

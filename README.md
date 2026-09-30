@@ -1,6 +1,6 @@
 # Coin Trading Bot
 
-Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동매매, 백테스트, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 7개 스윙 전략을 담당합니다.
+Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동매매, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 7개 스윙 전략을 담당합니다.
 
 > [!WARNING]
 > 이 프로젝트는 투자 수익을 보장하지 않습니다. 실거래 전 API 키 권한, 주문 금액, 손절 조건을 확인하고 충분히 테스트하세요. Upbit API 키에는 출금 권한을 부여하지 않는 것을 권장합니다.
@@ -13,7 +13,6 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
 - 메이저 코인용 적립 프로파일(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만) 및 알트 유니버스 자동 선정 — 둘 다 기본 off
 - 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
-- 같은 전략 구현을 재사용하는 백테스트
 - JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting
 - Discord 거래 알림 및 선택적 서버 오류 알림
 - React 18 기반 SPA(별도 프런트엔드 빌드 단계 없음)
@@ -50,7 +49,7 @@ $env:DB_PORT = "5432"
 .\gradlew.bat :bot:bootRun
 ```
 
-브라우저에서 <http://localhost:8080>에 접속해 첫 계정을 만든 뒤(회원가입은 계정이 하나도 없는 서버에서만 열립니다), 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능, 백테스트 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
+브라우저에서 <http://localhost:8080>에 접속해 첫 계정을 만든 뒤(회원가입은 계정이 하나도 없는 서버에서만 열립니다), 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
 
 > 개발 환경에서 `JWT_SECRET`과 `APP_ENCRYPTION_SECRET`이 비어 있으면 실행 시 임시 키가 생성됩니다. 재시작 후 세션과 저장된 Upbit 키를 유지하려면 두 값을 고정하세요. `prod` 프로필에서는 두 값이 필수입니다.
 
@@ -117,7 +116,7 @@ coin-trading-bot/
 │       │   ├── auth/             # JWT 인증과 Security 설정
 │       │   ├── cache/            # Redis 가격 캐시
 │       │   ├── client/           # Upbit REST 클라이언트
-│       │   ├── engine/           # 매매, 포지션, 백테스트 엔진
+│       │   ├── engine/           # 매매·포지션 엔진
 │       │   ├── marketdata/       # 시세 수집(WS ticker + REST candle)과 인메모리 저장소·스트림
 │       │   ├── notification/     # Discord 거래·오류 알림
 │       │   ├── persistence/      # R2DBC 엔티티와 repository
@@ -135,7 +134,7 @@ coin-trading-bot/
 
 ## 트레이딩 전략
 
-전략은 `common/src/main/kotlin/com/trading/common/strategy/`에 있으며 라이브 매매와 백테스트가 같은 구현을 사용합니다.
+전략은 `common/src/main/kotlin/com/trading/common/strategy/`에 있습니다.
 
 | 이름 | 진입 조건 요약 |
 |---|---|
@@ -191,7 +190,7 @@ coin-trading-bot/
 > 거래를 멈추지는 않습니다. 다만 그림자 관측 두 키(`TRADING_SHADOW_EXIT_*`)는 구간 밖이면 앱이 기동하지 않습니다 — preflight 가 먼저 거릅니다.
 > 구간의 정의처는 `common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt` 입니다.
 
-매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다. 50일 이동평균 시장 필터는 백테스트 전용입니다.
+매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다.
 
 > **익절·트레일링 값의 관계**: 익절(`TAKE_PROFIT`)이 트레일링 폭·활성 수익률보다 **커야** 트레일링이 실효합니다.
 > 예전 기본값은 익절 2% = 트레일링 폭 2%여서 익절이 항상 먼저 걸려 **트레일링이 사실상 동작하지 않았습니다**
@@ -214,8 +213,6 @@ coin-trading-bot/
 - **현금 경쟁**: 적립이 아직 투입하지 않은 예산은 스윙 매수 사이징에서 미리 빠집니다. 적립 단이 예산·KRW 부족으로 건너뛰어지면 `/api/bot/status` 의 `accumulate_skip` 에 사유가 보입니다.
 - **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다. 손익은 `pnl_amount`(원)로 읽으세요.
 - **거래대금 정의(2026-09-14)**: 같은 응답의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다. 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓입니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
-- **백테 근거**: 2026-09 fixture(하락장 4·상승장 3)에서 후보 기본값은 "하락장에서 단순 보유보다 덜 잃고(−20% vs −29%), 상승장에서 훨씬 덜 번다(+27% vs +96%)"는 프로파일을 보였습니다. 수익성 우월의 근거가 아니라 성격 확인입니다(`AccumulateBacktestTest`).
-
 ### 알트 유니버스 자동 선정 (기본 off)
 
 `TRADING_UNIVERSE_AUTO=true` 면 스윙 대상은 `TRADING_TICKERS` 대신 Upbit 24h 거래대금 상위 `TRADING_UNIVERSE_ALT_COUNT`(기본 8, 최대 16)개로 정해지고, 기동 시와 매 09:00 KST 에 다시 고릅니다. 투자유의 종목·페그 자산(스테이블·금 토큰)·적립 티커는 제외됩니다. 보유 중이거나 미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남고, 자동 선정 알트는 적립·보유 티커와 합쳐 20 까지만 채웁니다(적립·보유 티커 자체는 자르지 않습니다). 사용자가 UI 에서 고른 목록(`bot_state.tickers`)은 그대로 보존되므로 끄면 예전과 같이 돌아갑니다. 선정 API 가 실패하면 직전 목록을 유지합니다. 자동 선정 티커는 관심목록(`WATCHLIST_TICKERS`) 밖이면 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
@@ -235,7 +232,7 @@ coin-trading-bot/
 정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
 
 - `/login.html`: 로그인(회원가입은 계정이 없는 서버에서 첫 계정을 만들 때만)
-- `/app.html`: dashboard, bot, orders, backtest, wallet, settings 화면
+- `/app.html`: dashboard, bot, orders, wallet, settings 화면
 - `/api/*`: httpOnly JWT 쿠키를 사용하는 same-origin API
 - JSON 필드명: 요청과 응답 모두 `snake_case`
 
@@ -251,7 +248,7 @@ coin-trading-bot/
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
 | 차트 | GET | `/api/chart/candles`, `/indicators`, `/tickers`, `/compare` | 필요 |
-| 전략 | GET/POST | `/api/strategies`, `/performance`, `/backtest` | 필요 |
+| 전략 | GET | `/api/strategies`, `/performance` | 필요 |
 | 관심 목록 | GET | `/api/watchlist` | 필요 |
 | 실시간 가격 | GET | `/api/prices/stream`, `/latest`, `/status` | Public |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
