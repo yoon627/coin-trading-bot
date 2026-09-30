@@ -285,7 +285,7 @@ coin-trading-bot/
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |
-| `REDIS_ENABLED` | dev `false`, prod Compose `true` | API rate limit 카운터용 Redis 템플릿(`RedisConfig`) 활성화. prod 는 Redis 자동 구성이 켜져 있어 이 값과 무관하게 Redis 로 판정한다 — 끄는 스위치로 쓸 수 없다. Redis 가 실패하거나 500ms 안에 답하지 않으면 같은 한도로 in-memory 카운터에 판정하고 30초 뒤 다시 시도한다(장애 한 번에 WARN 한 줄, 복귀에 INFO 한 줄). 기동 직후에는 백그라운드로 Redis 연결을 미리 맺고(INFO `연결 준비 — Nms, 시도 k회`), 1초 간격으로 세 번 시도해도 실패하면 강등 상태로 시작한다. Redis 는 앱 health·compose 기동 조건에 들어가지 않는다 — 장애 신호는 그 WARN 과, 연결이 열려 있던 중 끊겼다면 Lettuce 의 재연결 실패 WARN(`Cannot reconnect to …`)뿐이다 |
+| `REDIS_ENABLED` | dev `false`, prod Compose `true` | API rate limit 카운터용 Redis 템플릿(`RedisConfig`) 활성화. prod 는 Redis 자동 구성이 켜져 있어 이 값과 무관하게 Redis 로 판정한다 — 끄는 스위치로 쓸 수 없다. Redis 가 실패하거나 500ms 안에 답하지 않으면 같은 한도로 in-memory 카운터에 판정하고 30초 뒤 다시 시도한다(장애 한 번에 WARN 한 줄, 복귀에 INFO 한 줄). 기동 때는 웹 서버가 요청을 받기 전에 Redis 연결을 미리 맺는다(INFO `연결 준비 — Nms, 시도 k회`). 최대 15초 기다리고, 넘으면 기다리지 않고 기동한다(뒤늦은 결과는 같은 INFO 또는 강등 WARN 한 줄). 1초 간격으로 세 번 시도해도 실패하면 강등 상태로 시작한다. Redis 는 앱 health·compose 기동 조건에 들어가지 않는다 — 장애 신호는 그 WARN 과, 연결이 열려 있던 중 끊겼다면 Lettuce 의 재연결 실패 WARN(`Cannot reconnect to …`)뿐이다 |
 | `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
