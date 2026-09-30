@@ -8,7 +8,7 @@ package com.trading.bot.domain
 object TradePnl {
 
     /**
-     * 왕복 수수료를 차감한 손익률(%). 백테스트의 `feeRate × 2` 와 같은 기준이다.
+     * 왕복 수수료를 차감한 손익률(%). 수수료는 원금 대비 비율(`roundTripFeeRate`)로 한 번에 뺀다.
      *
      * 평단이나 현재가를 모르면 null — 0 을 돌려주면 수수료만큼의 가짜 손실(-0.1%)이 기록에 남는다.
      * 외부 입금분을 `syncPosition` 으로 복원한 포지션에서 실제로 발생한다.
@@ -45,8 +45,8 @@ object TradePnl {
      * ⚠️ [totalAmount] 는 **그 체결의 대금**이어야 한다. 포지션 전체 원가를 넘기면 그만큼 부풀려진다 —
      * 엔진 매수가 정확히 그래서 실측으로 갈아탔다(#133).
      *
-     * [amount] 가 차감하는 수수료와 기준이 다르다 — 이쪽은 **체결 대금**에, 저쪽은 백테와 맞춘 **원금**에
-     * 비율을 곱한다. `fee` 컬럼은 실측 우선이고 `pnl_amount` 는 백테 정합용 추정이라 두 컬럼을 한 리포트에서
+     * [amount] 가 차감하는 수수료와 기준이 다르다 — 이쪽은 **체결 대금**에, 저쪽은 **원금**에
+     * 비율을 곱한다. `fee` 컬럼은 실측 우선이고 `pnl_amount` 는 원금 기준 추정이라 두 컬럼을 한 리포트에서
      * 더하지 않는다(이슈 #148).
      */
     fun estimatedFee(totalAmount: Double, roundTripFeeRate: Double): Double =

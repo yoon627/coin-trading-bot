@@ -2,13 +2,12 @@
 title: LLM 알파 검증 — 과거 데이터 백테스트로는 증명할 수 없다
 category: decision
 created: 2026-08-03
-updated: 2026-08-03
+updated: 2026-10-01
 claim_state: current
-verified: 2026-08-03 — rightsizing-history.md:22 인용, CombinedStrategy.kt 전문(3조건 전부 가격 파생), BacktestEngine.kt:98(다음 봉 시가 체결), `git log --all --diff-filter=D` 231커밋 전수에 LLM 관련 경로 0건, common·bot/src/main 에 뉴스/공지 수집 코드 0건
+verified: 2026-10-01 — BacktestEngine sources·링크 정리(백테스트 코드 제거) — 결론(과거 데이터 백테스트로는 증명 불가)은 엔진 유무와 무관 · 2026-08-03 — rightsizing-history.md:22 인용, CombinedStrategy.kt 전문(3조건 전부 가격 파생), BacktestEngine.kt:98(다음 봉 시가 체결), `git log --all --diff-filter=D` 231커밋 전수에 LLM 관련 경로 0건, common·bot/src/main 에 뉴스/공지 수집 코드 0건
 sources:
   - wiki/pages/decision/rightsizing-history.md
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
-  - bot/src/main/kotlin/com/trading/bot/engine/BacktestEngine.kt
   - https://www.anthropic.com/legal/consumer-terms
 ---
 
@@ -47,7 +46,7 @@ D1 스윙이라는 시간축은 여기서 **유리하게** 작용한다. LLM 응
 
 **② 모델 학습 데이터 오염 — 원리적 장벽.** 상용 LLM 은 특정 시점까지의 웹 텍스트로 학습돼 있다. 과거 구간의 공지·기사를 주고 "이게 호재냐" 를 물으면, 모델은 **그 자산의 이후 가격 흐름을 이미 알고 있을 수 있다.** 이건 코드로 막을 수 있는 종류의 look-ahead 가 아니다.
 
-[[backtest-engine]] 이 막는 look-ahead 와 층위가 다르다는 점이 중요하다. 엔진은 신호를 봉 `i` 종가까지의 window 로 판단하고 체결을 다음 봉 시가로 잡아 **데이터 흐름상의** 미래 참조를 차단한다. 그러나 모델 가중치 안에 들어간 미래 지식은 그 방어를 그냥 통과한다. **엔진이 올바르게 동작해도 결과는 무효다.**
+백테 엔진이 막던 look-ahead 와 층위가 다르다는 점이 중요하다(그 D1 엔진은 2026-10-01 MVP 1단계에서 지웠다). 엔진은 신호를 봉 `i` 종가까지의 window 로 판단하고 체결을 다음 봉 시가로 잡아 **데이터 흐름상의** 미래 참조를 차단했다. 그러나 모델 가중치 안에 들어간 미래 지식은 그 방어를 그냥 통과한다. **엔진이 올바르게 동작해도 결과는 무효다.**
 
 **③ 표본이 부족하다.** 가격을 실제로 움직이는 공지는 마켓당 월 수 건이다. 사실상 단일 마켓·D1 이라는 조건에서는 1년을 모아도 통계적 유의성에 도달하기 어렵다.
 

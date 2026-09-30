@@ -33,7 +33,7 @@ class ExitParamRangesTest {
         "trading.take-profit-pct, 0, false",
         "trading.take-profit-pct, 0.01, true",
         "trading.take-profit-pct, 100, true",
-        // 백테스트 API 가 라이브값을 폴백으로 쓰며 [0, 100] 을 요구한다.
+        // 상한 100 은 판정식 근거가 없다(#288) — 완화하면 preflight 사본과 함께 이 행을 바꾼다.
         "trading.take-profit-pct, 100.01, false",
         "trading.trailing-stop-pct, 0, false",
         "trading.trailing-stop-pct, 1.5, true",
@@ -58,7 +58,7 @@ class ExitParamRangesTest {
         "trading.shadow-exit.trailing-stop-pct, 1.5, true",
         "trading.shadow-exit.trailing-stop-pct, 100, false",
         "trading.shadow-exit.trailing-arm-pct, -1, false",
-        // 라이브 arm 의 상한은 백테 폴백 때문이라 그림자에는 없다.
+        // 라이브 arm 의 상한은 판정식 근거가 없어(#288) 그림자에는 두지 않았다.
         "trading.shadow-exit.trailing-arm-pct, 1000, true",
     )
     fun `구간은 판정식이 뜻을 잃는 경계에서 갈린다`(key: String, value: Double, inside: Boolean) {

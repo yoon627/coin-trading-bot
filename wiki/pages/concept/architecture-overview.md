@@ -2,9 +2,9 @@
 title: 아키텍처 개관 — 단일 Spring Boot 프로세스 안의 Upbit 봇·API·시세수집
 category: concept
 created: 2026-07-28
-updated: 2026-09-30
+updated: 2026-10-01
 claim_state: current
-verified: 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
+verified: 2026-10-01 — engine/ 행에서 BacktestEngine 삭제(백테스트 코드 제거) · 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
 sources:
   - settings.gradle.kts
   - PROJECT_ANALYSIS.md
@@ -30,7 +30,7 @@ Gradle 멀티모듈이지만 배포 단위는 **JVM 프로세스 하나**다. `s
 | `auth/` | JWT 인증 (`AuthController`, `JwtProvider`, `SecurityConfig`) |
 | `client/` | `UpbitClient` — 주문·조회 REST |
 | `marketdata/` | WS ticker + REST 캔들 수집, `MarketDataStore` ([[marketdata-pipeline]]) |
-| `engine/` | `TradingEngine`, `PositionManager`, `TradeExecutionService`, `BacktestEngine` ([[trading-engine-loop]]) |
+| `engine/` | `TradingEngine`, `PositionManager`, `TradeExecutionService` ([[trading-engine-loop]]) |
 | `stream/` | `CandleAggregator`, `MarketDataPersistenceService`, `DataRetentionService` |
 | `persistence/` | R2DBC Entity/Repository ([[persistence-schema]]) |
 | `security/` | `SecretsCrypto`(AES-GCM), `UserSecretsService` — 사용자별 거래소 키 암호화 |

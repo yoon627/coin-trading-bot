@@ -2,29 +2,27 @@
 title: lesson — 브래킷·감도 family 는 계기의 체결 규칙을 코드로 확인한 뒤 설계한다 (유령 손절이 없었던 이유)
 category: decision
 created: 2026-09-09
-updated: 2026-09-16
+updated: 2026-10-01
 claim_state: current
-verified: 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 [[shared-balance-2026-09]] 후처리 전용) · 2026-09-09 — 사다리 리뷰(code-reviewer)가 `CombinedStrategy.shouldBuy` 의 `currentPrice <= targetPrice` 거부와 `LiveSemanticsArm` 의 `fill = max(target, open)` 을 대조해 확인. codex 가 `pessimisticTrailing` 의 불가능한 경로를 확인, 단위테스트 red → green 으로 수정
+verified: 2026-10-01 — 계기 코드(`LiveSemanticsArm`)와 인용 리포트는 MVP 1단계에서 지웠다. 교훈의 근거인 `combined` 의 거부 조건(`currentPrice <= targetPrice`)은 `CombinedStrategy.kt` 에 그대로 있음을 확인 · 2026-09-16 — `LiveSemanticsArm.Trade` 에 진입·청산 봉 시각(`entryBarUtc`·`exitBarUtc`, 기본 "") 추가. 계기 동작 불변(기존 arm 테스트 전부 통과, 필드는 shared-balance 후처리 전용) · 2026-09-09 — 사다리 리뷰(code-reviewer)가 `CombinedStrategy.shouldBuy` 의 `currentPrice <= targetPrice` 거부와 `LiveSemanticsArm` 의 `fill = max(target, open)` 을 대조해 확인. codex 가 `pessimisticTrailing` 의 불가능한 경로를 확인, 단위테스트 red → green 으로 수정
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
-  - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArm.kt
-  - bot/src/test/kotlin/com/trading/bot/engine/LiveSemanticsArmPessimisticTrailingTest.kt
 ---
 
 # lesson: 브래킷·감도 family 는 계기의 체결 규칙을 코드로 확인한 뒤 설계한다
 
-**언제**: 2026-09-09 (익절×손절 격자 → 해상도 사다리, [[take-profit-stop-loss-2026-09]] · [[exit-resolution-ladder-2026-09]])
+**언제**: 2026-09-09 (익절×손절 격자 → 해상도 사다리 연구. 그 리포트와 계기 코드는 2026-10-01 MVP 1단계에서 지웠다 — [[rightsizing-history]])
 
 ## 증상
 
 두 사전고정 작업이 연달아 "진입 봉 손절은 돌파 **이전** 저가가 만든 유령일 수 있다"는 전제 위에 감도 family(`entryBarStopOnClose`)를 **브래킷**으로 설계했다.
 손절 off 우위의 2/3 가 이 family 에서 사라져 "손절 축은 순서 가정에 민감, 미판정"이라고 결론냈다.
 
-리뷰가 코드로 반증했다. `combined` 는 `currentPrice <= targetPrice` 면 거부하므로 `max(돌파선, 시가)` 체결은 시가 ≤ 돌파선인 봉에서 절대 성립하지 않는다.
+리뷰가 코드로 반증했다. `combined` 는 `currentPrice <= targetPrice` 면 거부하므로([[swing-strategies]]) `max(돌파선, 시가)` 체결은 시가 ≤ 돌파선인 봉에서 절대 성립하지 않는다.
 체결은 항상 돌파선 위에서 **여는** 첫 봉의 시가이고, 진입 봉 저가는 체결 이후다. 유령 손절은 없었다. 감도 family 는 브래킷이 아니라 실재 손절을 지우는 한쪽 처리였다.
 
 같은 리뷰에서 두 번째 브래킷(`pessimisticTrailing`)도 경로 가정과 모순되는 청산을 냈다. "이 봉 고가가 저가보다 먼저"라 가정하면서, 같은 봉에서 익절선을 지난 경우에도
-그 고가에서 파생한 트레일링선을 먼저 걸었다. 고가로 가는 길에 익절선이 있으면 익절이 먼저다.
+그 고가에서 파생한 트레일링선을 먼저 걸었다. 고가로 가는 길에 익절선이 있으면 익절이 먼저다(라이브 게이트 순서는 [[exit-gates]]).
 
 ## 원인 (3 Whys)
 

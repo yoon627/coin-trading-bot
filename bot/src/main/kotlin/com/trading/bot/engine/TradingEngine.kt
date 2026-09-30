@@ -585,7 +585,7 @@ class TradingEngine(
             if (dust) shadowExitObserver?.forget(ticker) else shadowExitObserver?.onTick(ticker, state, currentPrice)
             val sold = if (reason != null) positionManager.sell(ticker, state, currentPrice, reason) else null
             if (sold != null) {
-                // 실체결 단가를 함께 넘긴다 — currentPrice 와의 차이가 실행 슬리피지이고 백테에는 없는 항목이다.
+                // 실체결 단가를 함께 넘긴다 — currentPrice 와의 차이가 실행 슬리피지이고 모델 청산가에는 없는 항목이다.
                 shadowExitObserver?.onLiveExit(ticker, currentPrice, reason!!.name, sold.executedVwap)
                 return
             }
