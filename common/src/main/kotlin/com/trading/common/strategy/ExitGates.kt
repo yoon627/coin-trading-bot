@@ -1,6 +1,6 @@
 package com.trading.common.strategy
 
-/** 청산 게이트 판정 — 라이브(PositionManager)와 백테스트(BacktestEngine)가 같은 조건식을 쓰도록 공용화. */
+/** 청산 게이트 판정 — 라이브(PositionManager)와 그림자 관측(ShadowExitObserver)이 같은 조건식을 쓰도록 공용화. */
 object ExitGates {
 
     /**
@@ -21,7 +21,7 @@ object ExitGates {
 
     /**
      * maxHoldDays 의 유효값 해석 — 0/음수(env 오설정)는 1로 보정해 "매수 당일 즉시 청산 루프"를 방지.
-     * 라이브(DailyResetManager)·백테(BacktestEngine)가 같은 해석을 쓰도록 공용화.
+     * 판정(DailyResetManager)과 구간 검사(ExitParamRanges)가 같은 해석을 전제한다.
      */
     fun effectiveMaxHoldDays(maxHoldDays: Int): Int = maxHoldDays.coerceAtLeast(1)
 }

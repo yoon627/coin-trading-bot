@@ -230,3 +230,14 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-09-23] update | backtest-engine — 가격게이트 청산 봉 종가 신호 평가 (#223)
 
 - [[backtest-engine]] 재진입 모델 절: 가격게이트 청산 뒤 간격 규칙(같은 봉 금지·다음 봉 허용, 모드 무관)과 보유상한 봉 시가 판정 청산·비매수일 게이트 청산 한계를 기재. 골든 509→558(가격게이트 뒤 간격 1봉 54건 신설). [[reset-churn-measurement]]·[[hold-limit-policy-2026-09]]·[[yearly-strategy-comparison]] 에 엔진 버전 경계 주석.
+
+## [2026-10-01] update | MVP 1단계 — 연구·백테 리포트 19쪽 삭제와 링크 정리
+
+- 연구·백테 코드(D1 백테 엔진·intrabar 청산 모델·M1 replay·연구 전략·fixture·수집 스크립트)를 지우면서 그 코드를 sources 로 둔 `concept/backtest-engine` 과 `query/` 18쪽을 지웠다. 원문은 저장소 이력(`288ec49`).
+- 링크·sources 정리: [[exit-gates]](백테와의 순서 차이 절 삭제) · [[accumulate-ladder]](백테 절 삭제) · [[trading-engine-loop]](운영 트레일링 1.5/arm 0 근거를 지운 리포트 수치로 옮김, 익절·arm 상한은 #288) · [[swing-strategies]] · [[architecture-overview]] · [[persistence-schema]] · [[upbit-api]] · [[lesson-bracket-needs-fill-semantics]] · [[lesson-llm-alpha-verification]] · [[lesson-seed-vs-stream-overwrite]] · [[strategy-evolution-expectations]](historical 로 전환). [[rightsizing-history]] 에 항목 추가.
+- `verify.sh` 쪽수 49±2 → 32±2, `smoke.sh` 의 백테 질문을 "운영 전략은 무엇인가" 로 교체.
+
+## [2026-10-01] update | MVP 1단계 — 운영 전략 combined 만 남기고 전략 설정 삭제
+
+- [[swing-strategies]] 를 `TradingStrategy` 인터페이스와 `combined` 중심으로 다시 썼다: 나머지 등록 전략 8종·`ShoulderExit` 삭제, 기본 전략 규칙(엔진·상태 API 모두 첫 등록 bean), `TRADING_STRATEGY` 설정 삭제와 운영 secret 잔존 줄의 무해성.
+- [[architecture-overview]] common 행, [[marketdata-pipeline]] 의 전략별 최소 봉수·volume 서술을 `combined` 기준으로, [[rightsizing-history]] MVP 항목에 전략 정리를 더했다.

@@ -125,8 +125,7 @@ class TradingEngine(
     private var activeTickers: List<String> = emptyList()
 
     init {
-        activeStrategy = strategies.find { it.name == tradingProperties.strategy }
-            ?: strategies.firstOrNull()
+        activeStrategy = strategies.firstOrNull()
     }
 
     fun start(
@@ -585,7 +584,7 @@ class TradingEngine(
             if (dust) shadowExitObserver?.forget(ticker) else shadowExitObserver?.onTick(ticker, state, currentPrice)
             val sold = if (reason != null) positionManager.sell(ticker, state, currentPrice, reason) else null
             if (sold != null) {
-                // 실체결 단가를 함께 넘긴다 — currentPrice 와의 차이가 실행 슬리피지이고 백테에는 없는 항목이다.
+                // 실체결 단가를 함께 넘긴다 — currentPrice 와의 차이가 실행 슬리피지이고 모델 청산가에는 없는 항목이다.
                 shadowExitObserver?.onLiveExit(ticker, currentPrice, reason!!.name, sold.executedVwap)
                 return
             }
@@ -605,7 +604,7 @@ class TradingEngine(
 
         // 매수도 청산과 동일: store 에 충분한 D1 이 있으면 store, 부족하면(부팅 직후/신규 마켓) REST 폴백.
         // 구 `size>=2` 게이트는 오염(중복 누적)에 가려 늘 store 를 탔고, 오염 제거 후엔 warm-up 동안 적은 캔들로
-        // 전략을 죽였다(MeanReversion 등 size<21 false) → loadStoreDailyCandles 게이트로 매수/청산 통일.
+        // 전략을 죽였다(전략의 최소 봉 수 가드가 false) → loadStoreDailyCandles 게이트로 매수/청산 통일.
         val minCandles = effectiveMinCandles(strategy)
         val storeCandles = loadStoreDailyCandles(ticker, minCandles)
         // 09:00 경계 직후 store 의 최신 D1 은 새 날 첫 1분봉이 폴링되기까지(약 60~120초) 어제 봉이다. 그 window 로 판정하면
@@ -623,8 +622,7 @@ class TradingEngine(
                 warnStaleDailyCandle("store", ticker, dayOpen, storeCandles.first().openTime, "falling back to REST")
             }
             val candles = fetchDailyCandles(ticker)
-            // 부족해도 막지 않는다 — 전략이 자기 가드로 false 를 내므로 결과는 같고, 여기서 끊으면
-            // volatility_breakout(진입 2봉)처럼 짧은 이력으로도 매매하던 전략의 계약이 바뀐다.
+            // 부족해도 막지 않는다 — 전략이 자기 가드로 false 를 내므로 결과는 같다.
             // 목적은 차단이 아니라 "왜 신호가 없는지"를 드러내는 것이다.
             if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, "buy", candles.size, blocked = false)
             // Upbit 일봉도 그날 첫 체결 전엔 어제 봉이 [0] 이고 캐시 TTL 이 60초라 store 와 같은 경계 문제가 있다.
@@ -745,9 +743,9 @@ class TradingEngine(
         currentPrice: Double,
         strategy: TradingStrategy,
     ): Boolean {
-        // 여기 strategy 는 resolveExitStrategy 가 복원한 **진입 전략**이다. 활성 전략 값을 쓰면
-        // knee(41)로 산 포지션을 활성 volatility_breakout(21) 기준으로 판단해, 21~40봉 store 가
-        // "충분"으로 통과하고 ShoulderExit 이 영영 false 가 된다 — 차트청산이 죽은 포지션이 생긴다.
+        // 여기 strategy 는 resolveExitStrategy 가 복원한 **진입 전략**이다. 활성 전략 값을 쓰면 최소 봉 수가 더 큰
+        // 전략으로 산 포지션을 활성 전략의 봉 수로 판단해, 모자란 store 가 "충분"으로 통과하고 그 전략의 청산
+        // 신호가 영영 false 가 된다 — 차트청산이 죽은 포지션이 생긴다.
         val minCandles = effectiveMinCandles(strategy)
         val storeCandles = loadStoreDailyCandles(ticker, minCandles)
         if (storeCandles != null) {

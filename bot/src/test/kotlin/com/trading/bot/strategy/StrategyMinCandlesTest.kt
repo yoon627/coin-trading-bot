@@ -1,14 +1,12 @@
 package com.trading.bot.strategy
 
 import com.trading.bot.config.StrategyConfig
-import com.trading.bot.engine.BacktestEngine
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.strategy.TradingStrategy
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 
@@ -64,18 +62,6 @@ class StrategyMinCandlesTest {
         }
     }
 
-    @Test
-    fun `no strategy demands more candles than the backtest window provides`() {
-        // 백테는 전략에 항상 정확히 MIN_CANDLES 봉을 넘긴다. 그보다 많이 요구하는 전략은 백테에서
-        // 영영 신호를 못 내 비교 대상에서 조용히 빠진다.
-        for (strategy in strategies()) {
-            assertTrue(
-                strategy.minCandles <= BacktestEngine.MIN_CANDLES,
-                "${strategy.name}: minCandles=${strategy.minCandles} > 백테 window ${BacktestEngine.MIN_CANDLES}",
-            )
-        }
-    }
-
     /**
      * 선언값 자체를 고정한다.
      *
@@ -85,17 +71,7 @@ class StrategyMinCandlesTest {
      */
     @Test
     fun `declared minimums match the agreed contract`() {
-        val expected = mapOf(
-            "volatility_breakout" to 21,
-            "golden_cross" to 21,
-            "bollinger_bounce" to 21,
-            "mean_reversion" to 21,
-            "rsi_bounce" to 21,
-            "macd_cross" to 36,
-            "combined" to 21,
-            "knee_reversal" to 41,
-            "knee_pullback" to 41,
-        )
+        val expected = mapOf("combined" to 21)
 
         val actual = strategies().associate { it.name to it.minCandles }
 

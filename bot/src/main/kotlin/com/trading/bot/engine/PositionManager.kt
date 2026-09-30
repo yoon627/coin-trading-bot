@@ -962,7 +962,7 @@ class PositionManager(
                     completeSellAtomically(
                         ticker, state, currentPrice, qty.volume, reason,
                         remaining = sellable - qty.volume,
-                        // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 백테에 없는 항목이라 실물로만 얻는다.
+                        // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 판단 가격만 보는 모델에는 없어 실물로만 얻는다.
                         executedVwap = filled.filledVwap(),
                         feeBasis = sellFeeBasis(filled),
                         orderAmount = terminalFunds(filled),
@@ -1121,7 +1121,7 @@ class PositionManager(
     }
 
     /**
-     * 매도 TradeRecord 생성 — 기록용 pnl 은 왕복수수료 차감(net, 백테스트 feeRate×2 와 통일). 청산 게이트는 gross 유지.
+     * 매도 TradeRecord 생성 — 기록용 pnl 은 왕복수수료 차감(net). 청산 게이트는 gross 유지.
      * 평단 미상(외부 입금분 syncPosition 복원 등)이면 pnl null — 0%−fee 의 가짜 손실(−0.1%) 기록 방지.
      * markSold 이전에 호출해야 avgBuyPrice·entryStrategy 가 살아있어 손익과 전략 귀속이 복원된다.
      * reason 미지정 시 state.pendingSellReason 사용.

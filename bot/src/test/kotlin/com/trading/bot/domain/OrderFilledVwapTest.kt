@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test
  * 실체결 단가(VWAP) 파싱 — **실행 슬리피지를 재는 유일한 입력**이다.
  *
  * 이 봇은 시장가로 팔고 거래 기록에는 판단 시점 tick 가격을 쓴다. 그 둘의 차이가 실행 슬리피지이고,
- * 백테에는 아예 없는 항목이다(wiki `query/exit-resolution-verdict-2026-09` 한계).
+ * 판단 가격만 보는 모델로는 얻을 수 없다.
  *
  * Upbit 개별 주문 조회는 최상위 체결금액 합계를 주지 않고 `trades` 배열만 준다(공식 문서 확인 2026-09-05).
  * 그래서 `Σfunds / Σvolume` 으로 만들며, **얻을 수 없으면 추정하지 않고 null** 이다([Order.feeBasis] 와 같은 규율).

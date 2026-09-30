@@ -48,11 +48,8 @@ dependencies {
 }
 
 tasks.test {
-    // 기본 512m 로는 파라미터 스윕(좌표 5만 × 마켓 8의 지표 집계)이 힙을 넘긴다 — env 게이트를 켠 실행에서만 쓰이지만
-    // 태스크 단위로만 걸어 다른 서브프로젝트 테스트까지 예약하지 않는다.
-    maxHeapSize = "2g"
-    // 백테 리포트·골든 비교가 Kotlin `.format`(기본 로케일)으로 숫자를 찍는다 — 소수점이 `,` 인 로케일에서는
-    // 골든 문자열 동치가 깨지고 wiki 인용 표가 "+0,306" 이 된다. 137곳을 고치는 대신 테스트 JVM 로케일을 고정한다(#111).
+    // 알림 메시지가 금액을 기본 로케일로 찍고(`DiscordNotifier` 의 "%,.0f원") 테스트가 그 문자열을 단언한다 — 그룹 구분자가
+    // `,` 가 아닌 로케일에서는 깨진다. en·ko 에서는 고정 없이도 통과해 드러나지 않으므로 테스트 JVM 로케일을 고정한다.
     systemProperty("user.language", "en")
     systemProperty("user.country", "US")
     // 배포 스크립트·compose 를 읽는 테스트가 있다(TradingEnvPassthroughTest·ExitParamsPreflightScriptTest) —

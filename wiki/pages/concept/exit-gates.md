@@ -2,9 +2,9 @@
 title: 청산 게이트 — 손절·트레일링·익절·차트·보유상한
 category: concept
 created: 2026-07-28
-updated: 2026-09-28
+updated: 2026-10-01
 claim_state: current
-verified: 2026-09-28 — 청산 파라미터 해석이 `exitParamsOrGlobal` 한 함수(engine/ExitParams.kt)로 모였고 익절·손절·트레일링·보유상한이 모두 이를 읽음을 `ExitParamsSnapshotConsumptionTest`(매핑 1건 추가)로 확인, 변이 3종(스냅샷 무시·필드 교환·보유상한 우회) 검출 · 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
+verified: 2026-10-01 — 백테스트 코드 제거 후 `ExitGates` 호출자가 `PositionManager`·`DailyResetManager`·`ShadowExitObserver` 뿐임을 rg 로 확인, 평가 순서는 `TradingEngine.decideSell` 기준 · 2026-09-28 — 청산 파라미터 해석이 `exitParamsOrGlobal` 한 함수(engine/ExitParams.kt)로 모였고 익절·손절·트레일링·보유상한이 모두 이를 읽음을 `ExitParamsSnapshotConsumptionTest`(매핑 1건 추가)로 확인, 변이 3종(스냅샷 무시·필드 교환·보유상한 우회) 검출 · 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/DailyResetManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/ExitParams.kt
@@ -18,9 +18,7 @@ sources:
 
 이 페이지의 구현 인용은 Upbit `PositionManager` 기준이다(2026-09-16 KIS 경로 제거 후 유일한 청산 구현).
 
-일부 청산 판정식이 `common` 의 `ExitGates` 에 공용화돼 있다 — 라이브(`PositionManager`)와 백테스트(`BacktestEngine`)가 각각 구현하면 백테 결과가 라이브를 대변하지 못하기 때문이다([[backtest-engine]]).
-
-**단, 공용화된 것은 트레일링 판정과 `maxHoldDays` 보정뿐이고 평가 순서는 두 곳이 다르다** — 아래 "라이브와 백테의 순서 차이" 참조.
+일부 청산 판정식이 `common` 의 `ExitGates` 에 공용화돼 있다 — 라이브(`PositionManager`·`DailyResetManager`)와 그림자 관측(`ShadowExitObserver`)이 같은 조건식을 쓰게 하기 위해서다. 공용화된 것은 트레일링 판정과 `maxHoldDays` 보정뿐이고, 평가 순서는 `TradingEngine.decideSell` 이 정한다 — **손절 → 트레일링** → 익절 → 차트 → 일일리셋([[trading-engine-loop]]).
 
 ## 판정식
 
@@ -32,19 +30,8 @@ sources:
 | 차트 청산 | 전략의 `shouldSell` (기본 = 5/20 MA 데드크로스) | `TradingEngine.evaluateChartExit` |
 | 보유 상한 | `maxHoldDays` 경과 (KST 09:00 경계) | `DailyResetManager` |
 
-## 라이브와 백테의 순서 차이
-
-| | 순서 |
-|---|---|
-| 라이브 (`TradingEngine.decideSell`) | **손절 → 트레일링** → 익절 → 차트 → 일일리셋 |
-| 백테 (`IntrabarExitModel.evaluate`) | **트레일링 → 손절** → 익절 → 차트 → TIME_EXIT |
-
-의도된 차이다. 라이브는 10초 tick 이라 두 조건이 상호배타적으로 도달하지만, 백테는 봉 하나를 붕괴시켜 판정하므로 "하강 경로에서 라이브가 먼저 닿는 순서"(트레일링선 > 진입가 > 손절선)를 따라야 한다. 라이브 순서를 그대로 옮기면 **트레일링으로 이익 실현했을 거래가 −maxLoss 손절로 오기록**된다.
-
-따라서 백테의 청산 사유(reason) 분포를 라이브와 1:1로 비교하면 안 된다.
-
-**청산 직후의 재진입.** 라이브는 09:00 경계에서 `boughtToday` 가 풀려 보유상한 청산 당일 돌파하면 다시 산다(목표가가 `당일시가 + k·전일레인지` 라 시가 즉시 재매수는 아니다). 백테는 2026-09-23 부터 기본 `LIVE_SAME_BAR` 로 이 기회를 모델링한다(#144, 그 전 기본 LEGACY 는 2봉 공백).
-단 2026-09-08 부터 라이브는 **오늘 거래일 D1 이 있는 소스(store 또는 REST)로만** 재매수를 평가한다 — 그 전(약 60~120초)의 "공백 0" 재매수는 어제 window 위의 판정이었다([[trading-engine-loop]] 8번). `BacktestConfig.reentryMode` 가 이 축을 노브로 노출한다 — 배경과 측정 결과는 [[backtest-engine]]·[[reset-churn-measurement]].
+**청산 직후의 재진입.** 라이브는 09:00 경계에서 `boughtToday` 가 풀려 보유상한 청산 당일 돌파하면 다시 산다(목표가가 `당일시가 + k·전일레인지` 라 시가 즉시 재매수는 아니다).
+단 2026-09-08 부터 라이브는 **오늘 거래일 D1 이 있는 소스(store 또는 REST)로만** 재매수를 평가한다 — 그 전(약 60~120초)의 "공백 0" 재매수는 어제 window 위의 판정이었다([[trading-engine-loop]] 8번).
 
 ## 비자명한 지점
 
@@ -55,7 +42,7 @@ sources:
 - **NaN 안전**: 평단 0 등으로 `pnlPct` 가 NaN 이면 IEEE 비교 의미상 모든 조건이 false → 발동하지 않는다.
 - **게이트는 gross, 기록은 net**: 청산 판정은 수수료를 빼지 않은 수익률로 하고, `TradeRecord.pnlPercent` 에만 왕복 수수료(`roundTripFeeRate`, 기본 0.1%)를 차감해 남긴다.
 - **진입 전략으로 청산한다**: `resolveExitStrategy` 가 `entryStrategy` 를 복원해 그 전략의 `shouldSell` 을 쓴다. 전략이 목록에서 사라졌으면 활성 전략으로 폴백하며 WARN — 이때는 청산 기준이 진입과 달라진다([[swing-strategies]]). 같은 `entryStrategy` 가 **매도 기록의 전략 귀속**에도 쓰인다(`buildSellRecord` 가 `markSold` 이전에 읽는다 — [[persistence-schema]]).
-- **차트 청산은 기본 off** (`chartExitEnabled=false`). 켜기 전 백테스트 검증이 전제다.
+- **차트 청산은 기본 off** (`chartExitEnabled=false`).
 
 ## 진입 시점 스냅샷을 따른다 (2026-09-06~, #177)
 
@@ -78,6 +65,6 @@ internal fun TradingState.exitParamsOrGlobal(global: TradingProperties): ExitPar
 > [!conflict] 2026-09-06 이전에는 소비되지 않았다
 > 그전에는 스냅샷이 저장·복원만 되고 청산은 **현재** `tradingProperties` 를 읽었다. 그래서
 > **보유 중 설정을 바꾸면 열린 포지션의 청산 기준까지 즉시 바뀌었다** — 2026-09-06 트레일링 승격
-> ([[trailing-arm-finding-2026-09]])에서 실제로 발생했고, 그 거래들은 *진입은 옛 규칙, 청산은 새 규칙*이다.
+> (1.5/arm 0, [[trading-engine-loop]])에서 실제로 발생했고, 그 거래들은 *진입은 옛 규칙, 청산은 새 규칙*이다.
 > 그 기간의 성과를 어느 설정 몫으로 셀지는 정의되지 않는다. 이후 진입분부터는 이 문제가 없다.
 
