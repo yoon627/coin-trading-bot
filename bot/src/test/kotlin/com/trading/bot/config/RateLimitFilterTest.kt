@@ -10,13 +10,18 @@ import io.mockk.slot
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
+import org.springframework.core.annotation.AnnotatedElementUtils
 import org.springframework.data.redis.RedisConnectionFailureException
+import org.springframework.data.redis.core.ReactiveRedisCallback
 import org.springframework.data.redis.core.ReactiveRedisTemplate
 import org.springframework.data.redis.core.ReactiveValueOperations
 import org.springframework.http.HttpStatus
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest
 import org.springframework.mock.web.server.MockServerWebExchange
 import org.springframework.web.server.WebFilterChain
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.publisher.Sinks
 import java.time.Clock
@@ -600,5 +605,173 @@ class RateLimitFilterTest {
         assertTrue(warns.isEmpty(), warns.toString())
         send(filter)
         assertEquals(2, calls.get(), "강등되지 않았으니 다음 요청도 Redis 로 판정한다")
+    }
+
+    // ── 기동 예열 (#278) ──
+    // Lettuce 공유 연결은 첫 명령에서야 맺어진다. 기동 뒤 첫 요청이 그 비용을 치르다 판정 한도를 넘으면 Redis 가 정상인데도
+    // 강등된다(운영에서 기동 뒤 첫 판정이 500ms 를 넘겼다). 기동 뒤 예열이 먼저 연결을 맺는다.
+
+    /** 예열(`execute`)과 판정(`increment`)이 함께 쓰는 공유 연결. 첫 접속만 [connectCost] 만큼 막히고, 실제 템플릿처럼 구독할 때 막힌다. */
+    private class SharedConnection(private val connectCost: Duration) {
+        private var connected = false
+
+        @Synchronized
+        fun use() {
+            if (!connected) {
+                Thread.sleep(connectCost.toMillis())
+                connected = true
+            }
+        }
+    }
+
+    private fun sharedRedis(connection: SharedConnection, calls: AtomicInteger): ReactiveRedisTemplate<String, String> {
+        val template = redis(calls) { Mono.fromSupplier { connection.use(); 1L } }
+        every { template.execute(any<ReactiveRedisCallback<String>>()) } answers { Mono.fromSupplier { connection.use(); "PONG" }.flux() }
+        return template
+    }
+
+    private fun ReactiveRedisTemplate<String, String>.pingReturns(ping: Flux<String>) = apply {
+        every { execute(any<ReactiveRedisCallback<String>>()) } returns ping
+    }
+
+    @Test
+    fun `예열이 공유 연결을 미리 맺으면 첫 요청은 연결 비용을 치르지 않아 강등하지 않는다`() {
+        // 연결 비용(300ms)이 판정 한도(100ms)보다 크다 — 예열도 판정 한도로 끊으면 그 자체가 강등이 된다.
+        val calls = AtomicInteger()
+        val filter = RateLimitFilter(sharedRedis(SharedConnection(Duration.ofMillis(300)), calls), redisTimeout = Duration.ofMillis(100))
+
+        val (warns, infos) = logsWhile(Level.WARN) {
+            logsWhile(Level.INFO) {
+                filter.warmUpRedis().block(Duration.ofSeconds(5))
+                send(filter)
+            }.first
+        }
+
+        assertTrue(warns.isEmpty(), "Redis 가 정상인데 강등했다: $warns")
+        assertEquals(1, infos.count { it.contains("연결 준비") && it.contains("시도 1회") }, infos.toString())
+        send(filter)
+        assertEquals(2, calls.get(), "강등되지 않았으니 요청마다 Redis 로 판정한다")
+    }
+
+    @Test
+    fun `예열 첫 시도가 실패해도 다시 시도해 성공하면 강등하지 않는다`() {
+        // 기동 직후엔 복원·JIT 로 CPU 가 바빠 첫 연결이 Lettuce 타임아웃을 넘길 수 있다 — 한 번의 실패로 강등하면 같은 WARN 이 난다.
+        val calls = AtomicInteger()
+        val attempts = AtomicInteger()
+        val template = redis(calls) { Mono.just(1L) }
+            .pingReturns(Flux.defer { if (attempts.incrementAndGet() == 1) Flux.error<String>(down) else Flux.just("PONG") })
+        val filter = RateLimitFilter(template, warmUpRetryDelay = Duration.ofMillis(10))
+
+        val (warns, infos) = logsWhile(Level.WARN) {
+            logsWhile(Level.INFO) { filter.warmUpRedis().block(Duration.ofSeconds(5)) }.first
+        }
+
+        assertTrue(warns.isEmpty(), warns.toString())
+        assertEquals(2, attempts.get())
+        assertTrue(infos.any { it.contains("시도 2회") }, infos.toString())
+        send(filter)
+        assertEquals(1, calls.get(), "강등되지 않았으니 첫 요청이 Redis 로 판정한다")
+    }
+
+    @Test
+    fun `예열이 끝내 실패하면 강등 상태로 시작한다 - WARN 한 줄, 첫 요청은 Redis 를 기다리지 않는다`() {
+        val clock = MutableClock()
+        val calls = AtomicInteger()
+        val attempts = AtomicInteger()
+        val template = redis(calls) { Mono.just(1L) }
+            .pingReturns(Flux.defer { attempts.incrementAndGet(); Flux.error<String>(down) })
+        val filter = RateLimitFilter(template, clock = clock, warmUpRetryDelay = Duration.ofMillis(10))
+
+        val (warns, _) = logsWhile(Level.WARN) {
+            filter.warmUpRedis().block(Duration.ofSeconds(5)) // 오류가 아니라 빈 완료로 끝나야 한다
+            send(filter)
+        }
+
+        assertEquals(3, attempts.get(), "처음 1번 + 다시 2번")
+        assertEquals(1, warns.size, warns.toString())
+        assertTrue(warns.single().contains("redis down"), "원래 예외가 보여야 한다: $warns")
+        assertEquals(0, calls.get(), "강등 상태라 첫 요청은 Redis 를 부르지 않는다")
+        clock.now = clock.now.plusSeconds(31)
+        send(filter)
+        assertEquals(1, calls.get(), "지연이 지나면 한 요청이 다시 시도한다")
+    }
+
+    @Test
+    fun `요청이 먼저 강등시킨 뒤 예열이 실패해도 WARN 을 더하거나 지연을 늘리지 않는다`() {
+        val clock = MutableClock()
+        val calls = AtomicInteger()
+        var redisUp = false
+        val template = redis(calls) { if (redisUp) Mono.just(1L) else Mono.error(down) }.pingReturns(Flux.error(down))
+        val filter = RateLimitFilter(template, clock = clock, warmUpRetryDelay = Duration.ofMillis(10))
+
+        val (warns, _) = logsWhile(Level.WARN) {
+            send(filter) // 요청이 강등
+            clock.now = clock.now.plusSeconds(20)
+            filter.warmUpRedis().block(Duration.ofSeconds(5)) // 예열도 실패
+        }
+
+        assertEquals(1, warns.size, warns.toString())
+        redisUp = true
+        clock.now = clock.now.plusSeconds(11) // 요청의 강등으로부터 31초
+        send(filter)
+        assertEquals(2, calls.get(), "예열 실패가 지연을 늘렸다면 아직 다시 시도하지 않는다")
+    }
+
+    @Test
+    fun `요청이 먼저 강등시킨 뒤 예열이 성공해도 강등은 다시 시도한 요청만 푼다`() {
+        val clock = MutableClock()
+        val calls = AtomicInteger()
+        val template = redis(calls) { Mono.error(down) }.pingReturns(Flux.just("PONG"))
+        val filter = RateLimitFilter(template, clock = clock)
+
+        send(filter) // 강등
+        val (infos, _) = logsWhile(Level.INFO) { filter.warmUpRedis().block(Duration.ofSeconds(5)) }
+        send(filter)
+
+        assertEquals(1, calls.get(), "예열 성공이 강등을 풀었다면 두 번째 요청이 Redis 를 불렀다")
+        assertTrue(infos.any { it.contains("연결 준비") && it.contains("강등 중") }, "복귀로 읽히지 않게 구분한다: $infos")
+    }
+
+    @Test
+    fun `기동 리스너는 연결이 막혀도 바로 반환하고, 실패는 WARN 한 줄로만 남는다`() {
+        // 실제 템플릿은 구독한 스레드에서 동기로 연결한다 — 리스너 스레드에서 구독하면 기동 이벤트 처리가 연결만큼 멈춘다.
+        // 구독자에게 오류가 닿으면 Reactor 가 onErrorDropped ERROR(스택 포함)로 남겨 "장애 한 번에 WARN 한 줄" 이 깨진다.
+        val template = redis { Mono.just(1L) }.pingReturns(Mono.fromSupplier<String> { Thread.sleep(300); throw down }.flux())
+        val filter = RateLimitFilter(template, warmUpRetryDelay = Duration.ofMillis(10))
+        val own = LoggerFactory.getLogger(RateLimitFilter::class.java) as Logger
+        val operators = LoggerFactory.getLogger("reactor.core.publisher.Operators") as Logger
+        val ownLogs = ListAppender<ILoggingEvent>().apply { start() }
+        val operatorLogs = ListAppender<ILoggingEvent>().apply { start() }
+        own.addAppender(ownLogs)
+        operators.addAppender(operatorLogs)
+        try {
+            val started = System.nanoTime()
+            filter.warmUpRedisOnStartup()
+            assertTrue(Duration.ofNanos(System.nanoTime() - started) < Duration.ofMillis(200), "리스너 스레드가 연결만큼 묶였다")
+
+            val deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos()
+            while (ownLogs.list.none { it.level == Level.WARN } && System.nanoTime() < deadline) Thread.sleep(20)
+            Thread.sleep(100) // 뒤늦은 오류가 연산자에 닿을 시간
+            assertEquals(1, ownLogs.list.count { it.level == Level.WARN }, ownLogs.list.map { it.formattedMessage }.toString())
+            assertTrue(operatorLogs.list.none { it.level == Level.ERROR }, operatorLogs.list.map { it.formattedMessage }.toString())
+        } finally {
+            own.detachAppender(ownLogs)
+            operators.detachAppender(operatorLogs)
+            ownLogs.stop()
+            operatorLogs.stop()
+        }
+    }
+
+    @Test
+    fun `예열은 ApplicationReadyEvent 리스너이고, Redis 템플릿이 없으면 아무것도 하지 않는다`() {
+        val listener = AnnotatedElementUtils.findMergedAnnotation(
+            RateLimitFilter::class.java.getMethod("warmUpRedisOnStartup"),
+            EventListener::class.java,
+        )
+        assertEquals(listOf(ApplicationReadyEvent::class.java), listener?.classes?.map { it.java })
+
+        val filter = RateLimitFilter(null)
+        filter.warmUpRedisOnStartup()
+        assertNull(filter.warmUpRedis().block(Duration.ofSeconds(1)))
     }
 }
