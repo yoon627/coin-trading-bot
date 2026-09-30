@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component
  * 청산·주문 파라미터가 **선언되지 않았거나 의미상 구간 밖인 채** 거래하는 상태를 드러낸다 (#179, #230).
  *
  * - 선언: 운영 청산값은 `TRADING_*` env 가 소유하고 [TradingProperties] 의 코드 기본값과 다를 수 있다
- *   (2026-09-06~ 트레일링 1.5/0 vs 코드 2.0/3.0 — wiki `query/trailing-arm-finding-2026-09`).
+ *   (2026-09-06~ 트레일링 1.5/0 vs 코드 2.0/3.0 — wiki `trading-engine-loop`).
  *   배포 시크릿에서 한 줄이 빠지면 봇이 **조용히** 다른 청산 규칙으로 거래한다.
  * - 구간: 부호·단위 오기(손절 -5 → 매수 직후 손절)는 [ExitParamRanges] 가 거른다.
  *

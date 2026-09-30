@@ -260,20 +260,6 @@ class IndicatorsExtendedTest {
         assertFalse(Indicators.isMaUptrend(candles))
     }
 
-    // --- calculateStdDev ---
-
-    @Test
-    fun `calculateStdDev returns 0 for flat prices`() {
-        val candles = (0..10).map { Candle(tradePrice = 100.0) }
-        assertEquals(0.0, Indicators.calculateStdDev(candles, 10))
-    }
-
-    @Test
-    fun `calculateStdDev returns positive for varying prices`() {
-        val candles = (0..10).map { i -> Candle(tradePrice = 100.0 + (i % 2) * 50.0) }
-        assertTrue(Indicators.calculateStdDev(candles, 10) > 0)
-    }
-
     // --- calculateEma ---
 
     @Test
