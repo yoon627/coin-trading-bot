@@ -380,7 +380,8 @@ class UserTradingManager(
         val live = engine?.takeIf { it.isRunning() }
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
-            "strategy" to (engine?.getActiveStrategyName() ?: userStrategies[userId] ?: tradingProperties.strategy),
+            // 엔진·캐시가 없으면 새 엔진이 고를 전략(등록 첫 전략)을 보인다 — 화면은 이 값으로 시작 요청의 전략을 채운다.
+            "strategy" to (engine?.getActiveStrategyName() ?: userStrategies[userId] ?: strategies.firstOrNull()?.name ?: "none"),
             // engine.getActiveTickers() is set synchronously by start();
             // states keys only populate once the background loop initializes
             // them, so reading from states here would briefly return [] right

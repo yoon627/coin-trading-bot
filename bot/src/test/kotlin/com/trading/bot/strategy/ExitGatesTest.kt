@@ -57,7 +57,7 @@ class ExitGatesTest {
 
     @Test
     fun `effectiveMaxHoldDays coerces non-positive to one`() {
-        // 라이브(DailyResetManager)·백테(BacktestEngine) 공용 해석 — env 오설정 방어.
+        // DailyResetManager 가 쓰는 해석 — env 오설정 방어.
         assertEquals(1, ExitGates.effectiveMaxHoldDays(0))
         assertEquals(1, ExitGates.effectiveMaxHoldDays(-5))
         assertEquals(1, ExitGates.effectiveMaxHoldDays(1))
