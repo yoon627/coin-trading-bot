@@ -2,9 +2,9 @@
 title: 경량화(rightsizing) — 왜 collector·Kafka·ML·KIS 주식 봇이 없는가
 category: decision
 created: 2026-07-28
-updated: 2026-09-16
+updated: 2026-10-01
 claim_state: current
-verified: 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
+verified: 2026-10-01 — MVP 1단계(연구·백테 코드와 운영 밖 전략·전략 설정 제거) 항목 추가 — 운영 거래 분포는 2026-09-30 읽기 전용 조회(combined 212건·2026-07-14~09-30) · 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
 sources:
   - CLAUDE.md
   - PROJECT_ANALYSIS.md
@@ -20,12 +20,14 @@ sources:
 - **단일 JVM 에서 메시지 버스는 순비용이다.** collector→Kafka→bot 은 프로세스 경계가 있을 때만 값을 한다. 같은 프로세스 안이면 직접 fan-out 으로 충분하고, 실제로 `MarketDataIngestionService` 가 store/persistence 두 sink 를 **독립 try/catch 로 격리**해 구 Kafka 2-consumer-group 과 등가의 성질을 유지한다([[marketdata-pipeline]]).
 - **운영 비용이 실제로 부팅을 막았다.** 5컨테이너 구성은 소형 EC2 에서 OOM 으로 뜨지 못했다([[lesson-ec2-sizing-oom]]).
 - ML·스캘핑·Claude 분석은 수익 기여가 입증되지 않은 채 유지비만 발생했다. 이건 **미검증이지 반증이 아니다** — 재도입하려면 무엇을 어떤 순서로 증명해야 하는지는 [[lesson-llm-alpha-verification]] 에 있다.
+- **연구·백테 코드(2026-10-01, MVP 1단계 — 2026-09-30 결정).** 운영은 사용자 한 명이 `combined` 하나로 돈다(2026-07 이후 거래 기록 212건 전부). 연구 전략 10종, D1 백테 엔진·intrabar 청산 모델·M1 replay, 대시보드 백테 화면·API, 연구 테스트·fixture(31MB)·수집 스크립트, wiki 연구 리포트 19쪽은 운영에 닿지 않는 유지비였다 — 사용자 결정으로 지웠다. 같은 단계에서 등록 전략 중 `combined` 외 8종·무릎 전략의 청산 헬퍼 `ShoulderExit` 과 전략을 고르는 설정(`TRADING_STRATEGY`)도 지웠다([[swing-strategies]]). 연구 결론 중 운영에 남은 것은 트레일링 1.5/arm 0 하나다([[trading-engine-loop]]). 방법론 교훈은 남겼다([[lesson-bracket-needs-fill-semantics]] · [[lesson-llm-alpha-verification]]).
 
 ## 남은 흔적을 만나면
 
 - 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다. **KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다** — 사용자 결정(유지 비용 대비 필요 없음). `kis/` 패키지·`/api/stock|kis/*`·주식 화면·`users.kis_*`·`stock_order_intent`·`stock_position_state` 가 V27 에서 사라졌고 `bot_state.exchange` 컬럼만 남았다(값은 UPBIT 뿐). "KIS"·"stock" 서술은 과거다.
 - 소비자 없이 남은 저장 경로가 잔재로 남는다. `price_snapshots` 가 그랬고 V19 에서 제거됐다([[persistence-schema]]) — 경량화 직후가 아니라 한참 뒤에야 드러났다는 점이 교훈이다. 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
 - Redis 는 남아 있다 — `RateLimitFilter` 가 조건부로 쓴다.
+- "백테"·"fixture"·"M1 replay"·`query/` 리포트를 인용하는 서술은 2026-10-01 이전 것이다. 지운 코드·리포트는 저장소 이력에 있다(마지막으로 있던 커밋 `288ec49`).
 
 ## 되돌릴 때의 기준
 

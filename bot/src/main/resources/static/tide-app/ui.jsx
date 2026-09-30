@@ -23,7 +23,6 @@ const Icons = {
   dashboard: 'M3 13 L 12 4 L 21 13 M5 11 V 20 H 19 V 11',
   bot: ['M12 2 V 5','M5 8 H 19 V 18 H 5 Z','M9 13 H 9.01','M15 13 H 15.01','M9 17 H 15'],
   orders: ['M4 6 H 20','M4 12 H 20','M4 18 H 14'],
-  backtest: ['M3 3 H 21 V 21 H 3 Z','M3 9 H 21','M9 9 V 21'],
   bell: ['M6 8 A 6 6 0 0 1 18 8 V 13 L 20 16 H 4 L 6 13 Z','M10 19 A 2 2 0 0 0 14 19'],
   wallet: ['M3 7 H 19 V 19 H 3 Z','M3 7 V 5 A 2 2 0 0 1 5 3 H 17','M16 13 H 19'],
   settings: ['M12 8 A 4 4 0 1 0 12 16 A 4 4 0 1 0 12 8','M19 12 H 22','M2 12 H 5','M12 2 V 5','M12 19 V 22'],
@@ -94,7 +93,6 @@ function Sidebar({ active, onSelect, user, onLogout }) {
     { id: 'dashboard', label: '대시보드', icon: 'dashboard' },
     { id: 'bot', label: '봇 / 전략', icon: 'bot' },
     { id: 'orders', label: '주문·내역', icon: 'orders' },
-    { id: 'backtest', label: '백테스팅', icon: 'backtest' },
     { id: 'wallet', label: '지갑', icon: 'wallet' },
     { id: 'settings', label: '설정', icon: 'settings' },
   ];

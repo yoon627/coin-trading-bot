@@ -2,9 +2,9 @@
 title: 아키텍처 개관 — 단일 Spring Boot 프로세스 안의 Upbit 봇·API·시세수집
 category: concept
 created: 2026-07-28
-updated: 2026-09-30
+updated: 2026-10-01
 claim_state: current
-verified: 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
+verified: 2026-10-01 — common 행을 TradingStrategy + 운영 전략 combined 로(나머지 전략 삭제) · 2026-10-01 — engine/ 행에서 BacktestEngine 삭제(백테스트 코드 제거) · 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
 sources:
   - settings.gradle.kts
   - PROJECT_ANALYSIS.md
@@ -18,7 +18,7 @@ Gradle 멀티모듈이지만 배포 단위는 **JVM 프로세스 하나**다. `s
 | 모듈 | 역할 |
 |---|---|
 | `bot` | Spring Boot 애플리케이션 — Upbit 거래 봇 + REST API + SPA 정적 서빙 + in-process 시세 수집 (port 8080) |
-| `common` | 공용 도메인(`NormalizedTicker`/`NormalizedCandle`), 지표(`Indicators`), 스윙 전략 7종, `ExitGates` |
+| `common` | 공용 도메인(`NormalizedTicker`/`NormalizedCandle`), 지표(`Indicators`), `TradingStrategy` 와 운영 전략 `combined`, `ExitGates` |
 
 거래 경로는 **Upbit 하나**다. 국내주식 KIS 경로(`kis/` 패키지·별도 엔진·주문 WAL)는 2026-09-16 에 통째로 제거됐다([[rightsizing-history]]). 별도 collector 프로세스나 메시지 브로커도 없다 — 예전에 있었고 의도적으로 제거했다.
 
@@ -30,7 +30,7 @@ Gradle 멀티모듈이지만 배포 단위는 **JVM 프로세스 하나**다. `s
 | `auth/` | JWT 인증 (`AuthController`, `JwtProvider`, `SecurityConfig`) |
 | `client/` | `UpbitClient` — 주문·조회 REST |
 | `marketdata/` | WS ticker + REST 캔들 수집, `MarketDataStore` ([[marketdata-pipeline]]) |
-| `engine/` | `TradingEngine`, `PositionManager`, `TradeExecutionService`, `BacktestEngine` ([[trading-engine-loop]]) |
+| `engine/` | `TradingEngine`, `PositionManager`, `TradeExecutionService` ([[trading-engine-loop]]) |
 | `stream/` | `CandleAggregator`, `MarketDataPersistenceService`, `DataRetentionService` |
 | `persistence/` | R2DBC Entity/Repository ([[persistence-schema]]) |
 | `security/` | `SecretsCrypto`(AES-GCM), `UserSecretsService` — 사용자별 거래소 키 암호화 |

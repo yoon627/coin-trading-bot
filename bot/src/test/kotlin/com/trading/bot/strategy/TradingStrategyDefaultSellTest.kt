@@ -4,7 +4,7 @@ import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
-import com.trading.common.strategy.VolatilityBreakout
+import com.trading.common.strategy.TradingStrategy
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -12,12 +12,15 @@ import org.junit.jupiter.api.Test
 
 /**
  * TradingStrategy 의 공통 default 매도(shouldSell/shouldSellNormalized) 검증.
- * default 는 데드크로스(5/20) 이며 전략 종류와 무관 — VolatilityBreakout 를 대표 인스턴스로 사용.
+ * default 는 데드크로스(5/20) 이며 전략 종류와 무관 — shouldSell 을 override 하지 않은 익명 전략으로 본다.
  */
 class TradingStrategyDefaultSellTest {
 
     private val config = TradingProperties()
-    private val strategy = VolatilityBreakout()
+    private val strategy = object : TradingStrategy {
+        override val name = "default_sell_probe"
+        override suspend fun shouldBuy(candles: List<Candle>, currentPrice: Double, config: TradingProperties) = false
+    }
 
     private fun deadCrossCandles(): List<Candle> =
         listOf(Candle(tradePrice = 50.0)) + (1..20).map { i -> Candle(tradePrice = 200.0 - i * 2.0) }
