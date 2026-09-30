@@ -11,7 +11,6 @@ services:
       # TRADING_* 는 값 없이 이름만 적는다(#75) — .env 에 있으면 전달되고, 없으면 compose 가 변수를
       # 컨테이너에서 제거해 TradingProperties 기본값이 적용된다. 여기에 기본값을 쓰면 앱과 갈린다.
       - TRADING_TICKERS
-      - TRADING_STRATEGY
       - TRADING_AUTO_START
       - TRADING_TAKE_PROFIT_PCT
       - TRADING_MAX_LOSS_PCT

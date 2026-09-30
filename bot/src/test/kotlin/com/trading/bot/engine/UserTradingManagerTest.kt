@@ -69,7 +69,7 @@ class UserTradingManagerTest {
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
-    // 실제 앱처럼 등록 전략이 있어야 요청 전략 검증이 "combined" 를 알 수 없는 이름으로 거절하지 않는다.
+    // 요청 전략 검증과 전환 경로를 보려고 등록 전략을 두 개 둔다 — 없으면 검증이 "combined" 를 알 수 없는 이름으로 거절한다.
     private val registeredStrategies: List<TradingStrategy> = listOf("combined", "golden_cross").map { strategyName ->
         mockk<TradingStrategy> { every { name } returns strategyName }
     }
@@ -603,6 +603,20 @@ class UserTradingManagerTest {
         assertEquals(listOf("KRW-A"), status["entry_tickers"])
         assertEquals(listOf("KRW-ADA"), status["accumulate_tickers"])
         assertEquals(listOf("KRW-XRP"), status["exit_only_tickers"])
+    }
+
+    @Test
+    fun `getStatus without an engine names the strategy a start would use`() {
+        // 정지하면 엔진·전략 캐시가 지워진다. 그때 상태가 다른 이름을 보이면 화면이 그 이름으로 선택을 채우고,
+        // 그대로 시작하면 전략이 조용히 바뀐다 — 상태는 새 엔진이 고를 전략(등록 첫 전략)을 보고해야 한다.
+        val strategies = registeredStrategies.reversed()
+        val bare = UserTradingManager(
+            userRepository, botStateRepository, tradeExecutionService, discordNotifier,
+            strategies, TradingProperties(autoStart = true), upbitWebClient,
+            userSecretsService, marketDataStore, tradingStateService,
+        )
+
+        assertEquals(strategies.first().name, bare.getStatus(1L)["strategy"])
     }
 
     @Test

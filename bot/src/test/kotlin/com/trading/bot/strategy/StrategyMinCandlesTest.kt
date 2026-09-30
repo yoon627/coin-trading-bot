@@ -71,17 +71,7 @@ class StrategyMinCandlesTest {
      */
     @Test
     fun `declared minimums match the agreed contract`() {
-        val expected = mapOf(
-            "volatility_breakout" to 21,
-            "golden_cross" to 21,
-            "bollinger_bounce" to 21,
-            "mean_reversion" to 21,
-            "rsi_bounce" to 21,
-            "macd_cross" to 36,
-            "combined" to 21,
-            "knee_reversal" to 41,
-            "knee_pullback" to 41,
-        )
+        val expected = mapOf("combined" to 21)
 
         val actual = strategies().associate { it.name to it.minCandles }
 

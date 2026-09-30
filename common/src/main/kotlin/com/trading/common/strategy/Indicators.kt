@@ -48,18 +48,6 @@ object Indicators {
         return candles.take(period).map { it.close }.average()
     }
 
-    fun checkGoldenCross(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
-        if (candles.size < longPeriod + 1) return false
-        val shortMa = calculateMa(candles, shortPeriod)
-        val longMa = calculateMa(candles, longPeriod)
-        // Previous MAs (shift by 1)
-        val prevCandles = candles.drop(1)
-        val prevShortMa = calculateMa(prevCandles, shortPeriod)
-        val prevLongMa = calculateMa(prevCandles, longPeriod)
-
-        return shortMa > longMa && prevShortMa <= prevLongMa
-    }
-
     fun checkDeadCross(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {
         if (candles.size < longPeriod + 1) return false
         val shortMa = calculateMa(candles, shortPeriod)
@@ -69,18 +57,8 @@ object Indicators {
         val prevShortMa = calculateMa(prevCandles, shortPeriod)
         val prevLongMa = calculateMa(prevCandles, longPeriod)
 
-        // checkGoldenCross 의 거울: 단기 MA 가 장기 MA 를 하향 교차.
+        // 단기 MA 가 장기 MA 를 하향 교차 — 직전 봉에서 같거나 위였고(>=) 이번 봉에서 아래다.
         return shortMa < longMa && prevShortMa >= prevLongMa
-    }
-
-    fun lowestLow(candles: List<Ohlc>, period: Int): Double {
-        if (period <= 0 || candles.size < period) return 0.0
-        return candles.take(period).minOf { it.low }
-    }
-
-    fun highestHigh(candles: List<Ohlc>, period: Int): Double {
-        if (period <= 0 || candles.size < period) return 0.0
-        return candles.take(period).maxOf { it.high }
     }
 
     fun isMaUptrend(candles: List<Ohlc>, shortPeriod: Int = 5, longPeriod: Int = 20): Boolean {

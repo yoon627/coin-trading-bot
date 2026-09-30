@@ -162,7 +162,7 @@ EOF
 # 덮어써 두 값이 갈린다 — .env 에 실제로 설정된 키만 넘기고, 없으면 줄 자체를 쓰지 않는다.
 # 빈 문자열을 넘기는 것도 안 된다: Spring 이 "정의됨"으로 보고 Double 바인딩에서 기동에 실패한다.
 TRADING_OVERRIDE_KEYS=(
-    TRADING_TICKERS TRADING_STRATEGY TRADING_INVEST_RATIO TRADING_MAX_INVEST_AMOUNT
+    TRADING_TICKERS TRADING_INVEST_RATIO TRADING_MAX_INVEST_AMOUNT
     TRADING_AUTO_START TRADING_TAKE_PROFIT_PCT TRADING_MAX_LOSS_PCT TRADING_TRAILING_STOP_PCT
     TRADING_TRAILING_ARM_PCT TRADING_MAX_HOLD_DAYS TRADING_CHART_EXIT_ENABLED
     TRADING_ROUND_TRIP_FEE_RATE TRADING_K_VALUE TRADING_INTERVAL_SECONDS
@@ -185,7 +185,7 @@ append_trading_overrides() {
         value="${!key:-}"
         [[ -z "$value" ]] && continue
         # dotenv 는 quoting 규칙이 제각각이라 값을 그대로 쓴다 — 개행은 파일을 깨고 #·$·따옴표는
-        # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV·전략명뿐이므로 그 형태만 허용한다.
+        # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV 뿐이므로 그 형태만 허용한다.
         # 공백은 허용한다: TradingProperties.tickerList() 가 "KRW-BTC, KRW-ETH" 를 trim 해 받는다.
         if [[ ! "$value" =~ $TRADING_VALUE_PATTERN ]]; then
             echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , - 공백)." >&2

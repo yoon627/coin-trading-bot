@@ -9,7 +9,7 @@
 - [[architecture-overview]] — 단일 Spring Boot 프로세스 안의 봇·API·시세수집, 모듈 2개
 - [[trading-engine-loop]] — `processTicker` 게이트 순서, 청산 우선순위, 기본 리스크 파라미터, 응답을 못 받은 주문의 identifier 확정
 - [[exit-gates]] — 손절·트레일링·익절·차트청산·보유상한의 판정식과 비자명한 지점
-- [[swing-strategies]] — `TradingStrategy` 인터페이스와 전략 9종(무릎 매수 2종 포함), 기본 `combined` 의 3조건
+- [[swing-strategies]] — `TradingStrategy` 인터페이스와 유일한 운영 전략 `combined` 의 3조건, 기본 전략 규칙(첫 등록 bean)
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집(M1 `count=5` 오름차순 → 집계기 분 단위 멱등 base/provisional), `MarketDataStore`, 부팅 seed prime, half-open 워치독
 - [[accumulate-ladder]] — 메이저 코인 사다리 매매(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만)와 알트 유니버스 자동 선정 — 둘 다 기본 off, 롤백은 forward-off
 - [[persistence-schema]] — Flyway V1~V28, Upbit 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속, KIS 스키마 제거(V27), 주문 identifier(V28)
@@ -50,4 +50,4 @@
 
 ## source / query
 
-외부 원문을 ingest 하면 `source/`, 재사용 가치 있는 질의 결과는 `query/` 에 쌓인다. 둘 다 지금은 비어 있다 — `query/` 에 있던 연구·백테 리포트 18쪽은 2026-09-30 MVP 1단계에서 그 코드와 함께 지웠다([[rightsizing-history]], 원문은 git 이력).
+외부 원문을 ingest 하면 `source/`, 재사용 가치 있는 질의 결과는 `query/` 에 쌓인다. 둘 다 지금은 비어 있다 — `query/` 에 있던 연구·백테 리포트 18쪽은 2026-10-01 MVP 1단계에서 그 코드와 함께 지웠다([[rightsizing-history]], 원문은 git 이력).
