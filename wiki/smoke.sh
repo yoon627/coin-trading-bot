@@ -38,7 +38,7 @@ check() { # $1=질문  $2=페이지경로  $3=근거 정규식
 check "왜 collector 모듈이 없나"           "$P/decision/rightsizing-history.md"        "Kafka|메시지 버스"
 check "다음 migration 번호를 어떻게 정하나" "$P/decision/migration-numbering.md"       "ls-tree|origin/main"
 check "prod 에서 로그인이 안 되면"         "$P/decision/lesson-secure-cookie-http.md"  "Secure"
-check "백테를 라이브와 같다고 볼 수 있나"  "$P/concept/backtest-engine.md"             "우선순위가 다르|낙관|한계"
+check "운영 전략은 무엇인가"               "$P/concept/swing-strategies.md"            "combined"
 check "worktree 를 지울 때 주의할 점"      "$P/decision/worktree-workflow.md"          "gitignored|경고 없이"
 check "JDK 25 로 빌드가 깨지면"            "$P/entity/jdk-gradle-toolchain.md"         "JAVA_HOME"
 check "청산 조건 우선순위"                 "$P/concept/trading-engine-loop.md"         "STOP_LOSS.*TRAILING"

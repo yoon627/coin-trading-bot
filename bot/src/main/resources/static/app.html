@@ -27,7 +27,7 @@ function App() {
   const [user, setUser] = React.useState(null);
   const [active, setActive] = React.useState(() => {
     const h = location.hash.replace('#', '');
-    return ['dashboard','bot','orders','backtest','wallet','settings'].includes(h) ? h : 'dashboard';
+    return ['dashboard','bot','orders','wallet','settings'].includes(h) ? h : 'dashboard';
   });
   const [authChecked, setAuthChecked] = React.useState(false);
 
@@ -54,7 +54,6 @@ function App() {
     case 'dashboard': return <Dashboard {...props}/>;
     case 'bot':       return <BotPage {...props}/>;
     case 'orders':    return <OrdersPage {...props}/>;
-    case 'backtest':  return <BacktestPage {...props}/>;
     case 'wallet':    return <WalletPage {...props}/>;
     case 'settings':  return <SettingsPage {...props}/>;
     default:          return <Dashboard {...props}/>;

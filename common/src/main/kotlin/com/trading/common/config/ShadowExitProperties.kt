@@ -5,12 +5,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 /**
  * 후보 청산 파라미터의 **그림자 관측**. 기본 off — 켜도 라이브 매매는 바뀌지 않는다(계산·기록 전용).
  *
- * 목적은 수익 판정이 아니라 **모델 검증**이다: 백테가 트레일링 체결가로 쓰는 임계선
- * `peak × (1 − trailingStopPct/100)` 이 실제 10초 tick 에서 얼마나 낙관인지를 실물로 잰다.
- * 수익 우위 판정은 현재 거래 빈도로 약 4.7년이 걸리므로 이 관측의 목적이 아니다
- * (wiki `query/trailing-arm-finding-2026-09`).
+ * 목적은 수익 판정이 아니라 **모델 검증**이다: 트레일링 체결가를 임계선 `peak × (1 − trailingStopPct/100)` 으로
+ * 잡는 모델이 실제 10초 tick 에서 얼마나 낙관인지를 실물로 잰다.
+ * 수익 우위 판정은 현재 거래 빈도로 약 4.7년이 걸리므로 이 관측의 목적이 아니다.
  *
- * 기본값은 그 페이지가 사전고정으로 통과시킨 변형 A 다.
+ * 기본값(트레일링 1.5·arm 0)은 사전고정한 후보(변형 A)다.
  */
 @ConfigurationProperties(prefix = "trading.shadow-exit")
 data class ShadowExitProperties(

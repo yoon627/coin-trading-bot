@@ -27,8 +27,7 @@ data class LadderParams(
 }
 
 /**
- * 사다리 판정 입력. 라이브는 `TradingState` 에서, 백테는 시뮬레이션 상태에서 매핑한다 — 이 타입이
- * `common` 에 있어야 두 쪽이 같은 판정식을 쓴다(`ExitGates` 와 같은 이유).
+ * 사다리 판정 입력. 라이브는 `TradingState` 에서 매핑한다(`LadderStateMapper`).
  *
  * @param lastActionPrice 마지막 매수/매도의 **트리거가**(체결가가 아니다 — 거래소는 누적 평단만 준다).
  * @param flatPeak 무포지션 구간에서 관측한 최고가. 0 = 아직 관측 없음.
@@ -88,11 +87,8 @@ object AccumulateLadder {
         }
     }
 
-    /**
-     * 이 가격 이하에서 매수가 트리거된다(예산·단 수 게이트는 [decide] 가 본다). null = 매수 기준 없음.
-     * 백테가 봉의 low 와 비교해 "봉 안에서 닿았는가"를 판정하는 데 쓴다 — 임계식을 밖에서 다시 적지 않기 위해 노출.
-     */
-    fun buyTriggerPrice(input: LadderInput, params: LadderParams): Double? {
+    /** 이 가격 이하에서 매수가 트리거된다(예산·단 수 게이트는 [decide] 가 본다). null = 매수 기준 없음. */
+    private fun buyTriggerPrice(input: LadderInput, params: LadderParams): Double? {
         val reference = if (input.rungsFilled > 0) input.lastActionPrice else input.flatPeak
         if (reference <= 0.0) return null
         return reference * (1 - params.stepDownPct / 100.0)

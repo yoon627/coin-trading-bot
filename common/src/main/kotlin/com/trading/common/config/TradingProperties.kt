@@ -12,9 +12,9 @@ data class TradingProperties(
     val takeProfitPct: Double = 5.0,
     val maxLossPct: Double = 5.0,
     // ⚠️ 운영은 2026-09-06 부터 **1.5**(arm 0)로 돈다 — env 오버라이드가 소유한다
-    // (`TRADING_TRAILING_STOP_PCT`/`_ARM_PCT`, wiki `query/trailing-arm-finding-2026-09`).
-    // 여기 기본값을 옮기지 않은 이유: `BacktestConfig` 기본값·`default-golden.txt` 핀·기본 생성자를 쓰는
-    // 테스트 76곳이 이 값을 전제한다. 승격은 env 로 하고, 코드 기본값 이전은 골든 재생성을 동반한 별도 작업이다.
+    // (`TRADING_TRAILING_STOP_PCT`/`_ARM_PCT`, wiki `trading-engine-loop`). 코드 기본값과 달라서
+    // `ExitParamsDeclarationCheck` 가 기동 때 선언 누락을 알린다. 기본 생성자를 쓰는 테스트가 이 값을 전제하므로
+    // 기본값 이전은 그 기대를 함께 바꾸는 별도 작업이다.
     val trailingStopPct: Double = 2.0,
     // 트레일링 arm 임계(%): 고점 수익률이 이 값에 도달한 뒤에만 트레일링 평가. 0 이면 수익 중 즉시.
     // takeProfitPct 가 이 값·trailingStopPct 보다 커야 트레일링이 실효한다 — 그렇지 않으면 익절이
@@ -27,7 +27,7 @@ data class TradingProperties(
     val roundTripFeeRate: Double = 0.001,
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
-    // 차트/지표 기반 청산(shouldSell) 활성화. 기본 off — 켜기 전 백테스트 검증 권장.
+    // 차트/지표 기반 청산(shouldSell) 활성화. 기본 off.
     val chartExitEnabled: Boolean = false,
     // #19: reconcilePendingBuy 의 getOrder·잔고조회가 연속으로 이 횟수만큼 실패하면 해당 ticker 를 halt.
     // interval-seconds(기본 10s) 기준 20회 ≈ 200초 이상 지속 장애 시 무한 재시도를 멈춘다.

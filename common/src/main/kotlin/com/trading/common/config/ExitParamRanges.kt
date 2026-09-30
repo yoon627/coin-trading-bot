@@ -15,8 +15,7 @@ import kotlin.reflect.KProperty1
  *   `ExitParamsPreflightScriptTest` 가 두 표를 대조한다.
  *
  * 한 필드의 구간만 둔다. 필드 사이 관계(익절이 트레일링보다 커야 트레일링이 산다 등)는 `TradingEngine` 이 WARN 으로 본다.
- * 익절·arm 의 상한 100 은 백테스트 API 가 보내지 않은 청산값을 라이브값으로 채우며 [0, 100] 을 요구해서다 —
- * 넘으면 대시보드 백테가 400 이 된다.
+ * 익절·arm 의 상한 100 은 판정식상 필요 조건이 아니다 — 완화 여부는 #288(preflight 사본·대조 테스트와 함께 바꾼다).
  */
 object ExitParamRanges {
 
@@ -66,7 +65,7 @@ object ExitParamRanges {
 
     val SHADOW: List<Entry<ShadowExitProperties>> = listOf(
         Entry("trading.shadow-exit", ShadowExitProperties::trailingStopPct, TRAILING_STOP),
-        // 라이브 arm 의 상한은 백테 폴백 때문이라 그림자에는 두지 않는다 — 두면 새 기동 차단 조건이 된다.
+        // 라이브 arm 의 상한 100 은 판정식 근거가 없어(#288) 그림자에는 두지 않는다 — 두면 새 기동 차단 조건이 된다.
         Entry("trading.shadow-exit", ShadowExitProperties::trailingArmPct, Range(0.0, true, null, false)),
     )
 

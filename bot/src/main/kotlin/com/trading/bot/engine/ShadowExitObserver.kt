@@ -18,10 +18,10 @@ import org.slf4j.LoggerFactory
  * 두 청산을 짝지어 볼 수 있고, [[strategy-evolution-expectations]] 가 폐기한 "별도 티커 실돈 파일럿" 의
  * 결함(다른 마켓에 배정하면 성과가 마켓 효과가 된다)이 구조적으로 발생하지 않는다.
  *
- * 무엇을 재는가: **모델 과대추정폭** 하나다. 백테는 트레일링 체결가를 `peak × (1 − trail/100)` 이라는
- * 임계선으로 잡는데, 실제로 그 게이트를 발동시키는 tick 가격은 그 이하다. 그 차이가 이 스레드가
- * 무너뜨린 청산 모델의 잔여 오차이며, 승격 전에 실물로 확인해야 하는 유일한 양이다.
- * **수익 우위 판정용이 아니다** — 그건 현재 거래 빈도로 약 4.7년이 걸린다(`TrailingShadowPowerTest`).
+ * 무엇을 재는가: **모델 과대추정폭** 하나다. 모델은 트레일링 체결가를 `peak × (1 − trail/100)` 이라는
+ * 임계선으로 잡는데, 실제로 그 게이트를 발동시키는 tick 가격은 그 이하다. 그 차이가 청산 모델의
+ * 잔여 오차이며, 승격 전에 실물로 확인해야 하는 유일한 양이다.
+ * **수익 우위 판정용이 아니다** — 그건 현재 거래 빈도로 약 4.7년이 걸린다.
  *
  * 안전: [ExitGates.isTrailingStopTriggered] 는 순수 함수이고 peak 갱신은 라이브가 이미 한다(설정 무관).
  * 이 클래스는 라이브 판정 **뒤에** 불리며 모든 예외를 삼킨다 — 관측이 매매를 막으면 안 된다.
@@ -111,6 +111,6 @@ class ShadowExitObserver(
         fired.remove(ticker)
     }
 
-    /** 백테가 체결됐다고 보는 가격. `IntrabarExitModel` 의 `trailStopPrice` 와 같은 식이다. */
+    /** 모델이 체결됐다고 보는 가격 — 트레일링 임계선. */
     private fun modeledPrice(peak: Double) = peak * (1 - trailingStopPct / 100.0)
 }

@@ -56,10 +56,9 @@ const TideAPI = {
   // 매수→매도 짝. 응답은 { total, limit, truncated, round_trips } 이고 각 항목 필드는 SNAKE_CASE.
   roundTrips: () => TideAPI._fetch('/api/trades/roundtrips'),
 
-  // Strategy + backtest
+  // Strategy
   strategies: () => TideAPI._fetch('/api/strategies'),
   performance: () => TideAPI._fetch('/api/strategies/performance'),
-  backtest: (req) => TideAPI._fetch('/api/strategies/backtest', { method: 'POST', body: JSON.stringify(req) }),
 
   // Settings
   // Same SNAKE_CASE concern as register — UpbitKeysRequest.accessKey on the

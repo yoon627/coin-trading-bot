@@ -59,7 +59,7 @@ coin-trading-bot/
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
-│       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager(+UnknownOrderResolver·BalanceInterpretation), BacktestEngine
+│       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager(+UnknownOrderResolver·BalanceInterpretation)
 │       ├── stream/                  # CandleAggregator, MarketDataPersistenceService, DataRetentionService
 │       ├── config/                  # AppConfig, StrategyConfig, RedisConfig, RateLimitFilter 등
 │       ├── persistence/             # R2DBC Entity/Repository
@@ -73,7 +73,7 @@ coin-trading-bot/
 └── perf/                            # k6 부하 테스트
 ```
 
-> 스윙 전략 9개(`VolatilityBreakout`, `RsiBounce`, `GoldenCross`, `MacdCross`, `BollingerBounce`, `MeanReversion`, `CombinedStrategy`, `KneeReversal`, `KneePullback`)와 `TradingStrategy` 인터페이스는 `:common`에 거주하며 백테스트에도 그대로 재사용된다.
+> 스윙 전략 9개(`VolatilityBreakout`, `RsiBounce`, `GoldenCross`, `MacdCross`, `BollingerBounce`, `MeanReversion`, `CombinedStrategy`, `KneeReversal`, `KneePullback`)와 `TradingStrategy` 인터페이스는 `:common`에 거주한다.
 
 ---
 
@@ -108,9 +108,9 @@ coin-trading-bot/
 기본 데드크로스 대신 "어깨"에서 조기 이탈하는 것이 목적이다. 단 차트 청산은 `chartExitEnabled` 가 켜져
 있을 때만 평가되고 `maxHoldDays=1`이면 보유가 1거래일로 잘리므로, 스윙 의도로 쓰려면 두 값을 함께 조정해야 한다.
 
-**리스크 관리:** 익절 +5% / 손절 -5% / 트레일링 스탑 고점 대비 -2%(고점 +3% 도달 후) / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋. 50일 MA 아래 매수 차단은 **백테스트 전용**(`useMarketFilter` opt-in, 기본 off)이며 라이브 봇 매수 경로에는 적용되지 않는다.
+**리스크 관리:** 익절 +5% / 손절 -5% / 트레일링 스탑 고점 대비 -2%(고점 +3% 도달 후) / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋.
 
-**적립 프로파일 (`trading.accumulate.*`, 기본 off):** 티커별로 스윙 대신 사다리 매매를 택할 수 있다. `TradingEngine.processTicker` 는 공용 preamble(가격·동기화·pending reconcile) 뒤 `SWING`/`ACCUMULATE` 로 갈리고, 적립 경로는 `common` 의 `AccumulateLadder`(순수 판정: 눌림 진입·단계 매수·단계 매도·예산 상한)를 호출해 `PositionManager.buyRung`/`sellVolume` 로 체결한다. 손절·익절·트레일링·보유상한은 적용되지 않는다. 사다리 장부(`rungs_filled`·`last_action_price`·`flat_peak`)는 `trading_states`(V23)에 두고 잔고·평단은 종전대로 거래소에서 복원하며, 두 소스가 갈라지면(부분체결·수동 매매) `LadderStateMapper` 가 매 tick 정합을 맞춘다(정합 상태에서는 no-op). 같은 판정식을 `AccumulateBacktest`(별도 D1 시뮬레이터)가 공유한다.
+**적립 프로파일 (`trading.accumulate.*`, 기본 off):** 티커별로 스윙 대신 사다리 매매를 택할 수 있다. `TradingEngine.processTicker` 는 공용 preamble(가격·동기화·pending reconcile) 뒤 `SWING`/`ACCUMULATE` 로 갈리고, 적립 경로는 `common` 의 `AccumulateLadder`(순수 판정: 눌림 진입·단계 매수·단계 매도·예산 상한)를 호출해 `PositionManager.buyRung`/`sellVolume` 로 체결한다. 손절·익절·트레일링·보유상한은 적용되지 않는다. 사다리 장부(`rungs_filled`·`last_action_price`·`flat_peak`)는 `trading_states`(V23)에 두고 잔고·평단은 종전대로 거래소에서 복원하며, 두 소스가 갈라지면(부분체결·수동 매매) `LadderStateMapper` 가 매 tick 정합을 맞춘다(정합 상태에서는 no-op).
 
 **알트 유니버스 자동 선정 (`trading.universe.*`, 기본 off):** `UniverseSelector`(싱글톤, 공개 REST) 가 24h 거래대금 상위를 고르고 `TradingEngine.applyTickers` 가 활성 집합을 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 는 파생값을 되쓰지 않는다.
 
@@ -214,7 +214,7 @@ bot_configs
 | 사용자 | TradingController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
 | 차트 | ChartController | `/api/chart/{candles,indicators,tickers,compare}` |
-| 전략 | StrategyController | `/api/strategies/{,performance,backtest}` |
+| 전략 | StrategyController | `/api/strategies/{,performance}` |
 | 가격(SSE) | PriceStreamController | `/api/prices/{stream,latest,status}` |
 | 관심종목 | WatchlistController | `/api/watchlist` |
 
@@ -252,4 +252,3 @@ bot_configs
 5. **멀티 타임프레임** — 캔들을 자동 집계하여 모든 타임프레임 지원
 6. **저장 시 암호화** — AES-GCM으로 DB 내 Upbit API 키 보호
 7. **사용자별 엔진** — 사용자별 독립 엔진 + API 키 + 종목/전략 설정 (가입은 계정이 없을 때 첫 계정만 받아 실제 사용자는 한 명)
-8. **리서치-라이브 공유** — 스윙 전략 9개를 `:common`에 두어 라이브/백테스트 양쪽에서 재사용
