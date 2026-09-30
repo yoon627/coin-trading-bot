@@ -196,38 +196,6 @@ append_trading_overrides() {
     return 0
 }
 
-# 청산 파라미터가 렌더된 .env 에 선언돼 있는지 본다 (#179).
-# 앱은 이 키가 없으면 코드 기본값으로 **조용히** 거래한다 — 운영값(트레일링 1.5/0)과 다를 수 있다.
-# 앱을 죽이는 대신 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 손절·트레일링이 아예 평가되지
-# 않는 공백이 생기고, 자동 롤백은 이미지만 되돌려 결손 .env 로 거래를 재개시킨다.
-# 여기서 멈추면 결손 설정이 서버에 닿지도 않는다. 자동매매를 켜지 않는 인스턴스는 검사하지 않는다.
-EXIT_PARAM_KEYS=(
-    TRADING_TAKE_PROFIT_PCT
-    TRADING_MAX_LOSS_PCT
-    TRADING_TRAILING_STOP_PCT
-    TRADING_TRAILING_ARM_PCT
-    TRADING_MAX_HOLD_DAYS
-    TRADING_CHART_EXIT_ENABLED
-)
-
-preflight_exit_params() {
-    local env_file="$1" key missing=()
-    grep -qE '^TRADING_AUTO_START=(true|TRUE|1)$' "$env_file" || {
-        log "자동매매 off — 청산 파라미터 선언 검사 생략"
-        return 0
-    }
-    for key in "${EXIT_PARAM_KEYS[@]}"; do
-        grep -qE "^${key}=." "$env_file" || missing+=("$key")
-    done
-    if (( ${#missing[@]} > 0 )); then
-        echo "ERROR: 자동매매(TRADING_AUTO_START=true) 배포인데 청산 파라미터가 선언되지 않았습니다: ${missing[*]}" >&2
-        echo "       코드 기본값으로 조용히 거래하지 않도록 배포를 중단합니다." >&2
-        echo "       VULTR_DEPLOY_ENV 시크릿(또는 deploy/vultr/.env)에 해당 키를 넣고 다시 실행하세요." >&2
-        exit 1
-    fi
-    log "청산 파라미터 ${#EXIT_PARAM_KEYS[@]}개 선언 확인"
-}
-
 # ── SSH 키 ──
 ensure_ssh_key() {
     if [[ ! -f "$KEY_PEM" && -f "$KEY_PUB" ]]; then
@@ -546,7 +514,9 @@ do_deploy() {
     local tmp_env; tmp_env="$(mktemp)"
     trap "rm -f '$tmp_env'" EXIT
     render_server_env "$tmp_env"
-    preflight_exit_params "$tmp_env"   # 업로드 전에 검사한다 — 결손 .env 가 서버에 닿으면 롤백도 그걸 되돌리지 않는다
+    # 청산·주문 파라미터의 값(형식·구간)과 자동매매 배포의 선언을 업로드 전에 검사한다(#179, #230) —
+    # 잘못된 .env 가 서버에 닿으면 롤백도 그걸 되돌리지 않는다. 실행 비트에 기대지 않도록 bash 로 부른다.
+    bash "$SCRIPT_DIR/preflight_exit_params.sh" "$tmp_env"
     ssh_inst 'mkdir -p /opt/app'
     local scp_opts=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM")
     scp "${scp_opts[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
