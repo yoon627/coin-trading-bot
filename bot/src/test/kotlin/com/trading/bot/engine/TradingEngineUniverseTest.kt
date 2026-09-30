@@ -24,6 +24,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -247,6 +248,66 @@ class TradingEngineUniverseTest {
         engine.stop()
 
         assertTrue("KRW-M" in engine.getActiveTickers())
+    }
+
+    @Test
+    fun `a dormant ticker the selection already seeded keeps its live state when the account lookup recovers`() = runBlocking {
+        // 조회가 실패하는 동안 선정이 dormant 티커를 DB 행으로 시딩해 돌린다. 회복 뒤 기동 시점 사본으로 바꾸면 그 사이에 낸
+        // 주문의 pending 이 메모리와 DB 에서 함께 사라진다(#260).
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-M")
+        val dormant = TradingState("KRW-M")
+        val live = TradingState("KRW-M")
+        var seeded = false
+        coEvery { positionManager.loadState("KRW-M") } coAnswers { seeded = true; live }
+        val recovered = CompletableDeferred<Unit>()
+        coEvery { positionManager.heldCurrencies() } coAnswers {
+            if (!seeded) throw RuntimeException("accounts down")
+            // 시딩 뒤 도는 state 가 낸 주문 — dormant 행에는 pending 이 없다(있으면 흔적으로 활성에 실린다).
+            live.pendingSellIdentifier = "ctb-live"
+            recovered.complete(Unit)
+            setOf("M", "N")
+        }
+        coEvery { positionManager.syncPosition(any(), any()) } coAnswers { secondArg<TradingState>().position = true }
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 1), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-M" to dormant, "KRW-N" to TradingState("KRW-N")))
+        withTimeout(5_000) { recovered.await() }
+        engine.stop()
+
+        assertSame(live, engine.getStates()["KRW-M"])
+        assertEquals("ctb-live", engine.getStates().getValue("KRW-M").pendingSellIdentifier)
+        coVerify(exactly = 0) { positionManager.persistState(match { it === dormant }) }
+        // 선정되지 않은 보유 dormant 는 그대로 되살아난다.
+        assertTrue("KRW-N" in engine.getActiveTickers())
+    }
+
+    @Test
+    fun `a held dormant ticker seeded by a selection that stopped midway joins the active set once the lookup recovers`() = runBlocking {
+        // 선정 반영은 티커마다 시딩한 뒤 마지막에 활성 집합을 바꾼다 — 뒤 티커의 로드가 실패하면 시딩한 보유 티커가 활성 밖에 남아
+        // 다음 09:00 갱신까지 청산 평가를 못 받는다. 되살리기가 그 state 를 두고 활성에 붙인다.
+        val source = mockk<UniverseSource>()
+        coEvery { source.select(any(), any()) } returns listOf("KRW-M", "KRW-Y")
+        val live = TradingState("KRW-M")
+        var seeded = false
+        coEvery { positionManager.loadState("KRW-M") } coAnswers { seeded = true; live }
+        coEvery { positionManager.loadState("KRW-Y") } throws RuntimeException("db read failed")
+        val recovered = CompletableDeferred<Unit>()
+        coEvery { positionManager.heldCurrencies() } coAnswers {
+            if (!seeded) throw RuntimeException("accounts down")
+            recovered.complete(Unit)
+            setOf("M")
+        }
+        coEvery { positionManager.syncPosition(any(), any()) } coAnswers { secondArg<TradingState>().position = true }
+        val engine = createEngine(universe = UniverseProperties(auto = true, altCount = 2), source = source)
+
+        engine.start(listOf("KRW-ETH"), mapOf("KRW-M" to TradingState("KRW-M")))
+        withTimeout(5_000) { recovered.await() }
+        engine.stop()
+
+        assertTrue("KRW-M" in engine.getActiveTickers())
+        // 여기서는 dormant 사본과 시딩한 state 가 구조적으로 같다 — 동등 비교로는 사본으로 바뀐 것을 가려내지 못한다.
+        assertSame(live, engine.getStates()["KRW-M"])
     }
 
     @Test

@@ -353,7 +353,7 @@ class TradingEngine(
     /**
      * auto 재시작에서 진입 흔적이 없어 싣지 않은 durable 행 중 거래소에 실제 잔고가 있는 것을 활성에 되살린다.
      * 외부·수동 보유를 syncPosition 으로 편입한 포지션은 entryStrategy·buyDate 가 없어 흔적 필터에 걸리지 않는데,
-     * 빠뜨리면 청산 평가를 영영 못 받는다. 계좌 조회 1회로 판정하며, 실패하면 살리지 않고 다음 기동에 맡긴다.
+     * 빠뜨리면 청산 평가를 영영 못 받는다. 계좌 조회 1회로 판정하며, 실패하면 dormant 로 남겨 다음 루프·유니버스 갱신 때 다시 조회한다.
      */
     private suspend fun reviveHeldDormantStates() {
         val dormant = dormantStates
@@ -370,14 +370,23 @@ class TradingEngine(
         dormantStates = emptyMap()
         val revived = dormant.filterKeys { it.substringAfter("-") in held }
         if (revived.isEmpty()) return
+        val kept = mutableListOf<String>()
         revived.forEach { (ticker, state) ->
-            states[ticker] = state
+            // 조회가 실패하는 동안 선정이 같은 티커를 DB 행으로 시딩했으면 그 state 를 둔다 — 기동 시점 사본으로 바꾸면 그 사이 주문의
+            // pending 이 메모리와 DB 에서 함께 사라진다(#260, restartSnapshot 과 같은 "states 우선"). 활성 편입은 아래에서 그대로 한다 —
+            // 선정 반영이 뒤 티커의 로드 실패로 멈췄으면 시딩한 state 가 활성 밖에 남아 있다.
+            if (states.putIfAbsent(ticker, state) != null) {
+                kept += ticker
+                return@forEach
+            }
             // 잔고를 바로 채워야 뒤따르는 유니버스 갱신의 보호 집합(position)에 든다 — 시딩 루프는 이미 지났을 수 있다.
             positionManager.syncPosition(ticker, state)
             if (state.position || state.unsynced) positionManager.persistState(state)
         }
         activeTickers = (activeTickers + revived.keys).distinct()
-        log.info("Revived held tickers without entry metadata for user {}: {}", userId, revived.keys)
+        val inserted = revived.keys - kept.toSet()
+        if (inserted.isNotEmpty()) log.info("Revived held tickers without entry metadata for user {}: {}", userId, inserted)
+        if (kept.isNotEmpty()) log.info("Kept the live state the universe selection seeded for dormant tickers of user {}: {}", userId, kept)
     }
 
     /**
