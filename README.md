@@ -266,7 +266,7 @@ coin-trading-bot/
 | `TRADING_UNIVERSE_ALT_COUNT` | `8` | 자동 선정 종목 수(1~16) |
 | `WATCHLIST_TICKERS` | 주요 KRW 종목 | 관심 목록 종목 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
-| `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화 |
+| `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |
 | `REDIS_ENABLED` | dev `false`, prod Compose `true` | Redis 캐시 활성화 |
 | `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
