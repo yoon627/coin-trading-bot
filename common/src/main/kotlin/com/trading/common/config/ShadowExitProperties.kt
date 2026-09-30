@@ -19,12 +19,11 @@ data class ShadowExitProperties(
     val trailingArmPct: Double = 0.0,
 ) {
     init {
-        // 라이브 게이트와 같은 범위 계약. 0 이하면 트레일링이 즉시 발동하거나 영영 안 한다.
-        require(trailingStopPct > 0 && trailingStopPct < 100) {
-            "trading.shadow-exit.trailing-stop-pct must be in (0, 100), got $trailingStopPct"
-        }
-        require(trailingArmPct >= 0) {
-            "trading.shadow-exit.trailing-arm-pct must be >= 0, got $trailingArmPct"
+        // 구간은 ExitParamRanges 가 정한다. 라이브는 구간 밖이어도 알림만 내지만 그림자는 관측 전용이라 기동을 막는다 —
+        // 배포 preflight 가 같은 표로 먼저 거르므로 여기 걸리는 건 서버 .env 를 손으로 고친 경우다.
+        ExitParamRanges.SHADOW.forEach { entry ->
+            val violation = entry.violation(this)
+            require(violation == null) { "$violation" }
         }
     }
 }

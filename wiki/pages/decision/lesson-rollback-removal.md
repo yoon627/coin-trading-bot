@@ -4,7 +4,7 @@ category: decision
 created: 2026-08-26
 updated: 2026-08-26
 claim_state: current
-verified: 2026-08-26 — V23 브랜치를 실제로 만들었다가 pre-push codex P1 지적으로 폐기한 건. 운영 실측(SELL 32건 미귀속 0, 백업 30행 전부 NULL)과 `deploy/vultr/deploy.sh`·`backup.sh` 원문으로 확인
+verified: 2026-09-30 — `deploy.sh` 가 `backup.sh` 를 업로드할 뿐이라는 서술을 원문으로 재확인(#230 은 preflight 를 별도 스크립트로 옮겼을 뿐) · 2026-08-26 — V23 브랜치를 실제로 만들었다가 pre-push codex P1 지적으로 폐기한 건. 운영 실측(SELL 32건 미귀속 0, 백업 30행 전부 NULL)과 `deploy/vultr/deploy.sh`·`backup.sh` 원문으로 확인
 sources:
   - bot/src/main/resources/db/migration/V21__backfill_sell_strategy_and_pnl_amount.sql
   - deploy/vultr/deploy.sh
