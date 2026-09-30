@@ -276,8 +276,8 @@ class TradingEngine(
 
     /**
      * 루프가 기록하지 못한 pending([TradingState.pendingPersistFailed])과 고점([TradingState.peakPersistFailed], #54)을 한 번 더
-     * 기록한다. 재기록은 다음 tick 몫이라 멈춘 엔진에서는 일어나지 않고, 이 엔진의 states 를 버리거나 DB 값으로 덮는 쪽은 그
-     * 주문을 모르고 뒤처진 고점으로 트레일링한다. stop 이 루프를 join 한 뒤에 부른다.
+     * 기록한다. 재기록은 다음 tick 몫이라 멈춘 엔진에서는 일어나지 않고, 이 엔진의 states 를 버리면 DB 에서 시작하는 다음 엔진은
+     * 그 주문을 모르고 뒤처진 고점으로 트레일링한다. stop 이 루프를 join 한 뒤에 부른다.
      */
     internal suspend fun flushUnpersisted() {
         // pending 을 모두 먼저 — 고점 쓰기가 호출자의 시간 상한을 먹어 매도 기록이 밀리면 안 된다.
