@@ -444,10 +444,33 @@ class UserTradingManager(
         return UpbitClientImpl(upbitWebClient, authProvider)
     }
 
-    suspend fun reloadUserRuntime(userId: Long) = lockFor(userId).withLock {
-        if (shuttingDown) return@withLock // 종료 중 — 엔진 교체·재기동 안 함(M5 일관)
-        val existing = engines[userId] ?: return@withLock
-        val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock
+    /** 키·웹훅 저장 뒤 엔진을 저장된 설정으로 바꾼다. 끊긴 요청에는 503 이 가지 않으므로, 교체 전에 끊겨 이전 설정 엔진이 돌 수 있으면 여기서 알린다. */
+    suspend fun reloadUserRuntime(userId: Long) {
+        var locked = false
+        try {
+            lockFor(userId).withLock {
+                locked = true
+                reloadLocked(userId)
+            }
+        } catch (e: CancellationException) {
+            // catch 가 withLock 밖에 있어야 lock 대기의 취소를 받는다. 그때는 lock 을 쥔 요청(저장 전에 사용자를 읽은 시작·복원·reload)이
+            // 뒤이어 이전 설정으로 엔진을 기동할 수 있어 지금 도는 엔진이 없어도 알린다. lock 을 쥔 뒤의 취소는 교체 전이다(교체에는 중단
+            // 지점이 없다) — 도는 엔진이 남았을 때만 알리고, 정지 엔진이면 다음 시작·복원이 저장된 설정으로 새 엔진을 만든다. lock 을 놓은
+            // 뒤 판단해 그 사이 다른 요청이 새 설정으로 바꿨을 수도 있으므로 가능성으로 알린다(다시 저장은 무해하다).
+            if (!locked || engines[userId]?.isRunning() == true) {
+                log.error(
+                    "reload: user {} 요청이 끊겨 저장된 새 설정(자격증명·웹훅)이 반영되지 않았을 수 있다 — 봇이 이전 설정으로 돌 수 있으니 다시 저장해야 한다",
+                    userId,
+                )
+            }
+            throw e
+        }
+    }
+
+    private suspend fun reloadLocked(userId: Long) {
+        if (shuttingDown) return // 종료 중 — 엔진 교체·재기동 안 함(M5 일관)
+        val existing = engines[userId] ?: return
+        val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val wasRunning = existing.isRunning()
         // 사용자 목록 그대로 — 활성 집합(적립·잔류·auto 선정 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
@@ -458,7 +481,7 @@ class UserTradingManager(
         // 꼬리와 되살린 루프가 겹친다. 도는 엔진이었으면 취소는 아래 첫 취소 확인(기록의 시간 상한)에서 드러나 복귀 경로를 탄다.
         withContext(NonCancellable) { existing.stop() }
         // 종료가 이 엔진을 멈추고 기록한다 — 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
-        if (shuttingDown) return@withLock
+        if (shuttingDown) return
         // stop 이후에 읽어야 마지막 tick 의 기록까지 잡힌다 — 먼저 읽으면 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending
         // 이 된다(#20). tick 안에서 기록하지 못한 매도는 flush 가 한 번 더 남기고, 그래도 못 남기면 새 엔진은 DB 에 없는 그
         // 주문을 모르므로 교체하지 않고 아래 복귀 경로를 탄다 — 옛 엔진이 메모리의 그 주문을 다음 tick 에 다시 기록한다.
@@ -470,17 +493,10 @@ class UserTradingManager(
             } catch (e: CancellationException) {
                 // 취소여도 stop() 은 이미 일어났다 — 복구를 건너뛰면 정지된 엔진이 남아 손절이
                 // 무기한 멈추고, 이후 reload 는 wasRunning=false 로 보아 되살리지도 않는다.
-                // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다.
+                // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다(미반영은 [reloadUserRuntime] 이 알린다).
                 withContext(NonCancellable) {
                     // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
                     runCatching { existing.resume() }
-                        // 응답을 받지 못한 사용자는 새 설정이 반영된 줄 안다(#51 의 503 이 전달되지 않는다).
-                        .onSuccess {
-                            log.error(
-                                "reload: user {} 요청이 끊겨 이전 설정(자격증명·웹훅)의 엔진으로 복귀했다 — 저장된 새 설정은 반영되지 않았으니 다시 저장해야 한다",
-                                userId,
-                            )
-                        }
                         .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
                 }
                 throw e

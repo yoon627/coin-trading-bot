@@ -38,7 +38,9 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -220,12 +222,16 @@ class UserTradingManagerTest {
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled")
 
-        assertThrows(CancellationException::class.java) {
-            runBlocking { manager.reloadUserRuntime(1L) }
+        val errors = errorsDuring {
+            assertThrows(CancellationException::class.java) {
+                runBlocking { manager.reloadUserRuntime(1L) }
+            }
         }
 
         verify(exactly = 1) { mockEngine.resume() } // 복구는 수행
         assertSame(mockEngine, engines()[1L], "취소 시 엔진이 교체되면 안 된다")
+        // 되살린 엔진은 이전 설정으로 돈다 — 끊긴 요청에는 503 이 가지 않으므로 한 번 알린다.
+        assertEquals(1, errors.count { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 한 번 알려야 한다: $errors")
     }
 
     @Test
@@ -1078,8 +1084,8 @@ class UserTradingManagerTest {
         assertEquals(listOf(true), stopSettledAtResume, "stop 을 마친 뒤 한 번 복귀해야 한다")
         verify(exactly = 0) { manager.createEngine(any()) }
         assertSame(mockEngine, engines()[1L])
-        // 응답을 못 받은 사용자는 새 키·웹훅이 반영된 줄 안다 — 이전 설정으로 거래 중임을 알린다.
-        assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
+        // 응답을 못 받은 사용자는 새 키·웹훅이 반영된 줄 안다 — 이전 설정으로 돌 수 있음을 한 번 알린다.
+        assertEquals(1, errors.count { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 한 번 알려야 한다: $errors")
     }
 
     @Test
@@ -1322,8 +1328,13 @@ class UserTradingManagerTest {
         val saved = user(1L)
         every { userRepository.findById(1L) } returns Mono.just(saved)
         coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled") andThen emptyMap()
-        assertThrows(CancellationException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+        val errors = errorsDuring {
+            assertThrows(CancellationException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+        }
         assertSame(mockEngine, engines()[1L], "복귀하지 못한 정지 엔진은 맵에 남는다")
+        // 봇은 멈췄다 — "이전 설정으로 돈다"는 정반대 안내다.
+        assertTrue(errors.none { it.contains("반영되지 않았") }, "정지 엔진인데 이전 설정으로 돈다고 알렸다: $errors")
+        assertEquals(1, errors.count { it.contains("복귀 실패") && it.contains("정지 상태") }, "복귀 실패를 알려야 한다: $errors")
         stoppableRow()
         val newEngine = newEngineFromSavedKeys(saved)
 
@@ -1343,8 +1354,12 @@ class UserTradingManagerTest {
         val saved = user(1L)
         every { userRepository.findById(1L) } returns Mono.just(saved)
         coEvery { mockEngine.flushUnpersisted() } throws CancellationException("cancelled") andThen Unit
-        assertThrows(CancellationException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+        val errors = errorsDuring {
+            assertThrows(CancellationException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+        }
         assertSame(mockEngine, engines()[1L], "기록 중 끊긴 정지 엔진은 맵에 남는다")
+        // 정지 엔진은 다음 시작이 저장된 설정으로 바꾼다 — 미반영 알림은 도는 엔진에만 낸다.
+        assertTrue(errors.none { it.contains("반영되지 않았") }, "정지 엔진인데 미반영을 알렸다: $errors")
         stoppableRow()
         val newEngine = newEngineFromSavedKeys(saved)
 
@@ -1371,5 +1386,73 @@ class UserTradingManagerTest {
         assertTrue(errors.none { it.contains("ctb-sell-1") }, "버리지 않았는데 버린다고 알렸다: $errors")
         assertSame(mockEngine, engines()[1L])
         verify(exactly = 0) { manager.createEngine(any()) }
+    }
+
+    // 옛 엔진을 멈추기 전(lock 대기·사용자 조회 중)에 끊긴 reload 는 도는 엔진을 이전 설정으로 남긴다 — 끊긴 요청에는 503 이 가지
+    // 않으므로 알린다. 취소는 삼키지 않는다.
+
+    @Test
+    fun `a reload cancelled while reading the user warns that the previous settings may still be running`() = runTest {
+        runningEngineToReload()
+        every { userRepository.findById(1L) } returns Mono.never()
+        var thrown: Throwable? = null
+
+        val errors = errorsDuring {
+            val reload = launch { thrown = runCatching { manager.reloadUserRuntime(1L) }.exceptionOrNull() }
+            runCurrent()
+            reload.cancelAndJoin()
+        }
+
+        assertTrue(thrown is CancellationException, "취소를 삼키면 안 된다: $thrown")
+        coVerify(exactly = 0) { mockEngine.stop() }
+        assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
+    }
+
+    private fun userLock(userId: Long): Mutex {
+        val f = UserTradingManager::class.java.getDeclaredField("userLocks").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        return (f.get(manager) as ConcurrentHashMap<Long, Mutex>).computeIfAbsent(userId) { Mutex() }
+    }
+
+    @Test
+    fun `a reload cancelled while waiting for the user lock warns that the previous settings may still be running`() = runTest {
+        runningEngineToReload()
+        userLock(1L).lock()
+        var thrown: Throwable? = null
+
+        val errors = errorsDuring {
+            val reload = launch { thrown = runCatching { manager.reloadUserRuntime(1L) }.exceptionOrNull() }
+            runCurrent()
+            reload.cancelAndJoin()
+        }
+
+        assertTrue(thrown is CancellationException, "취소를 삼키면 안 된다: $thrown")
+        verify(exactly = 0) { userRepository.findById(any<Long>()) }
+        assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
+    }
+
+    @Test
+    fun `a reload cancelled while a start holds the user lock warns before that start runs its engine`() = runTest {
+        // lock 을 쥔 시작이 저장 전에 사용자를 읽었으면, 끊긴 reload 뒤에 이전 설정으로 엔진을 기동한다 — lock 을 기다리다 끊기면
+        // 그때 도는 엔진이 없어도 알린다.
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        every { botStateRepository.save(any()) } answers { Mono.just(firstArg()) }
+        coEvery { tradingStateService.loadStates(1L) } coAnswers { delay(1_000); emptyMap() }
+        val start = launch { manager.startBot(1L, listOf("KRW-BTC"), null) }
+        runCurrent()
+        var thrown: Throwable? = null
+
+        val errors = errorsDuring {
+            val reload = launch { thrown = runCatching { manager.reloadUserRuntime(1L) }.exceptionOrNull() }
+            runCurrent()
+            reload.cancelAndJoin()
+            verify(exactly = 0) { mockEngine.start(any(), any()) } // 알림 시점에는 시작이 아직 엔진을 기동하지 않았다
+        }
+        start.join()
+
+        assertTrue(thrown is CancellationException, "취소를 삼키면 안 된다: $thrown")
+        assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
+        verify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), any()) }
     }
 }
