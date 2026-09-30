@@ -186,20 +186,6 @@ class IndicatorsExtendedTest {
         assertEquals(0.0, result.signal, 1e-12)
     }
 
-    // --- checkGoldenCross ---
-
-    @Test
-    fun `checkGoldenCross returns false for insufficient data`() {
-        val candles = (0..10).map { Candle(tradePrice = 100.0) }
-        assertFalse(Indicators.checkGoldenCross(candles))
-    }
-
-    @Test
-    fun `checkGoldenCross returns false for flat prices`() {
-        val candles = (0..25).map { Candle(tradePrice = 100.0) }
-        assertFalse(Indicators.checkGoldenCross(candles))
-    }
-
     // --- checkDeadCross ---
 
     @Test
@@ -233,7 +219,7 @@ class IndicatorsExtendedTest {
     @Test
     fun `checkDeadCross treats flat-then-drop as cross via equality boundary`() {
         // 과거 완전 평평(prevShortMa == prevLongMa) + 최신 급락 -> prev 의 등호(>=)로 데드크로스 true.
-        // checkGoldenCross(prev <=) 와 대칭인 의도된 경계 동작을 고정.
+        // prev 의 등호를 교차로 세는 의도된 경계 동작을 고정.
         val candles = listOf(Candle(tradePrice = 10.0)) + (1..20).map { Candle(tradePrice = 100.0) }
         assertTrue(Indicators.checkDeadCross(candles))
     }
