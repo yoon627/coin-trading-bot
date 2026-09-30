@@ -1,8 +1,7 @@
 package com.trading.bot.config
 
 import org.slf4j.LoggerFactory
-import org.springframework.boot.context.event.ApplicationReadyEvent
-import org.springframework.context.event.EventListener
+import org.springframework.context.SmartLifecycle
 import org.springframework.data.redis.core.ReactiveRedisCallback
 import org.springframework.data.redis.core.ReactiveRedisTemplate
 import org.springframework.http.HttpStatus
@@ -16,6 +15,8 @@ import reactor.util.retry.Retry
 import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -28,8 +29,10 @@ class RateLimitFilter(
     private val redisTimeout: Duration = Duration.ofMillis(500),
     private val redisRetryDelay: Duration = Duration.ofSeconds(30),
     private val warmUpRetryDelay: Duration = Duration.ofSeconds(1),
-) : WebFilter {
+    private val warmUpWait: Duration = Duration.ofSeconds(15),
+) : WebFilter, SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
+    @Volatile private var running = false
 
     // Redis 가 없거나 장애일 때 fail-open 되지 않도록 in-memory fixed-window 로 판정한다 (단일 인스턴스 기준 유효).
     private val memoryHits = ConcurrentHashMap<String, Long>()
@@ -94,12 +97,32 @@ class RateLimitFilter(
             .flatMap { limited -> decide(exchange, chain, limited, limit) }
     }
 
-    // Lettuce 공유 연결은 첫 명령에서야 맺어진다 — 기동 뒤 첫 요청이 그 비용을 치르다 판정 한도를 넘으면 Redis 가 정상인데도
-    // 강등된다. 기동을 막지 않게 뒤에서 미리 맺는다.
-    @EventListener(ApplicationReadyEvent::class)
-    fun warmUpRedisOnStartup() {
-        warmUpRedis().subscribe()
+    // Lettuce 공유 연결은 첫 명령에서야 맺어진다(운영 약 2.5초). 웹 서버가 요청을 받은 뒤에 맺으면 그동안 온 요청이 팩토리
+    // lock 에서 기다리다 판정 한도에 끊겨, Redis 가 정상인데도 강등된다. 그래서 웹 서버보다 먼저 맺는다. 기동은 최대 warmUpWait
+    // 만큼만 늦추고 실패시키지 않는다 — 시간이 넘어도 구독은 끊지 않고(끊으면 worker 가 interrupt 돼 Lettuce 가 connect 를
+    // 버린다), 무엇이 나도 던지지 않는다(던지면 refresh 가 실패해 앱이 뜨지 않는다).
+    override fun start() {
+        running = true
+        try {
+            warmUpRedis().toFuture().get(warmUpWait.toMillis(), TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            log.info("Redis rate limit 연결 준비가 {}ms 안에 끝나지 않아 기다리지 않고 기동한다 — 예열은 뒤에서 이어진다", warmUpWait.toMillis())
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            log.info("Redis rate limit 연결 준비를 기다리다 interrupt 됐다 — 기다리지 않고 기동한다")
+        } catch (e: Exception) {
+            redisFailed(e, 0L)
+        }
     }
+
+    override fun stop() {
+        running = false
+    }
+
+    override fun isRunning(): Boolean = running
+
+    // 반응형 웹 서버(SMART_LIFECYCLE_PHASE - 1024)보다 먼저 시작한다.
+    override fun getPhase(): Int = 0
 
     // 판정 한도는 걸지 않는다 — 느린 첫 연결은 장애가 아니다(상한은 Lettuce 타임아웃). 기동 직후엔 CPU 가 바빠 첫 시도가 그
     // 타임아웃을 넘길 수 있어 몇 번 더 시도한 뒤에만 강등한다. 강등은 요청과 같은 전이 경로라 장애 한 번에 WARN 한 줄이다.
