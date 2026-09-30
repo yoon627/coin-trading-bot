@@ -46,8 +46,6 @@ class IndicatorsParityTest {
             Indicators.calculateTargetPrice(normalizedCandles, 0.5),
         )
         assertEquals(Indicators.calculateEma(candles, 12), Indicators.calculateEma(normalizedCandles, 12))
-        assertEquals(Indicators.calculateStdDev(candles, 10), Indicators.calculateStdDev(normalizedCandles, 10))
-        assertEquals(Indicators.checkGoldenCross(candles), Indicators.checkGoldenCross(normalizedCandles))
         assertEquals(Indicators.checkDeadCross(candles), Indicators.checkDeadCross(normalizedCandles))
         assertEquals(Indicators.isMaUptrend(candles), Indicators.isMaUptrend(normalizedCandles))
         assertEquals(

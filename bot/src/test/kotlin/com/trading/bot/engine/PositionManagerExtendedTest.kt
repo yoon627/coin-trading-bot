@@ -1310,7 +1310,7 @@ class PositionManagerExtendedTest {
         assertNull(state.pendingBuyUuid)
     }
 
-    // --- pnl net 기록 (이슈 #27 — 기록 pnlPercent 는 왕복수수료 차감, 백테스트 feeRate×2 와 통일) ---
+    // --- pnl net 기록 (이슈 #27 — 기록 pnlPercent 는 왕복수수료 차감) ---
 
     @Test
     fun `sell records net pnl after round-trip fee`() = runTest {

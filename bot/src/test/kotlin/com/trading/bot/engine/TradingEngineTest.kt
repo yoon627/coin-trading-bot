@@ -21,9 +21,7 @@ import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
 import com.trading.common.strategy.TradingStrategy
-import com.trading.common.strategy.GoldenCross
-import com.trading.common.strategy.MacdCross
-import com.trading.common.strategy.VolatilityBreakout
+import com.trading.common.strategy.CombinedStrategy
 import io.mockk.*
 import java.time.Clock
 import java.time.Instant
@@ -65,6 +63,11 @@ class TradingEngineTest {
         every { strategy.minCandles } returns 21
         every { dailyResetManager.checkAndReset(any()) } returns false
         every { dailyResetManager.shouldSellForDailyReset(any()) } returns false
+    }
+
+    private fun namedStrategy(strategyName: String): TradingStrategy = mockk {
+        every { name } returns strategyName
+        every { minCandles } returns 21
     }
 
     private fun createEngine(
@@ -256,6 +259,15 @@ class TradingEngineTest {
     }
 
     @Test
+    fun `a new engine starts with the first registered strategy`() {
+        // 이름이 아니라 등록 순서가 기본 전략을 정한다 — 상태 API 가 엔진이 없을 때 보고하는 전략과 같은 규칙이고,
+        // 둘이 갈리면 정지 뒤 시작이 다른 전략으로 돈다.
+        val combined = namedStrategy("combined")
+        assertEquals("test_strategy", createEngine(strategies = listOf(strategy, combined)).getActiveStrategyName())
+        assertEquals("combined", createEngine(strategies = listOf(combined, strategy)).getActiveStrategyName())
+    }
+
+    @Test
     fun `setStrategy returns true for valid strategy`() {
         val engine = createEngine()
         assertTrue(engine.setStrategy("test_strategy"))
@@ -306,7 +318,7 @@ class TradingEngineTest {
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns true
         // 익절이 차트청산보다 우선 — 가격 안전망이 트리거되면 차트 캔들 조회조차 하지 않음(short-circuit).
-        assertEquals(SellReason.TAKE_PROFIT, engine.decideSell(state, 100.0, "KRW-BTC", VolatilityBreakout()))
+        assertEquals(SellReason.TAKE_PROFIT, engine.decideSell(state, 100.0, "KRW-BTC", CombinedStrategy()))
         coVerify(exactly = 0) { marketDataStore.getCandles(any(), any(), any(), any()) }
     }
 
@@ -318,7 +330,7 @@ class TradingEngineTest {
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns false
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized()
-        assertEquals(SellReason.CHART_EXIT, engine.decideSell(state, 50.0, "KRW-BTC", VolatilityBreakout()))
+        assertEquals(SellReason.CHART_EXIT, engine.decideSell(state, 50.0, "KRW-BTC", CombinedStrategy()))
     }
 
     @Test
@@ -745,7 +757,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles(any(), any()) } throws RuntimeException("rate limit")
         every { dailyResetManager.shouldSellForDailyReset(state) } returns true
         // 예외가 전파되지 않고 dailyReset 안전망까지 평가됨
-        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0, "KRW-BTC", VolatilityBreakout()))
+        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0, "KRW-BTC", CombinedStrategy()))
     }
 
     // --- evaluateChartExit: store D1 distinct + REST 폴백 (D1 은 CandleAggregator 가 같은 날 반복 ingest) ---
@@ -766,7 +778,7 @@ class TradingEngineTest {
     fun `evaluateChartExit uses store candles without REST when distinct sufficient`() = runBlocking {
         val engine = createEngine()
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized()
-        assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, VolatilityBreakout()))
+        assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, CombinedStrategy()))
         coVerify(exactly = 0) { upbitClient.getDayCandles(any(), any()) }
     }
 
@@ -779,7 +791,7 @@ class TradingEngineTest {
         }
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns polluted
         coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns deadCrossLegacy()
-        assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, VolatilityBreakout()))
+        assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, CombinedStrategy()))
         coVerify { upbitClient.getDayCandles("KRW-BTC", 60) }
     }
 
@@ -788,7 +800,7 @@ class TradingEngineTest {
         val engine = createEngine()
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns emptyList()
         coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns listOf(Candle(tradePrice = 100.0))
-        assertFalse(engine.evaluateChartExit("KRW-BTC", 50.0, VolatilityBreakout()))
+        assertFalse(engine.evaluateChartExit("KRW-BTC", 50.0, CombinedStrategy()))
     }
 
     // --- loadStoreDailyCandles: 매수·청산 공통 D1 게이트 (distinct + size>=MIN_DAILY_CANDLES, 부족 시 null) ---
@@ -927,27 +939,27 @@ class TradingEngineTest {
 
     @Test
     fun `resolveExitStrategy uses entryStrategy when present`() {
-        val macd = MacdCross()
-        val golden = GoldenCross()
-        val engine = createEngine(strategies = listOf(macd, golden))
-        val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "macd_cross") }
-        assertEquals("macd_cross", engine.resolveExitStrategy(state, golden).name)
+        val entry = namedStrategy("entry_strategy")
+        val active = namedStrategy("active_strategy")
+        val engine = createEngine(strategies = listOf(entry, active))
+        val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "entry_strategy") }
+        assertEquals("entry_strategy", engine.resolveExitStrategy(state, active).name)
     }
 
     @Test
     fun `resolveExitStrategy falls back to active when entryStrategy null`() {
-        val golden = GoldenCross()
-        val engine = createEngine(strategies = listOf(golden))
+        val active = namedStrategy("active_strategy")
+        val engine = createEngine(strategies = listOf(active))
         val state = TradingState("KRW-BTC") // entryStrategy null (재시작 syncPosition 복원 시뮬)
-        assertEquals(golden.name, engine.resolveExitStrategy(state, golden).name)
+        assertEquals(active.name, engine.resolveExitStrategy(state, active).name)
     }
 
     @Test
     fun `resolveExitStrategy falls back when entryStrategy not in list`() {
-        val golden = GoldenCross()
-        val engine = createEngine(strategies = listOf(golden))
+        val active = namedStrategy("active_strategy")
+        val engine = createEngine(strategies = listOf(active))
         val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "removed_strategy") }
-        assertEquals(golden.name, engine.resolveExitStrategy(state, golden).name)
+        assertEquals(active.name, engine.resolveExitStrategy(state, active).name)
     }
 
     // --- getRealtimePrice: store staleness 가드 (이슈 #27 — 얼어붙은 store 가격으로 매매 판단 방지) ---
