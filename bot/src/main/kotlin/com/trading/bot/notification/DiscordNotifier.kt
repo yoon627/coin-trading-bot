@@ -102,6 +102,51 @@ class DiscordNotifier(
         sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
     }
 
+    /**
+     * 분당 상한에 걸려 개별로 보내지 못한 ERROR 요약. 요약 줄은 호출 측에서 마스킹된 상태로 전달.
+     * 로거별로 번갈아 싣는다 — 폭주 때는 한 로거의 반복 오류(티커·메시지마다 fingerprint 가 갈린다)가 줄을 다 채워,
+     * 다른 경로의 한 번만 찍히는 알림([HALT] 등)이 '외 N건' 에 묻힌다. 설명은 Discord 한도(4096자) 안에서 줄 단위로 채우고
+     * 못 실은 건수는 끝 줄에 남긴다.
+     */
+    fun sendErrorDigest(digest: ErrorAlertRateLimiter.Digest, webhookUrl: String) {
+        val lines = mutableListOf<String>()
+        var used = 0
+        val unlisted = LinkedHashMap<String, Int>()
+        interleaveByLogger(digest.alerts).forEach { alert ->
+            val repeat = if (alert.occurrences > 1) " (×${alert.occurrences})" else ""
+            val line = "• ${alert.logger.substringAfterLast('.')} — ${alert.summary}$repeat"
+            if (used + line.length + 1 <= DIGEST_LINES_BUDGET) {
+                lines += line
+                used += line.length + 1
+            } else {
+                unlisted.merge(alert.logger, alert.occurrences, Int::plus)
+            }
+        }
+        digest.overflowByLogger.forEach { (logger, count) -> unlisted.merge(logger, count, Int::plus) }
+        if (unlisted.isNotEmpty()) {
+            val byLogger = unlisted.entries.joinToString(" · ") { "${it.key.substringAfterLast('.')} ${it.value}" }
+            lines += "외 ${unlisted.values.sum()}건 — $byLogger".truncateForDiscord(DIGEST_TRAILER_MAX)
+        }
+        val total = digest.alerts.sumOf { it.occurrences } + digest.overflowByLogger.values.sum()
+        val embed = mapOf<String, Any>(
+            "title" to "📋 억제된 알림 ${total}건",
+            "color" to 0xF59E0B,
+            "description" to lines.joinToString("\n"),
+            "footer" to mapOf("text" to "분당 알림 상한을 넘어 개별로 보내지 못한 ERROR 입니다. (×K)는 직전 알림 이후 발생 횟수, 전문·stack 은 로그 파일에 있습니다."),
+        )
+        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
+    }
+
+    private fun interleaveByLogger(alerts: List<ErrorAlertRateLimiter.HeldAlert>): List<ErrorAlertRateLimiter.HeldAlert> {
+        val queues = alerts.groupByTo(LinkedHashMap()) { it.logger }.values.map { ArrayDeque(it) }
+        val ordered = ArrayList<ErrorAlertRateLimiter.HeldAlert>(alerts.size)
+        while (ordered.size < alerts.size) {
+            queues.forEach { queue -> queue.removeFirstOrNull()?.let(ordered::add) }
+        }
+        return ordered
+    }
+
+    // 오류 알림은 logback appender lock 안에서 여기까지 온다 — 블로킹(재시도 대기 포함)하면 모든 로깅 스레드가 멈춘다.
     private fun sendPayload(payload: Map<String, Any>, webhookUrl: String? = null) {
         val url = try {
             requestValidators.normalizeDiscordWebhookUrl(
@@ -134,4 +179,18 @@ class DiscordNotifier(
             log.warn("Failed to send Discord notification: {}", e.message)
         }
     }
+
+    private companion object {
+        // 줄 예산 + 끝 줄(못 실은 건수) + 줄바꿈이 설명 한도 4096 안에 든다.
+        const val DIGEST_LINES_BUDGET = 3_500
+        const val DIGEST_TRAILER_MAX = 500
+    }
+}
+
+/** [max] 자 안으로 자른다 — 서로게이트 쌍을 가르면 반쪽 문자가 남아 깨져 보이고, Discord 가 거부하는지는 확인하지 못했다. */
+internal fun String.truncateForDiscord(max: Int): String {
+    if (length <= max) return this
+    var end = max - 1
+    if (end > 0 && Character.isHighSurrogate(this[end - 1])) end--
+    return substring(0, end) + "…"
 }

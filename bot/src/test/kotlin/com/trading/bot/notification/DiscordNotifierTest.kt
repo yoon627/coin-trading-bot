@@ -216,4 +216,58 @@ class DiscordNotifierTest {
             assertTrue((it["value"] as String).length <= 1024, "field ${it["name"]} exceeds 1024")
         }
     }
+
+    private fun digestEmbed(digest: ErrorAlertRateLimiter.Digest): Map<*, *> {
+        notifier.sendErrorDigest(digest, "https://discord.com/api/webhooks/789/errwebhook")
+        verify { requestSpec.uri("https://discord.com/api/webhooks/789/errwebhook") }
+        val payloadSlot = slot<Map<String, Any>>()
+        verify { requestBodySpec.bodyValue(capture(payloadSlot)) }
+        return (payloadSlot.captured["embeds"] as List<*>).single() as Map<*, *>
+    }
+
+    @Test
+    fun `sendErrorDigest 는 로거별로 번갈아 한 줄씩 싣고 반복 횟수와 못 실은 건수를 붙인다`() {
+        val embed = digestEmbed(
+            ErrorAlertRateLimiter.Digest(
+                alerts = listOf(
+                    ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.TradingEngine", "Error processing KRW-A", 1),
+                    ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.TradingEngine", "Error processing KRW-B", 3),
+                    ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.PositionManager", "[HALT] KRW-XRP", 1),
+                ),
+                overflowByLogger = mapOf("com.trading.bot.client.UpbitClientImpl" to 4),
+            ),
+        )
+
+        assertEquals("📋 억제된 알림 9건", embed["title"])
+        assertEquals(
+            listOf(
+                "• TradingEngine — Error processing KRW-A",
+                "• PositionManager — [HALT] KRW-XRP",
+                "• TradingEngine — Error processing KRW-B (×3)",
+                "외 4건 — UpbitClientImpl 4",
+            ),
+            (embed["description"] as String).lines(),
+        )
+    }
+
+    @Test
+    fun `sendErrorDigest 는 폭주에서도 설명을 한도 안에 두고 다른 로거의 줄과 못 실은 건수를 남긴다`() {
+        val flood = (1..60).map { ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.TradingEngine", "x".repeat(200) + it, 1) }
+        val halt = ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.PositionManager", "[HALT] KRW-XRP", 1)
+        val overflow = (1..100).associate { "com.trading.bot.engine.Logger$it" to 1 } // 끝 줄이 500자를 넘게
+
+        val description = digestEmbed(ErrorAlertRateLimiter.Digest(flood + halt, overflow))["description"] as String
+
+        assertTrue(description.length <= 4096, "description ${description.length} exceeds 4096")
+        assertTrue(description.contains("• PositionManager — [HALT] KRW-XRP"))
+        val trailer = description.lines().last()
+        assertTrue(trailer.startsWith("외 ") && trailer.length <= 500, trailer)
+    }
+
+    @Test
+    fun `truncateForDiscord 는 한도 안에서 자르고 서로게이트 쌍을 가르지 않는다`() {
+        val text = "a".repeat(198) + "😀" + "tail" // 😀 는 서로게이트 쌍(index 198·199)
+        assertEquals("a".repeat(198) + "…", text.truncateForDiscord(200))
+        assertEquals("short", "short".truncateForDiscord(200))
+    }
 }
