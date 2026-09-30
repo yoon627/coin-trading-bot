@@ -33,7 +33,9 @@ import org.springframework.stereotype.Component
  * - 한계: ApplicationReadyEvent 이후부터 캡처(기동 실패 에러는 미포함).
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE) // restore(@Order LOWEST)보다 먼저 attach 되어 restore 중 에러가 Discord 에 도달하도록.
+// 청산 파라미터 기동 보고(HIGHEST+1)·restore(LOWEST)보다 먼저 attach 되어 그 에러가 Discord 에 도달하도록.
+// 세 순서는 ExitParamsDeclarationCheckTest 가 고정한다.
+@Order(Ordered.HIGHEST_PRECEDENCE)
 class DiscordErrorLogAppender internal constructor(
     private val discordNotifier: DiscordNotifier,
     private val props: ErrorAlertProperties,
