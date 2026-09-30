@@ -1,6 +1,9 @@
 package com.trading.bot.config
 
 import org.slf4j.LoggerFactory
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
+import org.springframework.data.redis.core.ReactiveRedisCallback
 import org.springframework.data.redis.core.ReactiveRedisTemplate
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
@@ -9,10 +12,12 @@ import org.springframework.web.server.WebFilter
 import org.springframework.web.server.WebFilterChain
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Schedulers
+import reactor.util.retry.Retry
 import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 @Component
@@ -22,6 +27,7 @@ class RateLimitFilter(
     // Redis 가 이 안에 답하지 않으면 in-memory 로 판정하고, 그 뒤 redisRetryDelay 동안은 Redis 를 부르지 않는다(#229).
     private val redisTimeout: Duration = Duration.ofMillis(500),
     private val redisRetryDelay: Duration = Duration.ofSeconds(30),
+    private val warmUpRetryDelay: Duration = Duration.ofSeconds(1),
 ) : WebFilter {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -48,6 +54,7 @@ class RateLimitFilter(
         private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30
         private const val KEY_PREFIX = "ratelimit:"
         private val WINDOW = Duration.ofMinutes(1)
+        private const val WARM_UP_RETRIES = 2L
     }
 
     override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
@@ -85,6 +92,38 @@ class RateLimitFilter(
             // 클라이언트가 끊겨 시도가 취소돼도 자리를 돌려준다 — 안 그러면 다시는 Redis 를 시도하지 않는다.
             .doFinally { if (probe) probing.set(false) }
             .flatMap { limited -> decide(exchange, chain, limited, limit) }
+    }
+
+    // Lettuce 공유 연결은 첫 명령에서야 맺어진다 — 기동 뒤 첫 요청이 그 비용을 치르다 판정 한도를 넘으면 Redis 가 정상인데도
+    // 강등된다. 기동을 막지 않게 뒤에서 미리 맺는다.
+    @EventListener(ApplicationReadyEvent::class)
+    fun warmUpRedisOnStartup() {
+        warmUpRedis().subscribe()
+    }
+
+    // 판정 한도는 걸지 않는다 — 느린 첫 연결은 장애가 아니다(상한은 Lettuce 타임아웃). 기동 직후엔 CPU 가 바빠 첫 시도가 그
+    // 타임아웃을 넘길 수 있어 몇 번 더 시도한 뒤에만 강등한다. 강등은 요청과 같은 전이 경로라 장애 한 번에 WARN 한 줄이다.
+    internal fun warmUpRedis(): Mono<Void> {
+        val template = redisTemplate ?: return Mono.empty()
+        return Mono.defer {
+            val started = System.nanoTime()
+            val attempts = AtomicInteger()
+            template.execute(ReactiveRedisCallback { it.ping() })
+                .doOnSubscribe { attempts.incrementAndGet() }
+                .subscribeOn(Schedulers.boundedElastic())
+                .then()
+                .retryWhen(Retry.fixedDelay(WARM_UP_RETRIES, warmUpRetryDelay).onRetryExhaustedThrow { _, signal -> signal.failure() })
+                .doOnSuccess { warmedUp(Duration.ofNanos(System.nanoTime() - started), attempts.get()) }
+        }.onErrorResume { error ->
+            redisFailed(error, 0L)
+            Mono.empty()
+        }
+    }
+
+    // 요청이 먼저 강등시켰으면 그대로 둔다(복귀는 다시 시도한 요청만 한다) — 이 줄이 복귀로 읽히지 않게 구분한다.
+    private fun warmedUp(elapsed: Duration, attempts: Int) {
+        val note = if (redisRetryAtMs.get() == 0L) "" else " (강등 중 — 다음 재시도에서 Redis 로 돌아간다)"
+        log.info("Redis rate limit 연결 준비 — {}ms, 시도 {}회{}", elapsed.toMillis(), attempts, note)
     }
 
     // 공유 연결이 아직 없으면 연결 획득이 구독한 스레드에서 동기로 막힌다(Lettuce connect) — 요청을 처리하는 이벤트 루프를
