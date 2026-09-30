@@ -10,8 +10,10 @@ import io.mockk.slot
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
-import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.boot.web.context.WebServerGracefulShutdownLifecycle
+import org.springframework.context.SmartLifecycle
 import org.springframework.context.event.EventListener
+import org.springframework.context.support.GenericApplicationContext
 import org.springframework.core.annotation.AnnotatedElementUtils
 import org.springframework.data.redis.RedisConnectionFailureException
 import org.springframework.data.redis.core.ReactiveRedisCallback
@@ -33,6 +35,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.function.Supplier
 
 class RateLimitFilterTest {
 
@@ -607,13 +610,14 @@ class RateLimitFilterTest {
         assertEquals(2, calls.get(), "강등되지 않았으니 다음 요청도 Redis 로 판정한다")
     }
 
-    // ── 기동 예열 (#278) ──
+    // ── 기동 예열 (#278·#280) ──
     // Lettuce 공유 연결은 첫 명령에서야 맺어진다. 기동 뒤 첫 요청이 그 비용을 치르다 판정 한도를 넘으면 Redis 가 정상인데도
-    // 강등된다(운영에서 기동 뒤 첫 판정이 500ms 를 넘겼다). 기동 뒤 예열이 먼저 연결을 맺는다.
+    // 강등된다(운영 첫 연결은 약 2.5초). 웹 서버가 요청을 받기 전에 예열이 먼저 연결을 맺는다.
 
     /** 예열(`execute`)과 판정(`increment`)이 함께 쓰는 공유 연결. 첫 접속만 [connectCost] 만큼 막히고, 실제 템플릿처럼 구독할 때 막힌다. */
     private class SharedConnection(private val connectCost: Duration) {
-        private var connected = false
+        @Volatile var connected = false
+            private set
 
         @Synchronized
         fun use() {
@@ -732,12 +736,88 @@ class RateLimitFilterTest {
         assertTrue(infos.any { it.contains("연결 준비") && it.contains("강등 중") }, "복귀로 읽히지 않게 구분한다: $infos")
     }
 
+    /** 반응형 웹 서버의 start/stop phase 에 둔 대역. 자기 `start()` 가 불린 순간(= 웹 서버가 요청을 받기 시작하는 때) 연결 상태를 기록한다. */
+    private class WebServerStandIn(private val connected: () -> Boolean) : SmartLifecycle {
+        @Volatile var connectedAtStart: Boolean? = null
+        @Volatile private var running = false
+
+        override fun start() {
+            connectedAtStart = connected()
+            running = true
+        }
+
+        override fun stop() {
+            running = false
+        }
+
+        override fun isRunning() = running
+
+        // Boot 3.4 반응형 WebServerStartStopLifecycle(package-private)의 phase 와 같은 식이다.
+        override fun getPhase() = WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE - 1024
+    }
+
+    private fun refreshWith(filter: RateLimitFilter, webServer: WebServerStandIn) = GenericApplicationContext().apply {
+        registerBean(RateLimitFilter::class.java, Supplier { filter })
+        registerBean(WebServerStandIn::class.java, Supplier { webServer })
+        refresh()
+    }
+
     @Test
-    fun `기동 리스너는 연결이 막혀도 바로 반환하고, 실패는 WARN 한 줄로만 남는다`() {
-        // 실제 템플릿은 구독한 스레드에서 동기로 연결한다 — 리스너 스레드에서 구독하면 기동 이벤트 처리가 연결만큼 멈춘다.
-        // 구독자에게 오류가 닿으면 Reactor 가 onErrorDropped ERROR(스택 포함)로 남겨 "장애 한 번에 WARN 한 줄" 이 깨진다.
-        val template = redis { Mono.just(1L) }.pingReturns(Mono.fromSupplier<String> { Thread.sleep(300); throw down }.flux())
-        val filter = RateLimitFilter(template, warmUpRetryDelay = Duration.ofMillis(10))
+    fun `실제 기동에서 예열은 웹 서버가 요청을 받기 전에 연결을 맺는다`() {
+        val connection = SharedConnection(Duration.ofMillis(300))
+        val filter = RateLimitFilter(sharedRedis(connection, AtomicInteger()), redisTimeout = Duration.ofMillis(100))
+        val webServer = WebServerStandIn { connection.connected }
+
+        refreshWith(filter, webServer).use {
+            assertEquals(true, webServer.connectedAtStart, "웹 서버가 요청을 받기 시작할 때 연결이 아직 없다")
+            assertTrue(filter.isRunning)
+        }
+    }
+
+    @Test
+    fun `실제 refresh 에서 ping 이 실패해도 기동은 성공하고 WARN 은 한 줄이다`() {
+        // start() 가 던지면 Spring 이 refresh 를 실패시켜 앱이 뜨지 않는다. 여기서는 예열의 실패가 빈 완료로 끝나 refresh 까지
+        // 새지 않는 것을 본다(start() 의 광범위 catch 는 지금 도달하지 않는 방어라 테스트로 닿지 않는다).
+        val filter = RateLimitFilter(redis { Mono.just(1L) }.pingReturns(Flux.error(down)), warmUpRetryDelay = Duration.ofMillis(10))
+        val webServer = WebServerStandIn { false }
+
+        val (warns, _) = logsWhile(Level.WARN) { refreshWith(filter, webServer).use { assertTrue(webServer.isRunning) } }
+
+        assertEquals(1, warns.size, warns.toString())
+    }
+
+    @Test
+    fun `start 는 예열이 끝날 때까지 기다려 뒤이은 첫 요청이 연결 비용을 치르지 않는다`() {
+        val calls = AtomicInteger()
+        val filter = RateLimitFilter(sharedRedis(SharedConnection(Duration.ofMillis(300)), calls), redisTimeout = Duration.ofMillis(100))
+
+        val (warns, _) = logsWhile(Level.WARN) {
+            filter.start()
+            send(filter)
+        }
+
+        assertTrue(warns.isEmpty(), "start 가 예열을 기다리지 않으면 첫 요청이 연결을 기다리다 강등된다: $warns")
+        assertEquals(1, calls.get())
+    }
+
+    @Test
+    fun `start 는 예열을 상한까지만 기다리고, 진행 중 호출을 끊지 않으며 뒤늦은 실패는 WARN 한 줄로 남긴다`() {
+        // 끊으면 worker 가 interrupt 돼 Lettuce 가 connect 를 버린다. 구독자에게 오류가 닿으면 Reactor 가 onErrorDropped ERROR 로 남긴다.
+        val interrupted = AtomicBoolean(false)
+        val slowFailure = Mono.fromSupplier<String> {
+            try {
+                Thread.sleep(400)
+            } catch (e: InterruptedException) {
+                interrupted.set(true)
+                throw e
+            }
+            throw down
+        }.flux()
+        val filter = RateLimitFilter(
+            redis { Mono.just(1L) }.pingReturns(slowFailure),
+            warmUpRetryDelay = Duration.ofMillis(10),
+            warmUpWait = Duration.ofMillis(50),
+        )
         val own = LoggerFactory.getLogger(RateLimitFilter::class.java) as Logger
         val operators = LoggerFactory.getLogger("reactor.core.publisher.Operators") as Logger
         val ownLogs = ListAppender<ILoggingEvent>().apply { start() }
@@ -746,13 +826,16 @@ class RateLimitFilterTest {
         operators.addAppender(operatorLogs)
         try {
             val started = System.nanoTime()
-            filter.warmUpRedisOnStartup()
-            assertTrue(Duration.ofNanos(System.nanoTime() - started) < Duration.ofMillis(200), "리스너 스레드가 연결만큼 묶였다")
+            filter.start()
+            assertTrue(Duration.ofNanos(System.nanoTime() - started) < Duration.ofMillis(500), "상한을 넘겨 기다렸다(상한 없으면 약 1.2초)")
 
             val deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos()
             while (ownLogs.list.none { it.level == Level.WARN } && System.nanoTime() < deadline) Thread.sleep(20)
             Thread.sleep(100) // 뒤늦은 오류가 연산자에 닿을 시간
-            assertEquals(1, ownLogs.list.count { it.level == Level.WARN }, ownLogs.list.map { it.formattedMessage }.toString())
+            val messages = ownLogs.list.map { "${it.level} ${it.formattedMessage}" }
+            assertFalse(interrupted.get(), "상한에서 진행 중 호출을 끊었다")
+            assertEquals(1, ownLogs.list.count { it.level == Level.WARN }, messages.toString())
+            assertTrue(ownLogs.list.any { it.level == Level.INFO && it.formattedMessage.contains("기다리지 않고 기동") }, messages.toString())
             assertTrue(operatorLogs.list.none { it.level == Level.ERROR }, operatorLogs.list.map { it.formattedMessage }.toString())
         } finally {
             own.detachAppender(ownLogs)
@@ -763,15 +846,24 @@ class RateLimitFilterTest {
     }
 
     @Test
-    fun `예열은 ApplicationReadyEvent 리스너이고, Redis 템플릿이 없으면 아무것도 하지 않는다`() {
-        val listener = AnnotatedElementUtils.findMergedAnnotation(
-            RateLimitFilter::class.java.getMethod("warmUpRedisOnStartup"),
-            EventListener::class.java,
-        )
-        assertEquals(listOf(ApplicationReadyEvent::class.java), listener?.classes?.map { it.java })
+    fun `start 는 던지지 않는다 - 즉시 실패하는 ping 이면 WARN 한 줄, 템플릿이 없으면 곧바로 반환한다`() {
+        val filter = RateLimitFilter(redis { Mono.just(1L) }.pingReturns(Flux.error(down)), warmUpRetryDelay = Duration.ofMillis(10))
+        assertFalse(filter.isRunning, "새 인스턴스가 running 이면 Spring 이 start() 를 부르지 않는다")
 
-        val filter = RateLimitFilter(null)
-        filter.warmUpRedisOnStartup()
-        assertNull(filter.warmUpRedis().block(Duration.ofSeconds(1)))
+        val (warns, _) = logsWhile(Level.WARN) { filter.start() }
+
+        assertTrue(filter.isRunning)
+        assertEquals(1, warns.size, "start 가 예열 끝까지 기다렸으면 WARN 이 이미 남아 있다: $warns")
+        val withoutRedis = RateLimitFilter(null)
+        withoutRedis.start()
+        assertTrue(withoutRedis.isRunning)
+    }
+
+    @Test
+    fun `예열은 자동 시작되는 SmartLifecycle 이고 ApplicationReadyEvent 리스너는 없다`() {
+        assertTrue(SmartLifecycle::class.java.isAssignableFrom(RateLimitFilter::class.java))
+        assertTrue(RateLimitFilter(null).isAutoStartup)
+        val listeners = RateLimitFilter::class.java.methods.filter { AnnotatedElementUtils.hasAnnotation(it, EventListener::class.java) }
+        assertTrue(listeners.isEmpty(), listeners.toString())
     }
 }
