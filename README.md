@@ -1,6 +1,6 @@
 # Coin Trading Bot
 
-Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동매매, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 7개 스윙 전략을 담당합니다.
+Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동매매, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 매매 전략(`combined`)을 담당합니다.
 
 > [!WARNING]
 > 이 프로젝트는 투자 수익을 보장하지 않습니다. 실거래 전 API 키 권한, 주문 금액, 손절 조건을 확인하고 충분히 테스트하세요. Upbit API 키에는 출금 권한을 부여하지 않는 것을 권장합니다.
@@ -9,7 +9,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 
 - Upbit WebSocket ticker와 REST candle을 이용한 in-process 시세 수집
 - 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
-- 7개 스윙 전략 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
+- 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
 - 메이저 코인용 적립 프로파일(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만) 및 알트 유니버스 자동 선정 — 둘 다 기본 off
 - 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
@@ -104,7 +104,7 @@ Browser ──HTTPS──> Caddy ──HTTP──> bot :8080 ──R2DBC──> 
 
 ```text
 coin-trading-bot/
-├── common/                       # 공용 모델, 설정, 기술 지표와 7개 전략
+├── common/                       # 공용 모델, 설정, 기술 지표와 전략(`combined`)
 │   └── src/main/kotlin/com/trading/common/
 │       ├── config/               # TradingProperties
 │       ├── domain/               # candle, ticker, order book, market 모델
@@ -136,21 +136,15 @@ coin-trading-bot/
 
 전략은 `common/src/main/kotlin/com/trading/common/strategy/`에 있습니다.
 
-| 이름 | 진입 조건 요약 |
-|---|---|
-| `volatility_breakout` | 현재가가 전일 범위와 당일 시가로 계산한 돌파가를 상향 돌파 |
-| `rsi_bounce` | RSI(14)가 과매도 구간에서 반등 |
-| `golden_cross` | 단기 이동평균이 장기 이동평균을 상향 돌파하고 RSI 과열 제외 |
-| `combined` | 변동성 돌파, 상승 추세와 RSI 필터 결합 |
-| `bollinger_bounce` | 볼린저 하단 밴드 부근 반등과 RSI 조건 결합 |
-| `macd_cross` | MACD가 signal을 상향 돌파하고 histogram이 양수 |
-| `mean_reversion` | MA20 대비 하락, 변동성 및 RSI 회복 조건 결합 |
-| `knee_reversal` | 40봉 고점 대비 15% 이상 하락 후, 20봉 저점 대비 3~12% 반등 구간에서 진입 |
-| `knee_pullback` | MA20 > MA40 상승 추세에서 MA20 부근까지 눌린 뒤 반등 양봉 |
+운영 전략은 `combined` 하나입니다. 일봉 21개 이상에서 세 조건을 모두 만족할 때 삽니다.
 
-> `knee_*` 전략은 청산도 함께 정의한다(과열 RSI 꺾임 또는 볼린저 상단 복귀 — "어깨"). 다만 차트 청산은
-> `TRADING_CHART_EXIT_ENABLED` 가 켜져 있을 때만 평가되고, `TRADING_MAX_HOLD_DAYS` 가 1이면 다음 거래일
-> 09:00에 강제 청산되므로 스윙 보유를 의도한다면 두 값을 함께 조정해야 한다.
+| 조건 | 내용 |
+|---|---|
+| 변동성 돌파 | 현재가 > 당일 시가 + 전일 레인지 × `TRADING_K_VALUE`(기본 0.5) |
+| 상승 추세 | MA5 > MA20 |
+| RSI 필터 | RSI(14)가 30~70 |
+
+청산은 아래 리스크 규칙이 맡습니다. 차트 청산(`TRADING_CHART_EXIT_ENABLED`, 기본 off)을 켜면 5/20 데드크로스도 청산 신호가 됩니다.
 
 ### 기본 리스크 관리
 
@@ -271,7 +265,6 @@ coin-trading-bot/
 |---|---|---|
 | `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` | 없음 | 선택적 전역 fallback 키. 일반적으로 UI에서 사용자별 키 등록 |
 | `TRADING_TICKERS` | `KRW-BTC` | 쉼표로 구분한 기본 거래 종목 |
-| `TRADING_STRATEGY` | `combined` | 기본 전략 |
 | `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
@@ -289,7 +282,7 @@ coin-trading-bot/
 
 > **적립 프로파일·자동 유니버스를 처음 켤 때** — 두 기능은 마이그레이션(V23)을 동반하며, `deploy.sh` 는 마이그레이션이 포함된 배포를 자동 롤백하지 않습니다. 켜기 전에 DB 를 수동 백업(`deploy/vultr/backup.sh` 와 별개로 `pg_dump`)하고, 문제가 생기면 이미지를 되돌리지 말고 `TRADING_ACCUMULATE_TICKERS` 를 비우고 `TRADING_UNIVERSE_AUTO=false` 로 재기동하세요(forward-off). 구버전 이미지는 V23 컬럼과 `ACCUMULATE_STEP` 사유를 모릅니다.
 >
-> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_STRATEGY`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지). ⚠️ **단 위 청산 6개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
+> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 6개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
 
 ## AWS 배포 (historical)
 
