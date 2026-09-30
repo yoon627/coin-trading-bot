@@ -107,8 +107,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Redis 는 rate limit 전용이고 장애 때 in-memory 로 강등된다 — healthy 를 기다리면 Redis 가 unhealthy 인 동안
+      # compose up 이 실패해 배포가 health·자동 롤백에 닿기 전에 멈추고, 재생성된 app 이 뜨지 않은 채 남는다.
       redis:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     # graceful shutdown: SIGTERM 후 진행 중이던 tick(주문 후처리 포함)이 끝나도록 대기.
     # 앱의 spring.lifecycle.timeout-per-shutdown-phase(30s)보다 넉넉히 크게 잡아 강제 kill(SIGKILL)을 피한다.
