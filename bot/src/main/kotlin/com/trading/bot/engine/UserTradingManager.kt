@@ -74,7 +74,7 @@ class UserTradingManager(
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
     private val userStrategies = ConcurrentHashMap<Long, String>()
     // userId 별 Mutex 로 start/stop/reload/setStrategy 의 engines mutate 를 직렬화.
-    // CAS (remove(k,v) / replace(k,old,new)) 만으로는 computeIfAbsent 직후 start() 호출 전에
+    // CAS (remove(k,v) / replace(k,old,new)) 만으로는 엔진 등록 직후 start() 호출 전에
     // stop 이 끼어드는 race window 를 닫지 못함.
     private val userLocks = ConcurrentHashMap<Long, Mutex>()
     // 정지는 됐는데 bot_state.running=false 를 쓰지 못한 사용자 — 이 집합이 DB 행보다 우선하고, 여기 있는 사용자에게는 엔진이 없다.
@@ -244,11 +244,11 @@ class UserTradingManager(
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             // 등록되지 않은 이름(전략 제거·rename 뒤)은 캐시하지 않는다 — 복원이 끝내 실패하면 그 이름이 상태 API 로 나가 시작 요청이 400 이 된다.
             if (isRegisteredStrategy(state.strategy)) userStrategies[userId] = state.strategy
+            // 복호화도 로드 앞(startBot 과 같다) — 로드 뒤에 실패하면 맵의 정지 엔진을 바꾸지 않았는데 그 매도를 버린다고 알린다.
+            val decryptedUser = userSecretsService.decryptUserSecrets(user)
             // durable 상태 로드를 엔진 등록보다 먼저 — 여기서 터지면 새 엔진을 등록하지 않는다.
             val initialStates = loadInitialStates(userId)
-            val engine = engines.computeIfAbsent(userId) {
-                createEngine(userSecretsService.decryptUserSecrets(user))
-            }
+            val engine = registerNewEngine(userId, decryptedUser)
             if (!engine.setStrategy(state.strategy)) {
                 // 전략을 제거·rename 한 배포나 revert 후에 발생한다. 폴백 자체는 안전하지만, 이 사실을
                 // 알리지 않으면 로그·캐시가 죽은 이름을 계속 보고해 운영자가 실제와 다른 전략이 매매 중인
@@ -294,7 +294,7 @@ class UserTradingManager(
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         // restoreOne 과 같은 이유로 durable 로드를 엔진 등록 앞에 둔다(실패 시 새로 만든 엔진이 기동되지 않은 채 남지 않게).
         val initialStates = loadInitialStates(userId)
-        val engine = engines.computeIfAbsent(userId) { createEngine(decryptedUser) }
+        val engine = registerNewEngine(userId, decryptedUser)
 
         val strategy = strategyName ?: userStrategies[userId]
         if (strategy != null && !engine.setStrategy(strategy)) {
@@ -496,9 +496,8 @@ class UserTradingManager(
                     // 되살리기마저 실패 — 엔진이 정지된 채 남는다. "이전 설정으로 거래 중" 과 정반대
                     // 상황이라 호출자가 다른 문구를 쓰도록 구분해 알린다.
                     log.error("reload: user {} 기존 엔진 복귀 실패 — 엔진이 정지 상태로 남는다", userId, restoreFailure)
-                    // 정지된 옛 엔진을 맵에 남기면 안내대로 /api/bot/start 를 눌렀을 때 그 엔진이
-                    // 재사용돼 옛 자격증명·webhook 으로 거래가 재개된다 — #51 이 고치려던 바로 그 상황.
-                    // 제거해 두면 다음 start 가 저장된 새 설정으로 엔진을 만든다.
+                    // 그 매도를 알리면 사람이 DB 를 맞추므로 엔진은 알린 자리에서 버린다 — 맵에 남겨 두면 다음 시작·정지가 이 엔진의
+                    // 메모리 값으로 맞춘 DB 를 되쓴다.
                     alertDroppedSells(userId, existing.unpersistedSells())
                     engines.remove(userId, existing)
                     restoreFailure.addSuppressed(e)
@@ -646,8 +645,8 @@ class UserTradingManager(
     private suspend fun flushOrAlert(userId: Long, engine: TradingEngine) = alertDroppedSells(userId, flushOrLog(userId, engine))
 
     /**
-     * 시작·복원의 초기 상태를 DB 에서 읽는다. 맵에 남은 정지 엔진은 재사용되고 start 가 그 states 를 이 값으로 덮으므로 읽기 전에
-     * 미기록 주문·고점을 남긴다. 알림은 읽기가 성공한 뒤에만 낸다 — 실패하면 덮은 것이 없고, 엔진이 남아 다음 시도가 다시 기록한다.
+     * 시작·복원의 초기 상태를 DB 에서 읽는다. 맵에 남은 정지 엔진은 뒤이어 새 엔진으로 바뀌어 그 states 가 버려지므로 읽기 전에
+     * 미기록 주문·고점을 남긴다. 알림은 읽기가 성공한 뒤에만 낸다 — 실패하면 바꾸지 않아 버린 것이 없고, 엔진이 남아 다음 시도가 다시 기록한다.
      */
     private suspend fun loadInitialStates(userId: Long): Map<String, TradingState> {
         val unrecorded = engines[userId]?.let { flushOrLog(userId, it) }.orEmpty()
@@ -655,6 +654,13 @@ class UserTradingManager(
         alertDroppedSells(userId, unrecorded)
         return loaded
     }
+
+    /**
+     * 방금 읽은 사용자 값으로 만든 엔진을 맵에 넣는다. 맵에 남은 정지 엔진은 재사용하지 않는다 — 저장 전 자격증명·웹훅으로 만들어졌을
+     * 수 있다(취소된 reload 가 남긴 엔진 등, #51). [loadInitialStates] 뒤에 불러야 그 엔진의 기록이 먼저 남는다.
+     */
+    private fun registerNewEngine(userId: Long, user: UserEntity): TradingEngine =
+        createEngine(user).also { engines[userId] = it }
 
     /**
      * 엔진 상태를 버리기 직전에 부른다. 선기록까지 실패한 매도면 이후 아무도 확정하지 않는다. 다만 선기록이 성공하고 uuid 기록만
