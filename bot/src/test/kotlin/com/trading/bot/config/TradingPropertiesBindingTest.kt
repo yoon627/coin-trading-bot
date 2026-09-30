@@ -74,7 +74,6 @@ class TradingPropertiesBindingTest {
     fun `모든 TRADING_ 키가 환경변수로 오버라이드된다`() {
         withEnv(
             "TRADING_TICKERS" to "KRW-SOL",
-            "TRADING_STRATEGY" to "mean_reversion",
             "TRADING_INVEST_RATIO" to "0.25",
             "TRADING_MAX_INVEST_AMOUNT" to "250000",
             "TRADING_K_VALUE" to "0.7",
@@ -90,7 +89,6 @@ class TradingPropertiesBindingTest {
         ).run { ctx ->
             val p = ctx.getBean(TradingProperties::class.java)
             assertThat(p.tickers).isEqualTo("KRW-SOL")
-            assertThat(p.strategy).isEqualTo("mean_reversion")
             assertThat(p.investRatio).isEqualTo(0.25)
             assertThat(p.maxInvestAmount).isEqualTo(250_000.0)
             assertThat(p.kValue).isEqualTo(0.7)
@@ -111,7 +109,6 @@ class TradingPropertiesBindingTest {
         runner.run { ctx ->
             val p = ctx.getBean(TradingProperties::class.java)
             assertThat(p.tickers).isEqualTo("KRW-BTC")
-            assertThat(p.strategy).isEqualTo("combined")
             assertThat(p.investRatio).isEqualTo(0.1)
             assertThat(p.maxInvestAmount).isEqualTo(100_000.0)
             assertThat(p.kValue).isEqualTo(0.5)

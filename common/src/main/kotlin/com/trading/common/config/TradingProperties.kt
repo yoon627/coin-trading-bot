@@ -5,7 +5,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 @ConfigurationProperties(prefix = "trading")
 data class TradingProperties(
     val tickers: String = "KRW-BTC",
-    val strategy: String = "combined",
     val investRatio: Double = 0.1,
     val maxInvestAmount: Double = 100_000.0,
     val kValue: Double = 0.5,
