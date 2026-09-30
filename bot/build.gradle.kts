@@ -55,6 +55,13 @@ tasks.test {
     // 골든 문자열 동치가 깨지고 wiki 인용 표가 "+0,306" 이 된다. 137곳을 고치는 대신 테스트 JVM 로케일을 고정한다(#111).
     systemProperty("user.language", "en")
     systemProperty("user.country", "US")
+    // 배포 스크립트·compose 를 읽는 테스트가 있다(TradingEnvPassthroughTest·ExitParamsPreflightScriptTest) —
+    // 입력으로 선언하지 않으면 그 파일만 고쳤을 때 테스트가 UP-TO-DATE 로 건너뛰어진다.
+    inputs.files(
+        rootProject.file("deploy/vultr/deploy.sh"),
+        rootProject.file("deploy/vultr/docker-compose.prod.yml"),
+        rootProject.file("deploy/vultr/preflight_exit_params.sh"),
+    ).withPropertyName("deployScripts").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.jacocoTestReport {

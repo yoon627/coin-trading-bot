@@ -2,9 +2,9 @@
 title: 배포 스택 — Vultr 서울 + Caddy TLS + GHCR
 category: entity
 created: 2026-07-28
-updated: 2026-09-01
+updated: 2026-09-30
 claim_state: current
-verified: 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
+verified: 2026-09-30 — 업로드 전 preflight(#230)를 `deploy.sh`·`preflight_exit_params.sh` 원문과 `ExitParamsPreflightScriptTest` 로 확인, 운영의 렌더된 `.env` 에 새 스크립트를 읽기 전용으로 돌려 통과(서버 bash 5.2·GNU Awk 5.2) · 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
 sources:
   - PROJECT_ANALYSIS.md
   - deploy/vultr/
@@ -44,6 +44,13 @@ sources:
   **두 목록 모두와** 대조하므로, 새 설정을 추가하면 그 테스트가 먼저 깨진다(변이 검사로 두 축 다 CAUGHT 확인).
   테스트는 목록 누락만 잡는다 — **실제로 켜졌는지는 기동 로그로 확인한다**(예: `[shadow-exit] 관측 on/off`).
   전달 계층이 넷(앱 기본값 → 시크릿 → 서버 `.env` → compose → 컨테이너)이라, 한 곳만 봐서는 알 수 없다.
+- **렌더한 `.env` 는 업로드 전에 preflight 를 거친다**(#179, #230). `deploy.sh` 가 `deploy/vultr/preflight_exit_params.sh` 를
+  부른다 — 청산·주문 파라미터의 형식·의미상 구간은 자동매매 여부와 무관하게, 자동매매 배포면 청산 6개 키의 선언까지 본다.
+  앱이 아니라 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 청산이 평가되지 않는 공백이 생기고, 자동 롤백은 이미지만
+  되돌려 같은 `.env` 로 다시 기동한다. 형식은 앱(Spring)보다 좁고(평범한 소수·소문자 `true`/`false`), 위반 메시지는 키와 허용
+  범위만 찍는다(배포 로그는 공개 CI 로그다). 구간의 정의처는 `ExitParamRanges` 이고 스크립트의 표는 사본이다 —
+  `ExitParamsPreflightScriptTest` 가 후보값으로 두 표와 실제 Spring 바인딩을 대조한다. 우회 플래그는 없다 — 오탐이면 모든 배포가
+  막히므로, 검사를 바꿀 때는 머지 전에 서버의 렌더된 `/opt/app/.env` 에 새 스크립트를 읽기 전용으로 돌려 본다.
 - **앱 코드 변경은 이미지 재빌드가 있어야 반영된다.** `deploy.sh deploy`(pull)만으로는 안 바뀐다([[lesson-cors-origin-rebuild]]).
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.

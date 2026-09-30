@@ -169,10 +169,27 @@ coin-trading-bot/
 
 > ⚠️ **자동매매 인스턴스(`TRADING_AUTO_START=true`)는 청산 파라미터를 `.env` 에 명시하세요.**
 > 운영값이 코드 기본값과 다를 수 있어(예: 트레일링), 환경변수 한 줄이 빠지면 봇이 조용히 다른 청산
-> 규칙으로 거래하게 됩니다. 두 장치가 이를 막습니다 — `deploy.sh` 가 **업로드 전에** 배포를 중단하고
-> (`preflight_exit_params`), 앱은 기동·봇 시작 시 실효값을 로그하고 미선언이면 ERROR 알림을 냅니다.
-> 어느 쪽도 *값*은 검사하지 않으므로 운영값을 바꾸는 데는 제약이 없고, 앱이 거래를 멈추지도 않습니다.
+> 규칙으로 거래하게 됩니다.
 > 대상 키: `TRADING_TAKE_PROFIT_PCT`·`TRADING_MAX_LOSS_PCT`·`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`·`TRADING_MAX_HOLD_DAYS`·`TRADING_CHART_EXIT_ENABLED`.
+>
+> 값은 **의미상 구간** 안이어야 합니다. 부호·단위 오기를 거르는 구간이고(손절 `-5` 는 매수 직후 손절이 됩니다) 운영값을 강제하지는 않습니다.
+> 숫자는 평범한 소수(지수·공백·쉼표 없이), 불리언은 소문자 `true`/`false` 로 적습니다.
+>
+> | 키 | 허용 |
+> |---|---|
+> | `TRADING_TAKE_PROFIT_PCT` | (0, 100] |
+> | `TRADING_MAX_LOSS_PCT` | (0, 100) |
+> | `TRADING_TRAILING_STOP_PCT` | (0, 100) |
+> | `TRADING_TRAILING_ARM_PCT` | [0, 100] |
+> | `TRADING_MAX_HOLD_DAYS` | 1 이상 정수 |
+> | `TRADING_INVEST_RATIO` | (0, 1] |
+> | `TRADING_ROUND_TRIP_FEE_RATE` | [0, 0.01) — 비율(0.001 = 0.1%) |
+> | `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT` / `_ARM_PCT` | (0, 100) / 0 이상 |
+>
+> 두 장치가 이를 지킵니다. `deploy/vultr/preflight_exit_params.sh`(`deploy.sh` 가 호출)는 **업로드 전에** 배포를 중단합니다 —
+> 형식·구간은 항상, 선언은 자동매매 배포에서 봅니다. 앱은 기동·봇 시작 시 실효값을 로그하고 미선언·구간 밖이면 ERROR 알림을 내되
+> 거래를 멈추지는 않습니다. 다만 그림자 관측 두 키(`TRADING_SHADOW_EXIT_*`)는 구간 밖이면 앱이 기동하지 않습니다 — preflight 가 먼저 거릅니다.
+> 구간의 정의처는 `common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt` 입니다.
 
 매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다. 50일 이동평균 시장 필터는 백테스트 전용입니다.
 
