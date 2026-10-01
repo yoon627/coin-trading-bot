@@ -97,9 +97,7 @@ MA5 > MA20 · RSI(14) 30~70 을 모두 만족하면 매수한다. 차트 청산�
 
 **리스크 관리:** 익절 +5% / 손절 -5% / 트레일링 스탑 고점 대비 -2%(고점 +3% 도달 후) / 최대 보유 1거래일(09:00 KST 경계) / 09:00 KST 일일 리셋.
 
-**적립 프로파일 (`trading.accumulate.*`, 기본 off):** 티커별로 스윙 대신 사다리 매매를 택할 수 있다. `TradingEngine.processTicker` 는 공용 preamble(가격·동기화·pending reconcile) 뒤 `SWING`/`ACCUMULATE` 로 갈리고, 적립 경로는 `common` 의 `AccumulateLadder`(순수 판정: 눌림 진입·단계 매수·단계 매도·예산 상한)를 호출해 `PositionManager.buyRung`/`sellVolume` 로 체결한다. 손절·익절·트레일링·보유상한은 적용되지 않는다. 사다리 장부(`rungs_filled`·`last_action_price`·`flat_peak`)는 `trading_states`(V23)에 두고 잔고·평단은 종전대로 거래소에서 복원하며, 두 소스가 갈라지면(부분체결·수동 매매) `LadderStateMapper` 가 매 tick 정합을 맞춘다(정합 상태에서는 no-op).
-
-**사용자 목록과 활성 집합 (#226):** 엔진은 사용자 목록(`getUserTickers()`)과 활성 집합(적립 ∪ 사용자 목록 ∪ 잔류)을 따로 든다. 사용자 목록 `bot_state.tickers` 에는 파생값을 되쓰지 않는다. 목록 밖이어도 엔진이 산 스윙 포지션·미해소 주문은 청산될 때까지 잔류하고(신규 진입 없음), 적립 설정에서 빠진 사다리 보유분은 싣지 않는다. 재기동(reload)과 실행 중 `/api/bot/start` 비교는 사용자 목록을 쓴다 — 실행 중 다른 목록은 409.
+**사용자 목록과 활성 집합 (#226):** 엔진은 사용자 목록(`getUserTickers()`)과 활성 집합(사용자 목록 ∪ 잔류)을 따로 든다. 사용자 목록 `bot_state.tickers` 에는 파생값을 되쓰지 않는다. 목록 밖이어도 엔진이 산 포지션·미해소 주문은 청산될 때까지 잔류한다(신규 진입 없음). 재기동(reload)과 실행 중 `/api/bot/start` 비교는 사용자 목록을 쓴다 — 실행 중 다른 목록은 409.
 
 ---
 
@@ -123,7 +121,7 @@ MA5 > MA20 · RSI(14) 30~70 을 모두 만족하면 매수한다. 차트 청산�
 | V20 | `trading_states` 에 `pending_sell_since`·`pending_sell_alerted` — 막힌 매도 알림을 재시작 횟수와 무관한 경과시간으로 판정 |
 | V21 | `trade_records.pnl_amount` 추가 + 매도 기록의 전략 귀속 소급 복구. `buildSellRecord` 가 `strategy` 를 안 넘겨 그때까지의 매도가 전부 `strategy=NULL` 이었다(전략별 손익이 통째로 `unknown` 으로 집계). 귀속은 포지션 구간 내 첫 번째 non-manual BUY 기준 — 수동 매수는 `TradingState` 를 세우지 않아 런타임 `entryStrategy` 후보가 아니다 |
 | V22 | `stock_order_intent.strategy`·`reason`(V27 에서 테이블째 제거) |
-| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`(매도 trigger 는 #235 부터 스윙 매도의 판단가도 담는다 — 매도 기록가). 컬럼 추가만이며 되돌릴 때는 DROP 이 아니라 프로파일을 끈다(forward-off) |
+| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`. 적립 프로파일은 2026-10-01 에 지웠고 앞 네 컬럼은 더 매핑하지 않는다(DROP 은 MVP 3단계). 뒤 세 컬럼은 스윙이 쓴다 — 주문 전 보유량(잔고 복원·응답 못 받은 주문 판정, #227)과 매도 판단가(매도 기록가, #235) |
 | V24·V25 | `shadow_exit_observation` 신설 + `live_exit_vwap` — 후보 청산 파라미터 그림자 관측·실행 슬리피지 |
 | V26 | `trade_records.order_amount` — 이 주문의 실체결 대금(Σ`trades[].funds`, 수수료 미포함). 엔진 BUY 의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 부풀려 읽던 문제(#146). nullable·백필 없음·롤백 시 DROP 금지 |
 | V27 | KIS 경로 제거 — 원자료를 `kis_archive_*` 4테이블(stock_order_intent·stock_position_state·users_keys·trade_executions)에 복사한 뒤 `stock_order_intent`·`stock_position_state` DROP, `users.kis_*` 5컬럼 DROP, `bot_state`·`bot_configs`·`trade_executions` 의 `exchange='KIS'` 행 삭제. PR revert 는 복구가 아니다(Flyway validate 실패) — 복구는 아카이브에서 새 마이그레이션으로(V28 은 아래 identifier). 아카이브 DROP 은 #203 |

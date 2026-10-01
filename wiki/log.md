@@ -246,3 +246,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[accumulate-ladder]] 의 유니버스 절(선정 규칙·`applyTickers`·첫 선정 전 진입 없음·dormant 되살리기)을 걷었다. 남는 규칙 — `bot_state.tickers` 는 사용자 의도만 저장, watchlist 밖 REST 폴백(`DailyCandleCache`) — 은 [[trading-engine-loop]] 로 옮겼다.
 - [[trading-engine-loop]] 의 잔류·정리·재기동·화면 분류·dust 해제에서 auto 분기를 걷었다. #226 테스트 묶음은 `TradingEngineTickerSetTest` 로 이름을 바꿨다.
+
+## [2026-10-01] delete | MVP 2단계 — 적립 프로파일 삭제
+
+- `concept/accumulate-ladder` 페이지를 지웠다(적립 코드·설계 스펙과 함께). 공유 경로는 남는 페이지가 맡는다 — 주문 전 보유량·매도 판단가는 [[persistence-schema]] V23 행과 [[trading-engine-loop]], 거래대금 정의는 README API 개요.
+- [[trading-engine-loop]] 의 프로파일 분기·`reservedKrw`·사다리 행 제외·dust 의 적립 예외, [[exit-gates]] 의 적립 미적용 서술, [[trade-record-volume-semantics]] 의 `accumulate` 귀속을 걷거나 과거형으로 바꿨다. `verify.sh` 쪽수 32±2 → 31±2.

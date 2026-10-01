@@ -1,6 +1,5 @@
 package com.trading.bot.config
 
-import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
 import java.io.File
@@ -48,7 +47,7 @@ class TradingEnvPassthroughTest {
         assertTrue(deployListed.size > MIN_PARSED) { "deploy.sh 파싱 실패로 보인다 — ${deployListed.size}개" }
 
         val expected = listOf(
-            TradingProperties::class, AccumulateProperties::class, ShadowExitProperties::class,
+            TradingProperties::class, ShadowExitProperties::class,
         ).flatMap { klass ->
             val prefix = klass.findAnnotation<ConfigurationProperties>()?.prefix
                 ?: error("${klass.simpleName} 에 @ConfigurationProperties prefix 가 없다")

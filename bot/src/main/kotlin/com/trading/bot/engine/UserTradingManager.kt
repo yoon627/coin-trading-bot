@@ -13,7 +13,6 @@ import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
-import com.trading.common.config.AccumulateProperties
 import com.trading.bot.config.ExitParamsDeclarationCheck
 import com.trading.common.config.TradingProperties
 import com.trading.bot.persistence.ShadowExitObservationRepository
@@ -59,7 +58,6 @@ class UserTradingManager(
     private val userSecretsService: UserSecretsService,
     private val marketDataStore: MarketDataStore,
     private val tradingStateService: TradingStateService,
-    private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
     private val dailyCandleCache: DailyCandleCache? = null,
     private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
     // null 이면 그림자 관측을 만들지 않는다 — 저장소 없이 켜면 매 tick 관측이 조용히 버려진다.
@@ -384,11 +382,10 @@ class UserTradingManager(
             // them, so reading from states here would briefly return [] right
             // after /api/bot/start.
             "tickers" to (engine?.getActiveTickers() ?: emptyList<String>()),
-            // 화면용 분류 — 활성 집합(tickers)은 사용자 목록·적립·청산 대기가 섞인 파생 집합이라, 뺀 티커가 그대로 보이면
+            // 화면용 분류 — 활성 집합(tickers)은 사용자 목록·청산 대기가 섞인 파생 집합이라, 뺀 티커가 그대로 보이면
             // 목록이 적용되지 않은 것으로 읽힌다(#226). default_tickers 는 목록 없이 시작할 때 쓰는 설정 목록이다.
             "user_tickers" to (live?.getUserTickers() ?: emptyList<String>()),
             "entry_tickers" to (live?.getEntryTickers() ?: emptyList<String>()),
-            "accumulate_tickers" to (live?.getAccumulateTickers() ?: emptyList<String>()),
             "exit_only_tickers" to (live?.getExitOnlyTickers() ?: emptyList<String>()),
             "default_tickers" to tradingProperties.tickerList(),
             "positions" to (engine?.getStates()?.map { (ticker, state) ->
@@ -401,10 +398,6 @@ class UserTradingManager(
                     "halted" to state.halted,
                     // 보유 여부 미확정으로 매수가 막힌 상태 — 로그를 안 보고도 원인을 알 수 있게 노출한다.
                     "unsynced" to state.unsynced,
-                    "profile" to engine.profileNameOf(ticker),
-                    "rungs" to state.rungsFilled,
-                    // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 하락장에서 단이 안 채워지는 이유를 여기서 본다.
-                    "accumulate_skip" to (state.accumulateSkipReason ?: ""),
                 )
             } ?: emptyList<Map<String, Any>>()),
             "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
@@ -471,8 +464,8 @@ class UserTradingManager(
         val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val wasRunning = existing.isRunning()
-        // 사용자 목록 그대로 — 활성 집합(적립·잔류 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
-        // 빈 목록(적립만 운용)을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
+        // 사용자 목록 그대로 — 활성 집합(잔류 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
+        // 빈 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
         val tickers = existing.getUserTickers()
         val strategy = existing.getActiveStrategyName()
         // 요청이 끊겨도 루프 join 까지 기다린다 — 취소가 여기서 새면 정지된 엔진만 남고(#262), join 전에 복귀하면 옛 루프의
@@ -560,7 +553,6 @@ class UserTradingManager(
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
             marketDataStore = marketDataStore,
-            accumulateProperties = accumulateProperties,
             dailyCandleCache = dailyCandleCache,
             shadowExitObserver = shadowExitObserver(user.id!!),
         )
