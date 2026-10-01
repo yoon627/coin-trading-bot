@@ -89,21 +89,6 @@ class RateLimitFilterTest {
     }
 
     @Test
-    fun `filter skips price stream endpoints`() {
-        val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
-        val filter = RateLimitFilter(redisTemplate)
-        val exchange = MockServerWebExchange.from(
-            MockServerHttpRequest.get("/api/prices/stream").build()
-        )
-        val chain = mockk<WebFilterChain>()
-        every { chain.filter(exchange) } returns Mono.empty()
-
-        filter.filter(exchange, chain).block()
-
-        io.mockk.verify { chain.filter(exchange) }
-    }
-
-    @Test
     fun `filter skips tide-app static bundle paths`() {
         val redisTemplate = mockk<ReactiveRedisTemplate<String, String>>()
         val filter = RateLimitFilter(redisTemplate)

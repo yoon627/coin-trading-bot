@@ -35,7 +35,7 @@ class TradingEngine(
     private val upbitClient: UpbitClient,
     private val positionManager: PositionManager,
     private val dailyResetManager: DailyResetManager,
-    private val strategies: List<TradingStrategy>,
+    private val strategy: TradingStrategy,
     private val tradingProperties: TradingProperties,
     private val userId: Long = 0,
     private val username: String = "",
@@ -76,18 +76,12 @@ class TradingEngine(
     private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
-    // 캔들 부족·낡은 D1 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 키에 전략(또는 소스)을 넣는 이유:
-    // 런타임 setStrategy 로 전략이 바뀌면 새로 알려야 하고, store/REST 가 서로의 경고를 삼키면 안 된다.
+    // 캔들 부족·낡은 D1 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 낡은 D1 키에 소스를 넣는 이유:
+    // store/REST 가 서로의 경고를 삼키면 안 된다.
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
-    // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
-    @Volatile
-    private var activeStrategy: TradingStrategy? = null
+    // 컨트롤러 스레드(start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
     @Volatile
     private var activeTickers: List<String> = emptyList()
-
-    init {
-        activeStrategy = strategies.firstOrNull()
-    }
 
     fun start(
         tickers: List<String> = tradingProperties.tickerList(),
@@ -124,7 +118,7 @@ class TradingEngine(
                     )
                 }
             warnIfExitConfigInert()
-            log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, activeStrategy?.name)
+            log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, strategy.name)
             loopJob = scope.launch { runLoop() }
         }
     }
@@ -230,15 +224,6 @@ class TradingEngine(
     internal fun unpersistedSells(): List<TradingState> =
         states.values.filter { it.pendingPersistFailed && it.hasPendingSell() }
 
-    fun getActiveStrategyName(): String = activeStrategy?.name ?: "none"
-
-    fun setStrategy(strategyName: String): Boolean {
-        val strategy = strategies.find { it.name == strategyName } ?: return false
-        activeStrategy = strategy
-        log.info("User {} ({}) strategy changed to: {}", userId, username, strategyName)
-        return true
-    }
-
     private suspend fun runLoop() {
         activeTickers.forEach { ticker ->
             states.computeIfAbsent(ticker) { TradingState(it) }
@@ -327,7 +312,6 @@ class TradingEngine(
 
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
-        val strategy = activeStrategy ?: return
         processTicker(ticker, state, strategy)
     }
 
@@ -483,7 +467,7 @@ class TradingEngine(
      * 평가는 막지 않는다 — 전략이 자기 가드로 false 를 내므로 "건너뛴다"고 적으면 운영자가 차단으로 오해한다.
      */
     private fun warnInsufficientCandles(ticker: String, strategy: TradingStrategy, actual: Int) {
-        val key = "$ticker:${strategy.name}:min-candles"
+        val key = "$ticker:min-candles"
         val now = System.currentTimeMillis()
         val last = candleWarnAtMs[key]
         if (last != null && now - last < STALE_WARN_INTERVAL_MS) return

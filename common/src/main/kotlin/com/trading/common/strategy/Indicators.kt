@@ -2,7 +2,6 @@ package com.trading.common.strategy
 
 import com.trading.common.domain.Ohlc
 import kotlin.math.max
-import kotlin.math.sqrt
 
 object Indicators {
 
@@ -53,76 +52,5 @@ object Indicators {
         val shortMa = calculateMa(candles, shortPeriod)
         val longMa = calculateMa(candles, longPeriod)
         return shortMa > longMa
-    }
-
-    data class BollingerBands(val upper: Double, val middle: Double, val lower: Double, val width: Double)
-
-    fun calculateBollingerBands(candles: List<Ohlc>, period: Int = 20, multiplier: Double = 2.0): BollingerBands? {
-        if (candles.size < period) return null
-        val closes = candles.take(period).map { it.close }
-        val middle = closes.average()
-        val variance = closes.map { (it - middle) * (it - middle) }.average()
-        val stdDev = sqrt(variance)
-        return BollingerBands(
-            upper = middle + stdDev * multiplier,
-            middle = middle,
-            lower = middle - stdDev * multiplier,
-            width = if (middle > 0) (stdDev * multiplier * 2) / middle else 0.0,
-        )
-    }
-
-    data class MacdResult(val macd: Double, val signal: Double, val histogram: Double)
-
-    /**
-     * MACD(fast, slow, signal) — TA-Lib(`ta_MACD.c`) 규칙. 받은 히스토리 **전체**를 누적하고, 각 EMA 는 첫 period 개의 SMA 로
-     * seed 하되 fast 창은 slow 창의 꼬리(`bars[slow-fast .. slow-1]`)에서 시작한다. 시그널은 slow EMA 가 정의되는 시점부터의
-     * MACD 선 전체에 EMA(signal). 최신순 입력(index 0 = 최신), 최소 `slow + signal` 봉(TA-Lib 최소 34 보다 1봉 보수적).
-     *
-     * 값은 **넘긴 히스토리 길이에 의존**한다 — seed 오차가 `(1-k)^n` 로만 감쇠하므로 넘긴 봉 수가 다른 호출끼리는
-     * 서로 조금 다른 값을 본다(수백 봉이면 수렴). 히스토리를 35봉으로 잘라 첫 값으로 seed 하던 이전 구현은 slow EMA 가
-     * 아예 수렴하지 못해 표준값과 크게 어긋났다(#27).
-     */
-    fun calculateMacd(
-        candles: List<Ohlc>,
-        fastPeriod: Int = 12,
-        slowPeriod: Int = 26,
-        signalPeriod: Int = 9,
-    ): MacdResult? {
-        require(fastPeriod in 1 until slowPeriod && signalPeriod >= 1) { "periods must satisfy 1 <= fast < slow, signal >= 1" }
-        if (candles.size < slowPeriod + signalPeriod) return null
-        val closes = candles.map { it.close }.reversed()
-
-        fun emaSeries(data: List<Double>, period: Int): List<Double> {
-            val k = 2.0 / (period + 1)
-            val out = ArrayList<Double>(data.size - period + 1)
-            var value = data.take(period).average()
-            out.add(value)
-            for (i in period until data.size) {
-                value = data[i] * k + value * (1 - k)
-                out.add(value)
-            }
-            return out
-        }
-
-        // fast 창을 slow 창의 꼬리에서 시작해야 두 EMA 가 같은 봉(slow-1)부터 정렬되고 seed 도 TA-Lib 과 같다.
-        val fastEma = emaSeries(closes.drop(slowPeriod - fastPeriod), fastPeriod)
-        val slowEma = emaSeries(closes, slowPeriod)
-        val macdLine = fastEma.zip(slowEma) { f, s -> f - s }
-        val signalLine = emaSeries(macdLine, signalPeriod)
-
-        val macd = macdLine.last()
-        val signal = signalLine.last()
-        return MacdResult(macd = macd, signal = signal, histogram = macd - signal)
-    }
-
-    fun calculateEma(candles: List<Ohlc>, period: Int): Double {
-        if (candles.size < period) return 0.0
-        val closes = candles.take(period).map { it.close }.reversed()
-        val k = 2.0 / (period + 1)
-        var ema = closes.first()
-        for (i in 1 until closes.size) {
-            ema = closes[i] * k + ema * (1 - k)
-        }
-        return ema
     }
 }

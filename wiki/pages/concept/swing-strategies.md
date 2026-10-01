@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-10-01
 claim_state: current
-verified: 2026-10-01 — 차트 청산 제거(MVP 2단계): `shouldSell`·`shouldSellNormalized`·`Indicators.checkDeadCross` 삭제, `minCandles` 는 기본값 없는 선언(`CombinedStrategy` 21 — 가드와 같은 값)임을 `StrategyMinCandlesTest`·`CombinedStrategyTest` 로 확인 · 2026-10-01 — 등록 전략이 `combined` 하나임을 `StrategyConfigTest` 로, 엔진 초기 전략·상태 API 폴백이 첫 등록 전략임을 `TradingEngineTest`·`UserTradingManagerTest` 로, 세 조건(RSI 는 상한·하한 각각)·21봉 가드·store 경로(`shouldBuyNormalized`)를 `CombinedStrategyTest` 로 확인(변이 9종 검출 — 조건 3·RSI 하한·가드·시가 매핑·bean 추가·폴백 2) · 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입, StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
+verified: 2026-10-01 — 전략 단일 주입: `TradingEngine`·`UserTradingManager` 생성자가 `strategy: TradingStrategy` 하나, 상태의 `strategy` 는 엔진 유무와 무관하게 주입 전략 이름(`UserTradingManagerTest` 통합 테스트 — 변이 "엔진 없으면 none" 검출), 새 행의 `bot_state.strategy` 가 `combined`(변이 "빈 칸" 검출) · 2026-10-01 — `Indicators` 에서 BB·MACD·EMA 삭제(main 소비자 `ChartController` 삭제) 뒤 main 호출자는 `CombinedStrategy` 하나(목표가·`isMaUptrend`·RSI, `calculateMa` 는 `isMaUptrend` 안에서)이고, `IndicatorsParityTest`(REST↔store 동등)·`IndicatorsExtendedTest` 통과 · 2026-10-01 — 차트 청산 제거(MVP 2단계): `shouldSell`·`shouldSellNormalized`·`Indicators.checkDeadCross` 삭제, `minCandles` 는 기본값 없는 선언(`CombinedStrategy` 21 — 가드와 같은 값)임을 `StrategyMinCandlesTest`·`CombinedStrategyTest` 로 확인 · 2026-10-01 — 등록 전략이 `combined` 하나임을 `StrategyConfigTest` 로, 엔진 초기 전략·상태 API 폴백이 첫 등록 전략임을 `TradingEngineTest`·`UserTradingManagerTest` 로, 세 조건(RSI 는 상한·하한 각각)·21봉 가드·store 경로(`shouldBuyNormalized`)를 `CombinedStrategyTest` 로 확인(변이 9종 검출 — 조건 3·RSI 하한·가드·시가 매핑·bean 추가·폴백 2) · 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입, StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/TradingStrategy.kt
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
@@ -28,7 +28,7 @@ interface TradingStrategy {
 ```
 
 - `shouldBuyNormalized` 변형이 있고 기본 구현이 `NormalizedCandle` → `Candle` 로 변환해 위임한다. 엔진은 store 캔들이 충분하면 Normalized 경로를, 부족하면 REST 캔들로 legacy 경로를 탄다([[trading-engine-loop]]).
-- 전략이 하나여도 인터페이스를 남긴 이유: 엔진이 전략 목록(`StrategyConfig` bean)을 받아 첫 전략을 기본으로 쓰고 `setStrategy` 로 바꾸며, 엔진 테스트가 이 자리에 스텁을 끼운다.
+- 전략이 하나여도 인터페이스를 남긴 이유: 엔진·매니저가 전략을 생성자로 받고(`StrategyConfig` bean 하나), 엔진 테스트가 이 자리에 스텁을 끼운다.
 
 ## `combined` — 세 조건의 AND
 
@@ -40,15 +40,15 @@ interface TradingStrategy {
 
 - **RSI 는 넘긴 봉 전체로 계산한다.** `calculateRsi` 는 리스트 전체로 Wilder smoothing 을 돌아 **창 길이가 값에 들어간다** — 라이브 store 경로는 21~60봉 가변이라 같은 시점이어도 넘긴 봉 수에 따라 RSI 가 조금씩 다르다(무릎 전략 실측, 2026-08: 50↔60봉 최대 5.65, 21~60봉 가변이면 최대 21.43). `combined` 는 자르지 않는다 — 동작을 바꾸지 않으려는 것이다.
 
-## 기본 전략 규칙
+## 전략 주입
 
-- 등록은 `StrategyConfig` 의 bean 이고, **엔진과 상태 API 는 첫 등록 bean 을 기본 전략으로 쓴다**(`TradingEngine` 초기화, 엔진·캐시가 없을 때의 `/api/bot/status` 전략). 둘이 같은 규칙이어야 정지 뒤 화면이 채운 전략으로 시작해도 전략이 바뀌지 않는다. `StrategyConfigTest` 가 등록 목록을 `["combined"]` 로 고정한다.
+- 등록은 `StrategyConfig` 의 bean **하나**다. `UserTradingManager` 가 `TradingStrategy` 하나를 생성자로 주입받아 엔진에 넘기고, 상태(`/api/bot/status`)·시작 응답의 `strategy` 도 그 이름이다 — 엔진이 있든 없든 같은 값이라 "기본 전략" 규칙이 따로 없다. bean 이 둘이 되면 대개 기동이 `NoUniqueBeanDefinitionException` 으로 실패하지만, `@Primary` 나 파라미터명(`strategy`)과 같은 bean 이름이 있으면 그 bean 이 조용히 주입된다 — 그래서 등록 목록은 `StrategyConfigTest` 가 `["combined"]` 로 고정한다.
 - 전략을 고르는 설정(`trading.strategy`·`TRADING_STRATEGY`)은 2026-10-01 에 없앴다. 운영 secret 에 남은 줄은 Vultr 배포가 전달하지 않고, 전달되더라도 Spring Boot 가 환경변수의 모르는 키로 바인딩을 실패시키지 않는다.
-- 사용자별 선택(`/api/bot/strategy`, 시작 요청의 `strategy`)은 등록 이름만 받는다 — 전략이 하나라 고를 것이 없지만 경로는 남아 있다.
+- 사용자별 선택(`/api/bot/strategy`, 전략 목록 `GET /api/strategies`, 화면의 선택기)도 같은 날 지웠다. 시작 요청에 `strategy` 를 보내도 무시된다 — 요청 DTO 에 필드가 없고 Jackson 이 모르는 필드를 버린다(`fail-on-unknown-properties: false`). `bot_state.strategy` 는 쓰기만 한다 — 옛 이미지로 롤백하면 복원이 이 값으로 전략을 고른다([[trading-engine-loop]]).
 
 ## 지표
 
-지표 계산은 `Indicators` 에 모여 있다. `calculateMacd` 는 2026-09-16(#27)부터 TA-Lib 규칙 — 받은 히스토리 전체, EMA 는 첫 period 개 SMA 로 seed(fast 창은 slow 창의 꼬리에서 시작), 시그널은 MACD 선 전체에 EMA(9) — 이라 **충분한 히스토리(수백 봉)를 넘기면** 외부 차트의 MACD 와 일치한다. 지금 MACD 를 쓰는 곳은 차트 API(`ChartController`) 하나이고, 값은 넘긴 `count` 에 의존한다(이전 구현은 35봉 절단이라 표준값과 크게 달랐다). `calculateEma` 등 나머지 지표는 아직 이 파일 고유의 단순 방식이라 외부 값과 다르다.
+지표 계산은 `Indicators` 에 모여 있고, `combined` 가 쓰는 목표가(`calculateTargetPrice`)·RSI(`calculateRsi`)·MA(`calculateMa`·`isMaUptrend`)만 남았다. MACD·볼린저 밴드·EMA 는 유일한 소비자였던 차트 API 와 함께 2026-10-01 지웠다(TA-Lib 규칙으로 맞춘 MACD 구현과 그 검증은 저장소 이력에 있다 — #27). 엔진은 store D1 과 REST 캔들을 오가므로 `IndicatorsParityTest` 가 같은 OHLC 를 두 형식으로 넣어 남은 지표가 같은 값을 내는지 고정한다.
 
 ## 청산과의 관계
 

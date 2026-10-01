@@ -30,16 +30,14 @@ class TradingController(
     suspend fun startBot(@RequestBody(required = false) req: StartBotRequest?): Map<String, Any> {
         val userId = currentUserId()
         val tickers = req?.tickers?.let(requestValidators::normalizeMarkets)
-        val strategy = req?.strategy?.let(requestValidators::normalizeStrategy)
-        val result = persisting { userTradingManager.startBot(userId, tickers, strategy) }
+        val result = persisting { userTradingManager.startBot(userId, tickers) }
         // UserTradingManager returns {"error": "..."} for precondition failures
-        // (no API keys, user missing, unknown strategy, running with another ticker list). Surface those as proper 4xx
-        // so clients can branch on status instead of having to inspect the body. Codes go first — the message can carry
-        // user input (a strategy name) that would otherwise trip the "not found" match.
+        // (no API keys, user missing, running with another ticker list). Surface those as proper 4xx
+        // so clients can branch on status instead of having to inspect the body. Codes go first so the message wording
+        // never decides a status that has a code.
         result["error"]?.let { msg ->
             val status = when {
                 result["code"] == UserTradingManager.CONFLICT_CODE -> HttpStatus.CONFLICT
-                result["code"] == UserTradingManager.UNKNOWN_STRATEGY_CODE -> HttpStatus.BAD_REQUEST
                 (msg as? String)?.contains("not found", ignoreCase = true) == true -> HttpStatus.NOT_FOUND
                 else -> HttpStatus.BAD_REQUEST
             }
@@ -56,16 +54,6 @@ class TradingController(
     @GetMapping("/bot/status")
     suspend fun getStatus(): Map<String, Any> {
         return userTradingManager.getStatus(currentUserId())
-    }
-
-    @PostMapping("/bot/strategy")
-    suspend fun changeStrategy(@RequestBody request: StrategyRequest): Map<String, Any> {
-        val strategy = requestValidators.normalizeStrategy(request.strategy)
-        val success = persisting { userTradingManager.setStrategy(currentUserId(), strategy) }
-        if (!success) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown strategy: $strategy")
-        }
-        return mapOf("status" to "changed", "strategy" to strategy)
     }
 
     @PostMapping("/bot/halt/clear")
@@ -148,8 +136,7 @@ private inline fun <T> persisting(block: () -> T): T =
         throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.message, e)
     }
 
-data class StartBotRequest(val tickers: List<String>? = null, val strategy: String? = null)
-data class StrategyRequest(val strategy: String)
+data class StartBotRequest(val tickers: List<String>? = null)
 data class ClearHaltRequest(val ticker: String)
 data class UserSettingsRequest(val discordWebhookUrl: String? = null)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)

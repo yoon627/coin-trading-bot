@@ -2,7 +2,7 @@ package com.trading.bot.marketdata
 
 import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
-import com.trading.bot.stream.MarketDataPersistenceService
+import com.trading.bot.stream.CandleAggregator
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
@@ -27,9 +27,9 @@ class MarketDataIngestionServiceTest {
 
     private val feed = mockk<UpbitMarketFeed>(relaxed = true)
     private val store = mockk<MarketDataStore>(relaxed = true)
-    private val persistence = mockk<MarketDataPersistenceService>(relaxed = true)
+    private val aggregator = mockk<CandleAggregator>(relaxed = true)
     private val watchlist = mockk<WatchlistProperties>(relaxed = true)
-    private val service = MarketDataIngestionService(feed, store, persistence, watchlist, MarketDataWatchdogProperties())
+    private val service = MarketDataIngestionService(feed, store, aggregator, watchlist, MarketDataWatchdogProperties())
 
     private val ticker = NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = 50_000_000.0)
     private val candle = NormalizedCandle(
@@ -37,28 +37,17 @@ class MarketDataIngestionServiceTest {
         openPrice = 1.0, highPrice = 2.0, lowPrice = 0.5, closePrice = 1.5, volume = 10.0,
     )
 
-    // 한 sink(persistence) 실패가 다른 sink(store) 갱신이나 수집 코루틴을 죽이면 안 된다.
+    // store·집계기 한쪽의 실패가 다른 쪽 갱신이나 수집 코루틴(Flow collect)을 죽이면 안 된다.
     @Test
-    fun `ingestTicker updates store even when persistence throws`() {
-        every { persistence.persistTicker(any()) } throws RuntimeException("db down")
-
-        assertDoesNotThrow { service.ingestTicker(ticker) }
-
-        verify { store.updateTicker(ticker) }
-    }
-
-    @Test
-    fun `ingestTicker still persists even when store throws`() {
+    fun `ingestTicker keeps the ticker flow alive when the store throws`() {
         every { store.updateTicker(any()) } throws RuntimeException("oom")
 
         assertDoesNotThrow { service.ingestTicker(ticker) }
-
-        verify { persistence.persistTicker(ticker) }
     }
 
     @Test
-    fun `ingestCandle updates store even when persistence throws`() {
-        every { persistence.persistCandle(any()) } throws RuntimeException("db down")
+    fun `ingestCandle updates store even when aggregation throws`() {
+        every { aggregator.onMinuteCandle(any()) } throws RuntimeException("bad period")
 
         assertDoesNotThrow { service.ingestCandle(candle) }
 
@@ -66,12 +55,12 @@ class MarketDataIngestionServiceTest {
     }
 
     @Test
-    fun `ingestCandle still persists even when store throws`() {
+    fun `ingestCandle still aggregates even when store throws`() {
         every { store.addCandle(any()) } throws RuntimeException("oom")
 
         assertDoesNotThrow { service.ingestCandle(candle) }
 
-        verify { persistence.persistCandle(candle) }
+        verify { aggregator.onMinuteCandle(candle) }
     }
 
     // 부팅 백필: store D1 버퍼를 과거 일봉으로 채운다(매수/청산 warm-up REST 폴백 방지).
@@ -95,8 +84,8 @@ class MarketDataIngestionServiceTest {
 
         service.seedDailyCandles(listOf("BTC/KRW"))
 
-        verify(exactly = 1) { persistence.primeAggregate(todayCandle, any()) }
-        verify(exactly = 0) { persistence.primeAggregate(yesterday, any()) }
+        verify(exactly = 1) { aggregator.prime(todayCandle, any()) }
+        verify(exactly = 0) { aggregator.prime(yesterday, any()) }
     }
 
     @Test
@@ -107,7 +96,7 @@ class MarketDataIngestionServiceTest {
         service.seedDailyCandles(listOf("BTC/KRW"))
 
         verify(exactly = 1) { store.addCandle(yesterday) }
-        verify(exactly = 0) { persistence.primeAggregate(any(), any()) }
+        verify(exactly = 0) { aggregator.prime(any(), any()) }
     }
 
     // 첫 라운드 꼬리(count>1)가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 store 의 seed 를 덮는다 —
@@ -120,8 +109,8 @@ class MarketDataIngestionServiceTest {
 
         service.seedDailyCandles(listOf("BTC/KRW", "ETH/KRW"))
 
-        verify(exactly = 1) { persistence.startAggregationFrom("BTC/KRW", any()) }
-        verify(exactly = 1) { persistence.startAggregationFrom("ETH/KRW", any()) }
+        verify(exactly = 1) { aggregator.startFrom(Exchange.UPBIT, "BTC/KRW", any()) }
+        verify(exactly = 1) { aggregator.startFrom(Exchange.UPBIT, "ETH/KRW", any()) }
     }
 
     @Test

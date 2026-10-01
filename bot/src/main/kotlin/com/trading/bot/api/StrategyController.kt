@@ -2,7 +2,6 @@ package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
 import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.common.strategy.TradingStrategy
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
@@ -10,14 +9,8 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 @RequestMapping("/api/strategies")
 class StrategyController(
-    private val strategies: List<TradingStrategy>,
     private val tradeRecordRepository: TradeRecordRepository,
 ) {
-    @GetMapping
-    fun listStrategies(): List<Map<String, String>> {
-        return strategies.map { mapOf("name" to it.name) }
-    }
-
     @GetMapping("/performance")
     suspend fun getPerformance(): Map<String, Any> {
         val userId = currentUserId()
