@@ -7,7 +7,7 @@ export MSYS_NO_PATHCONV=1
 # Coin Trading Bot - Vultr 배포 스크립트
 #
 # Vultr 서울(icn) vc2-1c-2gb (1 vCPU x86_64, 2GB, 55GB SSD) + Docker Compose — $10/월.
-# 구성: caddy + app + PostgreSQL + Redis.
+# 구성: caddy + app + PostgreSQL.
 #
 # AWS(4GB, $39.29/월 실측) 대비 -75%. 2GB 로 낮춘 근거는 운영 59일차 EC2 실측이다
 # (app 420MiB / postgres 380MiB / redis 3.4MiB / caddy 14MiB = 818MiB, load average 0.00).
