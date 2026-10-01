@@ -64,13 +64,7 @@ class TradingEngineTest {
         every { dailyResetManager.shouldSellForDailyReset(any()) } returns false
     }
 
-    private fun namedStrategy(strategyName: String): TradingStrategy = mockk {
-        every { name } returns strategyName
-        every { minCandles } returns 21
-    }
-
     private fun createEngine(
-        strategies: List<TradingStrategy> = listOf(strategy),
         props: TradingProperties = tradingProperties,
         clock: Clock = Clock.systemUTC(),
     ): TradingEngine {
@@ -78,7 +72,7 @@ class TradingEngineTest {
             upbitClient = upbitClient,
             positionManager = positionManager,
             dailyResetManager = dailyResetManager,
-            strategies = strategies,
+            strategy = strategy,
             tradingProperties = props,
             userId = 1L,
             username = "testuser",
@@ -249,33 +243,6 @@ class TradingEngineTest {
         assertTrue(engine.isRunning())
         assertEquals(listOf("KRW-BTC"), engine.getActiveTickers())
         engine.stop()
-    }
-
-    @Test
-    fun `getActiveStrategyName returns strategy name`() {
-        val engine = createEngine()
-        assertEquals("test_strategy", engine.getActiveStrategyName())
-    }
-
-    @Test
-    fun `a new engine starts with the first registered strategy`() {
-        // 이름이 아니라 등록 순서가 기본 전략을 정한다 — 상태 API 가 엔진이 없을 때 보고하는 전략과 같은 규칙이고,
-        // 둘이 갈리면 정지 뒤 시작이 다른 전략으로 돈다.
-        val combined = namedStrategy("combined")
-        assertEquals("test_strategy", createEngine(strategies = listOf(strategy, combined)).getActiveStrategyName())
-        assertEquals("combined", createEngine(strategies = listOf(combined, strategy)).getActiveStrategyName())
-    }
-
-    @Test
-    fun `setStrategy returns true for valid strategy`() {
-        val engine = createEngine()
-        assertTrue(engine.setStrategy("test_strategy"))
-    }
-
-    @Test
-    fun `setStrategy returns false for unknown strategy`() {
-        val engine = createEngine()
-        assertFalse(engine.setStrategy("nonexistent"))
     }
 
     @Test
@@ -454,7 +421,7 @@ class TradingEngineTest {
         upbitClient = upbitClient,
         positionManager = positionManager,
         dailyResetManager = dailyResetManager,
-        strategies = listOf(strategy),
+        strategy = strategy,
         tradingProperties = tradingProperties,
         userId = 1L,
         username = "testuser",
@@ -770,7 +737,7 @@ class TradingEngineTest {
     fun `loadStoreDailyCandles returns null when store absent`() {
         val engine = TradingEngine(
             upbitClient, positionManager, dailyResetManager,
-            listOf(strategy), tradingProperties,
+            strategy, tradingProperties,
         )
         assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
     }

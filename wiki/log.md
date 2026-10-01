@@ -266,3 +266,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[marketdata-pipeline]] 에서 store 를 밖으로 보이던 차트·SSE·watchlist 서술과 `tickerSink` 를 걷었다(store 는 최신 ticker 스냅샷과 캔들 버퍼만). [[persistence-schema]] 의 시세 테이블은 이제 읽는 코드도 없다.
 - [[swing-strategies]] 의 지표 절: MACD·볼린저·EMA 를 차트 API 와 함께 지웠고, 남은 지표의 REST↔store 동등성은 `IndicatorsParityTest` 가 고정한다. [[architecture-overview]] 는 패키지 표가 그대로 유효함을 다시 확인했다.
+
+## [2026-10-01] update | MVP 3단계 — 전략 선택 경로·봇 설정 API 제거
+
+- [[swing-strategies]] 의 "기본 전략 규칙"을 "전략 주입"으로 바꿨다 — 엔진·매니저가 bean 하나를 생성자로 받고 상태의 `strategy` 는 엔진 유무와 무관하게 그 이름이다. 시작 요청의 `strategy` 는 무시되고 `bot_state.strategy` 는 쓰기만 한다. index 설명을 맞췄다.
+- [[trading-engine-loop]] 의 봇 제어 저장 실패(503) 대상에서 전략 변경을, 복원의 전략 캐시·미등록 이름 400 서술을 걷었다. [[persistence-schema]] V12 행에 `bot_configs`·`user_exchange_keys` 가 코드 참조 없음을 적었다.
