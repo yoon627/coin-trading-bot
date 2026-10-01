@@ -256,3 +256,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[exit-gates]]·[[trading-engine-loop]] 의 청산 우선순위·판정식 표·파라미터 표에서 차트 청산(`CHART_EXIT`·`chartExitEnabled`)을 걷었다. `entryStrategy` 는 매도 기록 귀속과 #226 진입 흔적에만 쓰인다([[persistence-schema]]).
 - [[swing-strategies]] 의 인터페이스에서 `shouldSell`·`shouldSellNormalized` 를 지웠고 `minCandles` 는 기본값 없는 선언이 됐다. 필수 선언 키 6개 → 5개([[deployment-stack]]).
+
+## [2026-10-01] update | MVP 3단계 — 시세 DB 저장·보존 제거
+
+- [[marketdata-pipeline]] 의 fan-out 이 store 와 `CandleAggregator` 둘이 됐다(저장 서비스 삭제, 집계 진입점 `onMinuteCandle`·`startFrom`·`prime` 은 수집기가 직접 부른다). "저장" 절을 지운 사실·잃은 감사 수단·남은 관찰 지점(낡은 D1 WARN)으로 바꾸고, 부팅 로그 문구를 실제 로그(`Seeded … (primed today=…)`)로 고쳤다.
+- [[architecture-overview]] 의 `stream/` 행, [[persistence-schema]] 의 시세 테이블 서술(더 쓰지도 정리하지도 않는다), [[rightsizing-history]] 의 fan-out sink 서술을 맞췄다. [[lesson-seed-vs-stream-overwrite]] 는 서술 그대로 유효함을 특성 테스트로 다시 확인했다.
