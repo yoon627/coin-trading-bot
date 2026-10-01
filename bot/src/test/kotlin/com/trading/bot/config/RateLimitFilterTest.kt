@@ -307,12 +307,12 @@ class RateLimitFilterTest {
 
     private class Sent(val exchange: MockServerWebExchange, val chainCalls: AtomicInteger)
 
-    private fun exchange() = MockServerWebExchange.from(
-        MockServerHttpRequest.get("/api/bot/status").header("X-Forwarded-For", "203.0.113.7").build(),
+    private fun exchange(ip: String = "203.0.113.7") = MockServerWebExchange.from(
+        MockServerHttpRequest.get("/api/bot/status").header("X-Forwarded-For", ip).build(),
     )
 
-    private fun send(filter: RateLimitFilter, downstream: () -> Mono<Void> = { Mono.empty() }): Sent {
-        val exchange = exchange()
+    private fun send(filter: RateLimitFilter, ip: String = "203.0.113.7", downstream: () -> Mono<Void> = { Mono.empty() }): Sent {
+        val exchange = exchange(ip)
         val calls = AtomicInteger()
         filter.filter(exchange) { calls.incrementAndGet(); downstream() }.block(Duration.ofSeconds(5))
         return Sent(exchange, calls)
@@ -427,6 +427,44 @@ class RateLimitFilterTest {
         repeat(60) { assertNotEquals(HttpStatus.TOO_MANY_REQUESTS, send(filter).exchange.response.statusCode, "${it + 1}번째는 한도 안") }
 
         assertEquals(HttpStatus.TOO_MANY_REQUESTS, send(filter).exchange.response.statusCode)
+    }
+
+    // 정분 경계 직전에 분을 계산한 요청이 늦게 도착하는 경우다.
+    @Test
+    fun `이전 분을 계산한 늦은 요청이 현재 분 카운터를 비우지 않는다`() {
+        val clock = MutableClock()
+        val filter = RateLimitFilter(null, clock = clock)
+        repeat(60) { send(filter) }
+
+        clock.now = clock.now.minusSeconds(60)
+        send(filter)
+        clock.now = clock.now.plusSeconds(60)
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, send(filter).exchange.response.statusCode)
+    }
+
+    // 벽시계는 단조 증가가 아니다(NTP step 등). 창이 미래 분에 멈추면 시계가 따라잡을 때까지 같은 IP 가 429 로 잠긴다.
+    @Test
+    fun `벽시계가 1분 넘게 뒤로 가면 창을 새로 시작해 잠그지 않는다`() {
+        val clock = MutableClock()
+        val filter = RateLimitFilter(null, clock = clock)
+        repeat(61) { send(filter) }
+
+        clock.now = clock.now.minusSeconds(5 * 60)
+
+        assertNotEquals(HttpStatus.TOO_MANY_REQUESTS, send(filter).exchange.response.statusCode)
+    }
+
+    @Test
+    fun `지난 분 카운터는 남기지 않는다`() {
+        val clock = MutableClock()
+        val filter = RateLimitFilter(null, clock = clock)
+        for (ip in listOf("203.0.113.1", "203.0.113.2", "203.0.113.3")) send(filter, ip)
+        clock.now = clock.now.plusSeconds(60)
+
+        send(filter, "203.0.113.4")
+
+        assertEquals(1, filter.trackedClients())
     }
 
     @Test
