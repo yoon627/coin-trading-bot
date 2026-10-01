@@ -20,8 +20,6 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
       - DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
-      - REDIS_HOST=redis
-      - REDIS_ENABLED=true
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=trading
@@ -31,8 +29,6 @@ services:
       - APP_ENCRYPTION_SECRET=${APP_ENCRYPTION_SECRET:-}
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     restart: unless-stopped
     logging:
@@ -58,19 +54,5 @@ services:
       retries: 5
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
 volumes:
   pgdata:
-  redisdata:
