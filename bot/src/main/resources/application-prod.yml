@@ -1,13 +1,4 @@
 spring:
-  autoconfigure:
-    exclude: []
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      # Redis 는 rate limit 전용이고 장애 때 in-memory 로 강등된다(RateLimitFilter) — 기본값(명령 60s·연결 10s)까지 매달리지 않게.
-      timeout: 1s
-      connect-timeout: 1s
   r2dbc:
     url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslMode=${DB_SSL_MODE:disable}
     username: ${DB_USER:trading}
@@ -20,17 +11,6 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trading}?sslmode=${DB_SSL_MODE:disable}
     user: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
-
-redis:
-  enabled: ${REDIS_ENABLED:false}
-
-# Redis 가 health 에 들어가면 Redis 장애가 앱을 DOWN 으로 만들어 compose 헬스체크와 배포 health 게이트(자동 롤백 포함)가
-# 실패한다. Redis 는 필수 의존이 아니다 — 장애 신호는 RateLimitFilter 의 강등 WARN(과 연결이 끊기면 Lettuce 재연결 WARN)이다.
-# 이 기여자가 기동 직후 맺어 주던 Lettuce 공유 연결은 RateLimitFilter 가 웹 서버가 요청을 받기 전에 미리 맺는다.
-management:
-  health:
-    redis:
-      enabled: false
 
 app:
   jwt-secret: ${JWT_SECRET:}
