@@ -5,7 +5,7 @@
 # 앱이 아니라 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 손절·트레일링이 평가되지 않는 공백이 생기고,
 # 자동 롤백은 이미지만 되돌려 같은 .env 로 다시 기동한다. 여기서 멈추면 잘못된 설정이 서버에 닿지 않는다.
 #   값   선언된 키가 형식·의미상 구간 안인가. 자동매매 여부와 무관하다 — 수동 시작도 이 값으로 거래한다.
-#   선언 자동매매 배포면 청산 6개 키가 모두 선언됐는가. 빠지면 앱이 코드 기본값으로 조용히 거래한다.
+#   선언 자동매매 배포면 청산 5개 키가 모두 선언됐는가. 빠지면 앱이 코드 기본값으로 조용히 거래한다.
 #
 # 아래 표는 사본이다. 구간의 정의처는 common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt,
 # 선언 키의 정의처는 ExitParamsDeclarationCheck.REQUIRED_KEYS, 불리언은 TradingProperties·ShadowExitProperties 의
@@ -41,7 +41,6 @@ RANGE_RULES=(
 # 막으므로 좁게 본다. 자동매매 스위치는 아래 게이트가 읽는다.
 BOOLEAN_KEYS=(
     TRADING_AUTO_START
-    TRADING_CHART_EXIT_ENABLED
     TRADING_SHADOW_EXIT_ENABLED
 )
 EXIT_PARAM_KEYS=(
@@ -50,7 +49,6 @@ EXIT_PARAM_KEYS=(
     TRADING_TRAILING_STOP_PCT
     TRADING_TRAILING_ARM_PCT
     TRADING_MAX_HOLD_DAYS
-    TRADING_CHART_EXIT_ENABLED
 )
 
 # 정수부를 9자리로 묶는다 — 넘치면 앱이 Int 바인딩에 실패하거나(보유일) Double 이 무한대가 된다.

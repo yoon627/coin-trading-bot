@@ -170,7 +170,6 @@ class ExitParamsPreflightScriptTest {
             "TRADING_TRAILING_STOP_PCT=1.5",
             "TRADING_TRAILING_ARM_PCT=0",
             "TRADING_MAX_HOLD_DAYS=1",
-            "TRADING_CHART_EXIT_ENABLED=false",
             "TRADING_INVEST_RATIO=0.1",
             "TRADING_ROUND_TRIP_FEE_RATE=0.001",
             "TRADING_SHADOW_EXIT_ENABLED=true",
@@ -189,7 +188,7 @@ class ExitParamsPreflightScriptTest {
 
     @Test
     fun `자동매매면 청산 파라미터가 하나라도 빠질 때 막고, 값 위반과 함께 한 번에 알린다`() {
-        val declared = requiredEnvs.associateWith { if (it == "TRADING_CHART_EXIT_ENABLED") "false" else "1" }
+        val declared = requiredEnvs.associateWith { "1" }
         assertThat(run("TRADING_AUTO_START=true", *declared.map { (k, v) -> "$k=$v" }.toTypedArray()).exit).isEqualTo(0)
         requiredEnvs.forEach { missing ->
             val lines = listOf("TRADING_AUTO_START=true") + (declared - missing).map { (k, v) -> "$k=$v" }
@@ -226,8 +225,8 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `위반은 키와 허용 범위만 알리고 값은 찍지 않는다`() {
         // 배포 로그는 공개 repo 의 CI 로그다.
-        val run = run("TRADING_MAX_LOSS_PCT=-7.3517", "TRADING_CHART_EXIT_ENABLED=7.3517x")
-        assertThat(run.flagged).containsExactlyInAnyOrder("TRADING_MAX_LOSS_PCT", "TRADING_CHART_EXIT_ENABLED")
+        val run = run("TRADING_MAX_LOSS_PCT=-7.3517", "TRADING_SHADOW_EXIT_ENABLED=7.3517x")
+        assertThat(run.flagged).containsExactlyInAnyOrder("TRADING_MAX_LOSS_PCT", "TRADING_SHADOW_EXIT_ENABLED")
         assertThat(run.stderr).contains("(0, 100)")
         assertThat(run.stdout + run.stderr).doesNotContain("7.3517")
     }

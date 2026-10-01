@@ -85,7 +85,6 @@ class TradingPropertiesBindingTest {
             "TRADING_ROUND_TRIP_FEE_RATE" to "0.002",
             "TRADING_INTERVAL_SECONDS" to "20",
             "TRADING_AUTO_START" to "true",
-            "TRADING_CHART_EXIT_ENABLED" to "true",
         ).run { ctx ->
             val p = ctx.getBean(TradingProperties::class.java)
             assertThat(p.tickers).isEqualTo("KRW-SOL")
@@ -100,7 +99,6 @@ class TradingPropertiesBindingTest {
             assertThat(p.roundTripFeeRate).isEqualTo(0.002)
             assertThat(p.intervalSeconds).isEqualTo(20L)
             assertThat(p.autoStart).isTrue()
-            assertThat(p.chartExitEnabled).isTrue()
         }
     }
 
@@ -120,7 +118,6 @@ class TradingPropertiesBindingTest {
             assertThat(p.roundTripFeeRate).isEqualTo(0.001)
             assertThat(p.intervalSeconds).isEqualTo(10L)
             assertThat(p.autoStart).isFalse()
-            assertThat(p.chartExitEnabled).isFalse()
             assertThat(p.reconcileHaltThreshold).isEqualTo(20)
         }
     }

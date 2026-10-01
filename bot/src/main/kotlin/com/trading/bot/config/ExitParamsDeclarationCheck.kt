@@ -88,7 +88,6 @@ class ExitParamsDeclarationCheck(
             TradingProperties::trailingStopPct,
             TradingProperties::trailingArmPct,
             TradingProperties::maxHoldDays,
-            TradingProperties::chartExitEnabled,
         )
 
         val REQUIRED_KEYS: List<String> =

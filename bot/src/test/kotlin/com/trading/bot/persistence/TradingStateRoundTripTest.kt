@@ -131,10 +131,6 @@ class TradingStateRoundTripTest {
         halted = true,
         haltReason = "unexplained locked balance",
         reconcileFailureCount = 3,
-        rungsFilled = 3,
-        lastActionPrice = 70_100.0,
-        flatPeak = 72_000.0,
-        pendingBuyTriggerPrice = 69_000.0,
         pendingBuyPriorVolume = 0.00098765,
         pendingSellTriggerPrice = 71_000.0,
         pendingSellPriorVolume = 0.00456789,
@@ -175,10 +171,6 @@ class TradingStateRoundTripTest {
         assertThat(restored.haltReason).isEqualTo(original.haltReason)
         assertThat(restored.reconcileFailureCount).isEqualTo(original.reconcileFailureCount)
         assertThat(restored.exitParams).isEqualTo(original.exitParams)
-        assertThat(restored.rungsFilled).isEqualTo(original.rungsFilled)
-        assertThat(restored.lastActionPrice).isEqualTo(original.lastActionPrice)
-        assertThat(restored.flatPeak).isEqualTo(original.flatPeak)
-        assertThat(restored.pendingBuyTriggerPrice).isEqualTo(original.pendingBuyTriggerPrice)
         assertThat(restored.pendingBuyPriorVolume).isEqualTo(original.pendingBuyPriorVolume)
         assertThat(restored.pendingSellTriggerPrice).isEqualTo(original.pendingSellTriggerPrice)
         assertThat(restored.pendingSellPriorVolume).isEqualTo(original.pendingSellPriorVolume)
