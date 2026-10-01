@@ -506,7 +506,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `startBot persists the requested tickers, not the engine's derived active set`() = runTest {
-        // 자동 유니버스·적립 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면, 기능을 꺼도 그날의 목록이
+        // 적립·잔류 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면, 기능을 꺼도 그날의 목록이
         // 사용자 의도로 굳어 되돌릴 수 없다 — 저장은 사용자가 준 목록만.
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
@@ -521,7 +521,7 @@ class UserTradingManagerTest {
     }
 
     // --- 사용자 목록과 파생 활성 집합의 분리 (#226) ---
-    // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(적립·잔류·auto 선정)을 사용자 의도로 넘기면
+    // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(적립·잔류)을 사용자 의도로 넘기면
     // 목록에서 뺀 티커가 신규 진입 대상으로 승격된다.
 
     private fun userStrategies(): ConcurrentHashMap<Long, String> {

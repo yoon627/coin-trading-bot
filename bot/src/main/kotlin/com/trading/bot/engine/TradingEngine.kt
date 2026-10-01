@@ -6,7 +6,6 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
-import com.trading.common.config.UniverseProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
@@ -47,9 +46,6 @@ class TradingEngine(
     private val marketDataStore: MarketDataStore? = null,
     private val exchange: Exchange = Exchange.UPBIT,
     private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
-    private val universeProperties: UniverseProperties = UniverseProperties(),
-    // null = 자동 선정 없음. 켜짐 여부의 스위치는 universeProperties.auto 하나다.
-    private val universeSource: UniverseSource? = null,
     // null = 엔진의 인증 클라이언트로 직접 조회(단위 테스트·레거시 경로). 운영은 싱글톤 캐시를 주입한다.
     private val dailyCandleCache: DailyCandleCache? = null,
     // null = 그림자 관측 off. 켜도 매매는 바뀌지 않는다 — 후보 청산 파라미터를 나란히 평가해 기록만 한다.
@@ -63,21 +59,16 @@ class TradingEngine(
     // 적립 티커 집합은 설정에서 한 번 만든다 — tick 마다 문자열을 파싱하지 않고, start() 의 합집합과 같은 소스를 쓴다.
     private val accumulateTickers: Set<String> = accumulateProperties.tickerList().toSet()
 
-    // 신규 스윙 진입을 허용하는 집합 — auto 면 마지막 선정(applyTickers), 아니면 사용자 목록(start). 여기 없는 활성 티커는
-    // 보유·미해소 주문 때문에 잔류한 것이라 청산 뒤 재진입하지 못한다 — 잔류의 의미는 "청산될 때까지"이지 "새로 사도 된다"가
-    // 아니다. auto 면 첫 선정이 성공하기 전까지 빈 집합(신규 진입 없음, 청산만) — null(제한 없음)로 두면 선정 API 장애 중
-    // durable 잔재 전부가 진입 대상이 된다. null 은 start 전(processTicker 를 직접 부르는 단위 테스트)뿐이다.
+    // 신규 스윙 진입을 허용하는 집합 — start 가 사용자 목록으로 채운다. 여기 없는 활성 티커는 보유·미해소 주문 때문에
+    // 잔류한 것이라 청산 뒤 재진입하지 못한다 — 잔류의 의미는 "청산될 때까지"이지 "새로 사도 된다"가 아니다.
+    // null(제한 없음)은 start 전(processTicker 를 직접 부르는 단위 테스트)뿐이다.
     @Volatile
-    private var swingUniverse: Set<String>? = if (universeProperties.auto) emptySet() else null
+    private var swingUniverse: Set<String>? = null
 
-    // 사용자가 준 목록(bot_state.tickers). 활성 집합은 여기에 적립·잔류·auto 선정이 합쳐진 파생 집합이라, 재기동이나 실행 중
+    // 사용자가 준 목록(bot_state.tickers). 활성 집합은 여기에 적립·잔류가 합쳐진 파생 집합이라, 재기동이나 실행 중
     // start 비교가 활성 집합을 사용자 의도로 쓰면 잔류 티커가 신규 진입 대상으로 승격된다(#226).
     @Volatile
     private var userTickers: List<String> = emptyList()
-
-    // auto 재시작에서 진입 흔적이 없어 활성에 싣지 않은 durable 행. 실제 잔고가 있으면 runLoop 초입에서 되살린다.
-    @Volatile
-    private var dormantStates: Map<String, TradingState> = emptyMap()
 
     // 적립 티커의 주기 재동기화 시각. 거래소(앱·웹)에서 직접 한 매매는 TradingState 를 건드리지 않아 장부가 낡는다.
     private val ladderSyncedAtMs = ConcurrentHashMap<String, Long>()
@@ -103,9 +94,6 @@ class TradingEngine(
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
         // 경계 뒤 이 시간 안에 오늘 D1 이 없는 것은 정상(1분봉 폴링 주기 60s + 마켓 간 간격, 캐시 TTL 60s)이고, 넘기면 수집 정지로 본다.
         private const val STALE_DAILY_CANDLE_WARN_MS = 5 * 60_000L
-        // 자동 선정 알트가 채울 수 있는 활성 티커 수의 목표치(API 입력 상한 20 과 동일). 적립·보유·pending 티커는
-        // 자르지 않으므로 실제 활성 총수는 이를 넘을 수 있다 — 하드 상한이 아니라 알트 몫의 cap 이다.
-        internal const val SWING_UNIVERSE_CAP = 20
         // 적립 티커 계좌 재조회 주기 — 수동 매매를 이 시간 안에 장부에 반영한다(4종 × 1/60s 라 부하는 무시할 수준).
         private const val LADDER_SYNC_INTERVAL_MS = 60_000L
     }
@@ -136,8 +124,8 @@ class TradingEngine(
             userTickers = tickers.toList()
             // 적립 티커는 설정이 정하고 사용자 목록과 합친다. 사용자 목록(bot_state.tickers)은 건드리지 않는다 —
             // 파생 집합을 거기 되쓰면 프로파일을 꺼도 그날의 목록이 남아 되돌릴 수 없다.
-            // 목록 밖이라도 엔진이 산 스윙 포지션·미해소 주문(진입 흔적이 있는 durable 행)은 싣는다 — 자동 선정 티커는
-            // bot_state.tickers 에 없고, 사용자가 목록에서 뺀 티커도 마찬가지라 안 실으면 아무도 청산·reconcile 하지 않는다(#226).
+            // 목록 밖이라도 엔진이 산 스윙 포지션·미해소 주문(진입 흔적이 있는 durable 행)은 싣는다 — 사용자가 목록에서 뺀
+            // 티커는 bot_state.tickers 에 없어 안 실으면 아무도 청산·reconcile 하지 않는다(#226).
             // 진입 메타가 없는 행(청산 완료 잔재)은 싣지 않는다 — 전부 syncPosition 하면 기동 시 계좌 조회가 그만큼 반복된다.
             val requested = (accumulateTickers + tickers).toSet()
             val outside = initialStates.filterKeys { it !in requested }
@@ -149,21 +137,15 @@ class TradingEngine(
                 log.warn("User {} has no swing tickers — every active ticker is on the accumulate profile", userId)
             }
             activeTickers = active
-            if (!universeProperties.auto) swingUniverse = tickers.toSet()
+            swingUniverse = tickers.toSet()
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
             // 이번 실행의 활성 ticker 만 — 직전 실행(같은 엔진의 재기동)이나 과거 ticker 까지 남기면 tick 이 안 도는 상태가
-            // getStates·일일 리셋에 섞이고 applyTickers 의 보호 집합으로 되살아난다. 채운 뒤 나머지를 빼는 순서는 정확성과
-            // 무관하다(최종 상태 동일) — 같은 엔진을 다시 start 할 때(주로 resume) 잠금 없이 읽는 getStates()(상태 API)에서
-            // 전후 모두 활성인 티커가 잠깐 사라지지 않게 할 뿐이다(표시 전용).
+            // getStates·일일 리셋에 섞인다. 채운 뒤 나머지를 빼는 순서는 정확성과 무관하다(최종 상태 동일) — 같은 엔진을
+            // 다시 start 할 때(주로 resume) 잠금 없이 읽는 getStates()(상태 API)에서 전후 모두 활성인 티커가 잠깐 사라지지
+            // 않게 할 뿐이다(표시 전용).
             val seeded = initialStates.filterKeys { it in active }
             seeded.forEach { (ticker, state) -> states[ticker] = state }
             states.keys.retainAll(seeded.keys)
-            // 메타 없는 행(외부·수동 보유를 syncPosition 으로 편입한 것)은 잔고가 있을 때만 살린다 — runLoop 가 계좌를 1회 조회해 판정.
-            dormantStates = if (universeProperties.auto) {
-                initialStates.filterKeys { it !in active && it !in orphanLadders }
-            } else {
-                emptyMap()
-            }
             if (restored.isNotEmpty()) {
                 // buyDate 를 함께 남긴다 — 보유상한이 이미 지난 행은 첫 tick 에 청산되므로 무엇이 곧 팔릴지 로그로 보이게.
                 log.warn("User {}: 사용자 목록 밖 티커를 청산될 때까지 관리합니다(ticker=buyDate): {}", userId, restored.associateWith { initialStates[it]?.buyDate })
@@ -252,13 +234,13 @@ class TradingEngine(
 
     fun getActiveTickers(): List<String> = activeTickers.toList()
 
-    /** 사용자가 준 목록 — 적립·잔류·auto 선정이 섞이지 않은 재기동 입력. */
+    /** 사용자가 준 목록 — 적립·잔류가 섞이지 않은 재기동 입력. */
     fun getUserTickers(): List<String> = userTickers.toList()
 
     // 화면용 분류(status). 활성 집합 = 적립 ∪ 진입 허용 ∪ 청산 대기 — 진입 판정과 같은 isExitOnly 로 가른다.
     fun getAccumulateTickers(): List<String> = activeTickers.filter { profileOf(it) == TickerProfile.ACCUMULATE }
 
-    /** 신규 진입을 받는 스윙 티커 — 비-auto 면 사용자 목록, auto 면 선정 알트. 사용자 목록만 보이면 auto 의 실제 대상이 안 보인다. */
+    /** 신규 진입을 받는 스윙 티커 — 활성 중 진입 허용 집합(사용자 목록) 안의 것. */
     fun getEntryTickers(): List<String> = activeTickers.filter { profileOf(it) == TickerProfile.SWING && !isExitOnly(it) }
 
     /** 청산될 때까지만 관리하는 스윙 티커 — 활성이지만 신규 진입 허용 집합 밖이다. */
@@ -266,12 +248,10 @@ class TradingEngine(
 
     /**
      * 같은 엔진을 직전 실행의 사용자 목록·상태 그대로 다시 기동한다 — reload 가 새 엔진으로 넘어가지 못했을 때의 복귀 경로.
-     * 빈 상태로 start 하면 목록 밖 잔류 포지션과 잔고 미확인 dormant 행이 빠진다. stop 이 루프를 join 한 뒤에 부른다.
+     * 빈 상태로 start 하면 목록 밖 잔류 포지션이 빠진다. stop 이 루프를 join 한 뒤에 부른다.
+     * 상태는 사본으로 넘긴다 — start 가 states 를 바꾸므로 live view 를 넘기면 순회 중에 바뀐다.
      */
-    fun resume() = start(userTickers, restartSnapshot())
-
-    /** 재기동 입력용 상태 사본 — dormant ∪ states(같은 티커는 states 우선). start 가 states 를 바꾸므로 live view 가 아니라 사본이다. */
-    internal fun restartSnapshot(): Map<String, TradingState> = dormantStates + states
+    fun resume() = start(userTickers, getStates())
 
     /**
      * 루프가 기록하지 못한 pending([TradingState.pendingPersistFailed])과 고점([TradingState.peakPersistFailed], #54)을 한 번 더
@@ -302,7 +282,6 @@ class TradingEngine(
     }
 
     private suspend fun runLoop() {
-        reviveHeldDormantStates()
         activeTickers.forEach { ticker ->
             states.computeIfAbsent(ticker) { TradingState(it) }
         }
@@ -310,26 +289,13 @@ class TradingEngine(
         activeTickers.forEach { ticker ->
             positionManager.syncPosition(ticker, states[ticker]!!)
         }
-        // 기동 시 1회 + 매 09:00 경계. 재시작 첫 tick 도 경계로 잡히는데 그것 역시 "기동 시 갱신"이다.
-        // while 의 복구 경계 밖이라 여기서 던지면 running=true 인 채 루프가 죽는다 — 실패는 직전 목록 유지로 흡수.
-        try {
-            refreshUniverse()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.error("Initial universe refresh failed for user {} — keeping {}: {}", userId, activeTickers, e.message, e)
-        }
         releaseSettledTickers()
 
         while (running.get() && scope.isActive) {
             try {
-                // 기동 시 계좌 조회가 실패해 남은 dormant 행은 매 루프(tick 간격) 재시도한다 — 장애 중에만 도는 조회 1회라
-                // 부하는 무시할 수준이고, 09:00 까지 방치하면 실보유가 그동안 청산 평가를 못 받는다.
-                if (dormantStates.isNotEmpty()) reviveHeldDormantStates()
                 if (dailyResetManager.checkAndReset(states)) {
                     // 9AM 리셋(boughtToday=false)을 durable 로 flush — 리셋 직후 재시작 시 boughtToday=true 복원으로 당일 재진입이 재차단되는 것 방지.
                     states.values.forEach { positionManager.persistState(it) }
-                    refreshUniverse()
                     // flush 뒤에 뺀다 — 먼저 빼면 그 티커의 리셋이 durable 에 남지 않는다.
                     releaseSettledTickers()
                 }
@@ -350,105 +316,13 @@ class TradingEngine(
     }
 
     /**
-     * auto 재시작에서 진입 흔적이 없어 싣지 않은 durable 행 중 거래소에 실제 잔고가 있는 것을 활성에 되살린다.
-     * 외부·수동 보유를 syncPosition 으로 편입한 포지션은 entryStrategy·buyDate 가 없어 흔적 필터에 걸리지 않는데,
-     * 빠뜨리면 청산 평가를 영영 못 받는다. 계좌 조회 1회로 판정하며, 실패하면 dormant 로 남겨 다음 루프·유니버스 갱신 때 다시 조회한다.
-     */
-    private suspend fun reviveHeldDormantStates() {
-        val dormant = dormantStates
-        if (dormant.isEmpty()) return
-        val held = try {
-            positionManager.heldCurrencies()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("Could not check exchange holdings for dormant tickers of user {} — leaving {} dormant: {}", userId, dormant.keys, e.message)
-            return
-        }
-        // 조회가 성공했을 때만 판정을 끝낸다 — 실패는 위에서 return 해 dormant 를 남기고 다음 기회(루프·09:00 갱신)에 재시도.
-        dormantStates = emptyMap()
-        val revived = dormant.filterKeys { it.substringAfter("-") in held }
-        if (revived.isEmpty()) return
-        val kept = mutableListOf<String>()
-        revived.forEach { (ticker, state) ->
-            // 조회가 실패하는 동안 선정이 같은 티커를 DB 행으로 시딩했으면 그 state 를 둔다 — 기동 시점 사본으로 바꾸면 그 사이 주문의
-            // pending 이 메모리와 DB 에서 함께 사라진다(#260, restartSnapshot 과 같은 "states 우선"). 활성 편입은 아래에서 그대로 한다 —
-            // 선정 반영이 뒤 티커의 로드 실패로 멈췄으면 시딩한 state 가 활성 밖에 남아 있다.
-            if (states.putIfAbsent(ticker, state) != null) {
-                kept += ticker
-                return@forEach
-            }
-            // 잔고를 바로 채워야 뒤따르는 유니버스 갱신의 보호 집합(position)에 든다 — 시딩 루프는 이미 지났을 수 있다.
-            positionManager.syncPosition(ticker, state)
-            if (state.position || state.unsynced) positionManager.persistState(state)
-        }
-        activeTickers = (activeTickers + revived.keys).distinct()
-        val inserted = revived.keys - kept.toSet()
-        if (inserted.isNotEmpty()) log.info("Revived held tickers without entry metadata for user {}: {}", userId, inserted)
-        if (kept.isNotEmpty()) log.info("Kept the live state the universe selection seeded for dormant tickers of user {}: {}", userId, kept)
-    }
-
-    /**
-     * 자동 유니버스가 켜져 있으면 알트 스윙 목록을 새로 골라 활성 집합을 교체한다.
-     * @return 교체했으면 true. 꺼져 있거나 조회가 실패하면 false — 실패 시 직전 목록을 유지한다.
-     */
-    internal suspend fun refreshUniverse(): Boolean {
-        val source = universeSource?.takeIf { universeProperties.auto } ?: return false
-        // 기동 시 계좌 조회가 실패해 남은 dormant 행이 있으면 여기서 다시 판정한다 — 새 목록에 없으면 이번이 살릴 기회다.
-        if (dormantStates.isNotEmpty()) reviveHeldDormantStates()
-        val selected = source.select(exclude = accumulateTickers, count = universeProperties.altCount)
-        if (selected == null) {
-            log.warn("Universe refresh failed for user {} — keeping {}", userId, activeTickers)
-            return false
-        }
-        applyTickers(selected)
-        log.info("Universe refreshed for user {}: active={}", userId, activeTickers)
-        return true
-    }
-
-    /**
-     * 유니버스 선정 결과를 활성 집합에 반영하는 유일한 경로(`start()` 의 초기 합집합·dormant 되살리기·비-auto 정리 단계는 여기를 거치지 않는다). 목록만 갈아끼우면 새 티커는 `states` 에 없어 매 tick 조용히 skip 되고,
-     * 빠진 티커의 상태는 리셋·status 에 계속 섞인다 — 시딩·동기화·정리를 여기서 한꺼번에 한다.
-     *
-     * 보유 중·미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남긴다(진입 허용 집합 밖이라 새로 사지 않고, 청산 뒤
-     * 다음 갱신에서 빠진다). 알트 몫은 [SWING_UNIVERSE_CAP] 까지만 채우고 적립·보유 티커는 자르지 않는다.
-     *
-     * 신규 티커는 durable 복원본으로 시딩한다 — 빈 상태로 만들면 재시작 전에 남긴 pending uuid·halt·boughtToday 가
-     * 다음 upsert 에서 지워진다(자동 선정이 재시작 후 같은 티커를 다시 고르는 경우가 그렇다).
-     */
-    internal suspend fun applyTickers(next: List<String>) {
-        val protectedSet = states.filterValues { it.mustKeep() }.keys
-        // 현재 순서를 보존한다 — ConcurrentHashMap 키 순서는 삽입 순서가 아니다.
-        val protected = activeTickers.filter { it in protectedSet } + protectedSet.filter { it !in activeTickers }
-        val pinned = (accumulateTickers + protected).distinct()
-        val room = (SWING_UNIVERSE_CAP - pinned.size).coerceAtLeast(0)
-        val active = pinned + next.filter { it !in pinned }.distinct().take(room)
-
-        for (ticker in active) {
-            if (states.containsKey(ticker)) continue
-            val restored = positionManager.loadState(ticker) ?: TradingState(ticker)
-            // 09:00 갱신은 checkAndReset 뒤에 돈다 — 옛 boughtDate 를 그대로 두면 하루 종일 진입이 막힌다.
-            restored.resetDaily(dailyResetManager.getTradingDate())
-            val state = states.computeIfAbsent(ticker) { restored }
-            positionManager.syncPosition(ticker, state)
-            // durable 행이 없던 자동 티커에서 수동 보유를 발견하면 바로 남긴다 — 첫 저장 전에 죽고 다음 선정에서 빠지면
-            // initialStates 에도 dormant 에도 없어 그 포지션은 청산 평가를 영영 못 받는다.
-            if (state.position || state.unsynced) positionManager.persistState(state)
-        }
-        states.keys.filter { it !in active }.forEach { states.remove(it) }
-        activeTickers = active
-        swingUniverse = next.toSet()
-    }
-
-    /**
-     * 비-auto 에서 청산 대기(진입 허용 집합 밖) 티커 중 더 지킬 것이 없는 것(보유·unsynced·미해소 주문 없음)을 활성과 states
+     * 청산 대기(진입 허용 집합 밖) 티커 중 더 지킬 것이 없는 것(보유·unsynced·미해소 주문 없음)을 활성과 states
      * 에서 뺀다. 엔진 매도는 진입 메타를 지워 다음 기동에 싣지 않지만, 엔진 밖에서 팔린 행은 메타가 남아 기동마다 실린다.
      * 그 메타 위에 사람이 다시 사면 다음 기동에 잔류로 실려 옛 buyDate 로 보유상한 매도되므로, 여기서 durable 메타도 비운다 —
      * unsynced 가 아니라 귀속 불명 락이 없으니 코인이 돌아올 여지(#122 가 메타를 남기는 이유)도 없다. persistState 는 실패를
-     * 삼키므로 던지지 않는다(기동 시 호출은 runLoop 복구 경계 밖이다). auto 는 applyTickers 몫이다.
+     * 삼키므로 던지지 않는다(기동 시 호출은 runLoop 복구 경계 밖이다).
      */
     private suspend fun releaseSettledTickers() {
-        if (universeProperties.auto) return
         val settled = states.filter { (ticker, state) -> isExitOnly(ticker) && !state.mustKeep() }
         if (settled.isEmpty()) return
         settled.forEach { (ticker, state) ->
@@ -462,7 +336,7 @@ class TradingEngine(
         log.info("User {}: released tickers outside the list with nothing left to manage: {}", userId, settled.keys)
     }
 
-    /** 활성이지만 신규 진입 허용 집합 밖인 스윙 티커 — 목록·선정에서 빠졌는데 보유·미해소 주문 때문에 남은 것. start 전(null)은 없음. */
+    /** 활성이지만 신규 진입 허용 집합 밖인 스윙 티커 — 목록에서 빠졌는데 보유·미해소 주문 때문에 남은 것. start 전(null)은 없음. */
     private fun isExitOnly(ticker: String): Boolean =
         profileOf(ticker) == TickerProfile.SWING && swingUniverse?.let { ticker !in it } == true
 
@@ -595,7 +469,7 @@ class TradingEngine(
 
         // 당일 1회 진입: 이미 (팔 수 있는) 보유 중이거나 오늘 매수했으면 신규 매수 평가 자체를 생략.
         if ((state.position && !dust) || state.boughtToday) return
-        // 사용자 목록·자동 선정에서 빠졌는데 보유 때문에 잔류했던 티커 — 청산됐으면 새로 사지 않는다(auto 는 다음 갱신, 아니면 09:00 에 빠진다).
+        // 사용자 목록에서 빠졌는데 보유 때문에 잔류했던 티커 — 청산됐으면 새로 사지 않는다(09:00 에 빠진다).
         // 그런 티커의 dust 는 흡수될 길도 팔 길도 없어 잔류가 영구화되므로 장부에서 내린다(실잔고 확인은 PositionManager).
         if (isExitOnly(ticker)) {
             if (dust) positionManager.releaseDust(ticker, state, currentPrice)

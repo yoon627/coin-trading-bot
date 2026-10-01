@@ -99,9 +99,7 @@ MA5 > MA20 · RSI(14) 30~70 을 모두 만족하면 매수한다. 차트 청산�
 
 **적립 프로파일 (`trading.accumulate.*`, 기본 off):** 티커별로 스윙 대신 사다리 매매를 택할 수 있다. `TradingEngine.processTicker` 는 공용 preamble(가격·동기화·pending reconcile) 뒤 `SWING`/`ACCUMULATE` 로 갈리고, 적립 경로는 `common` 의 `AccumulateLadder`(순수 판정: 눌림 진입·단계 매수·단계 매도·예산 상한)를 호출해 `PositionManager.buyRung`/`sellVolume` 로 체결한다. 손절·익절·트레일링·보유상한은 적용되지 않는다. 사다리 장부(`rungs_filled`·`last_action_price`·`flat_peak`)는 `trading_states`(V23)에 두고 잔고·평단은 종전대로 거래소에서 복원하며, 두 소스가 갈라지면(부분체결·수동 매매) `LadderStateMapper` 가 매 tick 정합을 맞춘다(정합 상태에서는 no-op).
 
-**알트 유니버스 자동 선정 (`trading.universe.*`, 기본 off):** `UniverseSelector`(싱글톤, 공개 REST) 가 24h 거래대금 상위를 고르고 `TradingEngine.applyTickers` 가 활성 집합을 교체한다(보유·pending 티커 잔류, 알트 몫은 20 까지(적립·보유는 예외)). 사용자 목록 `bot_state.tickers` 는 파생값을 되쓰지 않는다.
-
-**사용자 목록과 활성 집합 (#226):** 엔진은 사용자 목록(`getUserTickers()`)과 활성 집합(적립 ∪ 사용자 목록 ∪ 잔류 ∪ auto 선정)을 따로 든다. 목록 밖이어도 엔진이 산 스윙 포지션·미해소 주문은 auto 여부와 무관하게 청산될 때까지 잔류하고(신규 진입 없음), 적립 설정에서 빠진 사다리 보유분은 싣지 않는다. 재기동(reload)과 실행 중 `/api/bot/start` 비교는 사용자 목록을 쓴다 — 실행 중 다른 목록은 409.
+**사용자 목록과 활성 집합 (#226):** 엔진은 사용자 목록(`getUserTickers()`)과 활성 집합(적립 ∪ 사용자 목록 ∪ 잔류)을 따로 든다. 사용자 목록 `bot_state.tickers` 에는 파생값을 되쓰지 않는다. 목록 밖이어도 엔진이 산 스윙 포지션·미해소 주문은 청산될 때까지 잔류하고(신규 진입 없음), 적립 설정에서 빠진 사다리 보유분은 싣지 않는다. 재기동(reload)과 실행 중 `/api/bot/start` 비교는 사용자 목록을 쓴다 — 실행 중 다른 목록은 409.
 
 ---
 

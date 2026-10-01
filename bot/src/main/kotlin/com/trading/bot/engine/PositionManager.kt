@@ -675,13 +675,6 @@ class PositionManager(
         persist(state)
     }
 
-    /** durable 복원본. 런타임에 새로 활성화되는 티커가 빈 상태로 시딩돼 pending uuid·halt 를 덮어쓰지 않게 한다. */
-    internal suspend fun loadState(ticker: String): TradingState? = tradingStateService.loadState(userId, ticker)
-
-    /** 잔고(free+locked)가 있는 코인 통화 — 재시작 시 메타 없는 durable 행을 살릴지 계좌 조회 1회로 판정한다. */
-    internal suspend fun heldCurrencies(): Set<String> =
-        upbitClient.getAccounts().filter { it.currency != "KRW" && it.totalBalance() > 0.0 }.map { it.currency }.toSet()
-
     /**
      * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다시 쓰게 한다(도는 엔진은 다음 tick, 멈춘 엔진은
      * [TradingEngine.flushUnpersisted]) — flush 가 갱신 tick 에만 걸리므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다(#54).

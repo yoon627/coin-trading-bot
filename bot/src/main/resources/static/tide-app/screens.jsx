@@ -230,7 +230,7 @@ function BotPage({ user, setActive }) {
                 {[
                   ['실행', status.data?.running ? '✓ Yes' : '— No'],
                   ['전략', status.data?.strategy || '—'],
-                  // 진입 대상(비-auto 는 사용자 목록, auto 는 선정 알트) · 적립 · 청산 대기(목록에서 빠졌지만 보유·미체결 주문이
+                  // 진입 대상(사용자 목록) · 적립 · 청산 대기(목록에서 빠졌지만 보유·미체결 주문이
                   // 남아 청산까지만 관리)를 나눠 보인다.
                   ['거래쌍', (status.data?.entry_tickers || []).join(', ') || '—'],
                   ['적립', (status.data?.accumulate_tickers || []).join(', ')],
