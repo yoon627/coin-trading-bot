@@ -4,7 +4,7 @@ category: decision
 created: 2026-09-16
 updated: 2026-10-01
 claim_state: current
-verified: 2026-10-01 — 지운 리포트(entry-resolution-vs-live) 링크를 이슈 번호(#190)로 바꾸고 삭제된 대조 하네스 안내를 고침 · 2026-09-16 — 수정은 seed 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록(store 읽기 없음). `CandleAggregator.kt` 원문(`existing == null` 분기가 M1 하나로 새 봉 → `addCandle` upsert)·`MarketDataIngestionService.seedDailyCandles`·`MarketDataStore.addCandle` 로 경로 확정. 라이브 00h 매수 17건 중 7건이 배포(재시작) 다음날 당일시가 바로 위에서 체결(#209 코멘트 표). 재현 테스트 `CandleAggregatorTest` Red→Green
+verified: 2026-10-01 — `seedDailyCandles` 가 저장 서비스를 거치지 않고 `CandleAggregator.prime`·`startFrom` 을 직접 부르게 바뀐 뒤에도 서술 유효: 실제 store·집계기로 seed 위 첫 분봉이 seed 를 대체하지 않음을 `MarketDataIngestionAggregationTest` 로 확인(prime 제거·prime 시각 오전달 변이 검출) · 2026-10-01 — 지운 리포트(entry-resolution-vs-live) 링크를 이슈 번호(#190)로 바꾸고 삭제된 대조 하네스 안내를 고침 · 2026-09-16 — 수정은 seed 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록(store 읽기 없음). `CandleAggregator.kt` 원문(`existing == null` 분기가 M1 하나로 새 봉 → `addCandle` upsert)·`MarketDataIngestionService.seedDailyCandles`·`MarketDataStore.addCandle` 로 경로 확정. 라이브 00h 매수 17건 중 7건이 배포(재시작) 다음날 당일시가 바로 위에서 체결(#209 코멘트 표). 재현 테스트 `CandleAggregatorTest` Red→Green
 sources:
   - bot/src/main/kotlin/com/trading/bot/stream/CandleAggregator.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt

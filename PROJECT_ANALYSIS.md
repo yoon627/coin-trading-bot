@@ -34,7 +34,7 @@
         │
         ▼
   MarketDataStore (in-memory) ──→ TradingEngine → 주문 실행
-  MarketDataPersistenceService ──→ PostgreSQL (시계열 저장)
+  CandleAggregator (분봉 → 상위 봉) ──→ MarketDataStore   — 시세는 DB 에 저장하지 않는다
 
 [분석 — REST]
   PostgreSQL ──→ Chart API (멀티 타임프레임 캔들)
@@ -60,7 +60,7 @@ coin-trading-bot/
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
 │       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager(+UnknownOrderResolver·BalanceInterpretation)
-│       ├── stream/                  # CandleAggregator, MarketDataPersistenceService, DataRetentionService
+│       ├── stream/                  # CandleAggregator (분봉 → 상위 봉, store 갱신)
 │       ├── config/                  # AppConfig, StrategyConfig, RedisConfig, RateLimitFilter 등
 │       ├── persistence/             # R2DBC Entity/Repository
 │       ├── security/                # SecretsCrypto (AES-GCM), UserSecretsService
@@ -172,7 +172,7 @@ bot_configs
     ▼
 [marketdata/UpbitMarketFeed]
     ├──→ MarketDataStore (in-memory)
-    └──→ MarketDataPersistenceService → PostgreSQL
+    └──→ CandleAggregator → MarketDataStore (상위 봉)
             │
             ▼
 [TradingEngine] ── 매매 루프 (코루틴)

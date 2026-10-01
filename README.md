@@ -120,7 +120,7 @@ coin-trading-bot/
 │       │   ├── notification/     # Discord 거래·오류 알림
 │       │   ├── persistence/      # R2DBC 엔티티와 repository
 │       │   ├── security/         # 사용자 API 키 암호화
-│       │   └── stream/           # candle 집계, 영속화, 보존 정책
+│       │   └── stream/           # candle 집계(분봉 → 상위 봉)
 │       └── resources/
 │           ├── db/migration/     # Flyway V1~V28
 │           └── static/           # login.html, app.html, tide-app/
