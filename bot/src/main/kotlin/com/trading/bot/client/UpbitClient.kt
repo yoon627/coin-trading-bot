@@ -1,7 +1,6 @@
 package com.trading.bot.client
 
 import com.trading.bot.domain.Account
-import com.trading.bot.domain.MarketInfo
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.Ticker
@@ -14,8 +13,6 @@ interface UpbitClient {
     suspend fun getDayCandles(market: String, count: Int = 30): List<Candle>
     suspend fun getMinuteCandles(market: String, unit: Int = 1, count: Int = 200): List<Candle>
     suspend fun getTicker(markets: String): List<Ticker>
-    /** 전체 마켓 목록(`is_details=true` — 투자유의 플래그 포함). 인증 불필요. */
-    suspend fun getMarkets(): List<MarketInfo>
     suspend fun placeOrder(request: OrderRequest): Order
     suspend fun getOrder(uuid: String): Order
     /**

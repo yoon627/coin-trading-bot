@@ -42,10 +42,6 @@ class TradingStateService(
         return result
     }
 
-    /** 단일 ticker 복원 — 런타임 티커 교체(자동 유니버스)가 durable 상태를 잃지 않게. */
-    suspend fun loadState(userId: Long, ticker: String): TradingState? =
-        tradingStateRepository.findByUserIdAndTicker(userId, ticker).awaitSingleOrNull()?.toDomain()
-
     private fun TradingState.toEntity(userId: Long, id: Long?): TradingStateEntity =
         TradingStateEntity(
             id = id,
@@ -68,10 +64,6 @@ class TradingStateService(
             halted = halted,
             haltReason = haltReason,
             reconcileFailureCount = reconcileFailureCount,
-            rungsFilled = rungsFilled,
-            lastActionPrice = lastActionPrice,
-            flatPeak = flatPeak,
-            pendingBuyTriggerPrice = pendingBuyTriggerPrice,
             pendingBuyPriorVolume = pendingBuyPriorVolume,
             pendingSellTriggerPrice = pendingSellTriggerPrice,
             pendingSellPriorVolume = pendingSellPriorVolume,
@@ -101,10 +93,6 @@ class TradingStateService(
             haltReason = haltReason,
             reconcileFailureCount = reconcileFailureCount,
             exitParams = exitParamsJson?.let { decodeExitParams(ticker, it) },
-            rungsFilled = rungsFilled,
-            lastActionPrice = lastActionPrice,
-            flatPeak = flatPeak,
-            pendingBuyTriggerPrice = pendingBuyTriggerPrice,
             pendingBuyPriorVolume = pendingBuyPriorVolume,
             pendingSellTriggerPrice = pendingSellTriggerPrice,
             pendingSellPriorVolume = pendingSellPriorVolume,

@@ -230,10 +230,9 @@ function BotPage({ user, setActive }) {
                 {[
                   ['실행', status.data?.running ? '✓ Yes' : '— No'],
                   ['전략', status.data?.strategy || '—'],
-                  // 진입 대상(비-auto 는 사용자 목록, auto 는 선정 알트) · 적립 · 청산 대기(목록에서 빠졌지만 보유·미체결 주문이
+                  // 진입 대상(사용자 목록) · 청산 대기(목록에서 빠졌지만 보유·미체결 주문이
                   // 남아 청산까지만 관리)를 나눠 보인다.
                   ['거래쌍', (status.data?.entry_tickers || []).join(', ') || '—'],
-                  ['적립', (status.data?.accumulate_tickers || []).join(', ')],
                   ['청산 대기', (status.data?.exit_only_tickers || []).join(', ')],
                 ].filter(([k, v]) => v).map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderTop: '1px solid var(--ink-100)' }}>
@@ -282,7 +281,7 @@ function fmtHolding(sec) {
 
 const SELL_REASON_LABEL = {
   TAKE_PROFIT: '익절', TRAILING_STOP: '트레일링', STOP_LOSS: '손절',
-  CHART_EXIT: '차트청산', DAILY_RESET: '일일리셋', MANUAL: '수동', ACCUMULATE_STEP: '적립 매도',
+  DAILY_RESET: '일일리셋', MANUAL: '수동',
 };
 
 const RT_GRID = '110px 1.4fr 1.4fr 96px 120px 100px 92px';

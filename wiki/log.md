@@ -241,3 +241,18 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[swing-strategies]] 를 `TradingStrategy` 인터페이스와 `combined` 중심으로 다시 썼다: 나머지 등록 전략 8종·`ShoulderExit` 삭제, 기본 전략 규칙(엔진·상태 API 모두 첫 등록 bean), `TRADING_STRATEGY` 설정 삭제와 운영 secret 잔존 줄의 무해성.
 - [[architecture-overview]] common 행, [[marketdata-pipeline]] 의 전략별 최소 봉수·volume 서술을 `combined` 기준으로, [[rightsizing-history]] MVP 항목에 전략 정리를 더했다.
+
+## [2026-10-01] update | MVP 2단계 — 알트 유니버스 자동 선정·dormant 되살리기 삭제
+
+- [[accumulate-ladder]] 의 유니버스 절(선정 규칙·`applyTickers`·첫 선정 전 진입 없음·dormant 되살리기)을 걷었다. 남는 규칙 — `bot_state.tickers` 는 사용자 의도만 저장, watchlist 밖 REST 폴백(`DailyCandleCache`) — 은 [[trading-engine-loop]] 로 옮겼다.
+- [[trading-engine-loop]] 의 잔류·정리·재기동·화면 분류·dust 해제에서 auto 분기를 걷었다. #226 테스트 묶음은 `TradingEngineTickerSetTest` 로 이름을 바꿨다.
+
+## [2026-10-01] delete | MVP 2단계 — 적립 프로파일 삭제
+
+- `concept/accumulate-ladder` 페이지를 지웠다(적립 코드·설계 스펙과 함께). 공유 경로는 남는 페이지가 맡는다 — 주문 전 보유량·매도 판단가는 [[persistence-schema]] V23 행과 [[trading-engine-loop]], 거래대금 정의는 README API 개요.
+- [[trading-engine-loop]] 의 프로파일 분기·`reservedKrw`·사다리 행 제외·dust 의 적립 예외, [[exit-gates]] 의 적립 미적용 서술, [[trade-record-volume-semantics]] 의 `accumulate` 귀속을 걷거나 과거형으로 바꿨다. `verify.sh` 쪽수 32±2 → 31±2.
+
+## [2026-10-01] update | MVP 2단계 — 차트 청산 삭제
+
+- [[exit-gates]]·[[trading-engine-loop]] 의 청산 우선순위·판정식 표·파라미터 표에서 차트 청산(`CHART_EXIT`·`chartExitEnabled`)을 걷었다. `entryStrategy` 는 매도 기록 귀속과 #226 진입 흔적에만 쓰인다([[persistence-schema]]).
+- [[swing-strategies]] 의 인터페이스에서 `shouldSell`·`shouldSellNormalized` 를 지웠고 `minCandles` 는 기본값 없는 선언이 됐다. 필수 선언 키 6개 → 5개([[deployment-stack]]).

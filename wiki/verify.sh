@@ -51,8 +51,10 @@ fi
 #     셋 다 같은 날의 서로 다른 질문(계기 결함·진입 필터·재진입 프리미엄)에 대한 확정 결과라 병합 대상이 아니다(중복 아님).
 #   49±2 → 32±2 (2026-10-01) — MVP 1단계: query/ 18페이지 + concept/backtest-engine 삭제(32 페이지). 의도한 감소 —
 #     연구·백테 코드와 fixture 를 지우면서 그 코드를 sources 로 둔 리포트를 함께 지웠다(rightsizing-history).
-if [ "$count" -lt 30 ] || [ "$count" -gt 34 ]; then
-  echo "FAIL: 페이지 수 $count 가 기대 범위(32±2) 밖 — 늘어난 이유를 확인하고 이 파일의 조정 이력에 남긴 뒤 올린다"; fail=1
+#   32±2 → 31±2 (2026-10-01) — MVP 2단계: concept/accumulate-ladder 삭제(31 페이지). 의도한 감소 — 적립 프로파일을 지웠고,
+#     남는 규칙(bot_state.tickers 저장·watchlist 밖 REST 폴백)은 trading-engine-loop 로 옮겼다.
+if [ "$count" -lt 29 ] || [ "$count" -gt 33 ]; then
+  echo "FAIL: 페이지 수 $count 가 기대 범위(31±2) 밖 — 늘어난 이유를 확인하고 이 파일의 조정 이력에 남긴 뒤 올린다"; fail=1
 fi
 
 # 선두 `---` 블록(frontmatter)만 출력. 첫 줄이 `---` 이 아니면 아무것도 내지 않는다.

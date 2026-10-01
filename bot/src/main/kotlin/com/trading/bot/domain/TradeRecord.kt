@@ -87,9 +87,6 @@ enum class SellReason {
     TAKE_PROFIT,
     TRAILING_STOP,
     STOP_LOSS,
-    CHART_EXIT,
     DAILY_RESET,
     MANUAL,
-    /** 적립 프로파일의 단 매도(부분·최종 모두). 평단 대비 손익을 기록한다. */
-    ACCUMULATE_STEP,
 }
