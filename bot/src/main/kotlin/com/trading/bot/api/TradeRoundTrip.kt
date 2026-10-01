@@ -76,8 +76,8 @@ private const val ESTIMATE_TOLERANCE_RATIO = 0.0025
 
 /**
  * 이 행을 **스냅샷으로 분류하는가**. 사실 판정이 아니라 정책이다 — `strategy` 가 비어 있으면 출처를
- * 알 수 없어 스냅샷이 아닌 쪽(증분·합산)으로 보낸다. 엔진이 `strategy` 없이 기록하는 경로가 실재하면
- * (`PositionManager.kt` 의 pendingBuyStrategy null 허용) 그 행은 증분으로 잘못 합산된다 — 이슈로 남겼다.
+ * 알 수 없어 스냅샷이 아닌 쪽(증분·합산)으로 보낸다. 엔진이 `strategy` 없이 기록하는 경로는 코드에 남아 있어
+ * (`PositionManager.kt` 의 pendingBuyStrategy null 허용) 그런 행이 생기면 증분으로 잘못 합산된다 — 운영에는 아직 없다(아래 [BuySide]).
  */
 private fun TradeRecordEntity.isSnapshotBuy(): Boolean =
     strategy != null && !strategy.equals(MANUAL_STRATEGY, ignoreCase = true)
@@ -94,7 +94,8 @@ private fun TradeRecordEntity.isSnapshotBuy(): Boolean =
  * 이미 담고 있으므로 앞선 수동 매수를 다시 더하면 이중계상이고, 뒤따르는 수동 매수를 빠뜨리면 누락이다.
  *
  * `strategy` 가 비어 있는 기록은 출처를 알 수 없으므로 스냅샷이 아니라 증분으로 취급한다(합산하는 쪽).
- * 엔진과 과거 수동 주문 모두 값을 채웠으므로 실데이터에는 없다.
+ * 그런 매수 행은 운영에 0건이다(2026-10-01 읽기 전용 조회 — `trade_records` 223건 중 `side='BUY' AND strategy IS NULL`, #145).
+ * 데이터의 성질이지 코드가 보장하는 불변식은 아니다 — 위 null 허용 경로로 생기면 이 규칙이 매수량을 부풀린다.
  *
  * ⚠️ 이 값은 **불변식이 아니라 조회 시점의 최선 추정**이다. 어떤 기록도 "이 스냅샷이 저 수동 매수를
  * 포함하는가"를 직접 말해주지 않아, 순서(`created_at`)로 추론한다. 수동 주문 체결과 그 행 기록 사이에

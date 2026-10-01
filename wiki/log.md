@@ -271,3 +271,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[swing-strategies]] 의 "기본 전략 규칙"을 "전략 주입"으로 바꿨다 — 엔진·매니저가 bean 하나를 생성자로 받고 상태의 `strategy` 는 엔진 유무와 무관하게 그 이름이다. 시작 요청의 `strategy` 는 무시되고 `bot_state.strategy` 는 쓰기만 한다. index 설명을 맞췄다.
 - [[trading-engine-loop]] 의 봇 제어 저장 실패(503) 대상에서 전략 변경을, 복원의 전략 캐시·미등록 이름 400 서술을 걷었다. [[persistence-schema]] V12 행에 `bot_configs`·`user_exchange_keys` 가 코드 참조 없음을 적었다.
+
+## [2026-10-01] update | 빈 strategy 매수 행 실측 근거(#145)
+
+- [[trade-record-volume-semantics]] 의 구분 키 절에 빈 `strategy` 매수 행이 운영 0건(2026-10-01, 223건 중)이라는 조회 근거와, 그것이 불변식이 아니라는 점(null 허용 경로가 남아 있다)을 적었다. `TradeRoundTrip` KDoc 과 같은 내용이다.
