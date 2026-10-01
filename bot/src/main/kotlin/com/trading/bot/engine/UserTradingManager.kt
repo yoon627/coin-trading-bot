@@ -18,7 +18,6 @@ import com.trading.bot.config.ExitParamsDeclarationCheck
 import com.trading.common.config.TradingProperties
 import com.trading.bot.persistence.ShadowExitObservationRepository
 import com.trading.common.config.ShadowExitProperties
-import com.trading.common.config.UniverseProperties
 import com.trading.common.strategy.TradingStrategy
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -61,8 +60,6 @@ class UserTradingManager(
     private val marketDataStore: MarketDataStore,
     private val tradingStateService: TradingStateService,
     private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
-    private val universeProperties: UniverseProperties = UniverseProperties(),
-    private val universeSource: UniverseSource? = null,
     private val dailyCandleCache: DailyCandleCache? = null,
     private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
     // null 이면 그림자 관측을 만들지 않는다 — 저장소 없이 켜면 매 tick 관측이 조용히 버려진다.
@@ -474,7 +471,7 @@ class UserTradingManager(
         val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val wasRunning = existing.isRunning()
-        // 사용자 목록 그대로 — 활성 집합(적립·잔류·auto 선정 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
+        // 사용자 목록 그대로 — 활성 집합(적립·잔류 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
         // 빈 목록(적립만 운용)을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
         val tickers = existing.getUserTickers()
         val strategy = existing.getActiveStrategyName()
@@ -564,8 +561,6 @@ class UserTradingManager(
             discordWebhookUrl = user.discordWebhookUrl,
             marketDataStore = marketDataStore,
             accumulateProperties = accumulateProperties,
-            universeProperties = universeProperties,
-            universeSource = universeSource,
             dailyCandleCache = dailyCandleCache,
             shadowExitObserver = shadowExitObserver(user.id!!),
         )
