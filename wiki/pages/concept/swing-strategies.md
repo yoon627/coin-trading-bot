@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-10-01
 claim_state: current
-verified: 2026-10-01 — 등록 전략이 `combined` 하나임을 `StrategyConfigTest` 로, 엔진 초기 전략·상태 API 폴백이 첫 등록 전략임을 `TradingEngineTest`·`UserTradingManagerTest` 로, 세 조건(RSI 는 상한·하한 각각)·21봉 가드·store 경로(`shouldBuyNormalized`)를 `CombinedStrategyTest` 로 확인(변이 9종 검출 — 조건 3·RSI 하한·가드·시가 매핑·bean 추가·폴백 2) · 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입, StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
+verified: 2026-10-01 — 차트 청산 제거(MVP 2단계): `shouldSell`·`shouldSellNormalized`·`Indicators.checkDeadCross` 삭제, `minCandles` 는 기본값 없는 선언(`CombinedStrategy` 21 — 가드와 같은 값)임을 `StrategyMinCandlesTest`·`CombinedStrategyTest` 로 확인 · 2026-10-01 — 등록 전략이 `combined` 하나임을 `StrategyConfigTest` 로, 엔진 초기 전략·상태 API 폴백이 첫 등록 전략임을 `TradingEngineTest`·`UserTradingManagerTest` 로, 세 조건(RSI 는 상한·하한 각각)·21봉 가드·store 경로(`shouldBuyNormalized`)를 `CombinedStrategyTest` 로 확인(변이 9종 검출 — 조건 3·RSI 하한·가드·시가 매핑·bean 추가·폴백 2) · 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입, StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/TradingStrategy.kt
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
@@ -22,15 +22,13 @@ sources:
 ```kotlin
 interface TradingStrategy {
     val name: String
-    val minCandles: Int get() = 21
+    val minCandles: Int  // 기본값 없음 — 구현체가 선언
     suspend fun shouldBuy(candles, currentPrice, config): Boolean
-    suspend fun shouldSell(candles, currentPrice, config): Boolean  // default: 5/20 데드크로스
 }
 ```
 
-- `shouldSell` 의 **기본 구현은 5/20 MA 데드크로스**다. `combined` 는 override 하지 않는다.
-- `*Normalized` 변형(`shouldBuyNormalized`/`shouldSellNormalized`)이 있고 기본 구현이 `NormalizedCandle` → `Candle` 로 변환해 위임한다. 엔진은 store 캔들이 충분하면 Normalized 경로를, 부족하면 REST 캔들로 legacy 경로를 탄다([[trading-engine-loop]]).
-- 전략이 하나여도 인터페이스를 남긴 이유: 엔진이 진입 전략으로 청산을 복원하고(`resolveExitStrategy`, [[exit-gates]]) 엔진 테스트가 이 자리에 스텁을 끼운다.
+- `shouldBuyNormalized` 변형이 있고 기본 구현이 `NormalizedCandle` → `Candle` 로 변환해 위임한다. 엔진은 store 캔들이 충분하면 Normalized 경로를, 부족하면 REST 캔들로 legacy 경로를 탄다([[trading-engine-loop]]).
+- 전략이 하나여도 인터페이스를 남긴 이유: 엔진이 전략 목록(`StrategyConfig` bean)을 받아 첫 전략을 기본으로 쓰고 `setStrategy` 로 바꾸며, 엔진 테스트가 이 자리에 스텁을 끼운다.
 
 ## `combined` — 세 조건의 AND
 
@@ -38,7 +36,7 @@ interface TradingStrategy {
 2. MA 상승추세 — `isMaUptrend(candles, 5, 20)` (MA5 > MA20)
 3. RSI 건전 구간 — `calculateRsi(candles, 14) in 30.0..70.0`
 
-캔들이 21개 미만이면 즉시 false. 필요한 최소 봉수는 **전략이 `minCandles` 로 선언**하고 엔진이 `max(MIN_DAILY_CANDLES, minCandles)` 로 쓴다 — `combined` 는 기본값 21(= 기본 `shouldSell` 인 5/20 데드크로스 요구)이고 `StrategyMinCandlesTest` 가 선언과 실제를 대조한다.
+캔들이 `minCandles`(21)개 미만이면 즉시 false. 필요한 최소 봉수는 **전략이 `minCandles` 로 선언**하고(인터페이스에 기본값이 없다) 엔진이 `max(MIN_DAILY_CANDLES, minCandles)` 로 쓴다 — `combined` 는 21 을 선언하고 같은 값으로 가드하며, `StrategyMinCandlesTest` 가 선언과 실제를 대조한다.
 
 - **RSI 는 넘긴 봉 전체로 계산한다.** `calculateRsi` 는 리스트 전체로 Wilder smoothing 을 돌아 **창 길이가 값에 들어간다** — 라이브 store 경로는 21~60봉 가변이라 같은 시점이어도 넘긴 봉 수에 따라 RSI 가 조금씩 다르다(무릎 전략 실측, 2026-08: 50↔60봉 최대 5.65, 21~60봉 가변이면 최대 21.43). `combined` 는 자르지 않는다 — 동작을 바꾸지 않으려는 것이다.
 
@@ -54,4 +52,4 @@ interface TradingStrategy {
 
 ## 청산과의 관계
 
-전략은 **진입 신호**가 주 역할이고, 실제 청산은 대부분 [[exit-gates]] 의 손익% 안전망이 담당한다. 차트 기반 청산(`shouldSell`)은 기본 off 이며, 켜더라도 손절·트레일링·익절 뒤에 평가된다.
+전략은 **진입 신호**만 낸다. 청산은 전략과 무관하게 [[exit-gates]] 의 손익% 안전망과 보유상한이 맡는다 — 전략별 차트 청산(`shouldSell`, 기본 5/20 데드크로스)은 운영에서 꺼져 있다가 2026-10-01 MVP 2단계에서 지웠다.

@@ -71,7 +71,7 @@ per-(user, ticker) 거래 상태를 durable 하게 보관한다. 이게 없으�
 - `pendingBuyIdentifier` / `pendingSellIdentifier`(V28) — uuid 를 받기 전 단계의 같은 역할. 주문 **전에** 기록돼, 응답을 못 받은 주문을 identifier 조회로 확정한다. uuid 를 알게 되면 비운다.
 - `peakPrice` — 트레일링 스톱의 기준선. 0 에서 다시 쌓이면 이미 발동했어야 할 청산이 안 걸린다.
 - `halted` / `reconcileFailureCount` — 재시작으로 halt 가 풀려 장애 중 재진입하는 것을 막는다.
-- `entryStrategy` — 진입 전략으로 청산을 평가하기 위해([[exit-gates]]).
+- `entryStrategy` — 매도 기록의 전략 귀속(`buildSellRecord`, [[exit-gates]])과 목록 밖 잔류의 진입 흔적(#226, [[trading-engine-loop]]).
 - `exitParams` 스냅샷 — 진입 시점 청산 파라미터. 익절·손절·트레일링·보유상한이 이 값(없으면 전역)으로 판정한다(2026-09-06~, #177 — [[exit-gates]] "진입 시점 스냅샷을 따른다"). 보유 중 설정을 바꿔도 열린 포지션은 진입 때 규칙이다.
 
 ## `trade_executions.exchange_order_id` 부분 unique
