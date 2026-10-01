@@ -506,8 +506,8 @@ class UserTradingManagerTest {
 
     @Test
     fun `startBot persists the requested tickers, not the engine's derived active set`() = runTest {
-        // 자동 유니버스·적립 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면, 기능을 꺼도 그날의 목록이
-        // 사용자 의도로 굳어 되돌릴 수 없다 — 저장은 사용자가 준 목록만.
+        // 잔류 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면 그날의 목록이 사용자 의도로 굳어
+        // 되돌릴 수 없다 — 저장은 사용자가 준 목록만.
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         val saved = slot<BotStateEntity>()
@@ -521,7 +521,7 @@ class UserTradingManagerTest {
     }
 
     // --- 사용자 목록과 파생 활성 집합의 분리 (#226) ---
-    // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(적립·잔류·auto 선정)을 사용자 의도로 넘기면
+    // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(잔류 포함)을 사용자 의도로 넘기면
     // 목록에서 뺀 티커가 신규 진입 대상으로 승격된다.
 
     private fun userStrategies(): ConcurrentHashMap<Long, String> {
@@ -534,7 +534,7 @@ class UserTradingManagerTest {
     fun `reload starts the replacement with the user list as is, never the config list or the derived active set`() = runTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        // 적립만 운용하는 엔진 — 빈 사용자 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다.
+        // 빈 사용자 목록으로 도는 엔진(잔류만 관리) — 빈 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다.
         every { mockEngine.getUserTickers() } returns emptyList()
         every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
@@ -591,7 +591,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-SOL")
-        every { mockEngine.getAccumulateTickers() } returns listOf("KRW-ADA")
         every { mockEngine.getEntryTickers() } returns listOf("KRW-A")
         every { mockEngine.getExitOnlyTickers() } returns listOf("KRW-XRP")
 
@@ -601,7 +600,6 @@ class UserTradingManagerTest {
         assertEquals(listOf("KRW-BTC"), status["default_tickers"])
         assertEquals(listOf("KRW-SOL"), status["user_tickers"])
         assertEquals(listOf("KRW-A"), status["entry_tickers"])
-        assertEquals(listOf("KRW-ADA"), status["accumulate_tickers"])
         assertEquals(listOf("KRW-XRP"), status["exit_only_tickers"])
     }
 

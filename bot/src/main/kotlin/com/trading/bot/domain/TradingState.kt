@@ -63,23 +63,12 @@ data class TradingState(
     // flush 에서 재기록한다(비영속).
     // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
     var peakPersistFailed: Boolean = false,
-    // 적립 프로파일 사다리 장부(durable). 잔고·평단은 거래소가 진실이고 이 둘은 분할 단위·기준가만 담당한다.
-    var rungsFilled: Int = 0,
-    var lastActionPrice: Double = 0.0,
-    // 무포지션 구간의 최고가 — 첫 단 진입 기준. 0 = 미관측.
-    var flatPeak: Double = 0.0,
-    // 적립 단 매수의 트리거가 — 값이 있으면 사다리 매수라는 표식이기도 하다(엔진 isLadderRow·completeBuy).
-    // 체결 확정(즉시·reconcile 어느 경로든)에서 lastActionPrice 로 옮긴다.
-    var pendingBuyTriggerPrice: Double? = null,
     // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 "주문 전부터 있던 코인"을 체결로 오판하지 않게 한다.
     var pendingBuyPriorVolume: Double? = null,
-    // 매도를 결정한 tick 가격 — 스윙·적립 공통이라 사다리 표식이 아니다(적립 여부는 pendingSellReason 으로 가른다).
-    // 매도 기록의 price·pnl 기준이고, 적립은 확정 때 사다리 기준가(lastActionPrice·flatPeak)로도 쓴다.
+    // 매도를 결정한 tick 가격 — 매도 기록의 price·pnl 기준이다(#235).
     var pendingSellTriggerPrice: Double? = null,
-    // 매도 주문 직전 free 보유량. 부분 체결 뒤 unlock 지연으로 거래소 잔량이 과소일 때 잔량의 하한.
+    // 매도 주문 직전 free 보유량 — 응답을 못 받은 매도의 흔적 판정 기준이다(#227).
     var pendingSellPriorVolume: Double? = null,
-    // 적립 단이 예산·KRW 부족으로 건너뛰어진 사유 — 상태 API 노출용, 비영속.
-    var accumulateSkipReason: String? = null,
     // 스윙 보유가 최소주문 미만 dust 라고 이미 알렸는지(비영속). 포지션이 바뀔 때만 풀린다 — 가격이 경계를 오갈 때마다
     // 다시 알리지 않는다(#234).
     var dustWarned: Boolean = false,
@@ -99,11 +88,10 @@ data class TradingState(
     fun pendingSellRef(): String? = pendingSellUuid ?: pendingSellIdentifier
 
     /** 매수 주문을 보내기 전의 의도 기록. 이 상태가 durable 이 된 뒤에만 주문을 보낸다. */
-    fun beginBuyOrder(identifier: String, strategy: String, triggerPrice: Double?, priorVolume: Double) {
+    fun beginBuyOrder(identifier: String, strategy: String, priorVolume: Double) {
         pendingBuyUuid = null
         pendingBuyIdentifier = identifier
         pendingBuyStrategy = strategy
-        pendingBuyTriggerPrice = triggerPrice
         pendingBuyPriorVolume = priorVolume
     }
 
@@ -141,7 +129,6 @@ data class TradingState(
         pendingBuyUuid = null
         pendingBuyIdentifier = null
         pendingBuyStrategy = null
-        pendingBuyTriggerPrice = null
         pendingBuyPriorVolume = null
     }
 
@@ -159,13 +146,6 @@ data class TradingState(
     fun updatePeakPrice(currentPrice: Double): Boolean {
         if (currentPrice <= peakPrice) return false
         peakPrice = currentPrice
-        return true
-    }
-
-    /** @return 무포지션 고점 갱신 여부 — [updatePeakPrice] 와 같은 이유로 갱신 tick 에만 flush 한다. */
-    fun updateFlatPeak(currentPrice: Double): Boolean {
-        if (currentPrice <= flatPeak) return false
-        flatPeak = currentPrice
         return true
     }
 
@@ -213,13 +193,12 @@ data class TradingState(
 
     fun markSold(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
         releaseHoldings(now)
-        rungsFilled = 0
         clearEntryMeta()
     }
 
     /**
      * 거래소 보유가 0 으로 관측됐지만 귀속 불명 락이 풀리면 코인이 돌아올 수 있을 때(#122). 진입 메타(buyDate·peakPrice·
-     * entryStrategy·exitParams)와 사다리 장부는 남긴다 — 재편입(`syncPosition`)은 position·평단·수량만 복원하므로 여기서
+     * entryStrategy·exitParams)는 남긴다 — 재편입(`syncPosition`)은 position·평단·수량만 복원하므로 여기서
      * 지우면 되돌아온 포지션이 보유상한·트레일링·진입 전략 기준을 영영 잃는다. 코인이 정말 사라졌다면 잔재는 무해하다:
      * 다음 신규 진입의 [markBought] 가 `resuming=false` 로 전부 덮어쓴다.
      */

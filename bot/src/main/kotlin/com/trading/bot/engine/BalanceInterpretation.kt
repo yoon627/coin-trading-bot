@@ -2,18 +2,20 @@ package com.trading.bot.engine
 
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.TradingState
-import com.trading.common.strategy.AccumulateLadder
 
 // 잔고·보유 해석 — 상태를 바꾸지 않는 판정이라 top-level 에 둬 PositionManager 밖의 협력 객체도 쓴다.
 
 /** 잔고 비교의 허용 오차 — 거래소 수량 소수 8자리의 한 단위(1e-8), 부동소수 오차를 흡수한다. */
 internal const val VOLUME_EPSILON = 1e-8
 
+/** 거래소 최소주문 금액(원화) — 매수·매도 모두 이 금액 미만이면 거래소가 받지 않는다. */
+internal const val MIN_ORDER_KRW = 5_000.0
+
 /**
  * 이 수량을 이 가격에 팔면 거래소 최소주문(원화 5,000원)에 못 미치는가 — 그런 보유는 팔 수 없는 dust 다(#234).
  * 정확히 최소주문이면 팔 수 있다. 엔진 테스트는 PositionManager 를 mock 하므로 판정은 멤버가 아니라 여기 둔다.
  */
-internal fun isBelowMinOrder(volume: Double, price: Double): Boolean = volume * price < AccumulateLadder.MIN_ORDER_KRW
+internal fun isBelowMinOrder(volume: Double, price: Double): Boolean = volume * price < MIN_ORDER_KRW
 
 /**
  * 기록상 보유가 이 가격에서 팔 수 없는 dust 인가. 기록(`holdVolume`)은 마지막 동기화 값이라 진입 게이트를 여는 데만 쓰고,
