@@ -427,8 +427,7 @@ class PositionManager(
         feeBasis: FeeBasis,
         orderAmount: Double?,
     ): TradeRecord {
-        // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
-        // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
+        // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null 이다.
         val strategy = state.pendingBuyStrategy
         val orderUuid = state.pendingBuyUuid // markBought 가 clear 하기 전에 캡처 — 멱등 dedup 키.
         // 매수 직후라 우리 매도 주문은 없다 → 상한 0 = free 만 센다(holdVolume 정의를 매수 경로도 공유).

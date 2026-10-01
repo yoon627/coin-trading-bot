@@ -87,7 +87,6 @@ class ExitParamsDeclarationCheckTest {
             "trading.trailing-stop-pct",
             "trading.trailing-arm-pct",
             "trading.max-hold-days",
-            "trading.chart-exit-enabled",
         )
     }
 

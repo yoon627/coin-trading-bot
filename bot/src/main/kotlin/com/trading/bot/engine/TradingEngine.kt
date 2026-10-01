@@ -67,7 +67,7 @@ class TradingEngine(
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
         // stale 폴백 WARN 은 ticker 당 1분 1회 — 피드 장애 시 tick(기본 10s)마다 반복되는 스팸 방지.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
-        // 일봉 지표 최소 캔들(데드크로스 5/20 = longPeriod+1). 매수·청산 공통 D1 충분 게이트.
+        // store D1 을 쓸 최소 봉 수(엔진 하한) — 이보다 짧은 store window 는 쓰지 않는다(effectiveMinCandles).
         // lookback 은 distinct 방어 여유분 포함(store openTime upsert 후엔 중복 없으나 안전망).
         private const val MIN_DAILY_CANDLES = 21
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
@@ -80,8 +80,8 @@ class TradingEngine(
     private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
-    // 캔들 부족·낡은 D1 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 키에 전략·경로(또는 소스)를 넣는 이유:
-    // 런타임 setStrategy 로 전략이 바뀌면 새로 알려야 하고, 매수/청산·store/REST 가 서로의 경고를 삼키면 안 된다.
+    // 캔들 부족·낡은 D1 경고도 tick 마다 반복되므로 같은 방식으로 억제한다. 키에 전략(또는 소스)을 넣는 이유:
+    // 런타임 setStrategy 로 전략이 바뀌면 새로 알려야 하고, store/REST 가 서로의 경고를 삼키면 안 된다.
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
     // 컨트롤러 스레드(setStrategy/start)와 runLoop 코루틴이 함께 접근 → 가시성 보장.
     @Volatile
@@ -406,7 +406,7 @@ class TradingEngine(
         // 낡았을 수 있어 여기서 끄면 실제로는 팔 수 있는 포지션이 손절을 잃는다. 주문 여부는 PositionManager 가 실잔고로 정한다.
         val dust = state.isDustAt(currentPrice)
         if (state.position) {
-            val reason = decideSell(state, currentPrice, ticker, resolveExitStrategy(state, strategy))
+            val reason = decideSell(state, currentPrice)
             // 라이브 판정 **뒤에** 관측한다 — decideSell 이 peak 을 갱신한 뒤라야 같은 tick 을 본다.
             // (손절이 먼저 걸린 tick 은 peak 갱신을 건너뛰지만, 그 구간은 진입가 아래라 후보도 발동하지 않는다.)
             // dust 는 관측 대상 포지션이 아니다 — 흡수 뒤의 새 포지션이 옛 관측과 짝지어지지 않게 흘린다.
@@ -431,9 +431,9 @@ class TradingEngine(
             return
         }
 
-        // 매수도 청산과 동일: store 에 충분한 D1 이 있으면 store, 부족하면(부팅 직후/신규 마켓) REST 폴백.
+        // store 에 충분한 D1 이 있으면 store, 부족하면(부팅 직후/신규 마켓) REST 폴백.
         // 구 `size>=2` 게이트는 오염(중복 누적)에 가려 늘 store 를 탔고, 오염 제거 후엔 warm-up 동안 적은 캔들로
-        // 전략을 죽였다(전략의 최소 봉 수 가드가 false) → loadStoreDailyCandles 게이트로 매수/청산 통일.
+        // 전략을 죽였다(전략의 최소 봉 수 가드가 false) → loadStoreDailyCandles 게이트.
         val minCandles = effectiveMinCandles(strategy)
         val storeCandles = loadStoreDailyCandles(ticker, minCandles)
         // 09:00 경계 직후 store 의 최신 D1 은 새 날 첫 1분봉이 폴링되기까지(약 60~120초) 어제 봉이다. 그 window 로 판정하면
@@ -453,7 +453,7 @@ class TradingEngine(
             val candles = fetchDailyCandles(ticker)
             // 부족해도 막지 않는다 — 전략이 자기 가드로 false 를 내므로 결과는 같다.
             // 목적은 차단이 아니라 "왜 신호가 없는지"를 드러내는 것이다.
-            if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, "buy", candles.size, blocked = false)
+            if (candles.size < minCandles) warnInsufficientCandles(ticker, strategy, candles.size)
             // Upbit 일봉도 그날 첫 체결 전엔 어제 봉이 [0] 이고 캐시 TTL 이 60초라 store 와 같은 경계 문제가 있다.
             val newestOpen = candles.firstOrNull()?.openTimeUtcOrNull()
             if (candles.isNotEmpty() && !isCurrentDay(newestOpen, dayOpen)) {
@@ -471,73 +471,13 @@ class TradingEngine(
     private suspend fun fetchDailyCandles(ticker: String): List<Candle> =
         dailyCandleCache?.get(ticker, MAX_DAILY_CANDLE_LOOKBACK) ?: upbitClient.getDayCandles(ticker, MAX_DAILY_CANDLE_LOOKBACK)
 
-    // 청산은 진입 전략으로 평가(진입-청산 일관성). entryStrategy 는 durable 복원되지만, 전략이 목록에서 사라졌으면
-    // (전략 제거/rename) 활성 전략으로 폴백한다. 폴백은 청산 기준이 진입과 달라지므로 WARN.
-    internal fun resolveExitStrategy(state: TradingState, fallback: TradingStrategy): TradingStrategy {
-        val entry = state.entryStrategy ?: return fallback
-        return strategies.find { it.name == entry } ?: run {
-            log.warn("entryStrategy '{}' not found for {} — exit falls back to '{}'", entry, state.ticker, fallback.name)
-            fallback
-        }
-    }
-
-    // 매도 사유 우선순위: 손익% 안전망(손절>트레일링>익절)이 먼저, 차트청산은 그 뒤(이익실현 보호), 일일리셋은 최후.
-    // when short-circuit 으로 가격 안전망이 트리거되면 chartExit(캔들 조회 포함)는 평가하지 않는다.
-    internal suspend fun decideSell(
-        state: TradingState,
-        currentPrice: Double,
-        ticker: String,
-        strategy: TradingStrategy,
-    ): SellReason? = when {
+    // 매도 사유 우선순위: 손익% 안전망(손절>트레일링>익절)이 먼저, 일일리셋은 최후.
+    internal fun decideSell(state: TradingState, currentPrice: Double): SellReason? = when {
         positionManager.checkStopLoss(state, currentPrice) -> SellReason.STOP_LOSS
         positionManager.checkTrailingStop(state, currentPrice) -> SellReason.TRAILING_STOP
         positionManager.checkTakeProfit(state, currentPrice) -> SellReason.TAKE_PROFIT
-        chartExitTriggered(ticker, currentPrice, strategy) -> SellReason.CHART_EXIT
         dailyResetManager.shouldSellForDailyReset(state) -> SellReason.DAILY_RESET
         else -> null
-    }
-
-    // off 면 즉시 false(캔들 조회 0 → 기존 동작 보존). 데이터 조회(REST 포함) 실패가
-    // 가격 안전망/매수 평가까지 막지 않도록 예외를 격리한다.
-    private suspend fun chartExitTriggered(
-        ticker: String,
-        currentPrice: Double,
-        strategy: TradingStrategy,
-    ): Boolean {
-        if (!tradingProperties.chartExitEnabled) return false
-        return try {
-            evaluateChartExit(ticker, currentPrice, strategy)
-        } catch (e: CancellationException) {
-            throw e // 취소 전파 — runCatching 은 CE 까지 삼켜 종료 중에도 후속 매수/청산 평가가 계속된다.
-        } catch (e: Exception) {
-            log.debug("chartExit evaluation failed for {}: {}", ticker, e.message)
-            false
-        }
-    }
-
-    /**
-     * 차트청산 신호 평가. 충분한 D1 이 store 에 있으면(loadStoreDailyCandles) 그것을, 부족하면
-     * 매수 경로와 동일한 getDayCandles REST 폴백. 그래도 부족하면 skip(false).
-     */
-    internal suspend fun evaluateChartExit(
-        ticker: String,
-        currentPrice: Double,
-        strategy: TradingStrategy,
-    ): Boolean {
-        // 여기 strategy 는 resolveExitStrategy 가 복원한 **진입 전략**이다. 활성 전략 값을 쓰면 최소 봉 수가 더 큰
-        // 전략으로 산 포지션을 활성 전략의 봉 수로 판단해, 모자란 store 가 "충분"으로 통과하고 그 전략의 청산
-        // 신호가 영영 false 가 된다 — 차트청산이 죽은 포지션이 생긴다.
-        val minCandles = effectiveMinCandles(strategy)
-        val storeCandles = loadStoreDailyCandles(ticker, minCandles)
-        if (storeCandles != null) {
-            return strategy.shouldSellNormalized(storeCandles, currentPrice, tradingProperties)
-        }
-        val candles = fetchDailyCandles(ticker)
-        if (candles.size < minCandles) {
-            warnInsufficientCandles(ticker, strategy, "chartExit", candles.size, blocked = true)
-            return false
-        }
-        return strategy.shouldSell(candles, currentPrice, tradingProperties)
     }
 
     /** 전략 요구와 엔진 하한 중 큰 쪽. 하한을 두는 이유는 21 미만 선언 전략이 더 짧은 store 를
@@ -546,27 +486,18 @@ class TradingEngine(
         max(MIN_DAILY_CANDLES, strategy.minCandles)
 
     /**
-     * 캔들이 모자라 신호를 못 내는 상황을 알린다. 조용히 false 를 반환하면 원인을 코드로만 알 수 있다.
-     *
-     * [blocked] 를 문구에 반영하는 이유: 매수 경로는 부족해도 전략을 그대로 호출하므로(짧은 이력으로도
-     * 매매하는 전략이 있다) "건너뛴다"고 적으면 실제로 체결된 진입을 운영자가 차단된 것으로 오해한다.
+     * 캔들이 모자라 매수 신호를 못 내는 상황을 알린다. 조용히 false 를 반환하면 원인을 코드로만 알 수 있다.
+     * 평가는 막지 않는다 — 전략이 자기 가드로 false 를 내므로 "건너뛴다"고 적으면 운영자가 차단으로 오해한다.
      */
-    private fun warnInsufficientCandles(
-        ticker: String,
-        strategy: TradingStrategy,
-        path: String,
-        actual: Int,
-        blocked: Boolean,
-    ) {
-        val key = "$ticker:${strategy.name}:$path"
+    private fun warnInsufficientCandles(ticker: String, strategy: TradingStrategy, actual: Int) {
+        val key = "$ticker:${strategy.name}:min-candles"
         val now = System.currentTimeMillis()
         val last = candleWarnAtMs[key]
         if (last != null && now - last < STALE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now
         log.warn(
-            "{} for {} (user {}): D1 캔들 {}개 < {} 전략 요구 {}개 — {}",
-            path, ticker, userId, actual, strategy.name, effectiveMinCandles(strategy),
-            if (blocked) "신호 평가를 건너뛴다" else "신호 평가는 계속하나 대부분 false 다",
+            "buy for {} (user {}): D1 캔들 {}개 < {} 전략 요구 {}개 — 신호 평가는 계속하나 대부분 false 다",
+            ticker, userId, actual, strategy.name, effectiveMinCandles(strategy),
         )
     }
 
@@ -602,7 +533,7 @@ class TradingEngine(
         runCatching { LocalDateTime.parse(candleDateTimeUtc).toInstant(ZoneOffset.UTC) }.getOrNull()
 
     /**
-     * 매수·청산 공통 D1 캔들 로딩. store 에 충분한(>=MIN_DAILY_CANDLES) D1 이 있으면 반환, 없으면 null(호출측 REST 폴백).
+     * 매수 D1 캔들 로딩. store 에 충분한(>=MIN_DAILY_CANDLES) D1 이 있으면 반환, 없으면 null(호출측 REST 폴백).
      * MarketDataStore 가 openTime upsert 로 dedup 하므로 distinctBy 는 방어망(store 회귀 대비, 평상시 no-op).
      */
     internal fun loadStoreDailyCandles(ticker: String, minCandles: Int = MIN_DAILY_CANDLES): List<NormalizedCandle>? {

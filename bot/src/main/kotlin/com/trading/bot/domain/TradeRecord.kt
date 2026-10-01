@@ -87,7 +87,6 @@ enum class SellReason {
     TAKE_PROFIT,
     TRAILING_STOP,
     STOP_LOSS,
-    CHART_EXIT,
     DAILY_RESET,
     MANUAL,
 }
