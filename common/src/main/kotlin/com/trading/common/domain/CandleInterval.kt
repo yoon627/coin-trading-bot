@@ -9,15 +9,4 @@ enum class CandleInterval(val minutes: Int, val label: String) {
     D1(1440, "1d"),
     W1(10080, "1w"),
     MO1(43200, "1M"),
-    ;
-
-    companion object {
-        fun fromMinutes(minutes: Int): CandleInterval =
-            entries.find { it.minutes == minutes }
-                ?: throw IllegalArgumentException("Unsupported interval: ${minutes}m")
-
-        fun fromLabel(label: String): CandleInterval =
-            entries.find { it.label == label }
-                ?: throw IllegalArgumentException("Unsupported interval label: $label")
-    }
 }

@@ -47,7 +47,6 @@ const TideAPI = {
   botStatus: () => TideAPI._fetch('/api/bot/status'),
   botStart: (req = {}) => TideAPI._fetch('/api/bot/start', { method: 'POST', body: JSON.stringify(req) }),
   botStop: () => TideAPI._fetch('/api/bot/stop', { method: 'POST' }),
-  botStrategy: (strategy) => TideAPI._fetch('/api/bot/strategy', { method: 'POST', body: JSON.stringify({ strategy }) }),
 
   // Trading data
   portfolio: () => TideAPI._fetch('/api/portfolio'),
@@ -57,7 +56,6 @@ const TideAPI = {
   roundTrips: () => TideAPI._fetch('/api/trades/roundtrips'),
 
   // Strategy
-  strategies: () => TideAPI._fetch('/api/strategies'),
   performance: () => TideAPI._fetch('/api/strategies/performance'),
 
   // Settings
