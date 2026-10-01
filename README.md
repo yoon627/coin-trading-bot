@@ -11,7 +11,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 - 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
 - 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
-- 메이저 코인용 적립 프로파일(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만) 및 알트 유니버스 자동 선정 — 둘 다 기본 off
+- 메이저 코인용 적립 프로파일(떨어지면 단계 매수·오르면 단계 매도, 예산 상한만) — 기본 off
 - 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
 - JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting
 - Discord 거래 알림 및 선택적 서버 오류 알림
@@ -207,19 +207,15 @@ coin-trading-bot/
 - **현금 경쟁**: 적립이 아직 투입하지 않은 예산은 스윙 매수 사이징에서 미리 빠집니다. 적립 단이 예산·KRW 부족으로 건너뛰어지면 `/api/bot/status` 의 `accumulate_skip` 에 사유가 보입니다.
 - **집계 한계**: 매도 기록은 `strategy=accumulate`·`reason=ACCUMULATE_STEP` 으로 남습니다. `/api/strategies/performance` 는 매도 행의 수익률을 단순 합산하므로 부분 매도가 잦은 이 프로파일의 행은 과대계상됩니다. 손익은 `pnl_amount`(원)로 읽으세요.
 - **거래대금 정의(2026-09-14)**: 같은 응답의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다. 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓입니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
-### 알트 유니버스 자동 선정 (기본 off)
-
-`TRADING_UNIVERSE_AUTO=true` 면 스윙 대상은 `TRADING_TICKERS` 대신 Upbit 24h 거래대금 상위 `TRADING_UNIVERSE_ALT_COUNT`(기본 8, 최대 16)개로 정해지고, 기동 시와 매 09:00 KST 에 다시 고릅니다. 투자유의 종목·페그 자산(스테이블·금 토큰)·적립 티커는 제외됩니다. 보유 중이거나 미해소 주문이 있는 티커는 목록에서 빠져도 청산될 때까지 남고, 자동 선정 알트는 적립·보유 티커와 합쳐 20 까지만 채웁니다(적립·보유 티커 자체는 자르지 않습니다). 사용자가 UI 에서 고른 목록(`bot_state.tickers`)은 그대로 보존되므로 끄면 예전과 같이 돌아갑니다. 선정 API 가 실패하면 직전 목록을 유지합니다. 자동 선정 티커는 관심목록(`WATCHLIST_TICKERS`) 밖이면 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
-
 ### 거래 목록을 바꿀 때
 
-목록(`TRADING_TICKERS`, 또는 UI·API 로 준 `bot_state.tickers`)에서 뺀 티커라도 봇이 산 포지션과 미해소 주문은 청산될 때까지 계속 관리합니다 — 손절·트레일링·보유상한은 적용되고 새로 사지는 않습니다. 이 규칙은 `TRADING_UNIVERSE_AUTO` 와 무관하며, 청산된 뒤에는 다음 09:00 에 활성 목록에서 빠집니다. 적립 설정에서 빠졌고 목록에도 없는 사다리 보유분은 스윙 청산을 받지 않도록 관리하지 않고 기동 로그 WARN 으로 알립니다(적립에 다시 넣거나 직접 정리하세요).
+목록(`TRADING_TICKERS`, 또는 UI·API 로 준 `bot_state.tickers`)에서 뺀 티커라도 봇이 산 포지션과 미해소 주문은 청산될 때까지 계속 관리합니다 — 손절·트레일링·보유상한은 적용되고 새로 사지는 않습니다. 청산된 뒤에는 다음 09:00 에 활성 목록에서 빠집니다. 적립 설정에서 빠졌고 목록에도 없는 사다리 보유분은 스윙 청산을 받지 않도록 관리하지 않고 기동 로그 WARN 으로 알립니다(적립에 다시 넣거나 직접 정리하세요). 관심목록(`WATCHLIST_TICKERS`) 밖 티커는 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
 
 이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려주고, 요청에 전략이 있으면 그 전략만 적용합니다. 등록되지 않은 전략 이름은 **400** 으로 거절합니다.
 
 시작·정지·전략 변경·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·전략 변경·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
 
-`GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 스윙 티커 — 자동 선정이 꺼져 있으면 사용자 목록, 켜져 있으면 선정 알트), `accumulate_tickers`(적립), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·적립·청산 대기를 나눠 보여 줍니다.
+`GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 스윙 티커 — 사용자 목록), `accumulate_tickers`(적립), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·적립·청산 대기를 나눠 보여 줍니다.
 
 ## 웹 UI
 
@@ -269,8 +265,6 @@ coin-trading-bot/
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
 | `TRADING_ACCUMULATE_TICKERS` | 없음(off) | 적립 프로파일로 매매할 티커. 예산·단수·간격은 [적립 프로파일](#적립-프로파일-메이저-코인용-기본-off) 참고 |
-| `TRADING_UNIVERSE_AUTO` | `false` | 알트 스윙 유니버스를 거래대금 상위로 자동 선정 |
-| `TRADING_UNIVERSE_ALT_COUNT` | `8` | 자동 선정 종목 수(1~16) |
 | `WATCHLIST_TICKERS` | 주요 KRW 종목 | 관심 목록 종목 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
@@ -280,7 +274,7 @@ coin-trading-bot/
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
 
-> **적립 프로파일·자동 유니버스를 처음 켤 때** — 두 기능은 마이그레이션(V23)을 동반하며, `deploy.sh` 는 마이그레이션이 포함된 배포를 자동 롤백하지 않습니다. 켜기 전에 DB 를 수동 백업(`deploy/vultr/backup.sh` 와 별개로 `pg_dump`)하고, 문제가 생기면 이미지를 되돌리지 말고 `TRADING_ACCUMULATE_TICKERS` 를 비우고 `TRADING_UNIVERSE_AUTO=false` 로 재기동하세요(forward-off). 구버전 이미지는 V23 컬럼과 `ACCUMULATE_STEP` 사유를 모릅니다.
+> **적립 프로파일을 처음 켤 때** — 이 기능은 마이그레이션(V23)을 동반하며, `deploy.sh` 는 마이그레이션이 포함된 배포를 자동 롤백하지 않습니다. 켜기 전에 DB 를 수동 백업(`deploy/vultr/backup.sh` 와 별개로 `pg_dump`)하고, 문제가 생기면 이미지를 되돌리지 말고 `TRADING_ACCUMULATE_TICKERS` 를 비우고 재기동하세요(forward-off). 구버전 이미지는 V23 컬럼과 `ACCUMULATE_STEP` 사유를 모릅니다.
 >
 > **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 6개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
 
