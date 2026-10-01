@@ -20,6 +20,7 @@ import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @Component
 class RateLimitFilter(
@@ -35,8 +36,10 @@ class RateLimitFilter(
     @Volatile private var running = false
 
     // Redis 가 없거나 장애일 때 fail-open 되지 않도록 in-memory fixed-window 로 판정한다 (단일 인스턴스 기준 유효).
-    private val memoryHits = ConcurrentHashMap<String, Long>()
-    private val memoryWindowMinute = AtomicLong(-1)
+    private class MemoryWindow(val minute: Long) {
+        val hits = ConcurrentHashMap<String, Long>()
+    }
+    private val memoryWindow = AtomicReference(MemoryWindow(-1))
 
     // 0 이면 Redis 로 판정하고, 그 밖이면 이 시각(ms)까지 in-memory 로 판정한다(강등).
     private val redisRetryAtMs = AtomicLong(0)
@@ -201,14 +204,16 @@ class RateLimitFilter(
             path.startsWith("/tide-app") || path == "/" ||
             path.endsWith(".html")
 
+    // 같은 분이거나 1분 이내로 늦은 요청(정분 직전에 분을 계산했다)은 지금 창에 센다 — 창을 되돌리면 지금 분 카운터가 지워진다.
+    // 그 밖(다음 분, 또는 벽시계가 1분 넘게 뒤로 감)은 새 창으로 바꾼다 — 창이 미래 분에 멈추면 시계가 따라잡을 때까지 잠긴다.
+    // 지난 창은 통째로 버려지므로 카운터는 한 창 분량만 남는다.
     private fun isMemoryRateLimited(key: String, minute: Long, limit: Int): Boolean {
-        // 분(window)이 바뀌면 카운터 초기화 → 맵 크기를 한 window 분량으로 제한.
-        if (memoryWindowMinute.getAndSet(minute) != minute) {
-            memoryHits.clear()
-        }
-        val count = memoryHits.merge(key, 1L) { a, b -> a + b } ?: 1L
+        val window = memoryWindow.updateAndGet { if (minute == it.minute || minute == it.minute - 1) it else MemoryWindow(minute) }
+        val count = window.hits.merge(key, 1L) { a, b -> a + b } ?: 1L
         return count > limit
     }
+
+    internal fun trackedClients(): Int = memoryWindow.get().hits.size
 
     private fun reject(exchange: ServerWebExchange, limit: Int): Mono<Void> {
         exchange.response.statusCode = HttpStatus.TOO_MANY_REQUESTS
