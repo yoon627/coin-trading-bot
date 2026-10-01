@@ -21,7 +21,6 @@ import com.trading.common.domain.Exchange
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
 import com.trading.common.strategy.TradingStrategy
-import com.trading.common.strategy.CombinedStrategy
 import io.mockk.*
 import java.time.Clock
 import java.time.Instant
@@ -285,12 +284,10 @@ class TradingEngineTest {
         assertTrue(engine.getStates().isEmpty())
     }
 
-    // --- decideSell 우선순위 (stopLoss > trailingStop > takeProfit > chartExit > dailyReset) ---
+    // --- decideSell 우선순위 (stopLoss > trailingStop > takeProfit > dailyReset) ---
 
     private fun sellState() = TradingState("KRW-BTC", position = true)
-    private val chartEnabledProps = TradingProperties(intervalSeconds = 1, chartExitEnabled = true)
 
-    // chartExit off(기본) — chartExitTriggered 가 즉시 false 라 가격 안전망/일일리셋만 평가.
     @Test
     fun `decideSell prioritizes stopLoss over everything`() = runBlocking {
         val engine = createEngine()
@@ -298,7 +295,7 @@ class TradingEngineTest {
         every { positionManager.checkStopLoss(state, any()) } returns true
         every { positionManager.checkTrailingStop(state, any()) } returns true
         every { positionManager.checkTakeProfit(state, any()) } returns true
-        assertEquals(SellReason.STOP_LOSS, engine.decideSell(state, 100.0, "KRW-BTC", strategy))
+        assertEquals(SellReason.STOP_LOSS, engine.decideSell(state, 100.0))
     }
 
     @Test
@@ -307,41 +304,29 @@ class TradingEngineTest {
         val state = sellState()
         every { positionManager.checkStopLoss(state, any()) } returns false
         every { positionManager.checkTrailingStop(state, any()) } returns true
-        assertEquals(SellReason.TRAILING_STOP, engine.decideSell(state, 100.0, "KRW-BTC", strategy))
+        assertEquals(SellReason.TRAILING_STOP, engine.decideSell(state, 100.0))
     }
 
     @Test
-    fun `decideSell prefers TAKE_PROFIT over chartExit and skips chart evaluation`() = runBlocking {
-        val engine = createEngine(props = chartEnabledProps)
+    fun `decideSell prefers TAKE_PROFIT over DAILY_RESET`() = runBlocking {
+        val engine = createEngine()
         val state = sellState()
         every { positionManager.checkStopLoss(state, any()) } returns false
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns true
-        // 익절이 차트청산보다 우선 — 가격 안전망이 트리거되면 차트 캔들 조회조차 하지 않음(short-circuit).
-        assertEquals(SellReason.TAKE_PROFIT, engine.decideSell(state, 100.0, "KRW-BTC", CombinedStrategy()))
-        coVerify(exactly = 0) { marketDataStore.getCandles(any(), any(), any(), any()) }
+        every { dailyResetManager.shouldSellForDailyReset(state) } returns true
+        assertEquals(SellReason.TAKE_PROFIT, engine.decideSell(state, 100.0))
     }
 
     @Test
-    fun `decideSell returns CHART_EXIT when only chart signal triggers`() = runBlocking {
-        val engine = createEngine(props = chartEnabledProps)
-        val state = sellState()
-        every { positionManager.checkStopLoss(state, any()) } returns false
-        every { positionManager.checkTrailingStop(state, any()) } returns false
-        every { positionManager.checkTakeProfit(state, any()) } returns false
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized()
-        assertEquals(SellReason.CHART_EXIT, engine.decideSell(state, 50.0, "KRW-BTC", CombinedStrategy()))
-    }
-
-    @Test
-    fun `decideSell falls to DAILY_RESET when chart disabled`() = runBlocking {
+    fun `decideSell falls to DAILY_RESET when no price exit triggers`() = runBlocking {
         val engine = createEngine()
         val state = sellState()
         every { positionManager.checkStopLoss(state, any()) } returns false
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns false
         every { dailyResetManager.shouldSellForDailyReset(state) } returns true
-        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0, "KRW-BTC", strategy))
+        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0))
     }
 
     @Test
@@ -351,7 +336,7 @@ class TradingEngineTest {
         every { positionManager.checkStopLoss(state, any()) } returns false
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns false
-        assertNull(engine.decideSell(state, 100.0, "KRW-BTC", strategy))
+        assertNull(engine.decideSell(state, 100.0))
     }
 
     // --- processTicker 오케스트레이션 (H8 게이트 순서·skip/return 불변식) ---
@@ -489,7 +474,7 @@ class TradingEngineTest {
 
         engine.processTicker("KRW-BTC", state, strategy)
 
-        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy", any()) }
+        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy") }
         coVerify(exactly = 0) { observer.onTick(any(), any(), any()) }
     }
 
@@ -507,7 +492,7 @@ class TradingEngineTest {
         engine.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.sell("KRW-BTC", state, 10_000_000.0, SellReason.STOP_LOSS) }
-        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy", any()) }
+        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy") }
     }
 
     @Test
@@ -520,7 +505,7 @@ class TradingEngineTest {
         engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true, holdVolume = 0.01), strategy) // 10만원
         engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true), strategy) // 수량 미상
 
-        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
     }
 
     @Test
@@ -745,28 +730,8 @@ class TradingEngineTest {
         coVerify { positionManager.syncPosition("KRW-BTC", state) }
     }
 
-    // chartExit 평가의 데이터 조회 실패가 가격 안전망/매수까지 막지 않도록 격리되는지 (REST 예외 전파 방지).
-    @Test
-    fun `decideSell isolates chartExit evaluation exception`() = runBlocking {
-        val engine = createEngine(props = chartEnabledProps)
-        val state = sellState()
-        every { positionManager.checkStopLoss(state, any()) } returns false
-        every { positionManager.checkTrailingStop(state, any()) } returns false
-        every { positionManager.checkTakeProfit(state, any()) } returns false
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns emptyList()
-        coEvery { upbitClient.getDayCandles(any(), any()) } throws RuntimeException("rate limit")
-        every { dailyResetManager.shouldSellForDailyReset(state) } returns true
-        // 예외가 전파되지 않고 dailyReset 안전망까지 평가됨
-        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0, "KRW-BTC", CombinedStrategy()))
-    }
-
-    // --- evaluateChartExit: store D1 distinct + REST 폴백 (D1 은 CandleAggregator 가 같은 날 반복 ingest) ---
-
-    private fun deadCrossLegacy(): List<Candle> =
-        listOf(Candle(tradePrice = 50.0)) + (1..20).map { i -> Candle(tradePrice = 200.0 - i * 2.0) }
-
     // openTime 을 하루씩 다르게 — distinctBy{openTime} 후에도 21개 유지([0]=최신).
-    private fun deadCrossNormalized(): List<NormalizedCandle> =
+    private fun distinctDailyNormalized(): List<NormalizedCandle> =
         (listOf(50.0) + (1..20).map { 200.0 - it * 2.0 }).mapIndexed { idx, p ->
             NormalizedCandle(
                 Exchange.UPBIT, "KRW-BTC", p, p, p, p, 1.0,
@@ -774,41 +739,12 @@ class TradingEngineTest {
             )
         }
 
-    @Test
-    fun `evaluateChartExit uses store candles without REST when distinct sufficient`() = runBlocking {
-        val engine = createEngine()
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized()
-        assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, CombinedStrategy()))
-        coVerify(exactly = 0) { upbitClient.getDayCandles(any(), any()) }
-    }
-
-    @Test
-    fun `evaluateChartExit falls back to REST when store candles polluted`() = runBlocking {
-        // 같은 openTime 30개(같은 날 누적) → distinct 후 1개 < 21 → REST 폴백.
-        val engine = createEngine()
-        val polluted = (1..30).map {
-            NormalizedCandle(Exchange.UPBIT, "KRW-BTC", 100.0, 100.0, 100.0, 100.0, 1.0, openTime = Instant.EPOCH)
-        }
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns polluted
-        coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns deadCrossLegacy()
-        assertTrue(engine.evaluateChartExit("KRW-BTC", 50.0, CombinedStrategy()))
-        coVerify { upbitClient.getDayCandles("KRW-BTC", 60) }
-    }
-
-    @Test
-    fun `evaluateChartExit returns false when candles insufficient`() = runBlocking {
-        val engine = createEngine()
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns emptyList()
-        coEvery { upbitClient.getDayCandles("KRW-BTC", 60) } returns listOf(Candle(tradePrice = 100.0))
-        assertFalse(engine.evaluateChartExit("KRW-BTC", 50.0, CombinedStrategy()))
-    }
-
-    // --- loadStoreDailyCandles: 매수·청산 공통 D1 게이트 (distinct + size>=MIN_DAILY_CANDLES, 부족 시 null) ---
+    // --- loadStoreDailyCandles: 매수 D1 게이트 (distinct + size>=MIN_DAILY_CANDLES, 부족 시 null) — D1 은 CandleAggregator 가 같은 날 반복 ingest ---
 
     @Test
     fun `loadStoreDailyCandles returns store candles when distinct sufficient`() {
         val engine = createEngine()
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized()
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns distinctDailyNormalized()
         assertEquals(21, engine.loadStoreDailyCandles("KRW-BTC")?.size)
     }
 
@@ -826,7 +762,7 @@ class TradingEngineTest {
     @Test
     fun `loadStoreDailyCandles returns null when store has too few candles`() {
         val engine = createEngine()
-        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns deadCrossNormalized().take(10)
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns distinctDailyNormalized().take(10)
         assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
     }
 
@@ -933,33 +869,6 @@ class TradingEngineTest {
         engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
-    }
-
-    // --- resolveExitStrategy: 청산을 진입 전략으로 (entryStrategy 복원 + 폴백) ---
-
-    @Test
-    fun `resolveExitStrategy uses entryStrategy when present`() {
-        val entry = namedStrategy("entry_strategy")
-        val active = namedStrategy("active_strategy")
-        val engine = createEngine(strategies = listOf(entry, active))
-        val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "entry_strategy") }
-        assertEquals("entry_strategy", engine.resolveExitStrategy(state, active).name)
-    }
-
-    @Test
-    fun `resolveExitStrategy falls back to active when entryStrategy null`() {
-        val active = namedStrategy("active_strategy")
-        val engine = createEngine(strategies = listOf(active))
-        val state = TradingState("KRW-BTC") // entryStrategy null (재시작 syncPosition 복원 시뮬)
-        assertEquals(active.name, engine.resolveExitStrategy(state, active).name)
-    }
-
-    @Test
-    fun `resolveExitStrategy falls back when entryStrategy not in list`() {
-        val active = namedStrategy("active_strategy")
-        val engine = createEngine(strategies = listOf(active))
-        val state = TradingState("KRW-BTC").apply { markBought(100.0, 1.0, "removed_strategy") }
-        assertEquals(active.name, engine.resolveExitStrategy(state, active).name)
     }
 
     // --- getRealtimePrice: store staleness 가드 (이슈 #27 — 얼어붙은 store 가격으로 매매 판단 방지) ---

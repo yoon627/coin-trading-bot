@@ -5,13 +5,14 @@ import com.trading.common.domain.Candle
 
 class CombinedStrategy : TradingStrategy {
     override val name = "combined"
+    override val minCandles = 21
 
     override suspend fun shouldBuy(
         candles: List<Candle>,
         currentPrice: Double,
         config: TradingProperties,
     ): Boolean {
-        if (candles.size < 21) return false
+        if (candles.size < minCandles) return false
 
         // 1. Volatility breakout
         val targetPrice = Indicators.calculateTargetPrice(candles, config.kValue)

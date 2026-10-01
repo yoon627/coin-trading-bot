@@ -17,12 +17,7 @@ import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
-import com.trading.common.strategy.AccumulateLadder
 import com.trading.common.strategy.ExitGates
-import com.trading.common.strategy.LadderAction
-import com.trading.common.strategy.LadderParams
-import java.math.BigDecimal
-import java.math.RoundingMode
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDateTime
@@ -54,15 +49,6 @@ class PositionManager(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    companion object {
-        private const val MIN_ORDER_AMOUNT_KRW = AccumulateLadder.MIN_ORDER_KRW
-        // 적립 단 매도는 요청 대비 이 비율 이상 체결됐을 때만 rung 을 소모한다 — 10% 체결로 한 단을 지우면 사다리가 어긋난다.
-        // 원가 정합(LadderStateMapper)의 허용치와 짝이라 common 에 둔다.
-        private const val RUNG_FILL_RATIO = AccumulateLadder.SELL_FILL_RATIO
-        private const val BUDGET_TOLERANCE_KRW = 1.0
-        private const val VOLUME_SCALE = 8
-    }
-
     // 응답을 못 받은 주문의 판정(#227). 못 찾은 이력의 수명이 이 엔진과 같아야 해서 여기서 만든다 — 주입하지 않는다.
     private val unknownOrders = UnknownOrderResolver(upbitClient, clock)
 
@@ -70,21 +56,14 @@ class PositionManager(
     private suspend fun findAccount(currency: String): Account? =
         upbitClient.getAccounts().find { it.currency == currency }
 
-    /**
-     * @param clearWhenEmpty 확인된 무잔고를 포지션 해제로 반영한다. 기본 false — 스윙은 감사 기록 없는 청산을 막기 위해
-     *   phantom 정리를 `sell()` 에 맡기지만, 적립의 주기 동기화는 수동 전량 매도 뒤에도 장부가 "보유"로 남아
-     *   다음 하락에 추가 단을 사 버리므로 여기서 내려야 한다(사다리 장부는 매퍼가 이어서 비운다).
-     */
-    suspend fun syncPosition(ticker: String, state: TradingState, clearWhenEmpty: Boolean = false) {
+    suspend fun syncPosition(ticker: String, state: TradingState) {
         try {
             val account = findAccount(ticker.substringAfter("-"))
-            var heldNow = 0.0
             if (account != null) {
                 // free 만 보면 안 된다 — 매도 주문이 떠 있는 채로 재시작하면 코인 전량이 locked 라 free 가 0 이다.
                 // 그걸 "보유 없음" 으로 동기화하면 손절·익절이 한 번도 평가되지 않는 무방비 보유가 되고,
                 // boughtToday 가 풀리는 순간 그 위에 추가 매수까지 들어간다.
                 val held = heldVolume(account, ourSellLockCeiling(state))
-                heldNow = held
                 if (held > 0.0) {
                     state.position = true
                     state.avgBuyPrice = account.avgBuyPriceDouble()
@@ -106,12 +85,6 @@ class PositionManager(
                     return
                 }
             }
-            if (clearWhenEmpty && heldNow <= 0.0 && state.position) {
-                log.warn("Position for {} is gone on the exchange (manual sell?) — clearing holdings", ticker)
-                state.position = false
-                state.holdVolume = 0.0
-                state.avgBuyPrice = 0.0
-            }
             // 조회 성공(보유 유무 무관) → 동기화 완료, 매수 차단 해소.
             state.unsynced = false
             state.unattributableLockWarned = false
@@ -124,7 +97,7 @@ class PositionManager(
         }
     }
 
-    /** 매수 진입 가드. 적립 단 추가만 [allowExisting] 로 "이미 보유"를 허용하고 나머지 가드는 두 경로가 같다. */
+    /** 매수 진입 가드. dust 흡수 매수만 [allowExisting] 로 "이미 보유"를 허용한다(#234). */
     private fun entryBlocked(ticker: String, state: TradingState, allowExisting: Boolean): Boolean {
         // 재매수 가드: 이미 보유 중이거나, 미해소 매수 주문(pending)이 있으면 신규 매수 금지.
         if (state.position && !allowExisting) {
@@ -161,13 +134,11 @@ class PositionManager(
         return false
     }
 
-    /** @param reservedKrw 적립 프로파일이 아직 투입하지 않은 예산 — 스윙 사이징에서 뺀다(알트가 적립 현금을 선점하지 못하게). */
     suspend fun buy(
         ticker: String,
         state: TradingState,
         currentPrice: Double,
         strategyName: String,
-        reservedKrw: Double = 0.0,
     ): TradeRecord? {
         // 팔 수 없는 dust 보유는 진입을 막지 않는다 — 사면 합쳐서 새 진입이 된다(#234). 아래에서 실잔고로 다시 판정한다.
         val onDust = state.isDustAt(currentPrice)
@@ -192,14 +163,14 @@ class PositionManager(
             return null
         }
         val krw = accounts.find { it.currency == "KRW" }?.balanceDouble() ?: 0.0
-        val investAmount = calculateInvestAmount((krw - reservedKrw).coerceAtLeast(0.0))
-        if (investAmount < MIN_ORDER_AMOUNT_KRW) {
+        val investAmount = calculateInvestAmount(krw)
+        if (investAmount < MIN_ORDER_KRW) {
             log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
             return null
         }
         // 손절 시점에도 최소주문 이상이어야 팔 수 있다 — 아니면 봇이 처음부터 손절 못 할 포지션을 연다(#234).
         // 손절폭은 이 진입이 스냅샷으로 가져갈 값이다.
-        if (investAmount * (1 - tradingProperties.exitParamsSnapshot().maxLossPct / 100) < MIN_ORDER_AMOUNT_KRW) {
+        if (investAmount * (1 - tradingProperties.exitParamsSnapshot().maxLossPct / 100) < MIN_ORDER_KRW) {
             log.debug("Skip buy for {}: investAmount={} would be unsellable at the stop-loss", ticker, investAmount)
             return null
         }
@@ -213,49 +184,7 @@ class PositionManager(
             coin?.let { state.avgBuyPrice = it.avgBuyPriceDouble() }
             return null
         }
-        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, triggerPrice = null, priorVolume = priorVolume, freshEntry = onDust)
-    }
-
-    /**
-     * 적립 단 매수. 예산 상한은 장부(rung)가 아니라 **주문 직전 거래소 실측 원가**로 판정한다 — 런타임 수동 매매로
-     * 장부가 낡아도 상한이 뚫리지 않는다. 건너뛴 사유는 상태에 남겨 API 로 드러낸다.
-     */
-    suspend fun buyRung(
-        ticker: String,
-        state: TradingState,
-        currentPrice: Double,
-        action: LadderAction.Buy,
-        params: LadderParams,
-    ): TradeRecord? {
-        if (entryBlocked(ticker, state, allowExisting = true)) return null
-        val accounts = try {
-            upbitClient.getAccounts()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.error("Failed to fetch balance for rung buy {}: {}", ticker, e.message, e)
-            return null
-        }
-        val krw = accounts.find { it.currency == "KRW" }?.balanceDouble() ?: 0.0
-        val coin = accounts.find { it.currency == ticker.substringAfter("-") }
-        val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-        // 예산은 매도 가능 수량이 아니라 계좌 총보유(locked 포함)로 잰다 — 수동 지정가·출금 대기로 잠긴 코인도
-        // 이 예산으로 산 돈이고, 빼고 재면 손절 없는 프로파일의 유일한 상한이 뚫린다.
-        val investedKrw = (coin?.avgBuyPriceDouble() ?: 0.0) * (coin?.totalBalance() ?: 0.0)
-        val skip = when {
-            investedKrw + action.amountKrw > params.budgetKrw + BUDGET_TOLERANCE_KRW ->
-                "budget: invested %.0f + rung %.0f > %.0f".format(investedKrw, action.amountKrw, params.budgetKrw)
-            krw < action.amountKrw -> "KRW balance %.0f < rung %.0f".format(krw, action.amountKrw)
-            else -> null
-        }
-        if (skip != null) {
-            // 같은 사유가 tick 마다 반복되므로 바뀔 때만 알린다.
-            if (state.accumulateSkipReason != skip) log.warn("Accumulate rung skipped for {}: {}", ticker, skip)
-            state.accumulateSkipReason = skip
-            return null
-        }
-        state.accumulateSkipReason = null
-        return placeBuy(ticker, state, currentPrice, action.amountKrw, AccumulateLadder.STRATEGY_NAME, action.triggerPrice, priorVolume)
+        return placeBuy(ticker, state, currentPrice, investAmount, strategyName, priorVolume)
     }
 
     /**
@@ -271,21 +200,17 @@ class PositionManager(
         currentPrice: Double,
         investAmount: Double,
         strategyName: String,
-        triggerPrice: Double?,
         priorVolume: Double,
-        freshEntry: Boolean = false,
     ): TradeRecord? {
         // 아래 블록은 취소를 받지 않는다 — 정지(stop/reload)가 시작된 뒤에는 새 주문을 시작하지 않는다.
         currentCoroutineContext().ensureActive()
         val identifier = newOrderIdentifier()
-        // 신규 진입이면 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에
-        // 재시작해도(syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
-        // 적립 추가 단은 기존 포지션 위에 얹는다 — 지우면 미체결(cancel+0)로 끝났을 때 buyDate·entryStrategy 가 영구 유실돼
-        // 프로파일을 끈 뒤 보유상한 청산이 동작하지 않는다.
-        // dust 흡수(freshEntry)도 새 진입이다 — 장부(position·수량)는 그대로 두고 메타만 지운다. 체결 확정은 실잔고로
+        // 여기가 이 포지션의 시작점 — 옛 진입 메타를 지운 상태로 pending 을 기록해야, 체결 확인 전에 재시작해도
+        // (syncPosition 이 position=true 를 먼저 세운다) 복원된 잔재가 상속되지 않는다.
+        // dust 흡수도 새 진입이다 — 장부(position·수량)는 그대로 두고 메타만 지운다. 체결 확정은 실잔고로
         // 수량·평단을 덮고(replace) 빈 메타를 오늘 날짜·이번 전략으로 채운다. 주문이 무산돼도 dust 는 계속 관리된다.
-        if (!state.position || freshEntry) state.clearEntryMeta()
-        state.beginBuyOrder(identifier, strategyName, triggerPrice, priorVolume)
+        state.clearEntryMeta()
+        state.beginBuyOrder(identifier, strategyName, priorVolume)
         // 선기록부터 체결 반영까지 취소가 끊지 못하게 한다. reload/stop 이 tick 을 취소하면 cancelAndJoin 이 이 블록의 완주를
         // 기다린다. 그 대기를 넘겨 프로세스가 죽어도 선기록된 identifier 로 재시작 뒤 확정된다.
         return withContext(NonCancellable) {
@@ -447,7 +372,7 @@ class PositionManager(
 
     /**
      * getOrder 장애 시 거래소 실잔고로 체결 여부 추정 복원. 주문 전 보유량(`pendingBuyPriorVolume`)을 넘는 증분이 있으면
-     * 그만큼을 이 주문의 체결로 확정, 없으면 pending 유지(다음 tick). 스윙·적립 모두 주문 직전 보유량(장부 밖 dust·수동 매수
+     * 그만큼을 이 주문의 체결로 확정, 없으면 pending 유지(다음 tick). 매수는 주문 직전 보유량(장부 밖 dust·수동 매수
      * 포함)을 기록하므로 이 주문으로 늘어난 증분만 센다. 같은 시각의 수동 매수 혼입 보정은 범위 밖(M3·수동매매 동기화 별도).
      */
     private sealed interface BalanceRecovery {
@@ -470,8 +395,8 @@ class PositionManager(
             return BalanceRecovery.LookupFailed
         }
         val balance = account?.balanceDouble() ?: 0.0
-        // 적립 추가 단은 주문 전부터 코인이 있다 — 주문 시점 보유량을 넘는 증분만 이 주문의 체결로 본다.
-        // 그 값이 없는 옛 pending 은 종전대로 잔고 전체(스윙은 position=false 였으므로 0 과 같다).
+        // dust 흡수 매수는 주문 전부터 코인이 있다 — 주문 시점 보유량을 넘는 증분만 이 주문의 체결로 본다.
+        // 그 값이 없는 옛 pending 은 종전대로 잔고 전체(신규 진입은 position=false 였으므로 0 과 같다).
         val prior = state.pendingBuyPriorVolume ?: 0.0
         val executed = balance - prior
         if (executed <= VOLUME_EPSILON) {
@@ -502,20 +427,14 @@ class PositionManager(
         feeBasis: FeeBasis,
         orderAmount: Double?,
     ): TradeRecord {
-        // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null. null 은 그대로 두어
-        // entryStrategy=null → resolveExitStrategy 가 조용히 fallback(빈 문자열 "" 은 WARN 스팸 유발).
+        // pending 은 buy 에서 항상 strategy 와 함께 set 되므로 정상흐름상 non-null 이다.
         val strategy = state.pendingBuyStrategy
         val orderUuid = state.pendingBuyUuid // markBought 가 clear 하기 전에 캡처 — 멱등 dedup 키.
-        // 적립 단이면 트리거가가 있다. 체결이 조금이라도 있으면 한 단으로 센다 — 시장가 매수(ord_type=price)는 잔량 환불로
-        // 종결되므로 미달 체결은 드물고, "미달이면 안 센다"는 규칙은 다음 tick 의 장부 정합(원가 기반 rung 추정)과 모순된다.
-        // 총 투입은 어차피 실측 원가 예산 게이트가 막는다.
-        val triggerPrice = state.pendingBuyTriggerPrice
-        val rungFilled = triggerPrice != null
         // 매수 직후라 우리 매도 주문은 없다 → 상한 0 = free 만 센다(holdVolume 정의를 매수 경로도 공유).
-        // 계좌를 못 읽었으면 체결분에 주문 전 보유량을 더한다 — 추가 단에서 체결분만 쓰면 replace=true 가 기존 보유를 지운다.
+        // 계좌를 못 읽었으면 체결분에 주문 전 보유량을 더한다 — dust 흡수에서 체결분만 쓰면 replace=true 가 dust 를 지운다.
         val volume = account?.let { heldVolume(it, 0.0) }?.takeIf { it > 0.0 }
             ?: (executedVolume + (state.pendingBuyPriorVolume ?: 0.0))
-        // 평단도 계좌를 못 읽었으면 가중평균 — 추가 단에서 현재가로 replace 하면 포지션 전체 평단이 이번 단 가격이 된다.
+        // 평단도 계좌를 못 읽었으면 가중평균 — dust 흡수에서 현재가로 replace 하면 dust 원가가 빠진다.
         val priorVolume = state.pendingBuyPriorVolume ?: 0.0
         val fillPrice = account?.avgBuyPriceDouble()?.takeIf { it > 0.0 }
             ?: if (priorVolume > 0.0 && state.avgBuyPrice > 0.0 && volume > 0.0) {
@@ -551,11 +470,6 @@ class PositionManager(
             // 진입 시점 청산 파라미터 스냅샷. markBought 뒤에 찍는다 — 신규 진입이면 markBought 가 옛 스냅샷을 비우므로
             // 여기서 현재 설정으로 새로 찍히고, 재시작 복원(기존 포지션 연장)이면 durable 값이 그대로 유지된다.
             s.exitParams = s.exitParams ?: snapshot
-            // 사다리 장부는 이 커밋 안에서만 바뀐다 — 밖에서 올리면 크래시 창에서 같은 단을 다시 산다.
-            if (rungFilled) {
-                s.rungsFilled += 1
-                s.lastActionPrice = triggerPrice!!
-            }
         }
         // 전이가 반영된 사본을 감사 기록과 한 트랜잭션으로 커밋한 뒤 원본 메모리 전이를 적용한다(#52).
         commitFillAndApply(state, record, applyTransition)
@@ -642,7 +556,7 @@ class PositionManager(
         if (state.dustWarned) return
         log.warn(
             "Swing holding on {} is dust below the {} KRW minimum order ({}) — not selling it",
-            ticker, MIN_ORDER_AMOUNT_KRW.toLong(), detail,
+            ticker, MIN_ORDER_KRW.toLong(), detail,
         )
         state.dustWarned = true
     }
@@ -674,13 +588,6 @@ class PositionManager(
         state.markSold()
         persist(state)
     }
-
-    /** durable 복원본. 런타임에 새로 활성화되는 티커가 빈 상태로 시딩돼 pending uuid·halt 를 덮어쓰지 않게 한다. */
-    internal suspend fun loadState(ticker: String): TradingState? = tradingStateService.loadState(userId, ticker)
-
-    /** 잔고(free+locked)가 있는 코인 통화 — 재시작 시 메타 없는 durable 행을 살릴지 계좌 조회 1회로 판정한다. */
-    internal suspend fun heldCurrencies(): Set<String> =
-        upbitClient.getAccounts().filter { it.currency != "KRW" && it.totalBalance() > 0.0 }.map { it.currency }.toSet()
 
     /**
      * 신고점 durable 반영. 실패를 [TradingState.peakPersistFailed] 로 남겨 다시 쓰게 한다(도는 엔진은 다음 tick, 멈춘 엔진은
@@ -803,49 +710,7 @@ class PositionManager(
         state.pendingSellAlerted = true
     }
 
-    suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? =
-        // 판단가를 pending 에 남긴다 — 체결이 reconcile 로 늦게 확정돼도 기록은 이 가격으로 한다(#235).
-        placeSell(ticker, state, currentPrice, reason, triggerPrice = currentPrice) { account ->
-            SellQuantity(account.balance, account.balanceDouble())
-        }
-
-    /**
-     * 적립 단 매도. 마지막 단은 거래소 잔고 원문으로 전량, 아니면 8자리 내림 수량. 요청이 free 잔고를 넘어도
-     * 전량으로 승격하지 않는다 — 나머지가 locked(수동 지정가·출금 대기)일 수 있어 전량 청산으로 확정하면 장부가 틀린다.
-     */
-    suspend fun sellVolume(
-        ticker: String,
-        state: TradingState,
-        currentPrice: Double,
-        action: LadderAction.Sell,
-    ): TradeRecord? =
-        placeSell(ticker, state, currentPrice, SellReason.ACCUMULATE_STEP, action.triggerPrice) { account ->
-            val sellable = account.balanceDouble()
-            if (action.isFinal) {
-                SellQuantity(account.balance, sellable)
-            } else {
-                // 주문 문자열은 8자리로 절삭된다 — 장부·기록·최소주문 검사도 실제로 보낸 그 수량을 써야 맞는다.
-                val orderVolume = formatVolume(minOf(action.volume, sellable))
-                SellQuantity(orderVolume, orderVolume.toDouble())
-            }
-        }
-
-    /** 주문에 실을 수량 문자열(거래소 원문 또는 plain decimal)과 그 수치. */
-    private class SellQuantity(val orderVolume: String, val volume: Double)
-
-    // Double.toString() 은 소액에서 지수표기("5.0E-5")를 내고 거래소가 거부한다. BigDecimal(double) 생성자는 이진
-    // 근사값(0.0003 → 0.000299999…)을 그대로 써서 내림이 한 자리 깎이므로 valueOf(십진 표기)로 만든다.
-    private fun formatVolume(volume: Double): String =
-        BigDecimal.valueOf(volume).setScale(VOLUME_SCALE, RoundingMode.DOWN).stripTrailingZeros().toPlainString()
-
-    private suspend fun placeSell(
-        ticker: String,
-        state: TradingState,
-        currentPrice: Double,
-        reason: SellReason,
-        triggerPrice: Double,
-        quantity: (Account) -> SellQuantity,
-    ): TradeRecord? {
+    suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? {
         if (!state.position) return null
         // 미해소 매도 주문이 있으면 신규 매도 금지 — reconcile 로 확정될 때까지 이중 매도 방지(매수 pending 가드 미러).
         if (state.hasPendingSell()) {
@@ -883,37 +748,27 @@ class PositionManager(
                 log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
                 state.markSold()
             }
-            // 사다리는 여기서부터의 눌림을 기다린다 — 옛 고점이 남으면 수동 청산 직후 곧바로 첫 단이 들어간다.
-            if (reason == SellReason.ACCUMULATE_STEP) state.flatPeak = currentPrice
             persist(state)
             return null
         }
 
-        // Upbit market sell: ord_type=market. 전량이면 거래소 원본 문자열, 부분이면 plain decimal.
-        val qty = quantity(account!!)
+        // Upbit market sell: ord_type=market. free 전량을 거래소 잔고 원문 문자열로 판다.
+        val orderVolume = account!!.balance
         // 실제 주문이 최소주문 아래면 거래소가 매 tick 거부한다 — 보내지 않는다.
-        if (isBelowMinOrder(qty.volume, currentPrice)) {
-            if (reason == SellReason.ACCUMULATE_STEP) {
-                // 사다리 판정은 장부 수량으로 최소주문을 봤다 — free 로 축소된 실제 주문이 여기 걸린다. 매수 skip 과 같은
-                // 창구로 드러낸다 — 조용히 멈추면 운영자가 사다리가 왜 안 파는지 모른다.
-                val skip = "sell: %s × %.0f < min order".format(qty.orderVolume, currentPrice)
-                if (state.accumulateSkipReason != skip) log.warn("Accumulate sell skipped for {}: {}", ticker, skip)
-                state.accumulateSkipReason = skip
-            } else {
-                // 스윙 dust(#234) — 팔 수 없다. 실측 수량을 남겨 엔진이 dust 로 보고 진입을 열게 한다(사면 합쳐져 새 진입).
-                // 청산 평가는 매 tick 계속 돌므로 락이 풀려 free 가 돌아오면 다음 청산 사유에서 정상으로 판다.
-                state.holdVolume = heldVolume(account, ourSellLockCeiling(state))
-                warnDustOnce(ticker, state, "%s × %.0f".format(qty.orderVolume, currentPrice))
-            }
+        if (isBelowMinOrder(sellable, currentPrice)) {
+            // dust(#234) — 팔 수 없다. 실측 수량을 남겨 엔진이 dust 로 보고 진입을 열게 한다(사면 합쳐져 새 진입).
+            // 청산 평가는 매 tick 계속 돌므로 락이 풀려 free 가 돌아오면 다음 청산 사유에서 정상으로 판다.
+            state.holdVolume = heldVolume(account, ourSellLockCeiling(state))
+            warnDustOnce(ticker, state, "%s × %.0f".format(orderVolume, currentPrice))
             return null
         }
         // 매수판([placeBuy])과 같은 순서 — 정지 중이면 시작하지 않고, identifier 를 먼저 남긴 뒤 보낸다(#227).
         currentCoroutineContext().ensureActive()
         val identifier = newOrderIdentifier()
         // 재시작 후에는 잔고·평단이 이미 비어 있으므로 청산 기록의 근거를 주문 시점 값으로 남긴다. 미해소가 얼마나 끌었는지는
-        // 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55). 주문 전 free 보유량은 부분 체결 뒤 unlock
-        // 지연으로 거래소 잔량이 과소일 때의 하한이자, 응답을 못 받은 주문의 흔적 판정 기준이다.
-        state.beginSellOrder(identifier, reason, clock.instant(), qty.volume, triggerPrice, sellable)
+        // 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55). 판단가(currentPrice)도 남긴다 — 체결이 reconcile 로
+        // 늦게 확정돼도 기록은 이 가격으로 한다(#235). 주문 전 free 보유량은 응답을 못 받은 주문의 흔적 판정 기준이다.
+        state.beginSellOrder(identifier, reason, clock.instant(), sellable, currentPrice, sellable)
         // 매수판과 동일 — 선기록부터 체결 반영까지 취소가 끊지 못하게 해야 청산 기록이 유실되지 않는다.
         return withContext(NonCancellable) {
             // 기록 장애가 손절을 막으면 안 된다 — 매수와 달리 실패해도 보낸다. 메모리 identifier 가 이 엔진의 이중
@@ -925,7 +780,7 @@ class PositionManager(
                         market = ticker,
                         side = "ask",
                         ordType = "market",
-                        volume = qty.orderVolume,
+                        volume = orderVolume,
                         identifier = identifier,
                     )
                 )
@@ -959,9 +814,10 @@ class PositionManager(
                 if (filled?.state == "done") {
                     // 즉시 체결 — 주문량으로 기록. done 은 upbit 시장가 매도의 정상 종결.
                     // #52: 상태 전이 저장과 감사 기록을 원자 커밋하고, 성공 후에만 메모리 전이를 적용한다.
+                    // free 전량을 팔았다 — 남은 locked 는 우리 주문의 것이 아니다([heldVolume]).
                     completeSellAtomically(
-                        ticker, state, currentPrice, qty.volume, reason,
-                        remaining = sellable - qty.volume,
+                        ticker, state, currentPrice, sellable, reason,
+                        remaining = 0.0,
                         // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 판단 가격만 보는 모델에는 없어 실물로만 얻는다.
                         executedVwap = filled.filledVwap(),
                         feeBasis = sellFeeBasis(filled),
@@ -1020,20 +876,10 @@ class PositionManager(
                 )
                 val account = findAccount(ticker.substringAfter("-"))
                 val unfilled = (ourSellLockCeiling(state) - executed).coerceAtLeast(0.0)
-                val exchangeRemaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
-                // 적립은 잔량이 곧 다음 단의 분모다. 취소된 미체결 잔량의 unlock 이 늦으면 거래소 기준이 과소(free 0.75 +
-                // locked 0.15 → 0.75)라 원가 정합이 rung 을 조기에 줄인다 — 주문 전 보유 − 체결량을 하한으로 둔다(60초 주기
-                // 동기화가 이후 실측으로 다시 맞춘다). 스윙은 종전 규칙 그대로.
-                val priorVolume = state.pendingSellPriorVolume ?: state.holdVolume
-                // 계좌 행이 없으면(null = 조회 성공 + 잔고 0 — 실패는 예외로 올라가 pending 이 남는다) 확인된 0 이라 하한을 쓰지 않는다.
-                val remaining = if (state.pendingSellReason == SellReason.ACCUMULATE_STEP && account != null && priorVolume > 0.0) {
-                    maxOf(exchangeRemaining, priorVolume - executed)
-                } else {
-                    exchangeRemaining
-                }
+                val remaining = account?.let { heldVolume(it, unfilled) } ?: 0.0
                 val recoveredAvg = account?.avgBuyPriceDouble() ?: 0.0
                 val now = LocalDateTime.now(TradingDay.KST)
-                commitFillAndApply(state, record, sellTransition(state, executed, remaining, recoveredAvg, now))
+                commitFillAndApply(state, record, sellTransition(remaining, recoveredAvg, now))
                 if (remaining > 0.0) {
                     log.info(
                         "SELL {} partial via reconcile: executed={}, remaining={}, price={} (tick {}) — position kept",
@@ -1088,7 +934,7 @@ class PositionManager(
         val record = buildSellRecord(ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate, orderAmount = null)
         val now = LocalDateTime.now(TradingDay.KST)
         // #52: 잔고 기반 복원도 감사 기록과 원자 커밋 — 실패는 호출부가 받고 pending 이 남아 다음 tick 이 재시도한다.
-        commitFillAndApply(state, record, sellTransition(state, volume, remaining = 0.0, recoveredAvg = 0.0, now = now))
+        commitFillAndApply(state, record, sellTransition(remaining = 0.0, recoveredAvg = 0.0, now = now))
         log.info("SELL {} recovered from zero balance (getOrder down): volume={}", ticker, volume)
         return record
     }
@@ -1112,7 +958,7 @@ class PositionManager(
     ): TradeRecord {
         val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap, feeBasis, orderAmount)
         val now = LocalDateTime.now(TradingDay.KST)
-        commitFillAndApply(state, record, sellTransition(state, volume, remaining, state.avgBuyPrice, now))
+        commitFillAndApply(state, record, sellTransition(remaining, state.avgBuyPrice, now))
         log.info(
             "SELL {} filled: price={}, volume={}, net pnl={}%, reason={}",
             ticker, record.price, volume, record.pnlPercent?.let { "%.2f".format(it) } ?: "-", record.reason,
@@ -1155,8 +1001,7 @@ class PositionManager(
             pnlAmount = TradePnl.amount(pnl, basisPrice, volume),
             // 청산은 진입 전략의 성과로 귀속한다. 매도 시점의 활성 전략을 쓰면 설정을 바꾼 뒤의 청산이
             // 엉뚱한 전략 몫으로 잡힌다. markSold 가 clearEntryMeta 로 지우기 전이라 값이 살아 있다.
-            // 적립 단 매도는 편입된 스윙 포지션이어도 적립 몫이다 — 그 규칙으로 팔았다.
-            strategy = if (reason == SellReason.ACCUMULATE_STEP) AccumulateLadder.STRATEGY_NAME else state.entryStrategy,
+            strategy = state.entryStrategy,
             fee = feeBasis,
             // totalAmount 는 판단 tick 평가액이고 이것이 실제 체결 대금이다(#146).
             orderAmount = orderAmount,
@@ -1177,23 +1022,13 @@ class PositionManager(
     private fun terminalFunds(filled: Order?): Double? =
         filled?.takeIf { it.isTerminal() }?.filledFunds()
 
-    /**
-     * 매도 확정 전이 — 즉시경로·reconcile(부분·전량)·잔고복원 네 곳이 모두 이 하나를 쓴다. 갈라지면 어느 한 경로에서
-     * 사다리 장부가 안 줄어 같은 단을 반복 매도한다. 사유·요청수량·트리거가는 durable pending 에서 읽으므로
-     * 재시작 뒤 reconcile 에서도 같은 판정이 나온다.
-     */
+    /** 매도 확정 전이 — 즉시경로·reconcile(부분·전량)·잔고복원 네 곳이 모두 이 하나를 쓴다. */
     private fun sellTransition(
-        state: TradingState,
-        executed: Double,
         remaining: Double,
         recoveredAvg: Double,
         now: LocalDateTime,
-    ): (TradingState) -> Unit {
-        val isLadder = state.pendingSellReason == SellReason.ACCUMULATE_STEP
-        val requested = state.pendingSellVolume ?: executed
-        val triggerPrice = state.pendingSellTriggerPrice
-        val rungConsumed = isLadder && executed >= RUNG_FILL_RATIO * requested
-        return { s ->
+    ): (TradingState) -> Unit =
+        { s ->
             if (remaining > 0.0) {
                 // 부분 체결 — 잔여 실잔고로 갱신, avgBuyPrice 유지. pending 해소(잔여분은 다음 tick 재평가).
                 // position 을 실측으로 되살린다: 매도 주문에 잠긴 잔고 때문에 복원 시 false 였을 수 있고,
@@ -1202,17 +1037,10 @@ class PositionManager(
                 s.holdVolume = remaining
                 if (s.avgBuyPrice <= 0.0) s.avgBuyPrice = recoveredAvg
                 s.clearPendingSell()
-                // 잔량이 있으면 사다리는 최소 1단이어야 한다 — 마지막 단이 90~99% 체결되면 rung 0·잔고>0 이 되어
-                // decide 가 영구 Hold 에 빠진다(적립엔 다른 청산 게이트가 없다). 잔량은 다음 상승에 isFinal 로 팔린다.
-                if (rungConsumed) s.rungsFilled = (s.rungsFilled - 1).coerceAtLeast(if (isLadder) 1 else 0)
             } else {
                 s.markSold(now)
-                // 전량 청산 후 첫 단은 여기서부터의 눌림을 기다린다.
-                if (isLadder && triggerPrice != null) s.flatPeak = triggerPrice
             }
-            if (rungConsumed && triggerPrice != null) s.lastActionPrice = triggerPrice
         }
-    }
 
     fun checkTakeProfit(state: TradingState, currentPrice: Double): Boolean {
         if (!state.position) return false
