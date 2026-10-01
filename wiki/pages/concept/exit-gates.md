@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-10-01
 claim_state: current
-verified: 2026-10-01 — 백테스트 코드 제거 후 `ExitGates` 호출자가 `PositionManager`·`DailyResetManager`·`ShadowExitObserver` 뿐임을 rg 로 확인, 평가 순서는 `TradingEngine.decideSell` 기준 · 2026-09-28 — 청산 파라미터 해석이 `exitParamsOrGlobal` 한 함수(engine/ExitParams.kt)로 모였고 익절·손절·트레일링·보유상한이 모두 이를 읽음을 `ExitParamsSnapshotConsumptionTest`(매핑 1건 추가)로 확인, 변이 3종(스냅샷 무시·필드 교환·보유상한 우회) 검출 · 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
+verified: 2026-10-01 — 적립 프로파일 제거(MVP 2단계)로 "적립 티커에는 게이트 미적용" 서술을 걷음 — 모든 활성 티커가 `decideSell` 을 탄다(`TradingEngine.processTicker` → `runSwing`) · 2026-10-01 — 백테스트 코드 제거 후 `ExitGates` 호출자가 `PositionManager`·`DailyResetManager`·`ShadowExitObserver` 뿐임을 rg 로 확인, 평가 순서는 `TradingEngine.decideSell` 기준 · 2026-09-28 — 청산 파라미터 해석이 `exitParamsOrGlobal` 한 함수(engine/ExitParams.kt)로 모였고 익절·손절·트레일링·보유상한이 모두 이를 읽음을 `ExitParamsSnapshotConsumptionTest`(매핑 1건 추가)로 확인, 변이 3종(스냅샷 무시·필드 교환·보유상한 우회) 검출 · 2026-09-14 — 보유상한 초과 WARN 은 `DailyResetManagerTest` 2건(초과 1회·정시 0건)으로 확인. 이전 확인분: 2026-09-08 — 재진입 문단의 경계 가드는 `TradingEngine.runSwing`(`isCurrentDay`·`pastBoundaryGrace`)과 `TradingEngineTest` 5건으로 확인. 이전 확인분: 2026-09-06 — 스냅샷 소비 도입(#177) 후 `ExitParamsSnapshotConsumptionTest` 6건 통과(게이트 4종 + 폴백 2종), `./gradlew build` 실행 990/skip 19/실패 0. 이전 확인분: 2026-07-28 — ExitGates.kt 전문, PositionManager.kt:591-612, TradingEngine.kt:320-334
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/DailyResetManager.kt
   - bot/src/main/kotlin/com/trading/bot/engine/ExitParams.kt
@@ -35,7 +35,6 @@ sources:
 
 ## 비자명한 지점
 
-- **적립 프로파일 티커에는 이 게이트가 하나도 적용되지 않는다.** `trading.accumulate.tickers` 에 든 티커는 `runAccumulate` 로 갈려 `decideSell` 자체를 타지 않는다 — 리스크 상한은 코인당 예산뿐이다([[accumulate-ladder]]). 적립을 끄면 남은 포지션이 즉시 이 게이트를 받는다.
 - **트레일링은 수익 구간에서만 작동한다.** 손실 구간은 손절이 담당한다.
 - **`trailingArmPct` 는 `trailingStopPct` 보다 클 때만 실효**하다. `pnl>0 ∧ drop≥trail` 이면 `peakPnl > trail/(1−trail/100)` 이 수학적으로 강제되므로, arm 이 trail 이하면 조건이 자동 충족돼 아무 효과가 없다. 엔진 기동 시 `warnIfExitConfigInert()` 가 이 무의미 조합과 "익절이 트레일링보다 낮아 트레일링이 dead 인" 조합을 WARN 으로 알린다.
 - **`maxHoldDays` 는 0·음수를 1로 보정**한다(`effectiveMaxHoldDays`). env 오설정으로 0 이 들어오면 "매수 당일 즉시 청산" 루프가 돌기 때문이다.
@@ -56,7 +55,7 @@ internal fun TradingState.exitParamsOrGlobal(global: TradingProperties): ExitPar
 ```
 
 - 소비처: `checkTakeProfit` · `checkStopLoss` · `checkTrailingStop`(`PositionManager`), `shouldSellForDailyReset`(`DailyResetManager`) — 모두 `exitParamsOrGlobal` 를 거친다(`maxHoldDays` 는 보정 전 값 — 판정은 `ExitGates.effectiveMaxHoldDays`). 폴백이 두 곳에 있으면 한쪽만 바뀌었을 때 보유상한만 옛 규칙을 따르는 포지션이 생긴다(#235). 새 진입이 찍는 스냅샷도 같은 `exitParamsSnapshot()` 매핑이다.
-- **늦은 보유상한 발동은 WARN 으로 드러난다**: `shouldSellForDailyReset` 이 경과 거래일 > 상한을 보면 프로세스 수명 동안 포지션(ticker·buyDate)당 1회 `Hold limit overrun` 을 남긴다 — 정상 발동(== 상한)은 침묵. 리셋이 밀린 구간(2026-07 3건, 원인 미확정, #131)의 재발 감지용이다. 한계: 손절·익절 등 앞선 게이트가 같은 tick 에 먼저 걸리면 이 판정에 도달하지 않아 남지 않고, 스윙 경로 전용이다(`runAccumulate` 는 `decideSell` 을 거치지 않는다).
+- **늦은 보유상한 발동은 WARN 으로 드러난다**: `shouldSellForDailyReset` 이 경과 거래일 > 상한을 보면 프로세스 수명 동안 포지션(ticker·buyDate)당 1회 `Hold limit overrun` 을 남긴다 — 정상 발동(== 상한)은 침묵. 리셋이 밀린 구간(2026-07 3건, 원인 미확정, #131)의 재발 감지용이다. 한계: 손절·익절 등 앞선 게이트가 같은 tick 에 먼저 걸리면 이 판정에 도달하지 않아 남지 않는다.
 - **스냅샷이 없으면 전역값으로 폴백**한다 — 스냅샷 도입(#177) 이전에 열린 포지션·복원 실패·봇 밖 보유의 편입·무산된 dust 흡수의 동작을 보존한다.
 - **`chartExitEnabled` 는 스냅샷에 없다.** 임계가 아니라 모드 스위치라 전역이 소유한다.
 - 생명주기: 진입 시 기록(`markBought` 가 신규 진입에서 옛 값을 비우고 호출부가 다시 찍는다) → `exit_params_json` 으로 durable →

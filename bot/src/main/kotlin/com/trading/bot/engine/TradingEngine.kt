@@ -4,15 +4,12 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
-import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
 import com.trading.common.domain.NormalizedCandle
-import com.trading.common.strategy.AccumulateLadder
-import com.trading.common.strategy.LadderAction
 import com.trading.common.strategy.TradingStrategy
 import java.time.Clock
 import java.time.Instant
@@ -45,7 +42,6 @@ class TradingEngine(
     private val discordWebhookUrl: String? = null,
     private val marketDataStore: MarketDataStore? = null,
     private val exchange: Exchange = Exchange.UPBIT,
-    private val accumulateProperties: AccumulateProperties = AccumulateProperties(),
     // null = 엔진의 인증 클라이언트로 직접 조회(단위 테스트·레거시 경로). 운영은 싱글톤 캐시를 주입한다.
     private val dailyCandleCache: DailyCandleCache? = null,
     // null = 그림자 관측 off. 켜도 매매는 바뀌지 않는다 — 후보 청산 파라미터를 나란히 평가해 기록만 한다.
@@ -54,33 +50,16 @@ class TradingEngine(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    internal enum class TickerProfile { SWING, ACCUMULATE }
-
-    // 적립 티커 집합은 설정에서 한 번 만든다 — tick 마다 문자열을 파싱하지 않고, start() 의 합집합과 같은 소스를 쓴다.
-    private val accumulateTickers: Set<String> = accumulateProperties.tickerList().toSet()
-
     // 신규 스윙 진입을 허용하는 집합 — start 가 사용자 목록으로 채운다. 여기 없는 활성 티커는 보유·미해소 주문 때문에
     // 잔류한 것이라 청산 뒤 재진입하지 못한다 — 잔류의 의미는 "청산될 때까지"이지 "새로 사도 된다"가 아니다.
     // null(제한 없음)은 start 전(processTicker 를 직접 부르는 단위 테스트)뿐이다.
     @Volatile
     private var swingUniverse: Set<String>? = null
 
-    // 사용자가 준 목록(bot_state.tickers). 활성 집합은 여기에 적립·잔류가 합쳐진 파생 집합이라, 재기동이나 실행 중
+    // 사용자가 준 목록(bot_state.tickers). 활성 집합은 여기에 잔류가 합쳐진 파생 집합이라, 재기동이나 실행 중
     // start 비교가 활성 집합을 사용자 의도로 쓰면 잔류 티커가 신규 진입 대상으로 승격된다(#226).
     @Volatile
     private var userTickers: List<String> = emptyList()
-
-    // 적립 티커의 주기 재동기화 시각. 거래소(앱·웹)에서 직접 한 매매는 TradingState 를 건드리지 않아 장부가 낡는다.
-    private val ladderSyncedAtMs = ConcurrentHashMap<String, Long>()
-
-    internal fun profileOf(ticker: String): TickerProfile =
-        if (ticker in accumulateTickers) TickerProfile.ACCUMULATE else TickerProfile.SWING
-
-    /** 상태 API 용 wire 값 — enum 이름을 그대로 내보내면 리팩터가 응답 계약을 조용히 바꾼다. */
-    internal fun profileNameOf(ticker: String): String = when (profileOf(ticker)) {
-        TickerProfile.SWING -> "swing"
-        TickerProfile.ACCUMULATE -> "accumulate"
-    }
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
@@ -94,8 +73,6 @@ class TradingEngine(
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
         // 경계 뒤 이 시간 안에 오늘 D1 이 없는 것은 정상(1분봉 폴링 주기 60s + 마켓 간 간격, 캐시 TTL 60s)이고, 넘기면 수집 정지로 본다.
         private const val STALE_DAILY_CANDLE_WARN_MS = 5 * 60_000L
-        // 적립 티커 계좌 재조회 주기 — 수동 매매를 이 시간 안에 장부에 반영한다(4종 × 1/60s 라 부하는 무시할 수준).
-        private const val LADDER_SYNC_INTERVAL_MS = 60_000L
     }
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
@@ -122,20 +99,12 @@ class TradingEngine(
     ) {
         if (running.compareAndSet(false, true)) {
             userTickers = tickers.toList()
-            // 적립 티커는 설정이 정하고 사용자 목록과 합친다. 사용자 목록(bot_state.tickers)은 건드리지 않는다 —
-            // 파생 집합을 거기 되쓰면 프로파일을 꺼도 그날의 목록이 남아 되돌릴 수 없다.
             // 목록 밖이라도 엔진이 산 스윙 포지션·미해소 주문(진입 흔적이 있는 durable 행)은 싣는다 — 사용자가 목록에서 뺀
             // 티커는 bot_state.tickers 에 없어 안 실으면 아무도 청산·reconcile 하지 않는다(#226).
             // 진입 메타가 없는 행(청산 완료 잔재)은 싣지 않는다 — 전부 syncPosition 하면 기동 시 계좌 조회가 그만큼 반복된다.
-            val requested = (accumulateTickers + tickers).toSet()
-            val outside = initialStates.filterKeys { it !in requested }
-            // 적립 설정에서 빠진 사다리 보유분은 싣지 않는다 — 실으면 스윙 청산(손절·09:00 보유상한)이 붙어 쌓아 온 단이 시장가로 팔린다.
-            val orphanLadders = outside.filterValues { it.isLadderRow() }.keys
-            val restored = outside.filterValues { !it.isLadderRow() && it.hasEntryTrace() }.keys.toList()
-            val active = (accumulateTickers + tickers + restored).distinct()
-            if (accumulateTickers.isNotEmpty() && active.size == accumulateTickers.size) {
-                log.warn("User {} has no swing tickers — every active ticker is on the accumulate profile", userId)
-            }
+            val requested = tickers.toSet()
+            val restored = initialStates.filterValues { it.hasEntryTrace() }.keys.filter { it !in requested }
+            val active = (tickers + restored).distinct()
             activeTickers = active
             swingUniverse = tickers.toSet()
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
@@ -149,9 +118,6 @@ class TradingEngine(
             if (restored.isNotEmpty()) {
                 // buyDate 를 함께 남긴다 — 보유상한이 이미 지난 행은 첫 tick 에 청산되므로 무엇이 곧 팔릴지 로그로 보이게.
                 log.warn("User {}: 사용자 목록 밖 티커를 청산될 때까지 관리합니다(ticker=buyDate): {}", userId, restored.associateWith { initialStates[it]?.buyDate })
-            }
-            if (orphanLadders.isNotEmpty()) {
-                log.warn("User {}: 적립 설정과 사용자 목록 밖의 사다리 장부 행은 싣지 않습니다 — 보유가 남았으면 적립에 다시 넣거나 직접 정리하세요: {}", userId, orphanLadders)
             }
             // 드롭한 ticker 에 미해소 주문이 남아 있으면 아무도 reconcile 하지 않는다 — 사람이 알아야 한다.
             initialStates.filterKeys { it !in active }
@@ -234,16 +200,15 @@ class TradingEngine(
 
     fun getActiveTickers(): List<String> = activeTickers.toList()
 
-    /** 사용자가 준 목록 — 적립·잔류가 섞이지 않은 재기동 입력. */
+    /** 사용자가 준 목록 — 잔류가 섞이지 않은 재기동 입력. */
     fun getUserTickers(): List<String> = userTickers.toList()
 
-    // 화면용 분류(status). 활성 집합 = 적립 ∪ 진입 허용 ∪ 청산 대기 — 진입 판정과 같은 isExitOnly 로 가른다.
-    fun getAccumulateTickers(): List<String> = activeTickers.filter { profileOf(it) == TickerProfile.ACCUMULATE }
+    // 화면용 분류(status). 활성 집합 = 진입 허용 ∪ 청산 대기 — 진입 판정과 같은 isExitOnly 로 가른다.
 
-    /** 신규 진입을 받는 스윙 티커 — 활성 중 진입 허용 집합(사용자 목록) 안의 것. */
-    fun getEntryTickers(): List<String> = activeTickers.filter { profileOf(it) == TickerProfile.SWING && !isExitOnly(it) }
+    /** 신규 진입을 받는 티커 — 활성 중 진입 허용 집합(사용자 목록) 안의 것. */
+    fun getEntryTickers(): List<String> = activeTickers.filter { !isExitOnly(it) }
 
-    /** 청산될 때까지만 관리하는 스윙 티커 — 활성이지만 신규 진입 허용 집합 밖이다. */
+    /** 청산될 때까지만 관리하는 티커 — 활성이지만 신규 진입 허용 집합 밖이다. */
     fun getExitOnlyTickers(): List<String> = activeTickers.filter { isExitOnly(it) }
 
     /**
@@ -336,9 +301,8 @@ class TradingEngine(
         log.info("User {}: released tickers outside the list with nothing left to manage: {}", userId, settled.keys)
     }
 
-    /** 활성이지만 신규 진입 허용 집합 밖인 스윙 티커 — 목록에서 빠졌는데 보유·미해소 주문 때문에 남은 것. start 전(null)은 없음. */
-    private fun isExitOnly(ticker: String): Boolean =
-        profileOf(ticker) == TickerProfile.SWING && swingUniverse?.let { ticker !in it } == true
+    /** 활성이지만 신규 진입 허용 집합 밖인 티커 — 목록에서 빠졌는데 보유·미해소 주문 때문에 남은 것. start 전(null)은 없음. */
+    private fun isExitOnly(ticker: String): Boolean = swingUniverse?.let { ticker !in it } == true
 
     // unsynced 는 "보유 여부를 아직 모른다" — 실제 포지션일 수 있으니 확인될 때까지 목록에서 빼지 않는다.
     private fun TradingState.mustKeep(): Boolean = position || unsynced || hasPendingOrder()
@@ -346,10 +310,6 @@ class TradingEngine(
     private fun TradingState.hasEntryTrace(): Boolean = hasPendingOrder() || entryStrategy != null || buyDate != null
 
     private fun TradingState.hasPendingOrder(): Boolean = hasPendingBuy() || hasPendingSell()
-
-    // 첫 단 매수가 미체결이면 rungsFilled 는 아직 0 이다 — 단 매수만 남기는 triggerPrice·적립 전략명으로도 알아본다.
-    private fun TradingState.isLadderRow(): Boolean =
-        rungsFilled > 0 || pendingBuyTriggerPrice != null || entryStrategy == AccumulateLadder.STRATEGY_NAME
 
     internal fun getRealtimePrice(ticker: String): Double? {
         // Prefer the in-process MarketDataStore — 단 신선한 ticker 만. timestamp 없이 가격만 쓰면
@@ -400,8 +360,7 @@ class TradingEngine(
             // write 증폭), 직전 flush 가 실패했으면 갱신이 없어도 재시도한다 — 하락 전환 후에는
             // 갱신될 일이 없어 그 1회 실패가 그대로 고점 유실이 된다(#54).
             // 아래 pending reconcile 분기보다 앞에 둔다: 미해소가 길어지는 동안에도 재시도가 돌아야 한다.
-            // 적립 프로파일은 트레일링을 쓰지 않으므로 보유 중 고점을 기록하지 않는다(무포지션 고점은 runAccumulate).
-            if (state.position && profileOf(ticker) == TickerProfile.SWING) {
+            if (state.position) {
                 val newHigh = state.updatePeakPrice(currentPrice)
                 if (newHigh || state.peakPersistFailed) positionManager.persistPeak(state)
             }
@@ -426,7 +385,7 @@ class TradingEngine(
                     // 늦게 확정된 스윙 청산도 그림자 관측에 보고한다 — 빠지면 #178 표본이 체결 확인 창 안에 끝난 매도만 담는다.
                     // 기록 price 가 판단가다. 부분 체결(포지션 유지)은 보고하지 않는다 — 발동 기록을 여기서 쓰면 잔량에서
                     // 다시 발동해 한 포지션에 관측이 둘 생긴다. 잔량이 팔리는 확정에서 보고한다.
-                    if (!state.position && profileOf(ticker) == TickerProfile.SWING) {
+                    if (!state.position) {
                         shadowExitObserver?.onLiveExit(ticker, settled.price, settled.reason, settled.executedVwap, decidedAt)
                     }
                     return
@@ -434,11 +393,7 @@ class TradingEngine(
                 if (state.hasPendingSell()) return // 아직 미해소 — 이 tick 매도/매수 평가 skip
             }
 
-            // 여기까지가 두 프로파일 공용 preamble. 청산·진입 규칙은 프로파일이 정한다.
-            when (profileOf(ticker)) {
-                TickerProfile.SWING -> runSwing(ticker, state, strategy, currentPrice)
-                TickerProfile.ACCUMULATE -> runAccumulate(ticker, state, currentPrice)
-            }
+            runSwing(ticker, state, strategy, currentPrice)
         } catch (e: CancellationException) {
             throw e // 취소 전파(runLoop 와 동일 이유 — 삼키면 loop 가 계속 돌아 join 지연·오탐 ERROR).
         } catch (e: Exception) {
@@ -509,55 +464,7 @@ class TradingEngine(
         }
         if (shouldBuy) {
             // 체결 확정·상태 전이·감사 기록·커밋 후 알림은 PositionManager.commitFill 이 담당한다(#52).
-            positionManager.buy(ticker, state, currentPrice, strategy.name, reservedKrw())
-        }
-    }
-
-    /**
-     * 적립 프로파일 — 손절·익절·트레일링·보유상한 없이 [AccumulateLadder] 판정만 따른다.
-     * 잔고 불명(unsynced)이면 판정하지 않는다: 예산 게이트가 거래소 실측을 전제로 한다.
-     */
-    private suspend fun runAccumulate(ticker: String, state: TradingState, currentPrice: Double) {
-        if (state.unsynced) return
-        // 거래소에서 직접 한 매매는 TradingState 를 갱신하지 않으므로 주기적으로 계좌를 다시 읽어 장부 정합의 입력을 최신화한다.
-        val now = clock.millis()
-        if (now - (ladderSyncedAtMs[ticker] ?: 0L) >= LADDER_SYNC_INTERVAL_MS) {
-            positionManager.syncPosition(ticker, state, clearWhenEmpty = true)
-            // 실패를 완료로 적으면 preamble 의 unsynced 재시도(clearWhenEmpty=false)가 차단만 풀고 옛 보유가 남아,
-            // 수동 전량 매도 직후 하락에 추가 단이 나간다 — 성공했을 때만 시각을 기록해 다음 tick 에 이 모드로 다시 읽는다.
-            if (state.unsynced) return
-            ladderSyncedAtMs[ticker] = now
-        }
-        val params = accumulateProperties.ladderParams()
-        // 매 tick 돌려도 정합 상태에서는 no-op 이라 사람이 고친 장부를 덮지 않는다. 런타임에 장부와 잔고가 갈라지면
-        // (부분체결·수동 매매) decide 가 Hold 로 멈추는데, 적립엔 다른 청산 게이트가 없어 여기 말고는 풀 곳이 없다.
-        val flatPeakBefore = state.flatPeak
-        val note = LadderStateMapper.reconcile(state, params, currentPrice)
-        if (note != null) {
-            log.warn("Ladder reconciled for {} (user {}): {}", ticker, userId, note)
-            positionManager.persistState(state)
-        } else if (state.flatPeak != flatPeakBefore) {
-            positionManager.persistPeak(state)
-        }
-        if (!state.position) {
-            // 무포지션 고점은 첫 단의 기준선 — peakPrice 와 같은 "갱신 tick 만 flush + 실패 시 재시도" 규약.
-            if (state.updateFlatPeak(currentPrice) || state.peakPersistFailed) positionManager.persistPeak(state)
-        }
-        when (val action = AccumulateLadder.decide(LadderStateMapper.toInput(state, currentPrice), params)) {
-            is LadderAction.Buy -> positionManager.buyRung(ticker, state, currentPrice, action, params)
-            is LadderAction.Sell -> positionManager.sellVolume(ticker, state, currentPrice, action)
-            LadderAction.Hold -> Unit
-        }
-    }
-
-    /** 적립 티커가 아직 투입하지 않은 예산의 합 — 스윙 매수가 이 현금을 쓰지 못하게 사이징에서 뺀다. */
-    internal fun reservedKrw(): Double {
-        if (accumulateTickers.isEmpty()) return 0.0
-        val budget = accumulateProperties.budgetKrw
-        return accumulateTickers.sumOf { ticker ->
-            val s = states[ticker]
-            val invested = if (s == null) 0.0 else s.avgBuyPrice * s.holdVolume
-            (budget - invested).coerceAtLeast(0.0)
+            positionManager.buy(ticker, state, currentPrice, strategy.name)
         }
     }
 
