@@ -11,7 +11,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 - 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
 - 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
-- 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
+- 포트폴리오, 거래 이력·라운드트립, 전략 성과
 - JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting
 - Discord 거래 알림 및 선택적 서버 오류 알림
 - React 18 기반 SPA(별도 프런트엔드 빌드 단계 없음)
@@ -111,7 +111,7 @@ coin-trading-bot/
 ├── bot/                          # Spring Boot 애플리케이션
 │   └── src/main/
 │       ├── kotlin/com/trading/bot/
-│       │   ├── api/              # REST/SSE 컨트롤러와 요청 검증
+│       │   ├── api/              # REST 컨트롤러와 요청 검증
 │       │   ├── auth/             # JWT 인증과 Security 설정
 │       │   ├── cache/            # Redis 가격 캐시
 │       │   ├── client/           # Upbit REST 클라이언트
@@ -219,11 +219,10 @@ coin-trading-bot/
 | 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
 | 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
-| 차트 | GET | `/api/chart/candles`, `/indicators`, `/tickers`, `/compare` | 필요 |
 | 전략 | GET | `/api/strategies`, `/performance` | 필요 |
-| 관심 목록 | GET | `/api/watchlist` | 필요 |
-| 실시간 가격 | GET | `/api/prices/stream`, `/latest`, `/status` | Public |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
+
+차트(`/api/chart/*`)·관심 목록(`/api/watchlist`)·실시간 가격(`/api/prices/*`) API 는 2026-10-01 에 지웠습니다 — 화면이 쓰지 않았고, 시세는 DB 에 저장하지 않습니다.
 
 `/api/strategies/performance` 의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다(2026-09-14 정의 변경). 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓였습니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
 
@@ -248,7 +247,7 @@ coin-trading-bot/
 | `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
-| `WATCHLIST_TICKERS` | 주요 KRW 종목 | 관심 목록 종목 |
+| `WATCHLIST_TICKERS` | 주요 KRW 종목 | 시세 수집(WS ticker·분봉 폴링) 대상 종목 — 목록 밖 티커는 REST 시세 폴백 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |

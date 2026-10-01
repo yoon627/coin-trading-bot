@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-10-01
 claim_state: current
-verified: 2026-10-01 — 차트 청산 제거(MVP 2단계): `shouldSell`·`shouldSellNormalized`·`Indicators.checkDeadCross` 삭제, `minCandles` 는 기본값 없는 선언(`CombinedStrategy` 21 — 가드와 같은 값)임을 `StrategyMinCandlesTest`·`CombinedStrategyTest` 로 확인 · 2026-10-01 — 등록 전략이 `combined` 하나임을 `StrategyConfigTest` 로, 엔진 초기 전략·상태 API 폴백이 첫 등록 전략임을 `TradingEngineTest`·`UserTradingManagerTest` 로, 세 조건(RSI 는 상한·하한 각각)·21봉 가드·store 경로(`shouldBuyNormalized`)를 `CombinedStrategyTest` 로 확인(변이 9종 검출 — 조건 3·RSI 하한·가드·시가 매핑·bean 추가·폴백 2) · 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입, StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
+verified: 2026-10-01 — `Indicators` 에서 BB·MACD·EMA 삭제(main 소비자 `ChartController` 삭제) 뒤 main 호출자는 `CombinedStrategy` 하나(목표가·`isMaUptrend`·RSI, `calculateMa` 는 `isMaUptrend` 안에서)이고, `IndicatorsParityTest`(REST↔store 동등)·`IndicatorsExtendedTest` 통과 · 2026-10-01 — 차트 청산 제거(MVP 2단계): `shouldSell`·`shouldSellNormalized`·`Indicators.checkDeadCross` 삭제, `minCandles` 는 기본값 없는 선언(`CombinedStrategy` 21 — 가드와 같은 값)임을 `StrategyMinCandlesTest`·`CombinedStrategyTest` 로 확인 · 2026-10-01 — 등록 전략이 `combined` 하나임을 `StrategyConfigTest` 로, 엔진 초기 전략·상태 API 폴백이 첫 등록 전략임을 `TradingEngineTest`·`UserTradingManagerTest` 로, 세 조건(RSI 는 상한·하한 각각)·21봉 가드·store 경로(`shouldBuyNormalized`)를 `CombinedStrategyTest` 로 확인(변이 9종 검출 — 조건 3·RSI 하한·가드·시가 매핑·bean 추가·폴백 2) · 2026-09-16 — `calculateMacd` 의 TA-Lib 규칙은 `IndicatorsExtendedTest` 의 손계산 앵커(fast 2·slow 3·signal 2, 6봉, 1e-12)와 120봉 참조 루프 대조로 확인(#27); 창 길이 의존은 같은 테스트의 35봉 절단 대조(Δmacd > 1e-3)로 고정 · 2026-08-23 — TradingStrategy.minCandles 계약 도입, StrategyMinCandlesTest 로 선언·실제 대조 및 mutation CAUGHT 확인
 sources:
   - common/src/main/kotlin/com/trading/common/strategy/TradingStrategy.kt
   - common/src/main/kotlin/com/trading/common/strategy/CombinedStrategy.kt
@@ -48,7 +48,7 @@ interface TradingStrategy {
 
 ## 지표
 
-지표 계산은 `Indicators` 에 모여 있다. `calculateMacd` 는 2026-09-16(#27)부터 TA-Lib 규칙 — 받은 히스토리 전체, EMA 는 첫 period 개 SMA 로 seed(fast 창은 slow 창의 꼬리에서 시작), 시그널은 MACD 선 전체에 EMA(9) — 이라 **충분한 히스토리(수백 봉)를 넘기면** 외부 차트의 MACD 와 일치한다. 지금 MACD 를 쓰는 곳은 차트 API(`ChartController`) 하나이고, 값은 넘긴 `count` 에 의존한다(이전 구현은 35봉 절단이라 표준값과 크게 달랐다). `calculateEma` 등 나머지 지표는 아직 이 파일 고유의 단순 방식이라 외부 값과 다르다.
+지표 계산은 `Indicators` 에 모여 있고, `combined` 가 쓰는 목표가(`calculateTargetPrice`)·RSI(`calculateRsi`)·MA(`calculateMa`·`isMaUptrend`)만 남았다. MACD·볼린저 밴드·EMA 는 유일한 소비자였던 차트 API 와 함께 2026-10-01 지웠다(TA-Lib 규칙으로 맞춘 MACD 구현과 그 검증은 저장소 이력에 있다 — #27). 엔진은 store D1 과 REST 캔들을 오가므로 `IndicatorsParityTest` 가 같은 OHLC 를 두 형식으로 넣어 남은 지표가 같은 값을 내는지 고정한다.
 
 ## 청산과의 관계
 

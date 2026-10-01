@@ -4,7 +4,7 @@ category: concept
 created: 2026-07-28
 updated: 2026-10-01
 claim_state: current
-verified: 2026-10-01 — stream/ 행: `MarketDataPersistenceService`·`DataRetentionService` 삭제 뒤 `bot/src/main/kotlin/com/trading/bot/stream/` 에 `CandleAggregator` 하나 · 2026-10-01 — common 행을 TradingStrategy + 운영 전략 combined 로(나머지 전략 삭제) · 2026-10-01 — engine/ 행에서 BacktestEngine 삭제(백테스트 코드 제거) · 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
+verified: 2026-10-01 — api/ 에서 차트·실시간 가격·watchlist 컨트롤러, domain/ 에서 `RealtimePrice`, persistence/ 에서 시세 repository·엔티티 삭제 — 패키지 표 서술은 그대로 유효 · 2026-10-01 — stream/ 행: `MarketDataPersistenceService`·`DataRetentionService` 삭제 뒤 `bot/src/main/kotlin/com/trading/bot/stream/` 에 `CandleAggregator` 하나 · 2026-10-01 — common 행을 TradingStrategy + 운영 전략 combined 로(나머지 전략 삭제) · 2026-10-01 — engine/ 행에서 BacktestEngine 삭제(백테스트 코드 제거) · 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
 sources:
   - settings.gradle.kts
   - PROJECT_ANALYSIS.md

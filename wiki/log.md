@@ -261,3 +261,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[marketdata-pipeline]] 의 fan-out 이 store 와 `CandleAggregator` 둘이 됐다(저장 서비스 삭제, 집계 진입점 `onMinuteCandle`·`startFrom`·`prime` 은 수집기가 직접 부른다). "저장" 절을 지운 사실·잃은 감사 수단·남은 관찰 지점(낡은 D1 WARN)으로 바꾸고, 부팅 로그 문구를 실제 로그(`Seeded … (primed today=…)`)로 고쳤다.
 - [[architecture-overview]] 의 `stream/` 행, [[persistence-schema]] 의 시세 테이블 서술(더 쓰지도 정리하지도 않는다), [[rightsizing-history]] 의 fan-out sink 서술을 맞췄다. [[lesson-seed-vs-stream-overwrite]] 는 서술 그대로 유효함을 특성 테스트로 다시 확인했다.
+
+## [2026-10-01] update | MVP 3단계 — 시세·차트·watchlist API 제거
+
+- [[marketdata-pipeline]] 에서 store 를 밖으로 보이던 차트·SSE·watchlist 서술과 `tickerSink` 를 걷었다(store 는 최신 ticker 스냅샷과 캔들 버퍼만). [[persistence-schema]] 의 시세 테이블은 이제 읽는 코드도 없다.
+- [[swing-strategies]] 의 지표 절: MACD·볼린저·EMA 를 차트 API 와 함께 지웠고, 남은 지표의 REST↔store 동등성은 `IndicatorsParityTest` 가 고정한다. [[architecture-overview]] 는 패키지 표가 그대로 유효함을 다시 확인했다.
