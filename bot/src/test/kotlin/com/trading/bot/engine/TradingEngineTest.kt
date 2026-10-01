@@ -489,7 +489,7 @@ class TradingEngineTest {
 
         engine.processTicker("KRW-BTC", state, strategy)
 
-        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy", any()) }
+        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy") }
         coVerify(exactly = 0) { observer.onTick(any(), any(), any()) }
     }
 
@@ -507,7 +507,7 @@ class TradingEngineTest {
         engine.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.sell("KRW-BTC", state, 10_000_000.0, SellReason.STOP_LOSS) }
-        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy", any()) }
+        coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy") }
     }
 
     @Test
@@ -520,7 +520,7 @@ class TradingEngineTest {
         engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true, holdVolume = 0.01), strategy) // 10만원
         engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true), strategy) // 수량 미상
 
-        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
     }
 
     @Test
