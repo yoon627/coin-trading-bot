@@ -8,7 +8,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 ## 주요 기능
 
 - Upbit WebSocket ticker와 REST candle을 이용한 in-process 시세 수집
-- 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
+- 사용자별 Upbit API 키 암호화 저장과 거래 종목 설정
 - 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
 - 포트폴리오, 거래 이력·라운드트립, 전략 성과
@@ -193,9 +193,9 @@ coin-trading-bot/
 
 목록(`TRADING_TICKERS`, 또는 UI·API 로 준 `bot_state.tickers`)에서 뺀 티커라도 봇이 산 포지션과 미해소 주문은 청산될 때까지 계속 관리합니다 — 손절·트레일링·보유상한은 적용되고 새로 사지는 않습니다. 청산된 뒤에는 다음 09:00 에 활성 목록에서 빠집니다. 관심목록(`WATCHLIST_TICKERS`) 밖 티커는 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
 
-이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려주고, 요청에 전략이 있으면 그 전략만 적용합니다. 등록되지 않은 전략 이름은 **400** 으로 거절합니다.
+이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려줍니다. 전략은 `combined` 하나라 고를 수 없고, 시작 요청에 `strategy` 를 보내도 무시합니다.
 
-시작·정지·전략 변경·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·전략 변경·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
+시작·정지·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
 
 `GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 티커 — 사용자 목록), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·청산 대기를 나눠 보여 줍니다.
 
@@ -216,13 +216,12 @@ coin-trading-bot/
 |---|---|---|---|
 | 인증 | POST | `/api/auth/register`(계정이 하나도 없을 때만, 있으면 403), `/login`, `/logout` | Public |
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
-| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
-| 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
+| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/halt/clear` | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
-| 전략 | GET | `/api/strategies`, `/performance` | 필요 |
+| 전략 성과 | GET | `/api/strategies/performance` | 필요 |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
 
-차트(`/api/chart/*`)·관심 목록(`/api/watchlist`)·실시간 가격(`/api/prices/*`) API 는 2026-10-01 에 지웠습니다 — 화면이 쓰지 않았고, 시세는 DB 에 저장하지 않습니다.
+차트(`/api/chart/*`)·관심 목록(`/api/watchlist`)·실시간 가격(`/api/prices/*`) API 는 2026-10-01 에 지웠습니다 — 화면이 쓰지 않았고, 시세는 DB 에 저장하지 않습니다. 같은 날 봇 설정(`/api/bot/configs`)·전략 변경(`/api/bot/strategy`)·전략 목록(`GET /api/strategies`)도 지웠습니다 — 운영 전략은 `combined` 하나입니다.
 
 `/api/strategies/performance` 의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다(2026-09-14 정의 변경). 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓였습니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
 

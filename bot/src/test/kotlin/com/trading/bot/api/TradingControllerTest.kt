@@ -41,7 +41,7 @@ class TradingControllerTest {
 
     @Test
     fun `startBot surfaces missing-keys error as 400 instead of 200`() {
-        coEvery { manager.startBot(userId, null, null) } returns
+        coEvery { manager.startBot(userId, null) } returns
             mapOf("error" to "Upbit API keys not configured. Set them via /api/user/keys")
 
         val ex = assertThrows<ResponseStatusException> {
@@ -52,7 +52,7 @@ class TradingControllerTest {
 
     @Test
     fun `startBot surfaces user-not-found error as 404`() {
-        coEvery { manager.startBot(userId, null, null) } returns
+        coEvery { manager.startBot(userId, null) } returns
             mapOf("error" to "User not found")
 
         val ex = assertThrows<ResponseStatusException> {
@@ -63,7 +63,7 @@ class TradingControllerTest {
 
     @Test
     fun `startBot surfaces a running-engine ticker conflict as 409`() {
-        coEvery { manager.startBot(userId, null, null) } returns
+        coEvery { manager.startBot(userId, null) } returns
             mapOf("error" to "Bot is already running with [KRW-BTC] — stop it before changing tickers", "code" to "conflict")
 
         val ex = assertThrows<ResponseStatusException> {
@@ -74,34 +74,15 @@ class TradingControllerTest {
 
     @Test
     fun `startBot returns success map without throwing on happy path`() {
-        coEvery { manager.startBot(userId, null, null) } returns
-            mapOf("status" to "started", "strategy" to "volatility_breakout")
+        coEvery { manager.startBot(userId, null) } returns
+            mapOf("status" to "started", "strategy" to "combined")
 
         val result = authed { controller.startBot(null) }
         assertEquals("started", result["status"])
-        assertEquals("volatility_breakout", result["strategy"])
+        assertEquals("combined", result["strategy"])
     }
 
-    @Test
-    fun `changeStrategy throws 400 on unknown strategy instead of 200 with error body`() {
-        coEvery { manager.setStrategy(userId, "nonexistent") } returns false
-
-        val ex = assertThrows<ResponseStatusException> {
-            authed { controller.changeStrategy(StrategyRequest("nonexistent")) }
-        }
-        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
-    }
-
-    @Test
-    fun `changeStrategy returns success map on valid strategy`() {
-        coEvery { manager.setStrategy(userId, "volatility_breakout") } returns true
-
-        val result = authed { controller.changeStrategy(StrategyRequest("volatility_breakout")) }
-        assertEquals("changed", result["status"])
-        assertEquals("volatility_breakout", result["strategy"])
-    }
-
-    // --- 봇 제어의 상태 저장 실패는 503 (#228) — 엔드포인트마다 변환하므로 네 곳을 모두 본다 ---
+    // --- 봇 제어의 상태 저장 실패는 503 (#228) — 엔드포인트마다 변환하므로 세 곳을 모두 본다 ---
 
     private val persistFailure = BotControlPersistFailedException("저장 실패 안내", RuntimeException("db down"))
 
@@ -119,31 +100,14 @@ class TradingControllerTest {
 
     @Test
     fun `startBot persistence failure is 503 with the manager's message`() {
-        coEvery { manager.startBot(userId, null, null) } throws persistFailure
+        coEvery { manager.startBot(userId, null) } throws persistFailure
         assertServiceUnavailable { controller.startBot(null) }
-    }
-
-    @Test
-    fun `changeStrategy persistence failure is 503 with the manager's message`() {
-        coEvery { manager.setStrategy(userId, "combined") } throws persistFailure
-        assertServiceUnavailable { controller.changeStrategy(StrategyRequest("combined")) }
     }
 
     @Test
     fun `clearHalt persistence failure is 503 with the manager's message`() {
         coEvery { manager.clearHalt(userId, "KRW-BTC") } throws persistFailure
         assertServiceUnavailable { controller.clearHalt(ClearHaltRequest("KRW-BTC")) }
-    }
-
-    @Test
-    fun `startBot maps an unknown strategy to 400 even when the name says not found`() {
-        coEvery { manager.startBot(userId, null, "x not found") } returns
-            mapOf("error" to "Unknown strategy: x not found", "code" to UserTradingManager.UNKNOWN_STRATEGY_CODE)
-
-        val ex = assertThrows<ResponseStatusException> {
-            authed { controller.startBot(StartBotRequest(strategy = "x not found")) }
-        }
-        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
     }
 
     // --- 설정 저장(Discord webhook) ---
