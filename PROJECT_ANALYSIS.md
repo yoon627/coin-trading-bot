@@ -82,7 +82,7 @@ coin-trading-bot/
 |--------|----------|------------|-----------|
 | **업비트 (Upbit)** | 코인 (KRW 마켓) | WebSocket + REST | 실시간 시세(WS), 분봉/일봉(REST 폴링) |
 
-모든 시세는 `NormalizedTicker`, `NormalizedCandle`로 정규화된다. (`Exchange` enum에 BINANCE/ALPACA 값이 남아있으나 현재 연동 코드는 없음 — Upbit 단독 운영.)
+모든 시세는 `NormalizedTicker`, `NormalizedCandle`로 정규화된다. `Exchange` enum 은 `UPBIT` 하나다(Binance·Alpaca 잔재와 `AssetType` 은 2026-10-01 지웠다).
 
 ---
 
