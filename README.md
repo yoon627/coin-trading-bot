@@ -143,7 +143,7 @@ coin-trading-bot/
 | 상승 추세 | MA5 > MA20 |
 | RSI 필터 | RSI(14)가 30~70 |
 
-청산은 아래 리스크 규칙이 맡습니다. 차트 청산(`TRADING_CHART_EXIT_ENABLED`, 기본 off)을 켜면 5/20 데드크로스도 청산 신호가 됩니다.
+청산은 아래 리스크 규칙이 맡습니다.
 
 ### 기본 리스크 관리
 
@@ -154,7 +154,6 @@ coin-trading-bot/
 | 트레일링 폭 | 고점 대비 -2% | `TRADING_TRAILING_STOP_PCT` |
 | 트레일링 활성 수익률 | +3%(고점이 이 수익률에 닿은 뒤 평가) | `TRADING_TRAILING_ARM_PCT` |
 | 최대 보유 기간 | 1 거래일(KST 09:00 경계) | `TRADING_MAX_HOLD_DAYS` |
-| 차트 기반 청산 | 비활성 | `TRADING_CHART_EXIT_ENABLED` |
 | 기록용 왕복 수수료율 | 0.001 | `TRADING_ROUND_TRIP_FEE_RATE` |
 
 기본값의 정의처는 `common/src/main/kotlin/com/trading/common/config/TradingProperties.kt` 하나입니다(#75). `application.yml`·`docker-compose*.yml`·`deploy/*/deploy.sh` 는 기본값을 갖지 않으며, 환경변수를 설정하지 않으면 위 값이 그대로 적용됩니다.
@@ -162,7 +161,7 @@ coin-trading-bot/
 > ⚠️ **자동매매 인스턴스(`TRADING_AUTO_START=true`)는 청산 파라미터를 `.env` 에 명시하세요.**
 > 운영값이 코드 기본값과 다를 수 있어(예: 트레일링), 환경변수 한 줄이 빠지면 봇이 조용히 다른 청산
 > 규칙으로 거래하게 됩니다.
-> 대상 키: `TRADING_TAKE_PROFIT_PCT`·`TRADING_MAX_LOSS_PCT`·`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`·`TRADING_MAX_HOLD_DAYS`·`TRADING_CHART_EXIT_ENABLED`.
+> 대상 키: `TRADING_TAKE_PROFIT_PCT`·`TRADING_MAX_LOSS_PCT`·`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`·`TRADING_MAX_HOLD_DAYS`.
 >
 > 값은 **의미상 구간** 안이어야 합니다. 부호·단위 오기를 거르는 구간이고(손절 `-5` 는 매수 직후 손절이 됩니다) 운영값을 강제하지는 않습니다.
 > 숫자는 평범한 소수(지수·공백·쉼표 없이), 불리언은 소문자 `true`/`false` 로 적습니다.
@@ -258,7 +257,7 @@ coin-trading-bot/
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
 
-> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 6개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
+> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 5개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
 
 ## AWS 배포 (historical)
 

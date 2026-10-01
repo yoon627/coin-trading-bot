@@ -13,8 +13,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 /**
  * `minCandles` 계약이 실제 동작과 맞는지 고정한다.
  *
- * 전략 목록을 **Spring 컨텍스트에서 열거**하는 이유: 기본값(21)이 있는 이상 더 많은 봉이 필요한 새 전략이
- * override 를 잊으면 같은 버그가 재발하는데, 하드코딩 목록이면 그 전략은 검사 대상에서 빠진다.
+ * 전략 목록을 **Spring 컨텍스트에서 열거**하는 이유: 하드코딩 목록이면 새 전략이 검사 대상에서 빠진다.
  */
 class StrategyMinCandlesTest {
 
@@ -45,10 +44,6 @@ class StrategyMinCandlesTest {
                 strategy.shouldBuy(short, 10_000.0, config),
                 "${strategy.name}: minCandles=${strategy.minCandles} 인데 ${short.size}봉에서 매수 신호가 났다",
             )
-            assertFalse(
-                strategy.shouldSell(short, 10_000.0, config),
-                "${strategy.name}: minCandles=${strategy.minCandles} 인데 ${short.size}봉에서 청산 신호가 났다",
-            )
         }
     }
 
@@ -58,7 +53,6 @@ class StrategyMinCandlesTest {
         for (strategy in strategies()) {
             val exact = flat(strategy.minCandles)
             strategy.shouldBuy(exact, 10_000.0, config)
-            strategy.shouldSell(exact, 10_000.0, config)
         }
     }
 
@@ -66,8 +60,8 @@ class StrategyMinCandlesTest {
      * 선언값 자체를 고정한다.
      *
      * "minCandles-1 에서 false" 만으로는 **선언이 실제보다 작은 경우를 못 잡는다** — 41봉을 요구하는
-     * 전략은 20봉에서도 false 라 21로 잘못 선언해도 통과한다(실측 확인). 기대값을 명시해야 override
-     * 누락이 드러나고, 새 전략은 이 표에 없어서 실패한다 — 계약을 정하라는 신호다.
+     * 전략은 20봉에서도 false 라 21로 잘못 선언해도 통과한다(실측 확인). 기대값을 명시해야 잘못된
+     * 선언이 드러나고, 새 전략은 이 표에 없어서 실패한다 — 계약을 정하라는 신호다.
      */
     @Test
     fun `declared minimums match the agreed contract`() {

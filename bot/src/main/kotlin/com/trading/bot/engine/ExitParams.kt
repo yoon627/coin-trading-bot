@@ -22,7 +22,6 @@ internal fun TradingProperties.exitParamsSnapshot(): ExitParamsSnapshot = ExitPa
  *
  * 폴백이 전역인 이유: 스냅샷이 없는 포지션(스냅샷 도입 이전·복원 실패·봇 밖 보유의 편입·무산된 dust 흡수)은 기존 동작을 그대로 둔다.
  * `maxHoldDays` 는 보정 전 값이다 — 판정은 `ExitGates.effectiveMaxHoldDays` 를 거친다.
- * `chartExitEnabled` 는 스냅샷에 없다 — 임계가 아니라 모드 스위치라 전역이 소유한다.
  */
 internal fun TradingState.exitParamsOrGlobal(global: TradingProperties): ExitParamsSnapshot =
     exitParams ?: global.exitParamsSnapshot()
