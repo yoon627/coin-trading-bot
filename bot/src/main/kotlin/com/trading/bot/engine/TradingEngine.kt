@@ -50,16 +50,12 @@ class TradingEngine(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    // 신규 스윙 진입을 허용하는 집합 — start 가 사용자 목록으로 채운다. 여기 없는 활성 티커는 보유·미해소 주문 때문에
-    // 잔류한 것이라 청산 뒤 재진입하지 못한다 — 잔류의 의미는 "청산될 때까지"이지 "새로 사도 된다"가 아니다.
-    // null(제한 없음)은 start 전(processTicker 를 직접 부르는 단위 테스트)뿐이다.
+    // 사용자가 준 목록(bot_state.tickers) — 신규 진입은 이 목록 안의 티커만 받는다. 활성 집합은 여기에 잔류가 합쳐진 파생 집합이라,
+    // 재기동이나 실행 중 start 비교가 활성 집합을 사용자 의도로 쓰면 잔류 티커가 신규 진입 대상으로 승격된다(#226).
+    // 여기 없는 활성 티커는 보유·미해소 주문 때문에 잔류한 것이라 청산 뒤 재진입하지 못한다 — 잔류의 의미는 "청산될 때까지"이지
+    // "새로 사도 된다"가 아니다. null(제한 없음)은 start 전(processTicker 를 직접 부르는 단위 테스트)뿐이다.
     @Volatile
-    private var swingUniverse: Set<String>? = null
-
-    // 사용자가 준 목록(bot_state.tickers). 활성 집합은 여기에 잔류가 합쳐진 파생 집합이라, 재기동이나 실행 중
-    // start 비교가 활성 집합을 사용자 의도로 쓰면 잔류 티커가 신규 진입 대상으로 승격된다(#226).
-    @Volatile
-    private var userTickers: List<String> = emptyList()
+    private var userTickers: List<String>? = null
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
@@ -106,7 +102,6 @@ class TradingEngine(
             val restored = initialStates.filterValues { it.hasEntryTrace() }.keys.filter { it !in requested }
             val active = (tickers + restored).distinct()
             activeTickers = active
-            swingUniverse = tickers.toSet()
             // durable 복원 상태를 seed — runLoop 의 computeIfAbsent 가 이 값을 유지하고, syncPosition 이 position/잔고만 덮는다.
             // 이번 실행의 활성 ticker 만 — 직전 실행(같은 엔진의 재기동)이나 과거 ticker 까지 남기면 tick 이 안 도는 상태가
             // getStates·일일 리셋에 섞인다. 채운 뒤 나머지를 빼는 순서는 정확성과 무관하다(최종 상태 동일) — 같은 엔진을
@@ -201,14 +196,12 @@ class TradingEngine(
     fun getActiveTickers(): List<String> = activeTickers.toList()
 
     /** 사용자가 준 목록 — 잔류가 섞이지 않은 재기동 입력. */
-    fun getUserTickers(): List<String> = userTickers.toList()
+    fun getUserTickers(): List<String> = userTickers.orEmpty().toList()
 
-    // 화면용 분류(status). 활성 집합 = 진입 허용 ∪ 청산 대기 — 진입 판정과 같은 isExitOnly 로 가른다.
-
-    /** 신규 진입을 받는 티커 — 활성 중 진입 허용 집합(사용자 목록) 안의 것. */
+    /** 화면용 분류 — 신규 진입을 받는 티커(활성 중 사용자 목록 안). 진입 판정과 같은 isExitOnly 로 가른다. */
     fun getEntryTickers(): List<String> = activeTickers.filter { !isExitOnly(it) }
 
-    /** 청산될 때까지만 관리하는 티커 — 활성이지만 신규 진입 허용 집합 밖이다. */
+    /** 화면용 분류 — 청산될 때까지만 관리하는 티커(활성이지만 사용자 목록 밖). */
     fun getExitOnlyTickers(): List<String> = activeTickers.filter { isExitOnly(it) }
 
     /**
@@ -216,7 +209,7 @@ class TradingEngine(
      * 빈 상태로 start 하면 목록 밖 잔류 포지션이 빠진다. stop 이 루프를 join 한 뒤에 부른다.
      * 상태는 사본으로 넘긴다 — start 가 states 를 바꾸므로 live view 를 넘기면 순회 중에 바뀐다.
      */
-    fun resume() = start(userTickers, getStates())
+    fun resume() = start(userTickers.orEmpty(), getStates())
 
     /**
      * 루프가 기록하지 못한 pending([TradingState.pendingPersistFailed])과 고점([TradingState.peakPersistFailed], #54)을 한 번 더
@@ -301,8 +294,8 @@ class TradingEngine(
         log.info("User {}: released tickers outside the list with nothing left to manage: {}", userId, settled.keys)
     }
 
-    /** 활성이지만 신규 진입 허용 집합 밖인 티커 — 목록에서 빠졌는데 보유·미해소 주문 때문에 남은 것. start 전(null)은 없음. */
-    private fun isExitOnly(ticker: String): Boolean = swingUniverse?.let { ticker !in it } == true
+    /** 활성이지만 사용자 목록 밖인 티커 — 목록에서 빠졌는데 보유·미해소 주문 때문에 남은 것. start 전(null)은 없음. */
+    private fun isExitOnly(ticker: String): Boolean = userTickers?.let { ticker !in it } == true
 
     // unsynced 는 "보유 여부를 아직 모른다" — 실제 포지션일 수 있으니 확인될 때까지 목록에서 빼지 않는다.
     private fun TradingState.mustKeep(): Boolean = position || unsynced || hasPendingOrder()

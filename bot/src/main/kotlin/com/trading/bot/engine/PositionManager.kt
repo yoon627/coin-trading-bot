@@ -710,23 +710,7 @@ class PositionManager(
         state.pendingSellAlerted = true
     }
 
-    suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? =
-        // 판단가를 pending 에 남긴다 — 체결이 reconcile 로 늦게 확정돼도 기록은 이 가격으로 한다(#235).
-        placeSell(ticker, state, currentPrice, reason, triggerPrice = currentPrice) { account ->
-            SellQuantity(account.balance, account.balanceDouble())
-        }
-
-    /** 주문에 실을 수량 문자열(거래소 잔고 원문)과 그 수치. */
-    private class SellQuantity(val orderVolume: String, val volume: Double)
-
-    private suspend fun placeSell(
-        ticker: String,
-        state: TradingState,
-        currentPrice: Double,
-        reason: SellReason,
-        triggerPrice: Double,
-        quantity: (Account) -> SellQuantity,
-    ): TradeRecord? {
+    suspend fun sell(ticker: String, state: TradingState, currentPrice: Double, reason: SellReason): TradeRecord? {
         if (!state.position) return null
         // 미해소 매도 주문이 있으면 신규 매도 금지 — reconcile 로 확정될 때까지 이중 매도 방지(매수 pending 가드 미러).
         if (state.hasPendingSell()) {
@@ -769,22 +753,22 @@ class PositionManager(
         }
 
         // Upbit market sell: ord_type=market. free 전량을 거래소 잔고 원문 문자열로 판다.
-        val qty = quantity(account!!)
+        val orderVolume = account!!.balance
         // 실제 주문이 최소주문 아래면 거래소가 매 tick 거부한다 — 보내지 않는다.
-        if (isBelowMinOrder(qty.volume, currentPrice)) {
+        if (isBelowMinOrder(sellable, currentPrice)) {
             // dust(#234) — 팔 수 없다. 실측 수량을 남겨 엔진이 dust 로 보고 진입을 열게 한다(사면 합쳐져 새 진입).
             // 청산 평가는 매 tick 계속 돌므로 락이 풀려 free 가 돌아오면 다음 청산 사유에서 정상으로 판다.
             state.holdVolume = heldVolume(account, ourSellLockCeiling(state))
-            warnDustOnce(ticker, state, "%s × %.0f".format(qty.orderVolume, currentPrice))
+            warnDustOnce(ticker, state, "%s × %.0f".format(orderVolume, currentPrice))
             return null
         }
         // 매수판([placeBuy])과 같은 순서 — 정지 중이면 시작하지 않고, identifier 를 먼저 남긴 뒤 보낸다(#227).
         currentCoroutineContext().ensureActive()
         val identifier = newOrderIdentifier()
         // 재시작 후에는 잔고·평단이 이미 비어 있으므로 청산 기록의 근거를 주문 시점 값으로 남긴다. 미해소가 얼마나 끌었는지는
-        // 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55). 주문 전 free 보유량은 응답을 못 받은 주문의
-        // 흔적 판정 기준이다.
-        state.beginSellOrder(identifier, reason, clock.instant(), qty.volume, triggerPrice, sellable)
+        // 재시작 횟수와 무관해야 한다 — 시작 시각을 durable 로 남긴다(#55). 판단가(currentPrice)도 남긴다 — 체결이 reconcile 로
+        // 늦게 확정돼도 기록은 이 가격으로 한다(#235). 주문 전 free 보유량은 응답을 못 받은 주문의 흔적 판정 기준이다.
+        state.beginSellOrder(identifier, reason, clock.instant(), sellable, currentPrice, sellable)
         // 매수판과 동일 — 선기록부터 체결 반영까지 취소가 끊지 못하게 해야 청산 기록이 유실되지 않는다.
         return withContext(NonCancellable) {
             // 기록 장애가 손절을 막으면 안 된다 — 매수와 달리 실패해도 보낸다. 메모리 identifier 가 이 엔진의 이중
@@ -796,7 +780,7 @@ class PositionManager(
                         market = ticker,
                         side = "ask",
                         ordType = "market",
-                        volume = qty.orderVolume,
+                        volume = orderVolume,
                         identifier = identifier,
                     )
                 )
@@ -830,9 +814,10 @@ class PositionManager(
                 if (filled?.state == "done") {
                     // 즉시 체결 — 주문량으로 기록. done 은 upbit 시장가 매도의 정상 종결.
                     // #52: 상태 전이 저장과 감사 기록을 원자 커밋하고, 성공 후에만 메모리 전이를 적용한다.
+                    // free 전량을 팔았다 — 남은 locked 는 우리 주문의 것이 아니다([heldVolume]).
                     completeSellAtomically(
-                        ticker, state, currentPrice, qty.volume, reason,
-                        remaining = sellable - qty.volume,
+                        ticker, state, currentPrice, sellable, reason,
+                        remaining = 0.0,
                         // 판단가(currentPrice)와의 차이가 실행 슬리피지다 — 판단 가격만 보는 모델에는 없어 실물로만 얻는다.
                         executedVwap = filled.filledVwap(),
                         feeBasis = sellFeeBasis(filled),
