@@ -241,3 +241,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[swing-strategies]] 를 `TradingStrategy` 인터페이스와 `combined` 중심으로 다시 썼다: 나머지 등록 전략 8종·`ShoulderExit` 삭제, 기본 전략 규칙(엔진·상태 API 모두 첫 등록 bean), `TRADING_STRATEGY` 설정 삭제와 운영 secret 잔존 줄의 무해성.
 - [[architecture-overview]] common 행, [[marketdata-pipeline]] 의 전략별 최소 봉수·volume 서술을 `combined` 기준으로, [[rightsizing-history]] MVP 항목에 전략 정리를 더했다.
+
+## [2026-10-01] update | MVP 2단계 — 알트 유니버스 자동 선정·dormant 되살리기 삭제
+
+- [[accumulate-ladder]] 의 유니버스 절(선정 규칙·`applyTickers`·첫 선정 전 진입 없음·dormant 되살리기)을 걷었다. 남는 규칙 — `bot_state.tickers` 는 사용자 의도만 저장, watchlist 밖 REST 폴백(`DailyCandleCache`) — 은 [[trading-engine-loop]] 로 옮겼다.
+- [[trading-engine-loop]] 의 잔류·정리·재기동·화면 분류·dust 해제에서 auto 분기를 걷었다. #226 테스트 묶음은 `TradingEngineTickerSetTest` 로 이름을 바꿨다.

@@ -11,7 +11,7 @@ import org.springframework.stereotype.Service
 
 /**
  * watchlist 밖 티커의 D1 REST 폴백 캐시. Upbit 레이트리밋은 프로세스(IP) 단위인데 엔진은 사용자당 하나라,
- * 엔진 필드로 두면 사용자 수만큼 같은 캔들을 다시 받는다 — [UniverseSelector] 와 같은 이유로 싱글톤이다.
+ * 엔진 필드로 두면 사용자 수만큼 같은 캔들을 다시 받는다 — 그래서 싱글톤이다.
  * TTL 은 ingestion 의 캔들 주기(60초)와 같아 신선도는 store 경로와 동일하다.
  */
 @Service

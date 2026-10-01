@@ -79,8 +79,6 @@ services:
       - TRADING_ACCUMULATE_MAX_RUNGS
       - TRADING_ACCUMULATE_STEP_DOWN_PCT
       - TRADING_ACCUMULATE_STEP_UP_PCT
-      - TRADING_UNIVERSE_AUTO
-      - TRADING_UNIVERSE_ALT_COUNT
       # 그림자 청산 관측(기본 off). 켜도 매매는 바뀌지 않는다 — 후보 청산 파라미터를 나란히 평가해 기록만 한다.
       # 이 세 줄이 없으면 .env 에 적어도 컨테이너에 도달하지 않아 **조용히 꺼진 채로 돈다**(#75 와 같은 함정).
       - TRADING_SHADOW_EXIT_ENABLED
