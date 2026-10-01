@@ -134,6 +134,48 @@ class PositionManagerDustTest {
     }
 
     @Test
+    fun `an absorbing fill without a coin row after the fill keeps the dust and averages the cost`() = runTest {
+        // 체결은 확인됐는데 계좌가 코인 행을 안 돌려주면, 체결분만으로 replace 하면 dust 가 장부에서 사라진다.
+        coEvery { upbit.getAccounts() } returnsMany listOf(
+            listOf(krw(), btc("0.0001")), // 주문 전
+            listOf(krw()), // 체결 뒤 — 코인 행 없음
+        )
+        coEvery { upbit.placeOrder(any()) } returns Order(uuid = "b-nf")
+        coEvery { upbit.getOrder("b-nf") } returns Order(uuid = "b-nf", state = "done", executedVolume = "0.01")
+        val state = dust()
+
+        manager.buy("KRW-BTC", state, price, "combined")
+
+        assertEquals(0.0101, state.holdVolume, 1e-12)
+        // 평단도 가중평균 — 이번 체결가로 덮으면 dust 원가가 빠진다.
+        assertEquals((12_000_000.0 * 0.0001 + price * 0.01) / 0.0101, state.avgBuyPrice, 1.0)
+    }
+
+    @Test
+    fun `balance recovery of an absorbing buy counts only the increase over the dust`() = runTest {
+        // 주문 뒤 getOrder 가 죽었다. 계좌의 dust 는 주문 전부터 있던 것 — 증분이 없으니 체결로 보지 않는다.
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0001"))
+        coEvery { upbit.placeOrder(any()) } returns Order(uuid = "b-rec")
+        coEvery { upbit.getOrder("b-rec") } throws RuntimeException("getOrder down")
+        val state = dust()
+
+        assertNull(manager.buy("KRW-BTC", state, price, "combined"))
+        assertEquals(0.0001, state.pendingBuyPriorVolume)
+
+        assertNull(manager.reconcilePendingBuy("KRW-BTC", state, price))
+        assertEquals("b-rec", state.pendingBuyUuid)
+
+        // 잔고가 늘었으면 그 증분만 이 주문의 체결이다.
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0101", avg = "10019802"))
+        val record = manager.reconcilePendingBuy("KRW-BTC", state, price)
+
+        assertEquals(0.0101, record!!.volume, 1e-12)
+        assertEquals(0.0101, state.holdVolume, 1e-12)
+        assertEquals("combined", state.entryStrategy)
+        assertNull(state.pendingBuyUuid)
+    }
+
+    @Test
     fun `a stale dust reading does not buy on top of a sellable holding`() = runTest {
         // 기록상 dust 지만 그 사이 앱에서 더 사서 실제로는 10만원어치다 — 그 위에 사면 이중 포지션이다.
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.01", avg = "9500000"))

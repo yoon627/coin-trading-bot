@@ -1,15 +1,10 @@
 package com.trading.bot.engine
 
-import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.Logger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
-import com.trading.common.config.AccumulateProperties
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
 import io.mockk.coEvery
@@ -20,13 +15,11 @@ import java.time.LocalDate
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.slf4j.LoggerFactory
 
 /**
  * 활성 티커 집합 — 사용자 목록 밖 잔류(#226)·청산 뒤 정리·재기동·화면 분류.
@@ -53,9 +46,7 @@ class TradingEngineTickerSetTest {
         every { dailyResetManager.checkAndReset(any()) } returns false
     }
 
-    private fun createEngine(
-        accumulate: AccumulateProperties = AccumulateProperties(),
-    ) = TradingEngine(
+    private fun createEngine() = TradingEngine(
         upbitClient = upbitClient,
         positionManager = positionManager,
         dailyResetManager = dailyResetManager,
@@ -64,7 +55,6 @@ class TradingEngineTickerSetTest {
         userId = 1L,
         username = "testuser",
         marketDataStore = marketDataStore,
-        accumulateProperties = accumulate,
     )
 
     private fun held(ticker: String) = TradingState(ticker, position = true, avgBuyPrice = 100.0, holdVolume = 1.0)
@@ -72,20 +62,6 @@ class TradingEngineTickerSetTest {
     /** 엔진이 산 포지션 — 진입 메타가 있어야 재시작 때 잔류로 실린다. */
     private fun heldEntry(ticker: String) =
         held(ticker).apply { entryStrategy = "test_strategy"; buyDate = LocalDate.of(2026, 9, 1) }
-
-    private val engineLogger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
-    private val engineLogs = ListAppender<ILoggingEvent>()
-
-    @AfterEach
-    fun detachLogs() {
-        engineLogger.detachAppender(engineLogs)
-    }
-
-    private fun captureEngineLogs(): ListAppender<ILoggingEvent> {
-        engineLogs.start()
-        engineLogger.addAppender(engineLogs)
-        return engineLogs
-    }
 
     @Test
     fun `start keeps a ticker outside the list whose order is known only by identifier`() = runBlocking {
@@ -103,27 +79,19 @@ class TradingEngineTickerSetTest {
 
     @Test
     fun `a held or pending ticker outside the requested list stays active`() = runBlocking {
-        val logs = captureEngineLogs()
-        val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-ADA"))
+        val engine = createEngine()
         engine.start(
             listOf("KRW-BTC"),
             linkedMapOf(
                 "KRW-XRP" to heldEntry("KRW-XRP"),
                 "KRW-P" to TradingState("KRW-P", pendingSellUuid = "s1"),
+                // 진입 흔적 없는 잔재(청산 완료)는 싣지 않는다.
                 "KRW-OLD" to TradingState("KRW-OLD"),
-                // 적립 설정에서 빠진 사다리 보유분 — 스윙 청산 규칙으로 시장가에 팔리지 않게 싣지 않고 알린다.
-                "KRW-LAD" to TradingState("KRW-LAD", position = true, entryStrategy = "accumulate", rungsFilled = 2),
-                // 첫 단 매수가 미체결이면 rungsFilled 는 아직 0 — 단 매수의 triggerPrice 로 사다리임을 안다.
-                "KRW-LAD0" to TradingState("KRW-LAD0", pendingBuyUuid = "b1", pendingBuyTriggerPrice = 100.0),
-                // 적립 설정 안의 사다리는 원래 활성이다 — 알릴 대상이 아니다.
-                "KRW-ADA" to TradingState("KRW-ADA", position = true, entryStrategy = "accumulate", rungsFilled = 1),
             ),
         )
         engine.stop()
 
-        assertEquals(listOf("KRW-ADA", "KRW-BTC", "KRW-XRP", "KRW-P"), engine.getActiveTickers())
-        val ladderWarning = logs.list.single { it.level == Level.WARN && "사다리" in it.formattedMessage }.formattedMessage
-        assertTrue("[KRW-LAD, KRW-LAD0]" in ladderWarning, ladderWarning)
+        assertEquals(listOf("KRW-BTC", "KRW-XRP", "KRW-P"), engine.getActiveTickers())
     }
 
     @Test
@@ -145,7 +113,7 @@ class TradingEngineTickerSetTest {
 
     @Test
     fun `getUserTickers is the requested list only and a no-op start does not replace it`() = runBlocking {
-        val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-BTC"))
+        val engine = createEngine()
         engine.start(listOf("KRW-ETH"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
         engine.start(listOf("KRW-SOL"))
         engine.stop()
@@ -190,8 +158,8 @@ class TradingEngineTickerSetTest {
         engine.processTicker("KRW-XRP", xrp, strategy)
         engine.processTicker("KRW-BTC", btc, strategy)
 
-        coVerify(exactly = 0) { positionManager.buy("KRW-XRP", any(), any(), any(), any()) }
-        coVerify(exactly = 1) { positionManager.buy("KRW-BTC", btc, 100.0, "test_strategy", any()) }
+        coVerify(exactly = 0) { positionManager.buy("KRW-XRP", any(), any(), any()) }
+        coVerify(exactly = 1) { positionManager.buy("KRW-BTC", btc, 100.0, "test_strategy") }
     }
 
     @Test
@@ -265,12 +233,11 @@ class TradingEngineTickerSetTest {
     }
 
     @Test
-    fun `ticker groups split the active set into accumulate and exit-only tickers`() = runBlocking {
-        val engine = createEngine(accumulate = AccumulateProperties(tickers = "KRW-ADA"))
+    fun `ticker groups split the active set into entry and exit-only tickers`() = runBlocking {
+        val engine = createEngine()
         engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to heldEntry("KRW-XRP")))
         engine.stop()
 
-        assertEquals(listOf("KRW-ADA"), engine.getAccumulateTickers())
         assertEquals(listOf("KRW-BTC"), engine.getEntryTickers())
         assertEquals(listOf("KRW-XRP"), engine.getExitOnlyTickers())
     }
