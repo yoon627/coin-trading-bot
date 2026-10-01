@@ -54,7 +54,7 @@ coin-trading-bot/
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
 │   └── src/main/kotlin/com/trading/bot/
-│       ├── api/                     # REST 컨트롤러 5개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
+│       ├── api/                     # REST 컨트롤러 4개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
@@ -88,7 +88,7 @@ coin-trading-bot/
 
 ## 5. 매매 (SWING 모드)
 
-시간봉/일봉 기준 기술적 지표로 매매. 보유 기간 수시간~수일. 사용자별 종목/전략은 `bot_configs`에 저장.
+시간봉/일봉 기준 기술적 지표로 매매. 보유 기간 수시간~수일. 사용자의 봇 실행 상태(실행 여부·티커 목록)는 `bot_state` 에 저장한다(전략 칸은 `combined` 를 쓰기만 한다 — 롤백 호환).
 
 **스윙 전략:** 운영 전략은 `CombinedStrategy`(`combined`) 하나다. 일봉 21개 이상에서 변동성 돌파(당일 시가 + 전일 레인지 × K) ·
 MA5 > MA20 · RSI(14) 30~70 을 모두 만족하면 매수한다. 청산은 전략과 무관하게 손익% 안전망과 보유상한이 맡는다.
@@ -134,11 +134,6 @@ trade_executions
 ├── exchange, market, side, order_type
 ├── price, volume, total_amount, fee, pnl_percent, pnl_amount
 ├── reason, strategy, status, executed_at
-
-bot_configs
-├── user_id (FK → users)
-├── exchange, market, strategy, trade_mode, parameters (JSONB)
-└── UNIQUE(user_id, exchange, market)
 ```
 
 ---
@@ -183,11 +178,10 @@ bot_configs
 | 그룹 | 컨트롤러 | 대표 경로 |
 |------|----------|-----------|
 | 인증 | AuthController | `/api/auth/{register,login,logout}` |
-| 봇 제어 | TradingController | `/api/bot/{start,stop,status,strategy,halt/clear}` |
-| 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
+| 봇 제어 | TradingController | `/api/bot/{start,stop,status,halt/clear}` |
 | 사용자 | TradingController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
-| 전략 | StrategyController | `/api/strategies/{,performance}` |
+| 전략 성과 | StrategyController | `/api/strategies/performance` |
 
 ### 에러 응답 정책
 - `SafeErrorAttributes`가 `ResponseStatusException.reason`만 노출 (FQCN/스택 leak 차단).

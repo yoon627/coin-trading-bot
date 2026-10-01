@@ -14,7 +14,7 @@ class StrategyConfigTest {
 
     @Test
     fun `registers only the production strategy`() {
-        // 엔진과 상태 API 는 첫 bean 을 기본 전략으로 쓴다 — 전략을 더하려면 이 목록과 기본 전략을 함께 정한다.
+        // 매니저가 TradingStrategy 하나를 주입받는다 — 둘째 bean 은 @Primary·이름 일치로 조용히 주입될 수 있어 기동 실패에 기대지 않고 목록을 고정한다.
         assertEquals(listOf("combined"), registeredStrategyNames())
     }
 }

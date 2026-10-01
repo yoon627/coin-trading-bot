@@ -69,10 +69,7 @@ class UserTradingManagerTest {
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
-    // 요청 전략 검증과 전환 경로를 보려고 등록 전략을 두 개 둔다 — 없으면 검증이 "combined" 를 알 수 없는 이름으로 거절한다.
-    private val registeredStrategies: List<TradingStrategy> = listOf("combined", "golden_cross").map { strategyName ->
-        mockk<TradingStrategy> { every { name } returns strategyName }
-    }
+    private val strategy: TradingStrategy = mockk { every { name } returns "combined" }
 
     @BeforeEach
     fun setup() {
@@ -87,7 +84,7 @@ class UserTradingManagerTest {
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, tradeExecutionService, discordNotifier,
-                registeredStrategies, TradingProperties(autoStart = true), upbitWebClient,
+                strategy, TradingProperties(autoStart = true), upbitWebClient,
                 userSecretsService, marketDataStore, tradingStateService,
             ),
         )
@@ -129,7 +126,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
 
@@ -154,7 +150,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
 
@@ -171,7 +166,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val cause = RuntimeException("db down")
         coEvery { tradingStateService.loadStates(1L) } throws cause
@@ -192,7 +186,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val loadFailure = RuntimeException("db down")
         coEvery { tradingStateService.loadStates(1L) } throws loadFailure
@@ -218,7 +211,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled")
 
@@ -242,10 +234,9 @@ class UserTradingManagerTest {
 
         manager.restoreAllRunningBots()
 
-        // lock 획득 후 engines 재확인으로 skip — 새 엔진 생성도, 기존 엔진 재기동(setStrategy/start)도 없다.
+        // lock 획득 후 engines 재확인으로 skip — 새 엔진 생성도, 기존 엔진 재기동(start)도 없다.
         // (구 computeIfAbsent 는 createEngine 만 skip 하고 실행 중 엔진에 start 를 다시 걸어 유령 엔진을 만들었다.)
         verify(exactly = 0) { manager.createEngine(any()) }
-        verify(exactly = 0) { mockEngine.setStrategy(any()) }
         verify(exactly = 0) { mockEngine.start(any()) }
     }
 
@@ -318,7 +309,7 @@ class UserTradingManagerTest {
         // restore 뿐 아니라 API 경로(startBot)도 종료 중이면 신규 엔진을 기동하지 않는다(M5 일관, 재검토 발견).
         manager.stop() // shuttingDown = true
 
-        val result = manager.startBot(1L, listOf("KRW-BTC"), "combined")
+        val result = manager.startBot(1L, listOf("KRW-BTC"))
 
         assertTrue(result["error"] == "Service is shutting down", "종료 중 startBot 이 거부되지 않음: $result")
         verify(exactly = 0) { manager.createEngine(any()) }
@@ -459,7 +450,7 @@ class UserTradingManagerTest {
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, actualTradeExecutionService, auditNotifier,
-                emptyList(), TradingProperties(autoStart = true), upbitWebClient,
+                strategy, TradingProperties(autoStart = true), upbitWebClient,
                 userSecretsService, marketDataStore, tradingStateService,
             ),
         )
@@ -482,29 +473,6 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `restore reports the strategy the engine actually uses, not the one in the database`() = runTest {
-        // DB 에 있는 전략명이 현재 bean 목록에 없으면(전략 제거·rename·revert 후) setStrategy 는 false 를
-        // 반환하고 엔진은 폴백 전략으로 돈다. 그 사실을 알리지 않으면 로그·상태 응답은 DB 값을 그대로
-        // 보고해, 운영자가 실제와 다른 전략이 매매 중인 것을 모른다.
-        val stale = BotStateEntity(userId = 7L, running = true, strategy = "removed_strategy", tickers = "KRW-BTC")
-        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(stale)
-        every { botStateRepository.findByUserIdAndExchange(7L, "UPBIT") } returns Mono.just(stale)
-        coEvery { userRepository.findById(7L) } returns Mono.just(user(7L))
-        every { mockEngine.setStrategy("removed_strategy") } returns false
-        every { mockEngine.getActiveStrategyName() } returns "volatility_breakout"
-
-        manager.restoreAllRunningBots()
-
-        // getStatus 는 engine 을 우선 읽어 이미 정확하다. 문제는 내부 캐시다 — 엔진이 사라진 뒤
-        // (재시작·reload) startBot 이 이 값을 다시 setStrategy 에 넘기므로, DB 의 죽은 이름이 남으면
-        // 매번 폴백을 반복하면서 로그에는 그 이름이 계속 찍힌다.
-        val f = UserTradingManager::class.java.getDeclaredField("userStrategies").apply { isAccessible = true }
-        @Suppress("UNCHECKED_CAST")
-        val cache = f.get(manager) as ConcurrentHashMap<Long, String>
-        assertEquals("volatility_breakout", cache[7L], "캐시에 DB 의 죽은 전략명이 그대로 남았다")
-    }
-
-    @Test
     fun `startBot persists the requested tickers, not the engine's derived active set`() = runTest {
         // 잔류 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면 그날의 목록이 사용자 의도로 굳어
         // 되돌릴 수 없다 — 저장은 사용자가 준 목록만.
@@ -513,22 +481,17 @@ class UserTradingManagerTest {
         val saved = slot<BotStateEntity>()
         every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
         every { mockEngine.getActiveTickers() } returns listOf("KRW-BTC", "KRW-ETH", "KRW-SOL")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
 
-        manager.startBot(1L, listOf("KRW-ETH"), null)
+        manager.startBot(1L, listOf("KRW-ETH"))
 
         assertEquals("KRW-ETH", saved.captured.tickers)
+        // 전략 칸은 이 코드가 읽지 않아도 계속 쓴다 — 옛 이미지로 롤백하면 복원이 이 값으로 전략을 고른다.
+        assertEquals("combined", saved.captured.strategy)
     }
 
     // --- 사용자 목록과 파생 활성 집합의 분리 (#226) ---
     // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(잔류 포함)을 사용자 의도로 넘기면
     // 목록에서 뺀 티커가 신규 진입 대상으로 승격된다.
-
-    private fun userStrategies(): ConcurrentHashMap<Long, String> {
-        val f = UserTradingManager::class.java.getDeclaredField("userStrategies").apply { isAccessible = true }
-        @Suppress("UNCHECKED_CAST")
-        return f.get(manager) as ConcurrentHashMap<Long, String>
-    }
 
     @Test
     fun `reload starts the replacement with the user list as is, never the config list or the derived active set`() = runTest {
@@ -536,7 +499,6 @@ class UserTradingManagerTest {
         every { mockEngine.isRunning() } returns true
         // 빈 사용자 목록으로 도는 엔진(잔류만 관리) — 빈 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다.
         every { mockEngine.getUserTickers() } returns emptyList()
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val loaded = mapOf("KRW-XRP" to TradingState("KRW-XRP"))
         coEvery { tradingStateService.loadStates(1L) } returns loaded
@@ -553,15 +515,13 @@ class UserTradingManagerTest {
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
 
-        val result = manager.startBot(1L, listOf("KRW-BTC"), "combined")
+        val result = manager.startBot(1L, listOf("KRW-BTC"))
 
         assertEquals("conflict", result["code"])
         assertTrue(result.containsKey("error"))
         coVerify(exactly = 0) { mockEngine.start(any(), any()) }
-        verify(exactly = 0) { mockEngine.setStrategy(any()) }
         coVerify(exactly = 0) { tradingStateService.loadStates(any()) }
         verify(exactly = 0) { botStateRepository.save(any()) }
-        assertNull(userStrategies()[1L])
     }
 
     @Test
@@ -570,19 +530,16 @@ class UserTradingManagerTest {
         every { mockEngine.isRunning() } returns true
         // bot_state 에서 온 목록은 trim 만 돼 있다 — 요청(대문자·distinct)과 순서·대소문자만 달라도 같은 목록이다.
         every { mockEngine.getUserTickers() } returns listOf("krw-btc", "KRW-ETH")
-        every { mockEngine.setStrategy("combined") } returns true
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         val saved = slot<BotStateEntity>()
         every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
 
-        val result = manager.startBot(1L, listOf("KRW-ETH", "KRW-BTC"), "combined")
+        val result = manager.startBot(1L, listOf("KRW-ETH", "KRW-BTC"))
 
         assertEquals("already_running", result["status"])
         assertEquals("combined", result["strategy"])
         assertEquals("krw-btc,KRW-ETH", saved.captured.tickers)
         assertEquals("combined", saved.captured.strategy)
-        verify(exactly = 1) { mockEngine.setStrategy("combined") }
         coVerify(exactly = 0) { mockEngine.start(any(), any()) }
     }
 
@@ -604,17 +561,14 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `getStatus without an engine names the strategy a start would use`() {
-        // 정지하면 엔진·전략 캐시가 지워진다. 그때 상태가 다른 이름을 보이면 화면이 그 이름으로 선택을 채우고,
-        // 그대로 시작하면 전략이 조용히 바뀐다 — 상태는 새 엔진이 고를 전략(등록 첫 전략)을 보고해야 한다.
-        val strategies = registeredStrategies.reversed()
-        val bare = UserTradingManager(
-            userRepository, botStateRepository, tradeExecutionService, discordNotifier,
-            strategies, TradingProperties(autoStart = true), upbitWebClient,
-            userSecretsService, marketDataStore, tradingStateService,
-        )
+    fun `status reports the injected strategy with or without an engine`() {
+        // 전략은 주입된 하나뿐이다 — 정지로 엔진이 사라진 뒤 상태가 다른 이름을 보이면 화면과 실제 매매 전략이 어긋난다.
+        assertEquals("combined", manager.getStatus(1L)["strategy"])
 
-        assertEquals(strategies.first().name, bare.getStatus(1L)["strategy"])
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+
+        assertEquals("combined", manager.getStatus(1L)["strategy"])
     }
 
     @Test
@@ -635,12 +589,11 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-SOL")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         val saved = slot<BotStateEntity>()
         every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
 
-        val result = manager.startBot(1L, null, null)
+        val result = manager.startBot(1L, null)
 
         assertEquals("already_running", result["status"])
         assertEquals("KRW-SOL", saved.captured.tickers)
@@ -750,10 +703,9 @@ class UserTradingManagerTest {
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         every { botStateRepository.save(any()) } returns Mono.error(RuntimeException("db down"))
-        every { mockEngine.getActiveStrategyName() } returns "combined"
 
         val thrown = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.startBot(1L, listOf("KRW-BTC"), "combined") }
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
         }
 
         assertEquals(START_UNPERSISTED_MESSAGE, thrown.message)
@@ -768,9 +720,8 @@ class UserTradingManagerTest {
         unpersistedStops().add(1L)
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-        every { mockEngine.getActiveStrategyName() } returns "combined"
 
-        manager.startBot(1L, listOf("KRW-BTC"), "combined")
+        manager.startBot(1L, listOf("KRW-BTC"))
 
         verify(exactly = 0) { botStateRepository.save(any()) }
         assertFalse(1L in unpersistedStops())
@@ -778,70 +729,16 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `start with an unknown strategy is refused before creating an engine`() = runTest {
-        val result = manager.startBot(1L, listOf("KRW-BTC"), "x not found")
-
-        assertEquals(UserTradingManager.UNKNOWN_STRATEGY_CODE, result["code"])
-        assertEquals("Unknown strategy: x not found", result["error"])
-        verify(exactly = 0) { manager.createEngine(any()) }
-    }
-
-    @Test
-    fun `start on a running engine with an unknown strategy is refused without touching the engine`() = runTest {
-        engines()[1L] = mockEngine
-        every { mockEngine.isRunning() } returns true
-        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-
-        val result = manager.startBot(1L, null, "nope")
-
-        assertEquals(UserTradingManager.UNKNOWN_STRATEGY_CODE, result["code"])
-        verify(exactly = 0) { mockEngine.setStrategy(any()) }
-    }
-
-    @Test
-    fun `strategy change on a running engine that cannot persist keeps the old strategy`() = runTest {
-        engines()[1L] = mockEngine
-        every { mockEngine.isRunning() } returns true
-        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-        every { botStateRepository.save(any()) } returns Mono.error(RuntimeException("db down"))
-
-        val thrown = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.startBot(1L, null, "golden_cross") }
-        }
-
-        assertEquals(STRATEGY_UNPERSISTED_MESSAGE, thrown.message)
-        verify(exactly = 0) { mockEngine.setStrategy(any()) }
-    }
-
-    @Test
     fun `start on a running engine writes nothing when the row already matches`() = runTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
 
-        val result = manager.startBot(1L, null, null)
+        val result = manager.startBot(1L, null)
 
         assertEquals("already_running", result["status"])
         verify(exactly = 0) { botStateRepository.save(any()) }
-    }
-
-    @Test
-    fun `strategy change that cannot persist changes neither the cache nor the engine`() = runTest {
-        engines()[1L] = mockEngine
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-        every { botStateRepository.save(any()) } returns Mono.error(RuntimeException("db down"))
-
-        val thrown = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.setStrategy(1L, "golden_cross") }
-        }
-
-        assertEquals(STRATEGY_UNPERSISTED_MESSAGE, thrown.message)
-        verify(exactly = 0) { mockEngine.setStrategy(any()) }
-        assertNull(userStrategies()[1L])
     }
 
     @Test
@@ -859,7 +756,6 @@ class UserTradingManagerTest {
     @Test
     fun `stop with a running engine lowers the running flag and forgets the engine`() = runTest {
         engines()[1L] = mockEngine
-        userStrategies()[1L] = "combined"
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
         val saved = slot<BotStateEntity>()
         every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
@@ -869,7 +765,6 @@ class UserTradingManagerTest {
         assertEquals("stopped", result["status"])
         assertFalse(saved.captured.running)
         assertNull(engines()[1L])
-        assertNull(userStrategies()[1L])
         assertFalse(1L in unpersistedStops())
     }
 
@@ -910,13 +805,12 @@ class UserTradingManagerTest {
         unpersistedStops().add(1L)
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         coEvery { tradingStateService.loadStates(1L) } coAnswers {
             delay(1_000)
             emptyMap()
         }
 
-        val start = launch { manager.startBot(1L, listOf("KRW-BTC"), "combined") }
+        val start = launch { manager.startBot(1L, listOf("KRW-BTC")) }
         advanceTimeBy(500) // 시작이 lock 을 쥔 채 상태 로드를 기다리는 중
         val finalSave = launch { manager.saveUnpersistedStops() }
         start.join()
@@ -931,48 +825,15 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns
             Mono.just(runningState(1L).copy(running = false))
         every { botStateRepository.save(any()) } returns Mono.error(RuntimeException("db down"))
 
         val thrown = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.startBot(1L, null, null) }
+            runBlocking { manager.startBot(1L, null) }
         }
 
         assertEquals(RUNNING_UNPERSISTED_MESSAGE, thrown.message)
-    }
-
-    @Test
-    fun `strategy change to the stored strategy writes nothing`() = runTest {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-
-        assertTrue(manager.setStrategy(1L, "combined"))
-
-        verify(exactly = 0) { botStateRepository.save(any()) }
-    }
-
-    @Test
-    fun `strategy change whose state lookup fails is a persistence failure`() = runTest {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.error(RuntimeException("db down"))
-
-        assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.setStrategy(1L, "golden_cross") }
-        }
-    }
-
-    @Test
-    fun `a failed restore does not cache a strategy name that is no longer registered`() = runTest {
-        // 캐시된 죽은 이름은 상태 API 로 나가 화면이 그 이름으로 시작을 요청한다 — 이제는 400 이다.
-        val stale = BotStateEntity(userId = 7L, running = true, strategy = "removed_strategy", tickers = "KRW-BTC")
-        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(stale)
-        every { botStateRepository.findByUserIdAndExchange(7L, "UPBIT") } returns Mono.just(stale)
-        every { userRepository.findById(7L) } returns Mono.just(user(7L))
-        coEvery { tradingStateService.loadStates(7L) } throws RuntimeException("db down")
-
-        manager.restoreAllRunningBots()
-
-        assertNull(userStrategies()[7L])
     }
 
     // --- 멈춘 엔진의 미기록 매도 pending (#244) ---
@@ -998,7 +859,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
     }
 
@@ -1194,7 +1054,7 @@ class UserTradingManagerTest {
         every { botStateRepository.save(any()) } answers { Mono.just(firstArg()) }
         val newEngine = newEngineFromSavedKeys(saved)
 
-        val errors = errorsDuring { manager.startBot(1L, listOf("KRW-BTC"), null) }
+        val errors = errorsDuring { manager.startBot(1L, listOf("KRW-BTC")) }
 
         coVerify(ordering = Ordering.ORDERED) {
             mockEngine.flushUnpersisted()
@@ -1262,7 +1122,7 @@ class UserTradingManagerTest {
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
 
         val errors = errorsDuring {
-            val thrown = runCatching { manager.startBot(1L, listOf("KRW-BTC"), null) }.exceptionOrNull()
+            val thrown = runCatching { manager.startBot(1L, listOf("KRW-BTC")) }.exceptionOrNull()
             assertEquals("db down", thrown?.message)
         }
 
@@ -1296,7 +1156,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
 
@@ -1336,7 +1195,6 @@ class UserTradingManagerTest {
         coEvery { mockEngine.stop() } answers { running.set(false) }
         every { mockEngine.resume() } throws RuntimeException("engine start failed")
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         val saved = user(1L)
         every { userRepository.findById(1L) } returns Mono.just(saved)
         coEvery { tradingStateService.loadStates(1L) } throws CancellationException("cancelled") andThen emptyMap()
@@ -1350,7 +1208,7 @@ class UserTradingManagerTest {
         stoppableRow()
         val newEngine = newEngineFromSavedKeys(saved)
 
-        manager.startBot(1L, listOf("KRW-BTC"), null)
+        manager.startBot(1L, listOf("KRW-BTC"))
 
         verify(exactly = 1) { newEngine.start(listOf("KRW-BTC"), any()) }
         verify(exactly = 0) { mockEngine.start(any(), any()) }
@@ -1362,7 +1220,6 @@ class UserTradingManagerTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
-        every { mockEngine.getActiveStrategyName() } returns "combined"
         val saved = user(1L)
         every { userRepository.findById(1L) } returns Mono.just(saved)
         coEvery { mockEngine.flushUnpersisted() } throws CancellationException("cancelled") andThen Unit
@@ -1375,7 +1232,7 @@ class UserTradingManagerTest {
         stoppableRow()
         val newEngine = newEngineFromSavedKeys(saved)
 
-        manager.startBot(1L, listOf("KRW-BTC"), null)
+        manager.startBot(1L, listOf("KRW-BTC"))
 
         verify(exactly = 1) { newEngine.start(listOf("KRW-BTC"), any()) }
         verify(exactly = 0) { mockEngine.start(any(), any()) }
@@ -1451,7 +1308,7 @@ class UserTradingManagerTest {
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         every { botStateRepository.save(any()) } answers { Mono.just(firstArg()) }
         coEvery { tradingStateService.loadStates(1L) } coAnswers { delay(1_000); emptyMap() }
-        val start = launch { manager.startBot(1L, listOf("KRW-BTC"), null) }
+        val start = launch { manager.startBot(1L, listOf("KRW-BTC")) }
         runCurrent()
         var thrown: Throwable? = null
 

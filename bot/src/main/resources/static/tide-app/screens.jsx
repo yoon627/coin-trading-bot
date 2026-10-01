@@ -126,12 +126,10 @@ function Dashboard({ user, setActive }) {
 // ── BOT / STRATEGY ────────────────────────────────────────
 function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
-  const strategies = useAPI(() => TideAPI.strategies().catch(() => []));
   const performance = useAPI(() => TideAPI.performance().catch(() => null));
   // 입력칸은 서버 기본 목록으로 채운다 — 고정 기본값을 두면 그대로 눌렀을 때 목록이 그 값 하나로 줄어 저장된다(#226).
   const [tickers, setTickers] = React.useState('');
   const [touched, setTouched] = React.useState(false);
-  const [selected, setSelected] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
   // 마지막으로 채운 기본값 — 폴링이 한 번 실패해 status 가 비어도 "고치지 않았다"는 판정이 흔들리지 않게 따로 둔다.
@@ -139,11 +137,6 @@ function BotPage({ user, setActive }) {
   const defaultTickers = (status.data?.default_tickers || []).join(', ');
   const tickerList = (text) => [...new Set(text.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))];
   const sameTickers = (a, b) => [...a].sort().join(',') === [...b].sort().join(',');
-
-  React.useEffect(() => {
-    if (!selected && status.data?.strategy) setSelected(status.data.strategy);
-    else if (!selected && strategies.data?.[0]) setSelected(strategies.data[0].name);
-  }, [status.data, strategies.data]);
 
   // 사용자가 한 번이라도 고쳤으면 폴링이 입력을 되돌리지 않는다(빈칸으로 비운 것도 의도다).
   React.useEffect(() => {
@@ -159,7 +152,7 @@ function BotPage({ user, setActive }) {
       // 기본 목록 그대로(순서·대소문자 무관)거나 비었으면 tickers 를 보내지 않는다 — 서버가 같은 설정 목록을 쓰고,
       // 이미 도는 봇에는 409 대신 already_running 이 된다.
       const list = tickerList(tickers);
-      const req = { strategy: selected };
+      const req = {};
       if (list.length && !sameTickers(list, tickerList(prefilled.current))) req.tickers = list;
       const res = await TideAPI.botStart(req);
       setToast(res?.status === 'already_running'
@@ -186,7 +179,7 @@ function BotPage({ user, setActive }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>봇 설정</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 4 }}>전략과 거래쌍을 선택하고 시작하세요.</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 4 }}>거래쌍을 정하고 시작하세요.</div>
             </div>
             <Badge tone={status.data?.running ? 'live' : 'neutral'} dot>
               {status.data?.running ? '실행 중' : '정지'}
@@ -197,20 +190,6 @@ function BotPage({ user, setActive }) {
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 8 }}>거래쌍 (쉼표로 구분)</div>
             <input className="tide-input" value={tickers} onChange={e => { setTouched(true); setTickers(e.target.value); }}
                    placeholder="비워 두면 서버 기본 목록 (예: KRW-BTC, KRW-ETH)"/>
-          </div>
-
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 10 }}>전략 선택</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-              {(strategies.data || []).map(s => (
-                <div key={s.name} onClick={() => setSelected(s.name)} style={{
-                  padding: 14, border: '1.5px solid', borderColor: selected === s.name ? 'var(--tide-primary)' : 'var(--ink-200)',
-                  borderRadius: 12, cursor: 'pointer', background: selected === s.name ? 'var(--tide-primary-soft)' : '#fff',
-                }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: selected === s.name ? 'var(--tide-primary-ink)' : 'var(--ink-900)' }}>{s.name}</div>
-                </div>
-              ))}
-            </div>
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 24 }}>

@@ -57,14 +57,6 @@ class RequestValidators {
         return normalized
     }
 
-    fun normalizeStrategy(strategy: String): String {
-        val normalized = strategy.trim()
-        if (normalized.isBlank() || normalized.length > 100) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid strategy name")
-        }
-        return normalized
-    }
-
     fun normalizeDiscordWebhookUrl(url: String?): String? {
         val normalized = url?.trim().orEmpty()
         if (normalized.isBlank()) {
