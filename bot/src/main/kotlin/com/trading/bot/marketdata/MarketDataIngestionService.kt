@@ -2,7 +2,7 @@ package com.trading.bot.marketdata
 
 import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
-import com.trading.bot.stream.MarketDataPersistenceService
+import com.trading.bot.stream.CandleAggregator
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
@@ -35,14 +35,14 @@ import java.time.temporal.ChronoUnit
 
 /**
  * 구 collector 모듈(Kafka 발행)을 흡수한 in-process 시세 수집기.
- * UpbitMarketFeed 에서 ticker(WS)/candle(REST 폴링)을 받아 MarketDataStore(메모리) 와
- * MarketDataPersistenceService(DB+집계) 로 직접 fan-out 한다. 단일 JVM 이라 메시지 버스 불필요.
+ * UpbitMarketFeed 에서 ticker(WS)/candle(REST 폴링)을 받아 MarketDataStore(메모리) 에 넣고, 분봉은
+ * CandleAggregator 로도 보내 상위 봉(엔진이 읽는 D1 포함)을 store 에 접는다. 단일 JVM 이라 메시지 버스 불필요.
  */
 @Component
 class MarketDataIngestionService(
     private val upbitMarketFeed: UpbitMarketFeed,
     private val marketDataStore: MarketDataStore,
-    private val persistenceService: MarketDataPersistenceService,
+    private val candleAggregator: CandleAggregator,
     private val watchlistProperties: WatchlistProperties,
     private val watchdogProperties: MarketDataWatchdogProperties,
 ) {
@@ -204,8 +204,7 @@ class MarketDataIngestionService(
         }
     }
 
-    // fan-out 격리: store / persistence 를 각각 독립 try/catch 로 감싼다.
-    // 한 sink 의 실패가 다른 sink 나 수집 코루틴(Flow collect)을 죽이지 않게 — 구 Kafka 2-consumer-group 격리와 등가.
+    // store 실패가 수집 코루틴(Flow collect)을 죽이지 않게 감싼다.
     internal fun ingestTicker(ticker: NormalizedTicker) {
         lastTickerAt = System.currentTimeMillis()
         try {
@@ -213,13 +212,9 @@ class MarketDataIngestionService(
         } catch (e: Exception) {
             log.warn("store.updateTicker failed for {}: {}", ticker.market, e.message)
         }
-        try {
-            persistenceService.persistTicker(ticker)
-        } catch (e: Exception) {
-            log.warn("persistTicker failed for {}: {}", ticker.market, e.message)
-        }
     }
 
+    // fan-out 격리: store 와 집계기를 각각 독립 try/catch 로 감싼다 — 한쪽의 실패가 다른 쪽이나 수집 코루틴을 죽이지 않게.
     internal fun ingestCandle(candle: NormalizedCandle) {
         try {
             marketDataStore.addCandle(candle)
@@ -227,14 +222,14 @@ class MarketDataIngestionService(
             log.warn("store.addCandle failed for {}: {}", candle.market, e.message)
         }
         try {
-            persistenceService.persistCandle(candle)
+            candleAggregator.onMinuteCandle(candle)
         } catch (e: Exception) {
-            log.warn("persistCandle failed for {}: {}", candle.market, e.message)
+            log.warn("candle aggregation failed for {}: {}", candle.market, e.message)
         }
     }
 
     private fun primeTodayAggregate(market: String, today: NormalizedCandle, fetchedAt: Instant): Boolean = try {
-        persistenceService.primeAggregate(today, fetchedAt)
+        candleAggregator.prime(today, fetchedAt)
         true
     } catch (e: IllegalArgumentException) {
         // seed 는 이미 store 에 들어갔다 — 실패는 등록만이라 "seed 실패" 와 구분해 남긴다(D1 경계가 UTC 자정이 아니게 바뀐 경우).
@@ -245,7 +240,7 @@ class MarketDataIngestionService(
     // 부팅 직후 store D1 버퍼를 과거 일봉으로 1회 채운다. 미실행 시 매수/청산(TradingEngine.loadStoreDailyCandles)이
     // store 부족으로 warm-up(D1 은 분봉 집계라 하루 1개씩만 누적 → 최대 ~21일) 동안 매 tick REST 폴백을 탄다.
     // collectCandlesPeriodically 와 같은 코루틴에서 호출되므로 candle writer 단일성 유지(MarketDataStore trim race 방지).
-    // store.addCandle 직접 — ingestCandle 의 persistCandle→aggregator.onMinuteCandle 은 분봉 전용이라 D1 을 오집계함.
+    // store.addCandle 직접 — ingestCandle 의 집계(onMinuteCandle)는 분봉 전용이라 D1 을 넣으면 오집계한다.
     internal suspend fun seedDailyCandles(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
             // seed 는 부팅 시 마켓 수만큼 연속 호출돼 429 를 유발하던 두 경로 중 하나다
@@ -253,7 +248,7 @@ class MarketDataIngestionService(
             if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
             // 첫 라운드 꼬리(M1_FETCH_COUNT)가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 seed 를 덮는다 —
             // seed 성공·오늘 행 유무와 무관하게 지금 이전 period 는 집계하지 않는다.
-            persistenceService.startAggregationFrom(market, Instant.now())
+            candleAggregator.startFrom(Exchange.UPBIT, market, Instant.now())
             try {
                 val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
                 val fetchedAt = Instant.now()

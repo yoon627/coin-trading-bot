@@ -9,7 +9,7 @@
 - [[architecture-overview]] — 단일 Spring Boot 프로세스 안의 봇·API·시세수집, 모듈 2개
 - [[trading-engine-loop]] — `processTicker` 게이트 순서, 청산 우선순위, 기본 리스크 파라미터, 응답을 못 받은 주문의 identifier 확정
 - [[exit-gates]] — 손절·트레일링·익절·보유상한의 판정식과 비자명한 지점
-- [[swing-strategies]] — `TradingStrategy` 인터페이스와 유일한 운영 전략 `combined` 의 3조건, 기본 전략 규칙(첫 등록 bean)
+- [[swing-strategies]] — `TradingStrategy` 인터페이스와 유일한 운영 전략 `combined` 의 3조건, 전략 주입(bean 하나를 생성자로)
 - [[marketdata-pipeline]] — WS ticker + REST 캔들 수집(M1 `count=5` 오름차순 → 집계기 분 단위 멱등 base/provisional), `MarketDataStore`, 부팅 seed prime, half-open 워치독
 - [[persistence-schema]] — Flyway V1~V28, Upbit 주문·포지션 상태가 무엇을 살리는가, 매도 전략 귀속, KIS 스키마 제거(V27), 주문 identifier(V28)
 - [[trade-record-volume-semantics]] — `trade_records.volume` 이 엔진은 총보유량 스냅샷, 수동은 증분인 이유와 보유량 산출 규칙, 추정치가 섞인 그룹의 잔량 0 허용 오차

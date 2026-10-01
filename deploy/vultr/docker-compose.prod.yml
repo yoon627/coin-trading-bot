@@ -25,7 +25,7 @@ services:
     pull_policy: always
     ports:
       - "80:80"                # ACME HTTP-01 challenge + HTTP→HTTPS 리다이렉트 (전세계 개방 필요)
-      - "443:443"              # HTTPS 대시보드 / REST / SSE
+      - "443:443"              # HTTPS 대시보드 / REST
     environment:
       # 예: 141-164-1-2.sslip.io. deploy.sh 가 인스턴스 공인 IP 로 자동 생성해 .env 에 주입.
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required (e.g. 141-164-1-2.sslip.io)}

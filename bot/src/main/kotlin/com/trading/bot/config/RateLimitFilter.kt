@@ -199,7 +199,7 @@ class RateLimitFilter(
         path.startsWith("/actuator") ||
             path.startsWith("/css") || path.startsWith("/js") ||
             path.startsWith("/tide-app") || path == "/" ||
-            path.endsWith(".html") || path.startsWith("/api/prices")
+            path.endsWith(".html")
 
     private fun isMemoryRateLimited(key: String, minute: Long, limit: Int): Boolean {
         // 분(window)이 바뀌면 카운터 초기화 → 맵 크기를 한 window 분량으로 제한.

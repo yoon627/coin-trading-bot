@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * indicator/strategy Indicators 통합(M12) 회귀 보호.
- * 같은 OHLC 를 Candle(매매 경로)과 NormalizedCandle(차트 경로)로 만들어 모든 지표가 동일값을 내는지,
+ * 같은 OHLC 를 Candle(엔진의 REST 폴백)과 NormalizedCandle(엔진의 store D1)로 만들어 모든 지표가 동일값을 내는지,
  * 그리고 NormalizedCandle 필드 매핑이 swap 없이 정확한지 검증한다.
  */
 class IndicatorsParityTest {
@@ -45,13 +45,7 @@ class IndicatorsParityTest {
             Indicators.calculateTargetPrice(candles, 0.5),
             Indicators.calculateTargetPrice(normalizedCandles, 0.5),
         )
-        assertEquals(Indicators.calculateEma(candles, 12), Indicators.calculateEma(normalizedCandles, 12))
         assertEquals(Indicators.isMaUptrend(candles), Indicators.isMaUptrend(normalizedCandles))
-        assertEquals(
-            Indicators.calculateBollingerBands(candles),
-            Indicators.calculateBollingerBands(normalizedCandles),
-        )
-        assertEquals(Indicators.calculateMacd(candles), Indicators.calculateMacd(normalizedCandles))
     }
 
     @Test

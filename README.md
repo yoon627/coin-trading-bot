@@ -8,10 +8,10 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 ## 주요 기능
 
 - Upbit WebSocket ticker와 REST candle을 이용한 in-process 시세 수집
-- 사용자별 Upbit API 키 암호화 저장과 종목·전략 설정
+- 사용자별 Upbit API 키 암호화 저장과 거래 종목 설정
 - 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
-- 실시간 가격 SSE, 포트폴리오, 거래 이력, 차트와 기술 지표
+- 포트폴리오, 거래 이력·라운드트립, 전략 성과
 - JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting
 - Discord 거래 알림 및 선택적 서버 오류 알림
 - React 18 기반 SPA(별도 프런트엔드 빌드 단계 없음)
@@ -111,7 +111,7 @@ coin-trading-bot/
 ├── bot/                          # Spring Boot 애플리케이션
 │   └── src/main/
 │       ├── kotlin/com/trading/bot/
-│       │   ├── api/              # REST/SSE 컨트롤러와 요청 검증
+│       │   ├── api/              # REST 컨트롤러와 요청 검증
 │       │   ├── auth/             # JWT 인증과 Security 설정
 │       │   ├── cache/            # Redis 가격 캐시
 │       │   ├── client/           # Upbit REST 클라이언트
@@ -120,7 +120,7 @@ coin-trading-bot/
 │       │   ├── notification/     # Discord 거래·오류 알림
 │       │   ├── persistence/      # R2DBC 엔티티와 repository
 │       │   ├── security/         # 사용자 API 키 암호화
-│       │   └── stream/           # candle 집계, 영속화, 보존 정책
+│       │   └── stream/           # candle 집계(분봉 → 상위 봉)
 │       └── resources/
 │           ├── db/migration/     # Flyway V1~V28
 │           └── static/           # login.html, app.html, tide-app/
@@ -193,9 +193,9 @@ coin-trading-bot/
 
 목록(`TRADING_TICKERS`, 또는 UI·API 로 준 `bot_state.tickers`)에서 뺀 티커라도 봇이 산 포지션과 미해소 주문은 청산될 때까지 계속 관리합니다 — 손절·트레일링·보유상한은 적용되고 새로 사지는 않습니다. 청산된 뒤에는 다음 09:00 에 활성 목록에서 빠집니다. 관심목록(`WATCHLIST_TICKERS`) 밖 티커는 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
 
-이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려주고, 요청에 전략이 있으면 그 전략만 적용합니다. 등록되지 않은 전략 이름은 **400** 으로 거절합니다.
+이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려줍니다. 전략은 `combined` 하나라 고를 수 없고, 시작 요청에 `strategy` 를 보내도 무시합니다.
 
-시작·정지·전략 변경·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·전략 변경·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
+시작·정지·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
 
 `GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 티커 — 사용자 목록), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·청산 대기를 나눠 보여 줍니다.
 
@@ -216,14 +216,12 @@ coin-trading-bot/
 |---|---|---|---|
 | 인증 | POST | `/api/auth/register`(계정이 하나도 없을 때만, 있으면 403), `/login`, `/logout` | Public |
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
-| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/strategy`, `/halt/clear` | 필요 |
-| 봇 설정 | GET/POST/DELETE | `/api/bot/configs`, `/config`, `/config/{id}` | 필요 |
+| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/halt/clear` | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
-| 차트 | GET | `/api/chart/candles`, `/indicators`, `/tickers`, `/compare` | 필요 |
-| 전략 | GET | `/api/strategies`, `/performance` | 필요 |
-| 관심 목록 | GET | `/api/watchlist` | 필요 |
-| 실시간 가격 | GET | `/api/prices/stream`, `/latest`, `/status` | Public |
+| 전략 성과 | GET | `/api/strategies/performance` | 필요 |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
+
+차트(`/api/chart/*`)·관심 목록(`/api/watchlist`)·실시간 가격(`/api/prices/*`) API 는 2026-10-01 에 지웠습니다 — 화면이 쓰지 않았고, 시세는 DB 에 저장하지 않습니다. 같은 날 봇 설정(`/api/bot/configs`)·전략 변경(`/api/bot/strategy`)·전략 목록(`GET /api/strategies`)도 지웠습니다 — 운영 전략은 `combined` 하나입니다.
 
 `/api/strategies/performance` 의 `total_amount` 는 실체결 대금(`order_amount`)이 기록된 행의 합이고, 없는 행 수는 `amount_unknown_trades` 로 따로 옵니다(2026-09-14 정의 변경). 그 이전 행은 전부 미상이라 배포 직후 합계가 0 근처에서 다시 쌓였습니다 — 축소가 아니라 정의 변경입니다(엔진 매수 행의 `total_amount` 는 포지션 원가 스냅샷이라 더하면 부풀려졌습니다).
 
@@ -248,7 +246,7 @@ coin-trading-bot/
 | `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
-| `WATCHLIST_TICKERS` | 주요 KRW 종목 | 관심 목록 종목 |
+| `WATCHLIST_TICKERS` | 주요 KRW 종목 | 시세 수집(WS ticker·분봉 폴링) 대상 종목 — 목록 밖 티커는 REST 시세 폴백 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |

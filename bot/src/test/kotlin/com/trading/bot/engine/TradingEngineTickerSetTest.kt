@@ -50,7 +50,7 @@ class TradingEngineTickerSetTest {
         upbitClient = upbitClient,
         positionManager = positionManager,
         dailyResetManager = dailyResetManager,
-        strategies = listOf(strategy),
+        strategy = strategy,
         tradingProperties = TradingProperties(intervalSeconds = 1),
         userId = 1L,
         username = "testuser",

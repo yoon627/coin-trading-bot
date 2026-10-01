@@ -132,19 +132,6 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeMarkets(markets) }
     }
 
-    // --- normalizeStrategy ---
-
-    @Test
-    fun `normalizeStrategy accepts valid names`() {
-        assertEquals("volatility_breakout", validators.normalizeStrategy("volatility_breakout"))
-    }
-
-    @Test
-    fun `normalizeStrategy rejects blank`() {
-        assertThrows<ResponseStatusException> { validators.normalizeStrategy("") }
-        assertThrows<ResponseStatusException> { validators.normalizeStrategy("   ") }
-    }
-
     // --- normalizeDiscordWebhookUrl ---
 
     @Test
