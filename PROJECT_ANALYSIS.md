@@ -36,8 +36,7 @@
   MarketDataStore (in-memory) ──→ TradingEngine → 주문 실행
   CandleAggregator (분봉 → 상위 봉) ──→ MarketDataStore   — 시세는 DB 에 저장하지 않는다
 
-[분석 — REST]
-  PostgreSQL ──→ Chart API (멀티 타임프레임 캔들)
+[보조]
   Redis      ──→ 선택적 분산 rate limiting
 ```
 
@@ -50,12 +49,12 @@ coin-trading-bot/
 ├── common/                          # 공유 도메인 + 인디케이터 + 스윙 전략
 │   └── src/main/kotlin/com/trading/common/
 │       ├── domain/                  # NormalizedCandle, NormalizedTicker, Exchange, MarketPair
-│       └── strategy/                # Indicators (RSI, MACD, BB, MA, EMA) + TradingStrategy 인터페이스 + CombinedStrategy
+│       └── strategy/                # Indicators (목표가, RSI, MA) + TradingStrategy 인터페이스 + CombinedStrategy
 │                                    #   (@Bean 등록은 :bot/config/StrategyConfig)
 │
 ├── bot/                             # 메인 앱 (시세 수집 + 매매 엔진 + REST + SPA)
 │   └── src/main/kotlin/com/trading/bot/
-│       ├── api/                     # REST 컨트롤러 8개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
+│       ├── api/                     # REST 컨트롤러 5개 + UpbitErrorHandlerAdvice (AuthController 는 auth/)
 │       ├── auth/                    # JWT 인증 (AuthController, JwtProvider, SecurityConfig)
 │       ├── client/                  # UpbitClient (REST 주문/조회)
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
@@ -130,12 +129,6 @@ MA5 > MA20 · RSI(14) 30~70 을 모두 만족하면 매수한다. 청산은 전�
 ### 핵심 테이블
 
 ```
-market_candles
-├── exchange, market, interval_minutes
-├── open_price, high_price, low_price, close_price, volume, quote_volume
-├── open_time, close_time
-└── UNIQUE(exchange, market, interval_minutes, open_time)
-
 trade_executions
 ├── user_id (FK → users)
 ├── exchange, market, side, order_type
@@ -152,15 +145,13 @@ bot_configs
 
 ## 7. 멀티 타임프레임 분석
 
-`marketdata`가 수집한 캔들을 `CandleAggregator`가 상위 타임프레임으로 집계:
+`marketdata`가 수집한 캔들을 `CandleAggregator`가 상위 타임프레임으로 집계해 `MarketDataStore` 에 올린다:
 
 ```
 캔들 → 5분/15분/1시간/4시간/일/주/월봉 (CandleAggregator)
 ```
 
-**Chart API** (`/api/chart/`):
-- `GET /api/chart/candles?exchange=UPBIT&market=BTC/KRW&interval=1h&count=100`
-- `GET /api/chart/indicators?...&indicators=rsi,macd,bb`
+엔진이 읽는 것은 일봉(D1)뿐이다. 나머지 타임프레임을 읽던 차트 API 는 2026-10-01 지웠다.
 
 ---
 
@@ -196,10 +187,7 @@ bot_configs
 | 봇 설정 | BotConfigController | `/api/bot/{configs,config,config/{id}}` |
 | 사용자 | TradingController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
-| 차트 | ChartController | `/api/chart/{candles,indicators,tickers,compare}` |
 | 전략 | StrategyController | `/api/strategies/{,performance}` |
-| 가격(SSE) | PriceStreamController | `/api/prices/{stream,latest,status}` |
-| 관심종목 | WatchlistController | `/api/watchlist` |
 
 ### 에러 응답 정책
 - `SafeErrorAttributes`가 `ResponseStatusException.reason`만 노출 (FQCN/스택 leak 차단).
