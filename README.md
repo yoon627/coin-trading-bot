@@ -81,7 +81,7 @@ Browser ──HTTPS──> Caddy ──HTTP──> bot :8080 ──R2DBC──> 
                                       └──webhook───> Discord
 ```
 
-`bot`의 `marketdata` 패키지가 ticker와 candle을 직접 수집합니다. 현재 런타임에는 별도 collector, Kafka, research/ML 서비스가 없습니다. `monitoring/`에 남아 있는 설정도 현재 production Compose 스택에는 포함되지 않습니다.
+`bot`의 `marketdata` 패키지가 ticker와 candle을 직접 수집합니다. 현재 런타임에는 별도 collector, Kafka, research/ML 서비스나 모니터링 스택이 없습니다.
 
 운영 환경에서는 단일 EC2 인스턴스의 Docker Compose가 `caddy + app + postgres`를 실행합니다. Caddy만 80/443 포트를 공개하고 `app:8080`, PostgreSQL은 Compose 내부 네트워크에서만 접근할 수 있습니다.
 
@@ -122,7 +122,6 @@ coin-trading-bot/
 │           ├── db/migration/     # Flyway V1~V28
 │           └── static/           # login.html, app.html, tide-app/
 ├── deploy/vultr/                 # Vultr 서울 생성·배포 스크립트와 prod Compose (2GB 예산)
-├── perf/                         # k6 시나리오(현재 API와 동기화 여부 확인 필요)
 └── docker-compose.yml            # 로컬/단일 호스트용 app, postgres
 ```
 
@@ -320,8 +319,7 @@ SSH는 `SSH_ALLOW_CIDR`로 제한하고 Actions 전용 규칙만 동적 runner I
 ## 참고 사항
 
 - 현재 지원 거래소는 Upbit뿐입니다.
-- `collector`, `research`, Kafka, ML/스캘핑/Claude 분석은 현재 애플리케이션에 포함되지 않습니다.
-- `perf/load-test.js`에는 제거된 Prometheus/ML 엔드포인트 검사가 남아 있으므로, 성능 테스트 전에 현재 API에 맞게 시나리오를 갱신해야 합니다.
+- `collector`, `research`, Kafka, ML/스캘핑/Claude 분석, 모니터링 스택(Prometheus·Grafana·Loki), k6 부하 테스트는 현재 저장소에 포함되지 않습니다.
 - 설계 배경과 경량화 이력은 [`PROJECT_ANALYSIS.md`](PROJECT_ANALYSIS.md)를 참고하세요.
 - 누적 지식베이스(아키텍처 개념·결정 배경·겪은 함정)는 [`wiki/index.md`](wiki/index.md)에 있습니다. 운영 규약은 [`wiki/WIKI.md`](wiki/WIKI.md). 페이지를 고쳤으면 **세 가지를 모두** 돌립니다 — 하나만 돌리면 나머지 위반을 놓칩니다:
   ```bash
