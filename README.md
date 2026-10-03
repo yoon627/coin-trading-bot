@@ -12,7 +12,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 - 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
 - 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
 - 포트폴리오, 거래 이력·라운드트립, 전략 성과
-- JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting
+- JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting(앱 메모리 카운터 — 인증 경로 30/분, 로그인한 일반 API 60/분)
 - Discord 거래 알림 및 선택적 서버 오류 알림
 - React 18 기반 SPA(별도 프런트엔드 빌드 단계 없음)
 
@@ -25,7 +25,7 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 
 ### 1. PostgreSQL 실행
 
-기본 개발 프로필은 PostgreSQL을 사용하며 Redis는 비활성화되어 있습니다. 루트 Compose가 PostgreSQL을 호스트의 `5432` 포트에 공개하므로 다음과 같이 실행합니다.
+기본 개발 프로필은 PostgreSQL을 사용합니다. 루트 Compose가 PostgreSQL을 호스트의 `5432` 포트에 공개하므로 다음과 같이 실행합니다.
 
 ```bash
 docker compose up -d postgres
@@ -77,14 +77,13 @@ CI는 `services: postgres`로 DB를 제공하고 `DB_TESTS_REQUIRED=true`를 켜
 ```text
 Browser ──HTTPS──> Caddy ──HTTP──> bot :8080 ──R2DBC──> PostgreSQL
                                       │
-                                      ├──reactive──> Redis (prod cache/rate limit)
                                       ├──WS/REST───> Upbit
                                       └──webhook───> Discord
 ```
 
 `bot`의 `marketdata` 패키지가 ticker와 candle을 직접 수집합니다. 현재 런타임에는 별도 collector, Kafka, research/ML 서비스가 없습니다. `monitoring/`에 남아 있는 설정도 현재 production Compose 스택에는 포함되지 않습니다.
 
-운영 환경에서는 단일 EC2 인스턴스의 Docker Compose가 `caddy + app + postgres + redis`를 실행합니다. Caddy만 80/443 포트를 공개하고 `app:8080`, PostgreSQL, Redis는 Compose 내부 네트워크에서만 접근할 수 있습니다.
+운영 환경에서는 단일 EC2 인스턴스의 Docker Compose가 `caddy + app + postgres`를 실행합니다. Caddy만 80/443 포트를 공개하고 `app:8080`, PostgreSQL은 Compose 내부 네트워크에서만 접근할 수 있습니다.
 
 ## 기술 스택
 
@@ -93,7 +92,6 @@ Browser ──HTTPS──> Caddy ──HTTP──> bot :8080 ──R2DBC──> 
 | Language | Kotlin 2.1, JDK 21 |
 | Framework | Spring Boot 3.4, WebFlux, Kotlin Coroutines |
 | Persistence | Spring Data R2DBC, PostgreSQL 17, Flyway |
-| Cache | Reactive Redis 7(prod 프로필에서 활성) |
 | Auth/Security | Spring Security, JWT, BCrypt, AES-GCM |
 | Frontend | React 18, Babel Standalone, 정적 SPA |
 | Build/Deploy | Gradle Kotlin DSL, Docker Compose, GitHub Actions, GHCR |
@@ -113,7 +111,6 @@ coin-trading-bot/
 │       ├── kotlin/com/trading/bot/
 │       │   ├── api/              # REST 컨트롤러와 요청 검증
 │       │   ├── auth/             # JWT 인증과 Security 설정
-│       │   ├── cache/            # Redis 가격 캐시
 │       │   ├── client/           # Upbit REST 클라이언트
 │       │   ├── engine/           # 매매·포지션 엔진
 │       │   ├── marketdata/       # 시세 수집(WS ticker + REST candle)과 인메모리 저장소·스트림
@@ -128,7 +125,7 @@ coin-trading-bot/
 ├── deploy/oci/                   # Oracle Cloud(Always Free) 생성·배포 스크립트와 prod Compose
 ├── deploy/vultr/                 # Vultr 서울 생성·배포 스크립트와 prod Compose (2GB 예산)
 ├── perf/                         # k6 시나리오(현재 API와 동기화 여부 확인 필요)
-└── docker-compose.yml            # 로컬/단일 호스트용 app, postgres, redis
+└── docker-compose.yml            # 로컬/단일 호스트용 app, postgres
 ```
 
 ## 트레이딩 전략
@@ -250,7 +247,6 @@ coin-trading-bot/
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |
-| `REDIS_ENABLED` | dev `false`, prod Compose `true` | API rate limit 카운터용 Redis 템플릿(`RedisConfig`) 활성화. prod 는 Redis 자동 구성이 켜져 있어 이 값과 무관하게 Redis 로 판정한다 — 끄는 스위치로 쓸 수 없다. Redis 가 실패하거나 500ms 안에 답하지 않으면 같은 한도로 in-memory 카운터에 판정하고 30초 뒤 다시 시도한다(장애 한 번에 WARN 한 줄, 복귀에 INFO 한 줄). 기동 때는 웹 서버가 요청을 받기 전에 Redis 연결을 미리 맺는다(INFO `연결 준비 — Nms, 시도 k회`). 최대 15초 기다리고, 넘으면 기다리지 않고 기동한다(뒤늦은 결과는 같은 INFO 또는 강등 WARN 한 줄). 1초 간격으로 세 번 시도해도 실패하면 강등 상태로 시작한다. Redis 는 앱 health·compose 기동 조건에 들어가지 않는다 — 장애 신호는 그 WARN 과, 연결이 열려 있던 중 끊겼다면 Lettuce 의 재연결 실패 WARN(`Cannot reconnect to …`)뿐이다 |
 | `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
@@ -277,7 +273,8 @@ AWS 실측 $39.29/월 대비 **-75%**. Vultr 서울(`icn`) `vc2-1c-2gb`(1 vCPU x
 KST 전역 DB cutover가 공지돼 있어, 해당 시간대에는 새 인스턴스 생성·삭제·리사이즈를 하지 않는다.
 
 2GB로 낮춘 근거는 **운영 59일차 EC2 실측**이다 — app 420MiB / postgres 380MiB / redis 3.4MiB /
-caddy 14MiB = 합계 818MiB, load average 0.00. 컨테이너 제한도 이에 맞춰 조정했다(합계 1472m).
+caddy 14MiB = 합계 818MiB, load average 0.00. 컨테이너 제한도 이에 맞춰 조정했다(지금 합계 1440m — redis 를 뺐다. 예전에
+적었던 1472m 는 caddy 를 64m 로 센 값이고, compose 의 caddy 는 처음부터 96m 였다).
 
 ```bash
 install -m 600 deploy/vultr/.env.example deploy/vultr/.env
