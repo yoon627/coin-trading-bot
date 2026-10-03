@@ -4,10 +4,11 @@ category: decision
 created: 2026-07-28
 updated: 2026-10-03
 claim_state: historical
-verified: 2026-10-03 — "지금은 다른 것" 의 컨테이너 구성을 redis 제거 뒤 운영 compose 원문으로 고침 · 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 331426f. 전제(5컨테이너)는 현재 구조와 다름 — settings.gradle.kts 모듈 2개로 확인
+verified: 2026-10-03 — 4GB 하한을 당시 구성의 값으로 "지금은 다른 것" 에 옮기고, 지금 운영(Vultr 2GB·제한 합계 1440m)을 운영 compose 의 `mem_limit` 원문으로 확인 · 2026-10-03 — "지금은 다른 것" 의 컨테이너 구성을 redis 제거 뒤 운영 compose 원문으로 고침 · 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 331426f. 전제(5컨테이너)는 현재 구조와 다름 — settings.gradle.kts 모듈 2개로 확인
 sources:
   - docs/lessons.md
   - PROJECT_ANALYSIS.md
+  - deploy/vultr/docker-compose.prod.yml
 ---
 
 # lesson: 소형 EC2 OOM
@@ -23,11 +24,10 @@ t2.micro(1GB)·t3.small(2GB) 에 올렸더니 두 JVM(app/collector) 동시 부�
 ## 지금도 유효한 것
 
 - **메모리 부족은 "느려짐"이 아니라 "부팅 실패"로 나타난다.** `exit 137` 은 앱 버그가 아니라 커널이 죽인 흔적이다.
-- **최소 4GB** 가 이 스택의 하한이었다. 현재 운영은 t4g.medium(arm64, 4GB)이며 이 교훈이 반영된 결과다([[deployment-stack]]).
 - JVM 이 여럿이면 각각 heap 상한을 명시하지 않는 한 동시 부팅 peak 이 합산된다.
 
 ## 지금은 다른 것
 
-collector 가 없어져 JVM 이 하나이므로 당시의 "동시 부팅 peak" 자체가 사라졌다. 컨테이너도 app + postgres + caddy 구성이다. 따라서 **이 항목을 근거로 현재 인스턴스 크기를 논하지 말고**, 현재 구성 기준으로 다시 측정한다.
+당시 이 스택의 하한은 **4GB** 였고, 그 뒤 운영은 t4g.medium(arm64, 4GB)에서 돌았다. collector 가 없어져 JVM 이 하나이므로 당시의 "동시 부팅 peak" 자체가 사라졌다. 컨테이너도 app + postgres + caddy 구성이고, 운영은 2026-07-31 부터 그 구성의 실측을 근거로 Vultr 2GB(x86_64, 메모리 제한 합계 1440m)에서 돈다([[deployment-stack]]). 따라서 **이 항목을 근거로 현재 인스턴스 크기를 논하지 말고**, 현재 구성 기준으로 다시 측정한다.
 
 같은 작업에서 발견된 배포 스크립트 함정은 별도 항목으로 분리했다 — [[lesson-deploy-script-pitfalls]].
