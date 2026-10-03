@@ -9,7 +9,6 @@
 | **빌드** | Gradle (Kotlin DSL), 멀티모듈 (`common`, `bot`) |
 | **데이터베이스** | PostgreSQL 17 (R2DBC 비동기 드라이버) |
 | **마이그레이션** | Flyway (V1~V28) |
-| **캐시** | Redis 7 (reactive, prod 프로필에서 활성) |
 | **인증** | Spring Security + JWT (jjwt, httpOnly+Secure 쿠키) |
 | **비동기** | Kotlin Coroutines + Reactor |
 | **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
@@ -35,9 +34,6 @@
         ▼
   MarketDataStore (in-memory) ──→ TradingEngine → 주문 실행
   CandleAggregator (분봉 → 상위 봉) ──→ MarketDataStore   — 시세는 DB 에 저장하지 않는다
-
-[보조]
-  Redis      ──→ 선택적 분산 rate limiting
 ```
 
 ---
@@ -60,12 +56,12 @@ coin-trading-bot/
 │       ├── marketdata/              # in-process 시세 수집 (WS ticker + REST candle, 구 collector 흡수) — 상시 WS 연결 단일화
 │       ├── engine/                  # TradingEngine, TradeExecutionService, PositionManager(+UnknownOrderResolver·BalanceInterpretation)
 │       ├── stream/                  # CandleAggregator (분봉 → 상위 봉, store 갱신)
-│       ├── config/                  # AppConfig, StrategyConfig, RedisConfig, RateLimitFilter 등
+│       ├── config/                  # AppConfig, StrategyConfig, RateLimitFilter 등
 │       ├── persistence/             # R2DBC Entity/Repository
 │       ├── security/                # SecretsCrypto (AES-GCM), UserSecretsService
 │       └── notification/            # DiscordNotifier
 │
-├── docker-compose.yml               # 로컬 인프라 (app, postgres, redis)
+├── docker-compose.yml               # 로컬 인프라 (app, postgres)
 ├── deploy/aws/                      # AWS 배포 스크립트 + docker-compose.prod.yml
 ├── deploy/oci/                      # OCI(Always Free) 배포 스크립트 + docker-compose.prod.yml
 ├── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
@@ -187,6 +183,11 @@ trade_executions
 - `SafeErrorAttributes`가 `ResponseStatusException.reason`만 노출 (FQCN/스택 leak 차단).
 - `UpbitErrorHandlerAdvice`가 `UpbitApiException` → 사용자 친화적 4xx 변환. raw 401은 노출하지 않음 (FE 401 자동 logout 회피).
 
+### Rate limit
+- `RateLimitFilter`가 클라이언트 IP(Caddy 가 덮어쓴 `X-Forwarded-For` 첫 값, 없으면 접속 주소)별 1분 고정 창을 앱 메모리에서 센다. 인증 경로(`/api/auth/**`) 30/분, 일반 API 60/분, 넘으면 429 + `Retry-After: 60`. `/actuator`·정적 자원·SPA 진입 경로는 세지 않는다.
+- Spring Security(order -100)가 이 필터보다 먼저 돌아 비인증 일반 API 요청은 401 로 끝난다 — 일반 API 한도는 로그인한 요청에 걸린다.
+- 카운터는 인스턴스마다 따로이고 재시작하면 0 이 된다(단일 인스턴스 전제, Redis 는 2026-10 에 뺐다).
+
 ---
 
 ## 10. Docker Compose 인프라
@@ -194,11 +195,11 @@ trade_executions
 ```
    Browser ──HTTPS:443──► caddy(TLS 종단) ──reverse_proxy──► app:8080
 
-┌──────────────┬──────────────┬────────────────┬───────────────┐
-│  caddy :443  │   app :8080  │ postgres :5432 │  redis :6379  │
-│  (TLS 종단)  │  (수집+매매  │   (PG 17)      │ (rate limit)  │
-│  (LE 자동)   │   +REST+SPA) │                │               │
-└──────────────┴──────────────┴────────────────┴───────────────┘
+┌──────────────┬──────────────┬────────────────┐
+│  caddy :443  │   app :8080  │ postgres :5432 │
+│  (TLS 종단)  │  (수집+매매  │   (PG 17)      │
+│  (LE 자동)   │   +REST+SPA) │                │
+└──────────────┴──────────────┴────────────────┘
 ```
 
 - 외부 진입점은 Caddy(:80/:443). `app`은 호스트에 노출되지 않고(`expose` 만) Caddy 가 `app:8080` 으로 리버스 프록시한다(Let's Encrypt 자동 발급).

@@ -2,9 +2,9 @@
 title: 배포 스택 — Vultr 서울 + Caddy TLS + GHCR
 category: entity
 created: 2026-07-28
-updated: 2026-10-01
+updated: 2026-10-03
 claim_state: current
-verified: 2026-10-01 — preflight 의 필수 선언 키가 5개(차트 청산 키 제거, `preflight_exit_params.sh` `EXIT_PARAM_KEYS`)임을 확인 · 2026-09-30 — 웹 서버 전 동기 예열(#280)을 `RateLimitFilter` 원문과 `RateLimitFilterTest` 로 확인했다. 실제 `GenericApplicationContext` refresh 에서 반응형 웹 서버 phase 대역이 시작될 때 연결이 이미 맺어져 있고, ping 이 실패해도 refresh 가 성공한다. 상한 초과 때 진행 중 호출을 interrupt 하지 않는다. 최소 Boot 반응형 앱과 로컬 redis:7(새 JVM 3회) 실측에서 `연결 준비`(155~181ms)가 `Netty started`·`Started` 보다 먼저 찍혔고, 요청 전에 연결 수가 1→2 가 됐으며, 첫 요청은 새 연결 없이 강등 WARN 0 이었다. 웹 서버 phase 는 Boot 3.4.1 `WebServerStartStopLifecycle` 소스 확인, 운영 첫 연결 2479ms 는 배포 `0cad9c3` 로그 · 2026-09-30 — 기동 예열(#278)을 `RateLimitFilter` 원문과 `RateLimitFilterTest`(예열·판정이 한 공유 연결을 쓰는 fake — 예열이 없으면 첫 요청이 강등되는 운영 결함을 재현)로 확인. 로컬 redis:7 새 JVM 실측에서 예열이 판정과 같은 연결을 맺어 첫 요청이 약 200ms→10ms(연결 수 그대로). 기동 뒤 첫 판정 강등은 운영 배포 `4d271cf` 로그로 관찰, Lettuce 재연결 WARN 은 lettuce 6.4.1 `ConnectionWatchdog` 소스 확인 · 2026-09-30 — Redis 장애 비결합(#229)을 `RateLimitFilter`·`application-prod.yml`·compose 원문과 `RateLimitFilterTest`·`RedisProdSettingsTest`(prod 프로필 로드·compose 파싱)로 확인, 로컬 redis:7 로 pause·stop·닫힌 포트·블랙홀 주소를 재현해 요청이 타임아웃(≈500ms) 안에 통과하고 WARN 1줄·복귀 INFO 가 남는 것을 관찰 · 2026-09-30 — 업로드 전 preflight(#230)를 `deploy.sh`·`preflight_exit_params.sh` 원문과 `ExitParamsPreflightScriptTest` 로 확인, 운영의 렌더된 `.env` 에 새 스크립트를 읽기 전용으로 돌려 통과(서버 bash 5.2·GNU Awk 5.2) · 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
+verified: 2026-10-03 — Redis 제거를 `RateLimitFilter`·compose·`application-prod.yml` 원문과 `RateLimitFilterTest`(고정 시계 행동 테스트)로 확인했다. 필터 순서(Security 가 먼저 — 비인증 일반 API 는 401)는 로컬 컨테이너에서 비인증 `/api/bot/status` 가 401·필터 미도달인 것으로 관찰했다. 롤백 경로(옛 이미지 b8d227e + redis 없는 compose, `deploy.sh:593` 과 같은 `up -d --remove-orphans --pull missing`)를 로컬에서 재현해 redis 컨테이너 제거·볼륨 잔존·health UP 5s·강등 WARN 1줄·인증 경로 31번째 429 를 관찰했다 · 2026-10-01 — preflight 의 필수 선언 키가 5개(차트 청산 키 제거, `preflight_exit_params.sh` `EXIT_PARAM_KEYS`)임을 확인 · 2026-09-30 — 웹 서버 전 동기 예열(#280)을 `RateLimitFilter` 원문과 `RateLimitFilterTest` 로 확인했다. 실제 `GenericApplicationContext` refresh 에서 반응형 웹 서버 phase 대역이 시작될 때 연결이 이미 맺어져 있고, ping 이 실패해도 refresh 가 성공한다. 상한 초과 때 진행 중 호출을 interrupt 하지 않는다. 최소 Boot 반응형 앱과 로컬 redis:7(새 JVM 3회) 실측에서 `연결 준비`(155~181ms)가 `Netty started`·`Started` 보다 먼저 찍혔고, 요청 전에 연결 수가 1→2 가 됐으며, 첫 요청은 새 연결 없이 강등 WARN 0 이었다. 웹 서버 phase 는 Boot 3.4.1 `WebServerStartStopLifecycle` 소스 확인, 운영 첫 연결 2479ms 는 배포 `0cad9c3` 로그 · 2026-09-30 — 기동 예열(#278)을 `RateLimitFilter` 원문과 `RateLimitFilterTest`(예열·판정이 한 공유 연결을 쓰는 fake — 예열이 없으면 첫 요청이 강등되는 운영 결함을 재현)로 확인. 로컬 redis:7 새 JVM 실측에서 예열이 판정과 같은 연결을 맺어 첫 요청이 약 200ms→10ms(연결 수 그대로). 기동 뒤 첫 판정 강등은 운영 배포 `4d271cf` 로그로 관찰, Lettuce 재연결 WARN 은 lettuce 6.4.1 `ConnectionWatchdog` 소스 확인 · 2026-09-30 — Redis 장애 비결합(#229)을 `RateLimitFilter`·`application-prod.yml`·compose 원문과 `RateLimitFilterTest`·`RedisProdSettingsTest`(prod 프로필 로드·compose 파싱)로 확인, 로컬 redis:7 로 pause·stop·닫힌 포트·블랙홀 주소를 재현해 요청이 타임아웃(≈500ms) 안에 통과하고 WARN 1줄·복귀 INFO 가 남는 것을 관찰 · 2026-09-30 — 업로드 전 preflight(#230)를 `deploy.sh`·`preflight_exit_params.sh` 원문과 `ExitParamsPreflightScriptTest` 로 확인, 운영의 렌더된 `.env` 에 새 스크립트를 읽기 전용으로 돌려 통과(서버 bash 5.2·GNU Awk 5.2) · 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
 sources:
   - bot/src/main/kotlin/com/trading/bot/config/RateLimitFilter.kt
   - bot/src/main/resources/application-prod.yml
@@ -19,7 +19,7 @@ sources:
 | 계층 | 구성 |
 |---|---|
 | 호스트 | Vultr 서울(`icn`) **vc2-1c-2gb** (x86_64, 2GB) |
-| 컨테이너 | Docker Compose (app + postgres + redis + caddy) |
+| 컨테이너 | Docker Compose (app + postgres + caddy) |
 | TLS | **Caddy 2** + Let's Encrypt, sslip.io 자동 도메인 |
 | 이미지 | GitHub Actions → **GHCR** (multi-arch push) |
 | 배포 | GitHub Actions `main` push → GHCR → SSH → `deploy/vultr/deploy.sh deploy` |
@@ -32,7 +32,7 @@ sources:
 각 선택이 사고에서 나왔다:
 
 - **TLS 종단(Caddy)** — prod 프로파일이 항상 `Secure` 쿠키를 발급해 평문 HTTP 에서는 브라우저 로그인이 원천적으로 불가능했다([[lesson-secure-cookie-http]]).
-- **2GB 인스턴스** — 이전 EC2의 컨테이너 실측 818MiB를 근거로 제한 합계 1472m로 rightsizing 했다.
+- **2GB 인스턴스** — 이전 EC2의 컨테이너 실측 818MiB를 근거로 rightsizing 했다. 지금 제한 합계는 caddy 96m + app 832m + postgres 512m = 1440m 다(redis 를 뺀 뒤). 예전 문서의 "1472m" 는 caddy 를 64m 로 적은 값이다 — compose 의 caddy 는 Vultr 이전 때부터 96m(실측 27MiB 에 64m 는 빠듯해 올림)라 당시 실제 합계는 1504m 였다.
 - **x86_64(Vultr)** — AWS arm64에서 전환하지만 GHCR 이미지와 공식 의존성 이미지가 multi-arch다.
 
 ## 배포 시 주의
@@ -46,23 +46,14 @@ sources:
   **두 목록 모두와** 대조하므로, 새 설정을 추가하면 그 테스트가 먼저 깨진다(변이 검사로 두 축 다 CAUGHT 확인).
   테스트는 목록 누락만 잡는다 — **실제로 켜졌는지는 기동 로그로 확인한다**(예: `[shadow-exit] 관측 on/off`).
   전달 계층이 넷(앱 기본값 → 시크릿 → 서버 `.env` → compose → 컨테이너)이라, 한 곳만 봐서는 알 수 없다.
-- **Redis 장애는 앱 health·기동·배포를 막지 않는다**(#229). Redis 는 API rate limit 전용이고, 장애나 500ms 무응답이면
-  `RateLimitFilter` 가 같은 한도로 in-memory 카운터에 판정한다(30초 뒤 요청 하나가 다시 시도). 그래서 prod 는 Redis 를 앱
-  health 에서 빼고(`management.health.redis.enabled: false` — compose 헬스체크·`deploy.sh` health 게이트가 전체
-  `/actuator/health` 를 본다), compose 의 app→redis 의존을 `service_started` 로 둔다 — `service_healthy` 면 Redis 가
-  unhealthy 인 동안 `compose up` 이 실패해 배포가 health·자동 롤백 분기에 닿기 전에 멈추고, 재생성된 app 이 뜨지 않은 채
-  남는다. postgres 의존은 `service_healthy` 그대로다.
-  빠진 health 기여자는 기동 직후 Lettuce 공유 연결(지연 초기화)을 맺어 주는 일도 하고 있었다. 빼고 나자 기동 뒤 첫 판정이
-  연결 수립을 떠안아 500ms 를 넘겼고, Redis 가 정상인데 강등됐다(#278, 2026-09-30 운영 관찰). 운영의 첫 연결은 약 2.5초다.
-  그래서 필터가 웹 서버보다 먼저 도는 `SmartLifecycle`(phase 0 — 반응형 웹 서버는 `SMART_LIFECYCLE_PHASE - 1024`)에서
-  PING 으로 연결을 맺고, 최대 15초 기다린다(#280). 처음(#278)에는 기동 완료(ApplicationReadyEvent) 뒤 백그라운드로 맺었는데,
-  그러면 연결이 끝나기 전 약 2.5초 동안 들어온 요청이 팩토리 lock 에서 기다리다 여전히 강등될 수 있었다. 정상이면 연결이
-  끝나는 대로 기동을 이어가고, 상한을 넘기면 기다리지 않고 기동한다(예열은 뒤에서 이어진다). 그만큼 봇 복원·기동 보고도
-  늦어진다. 판정 한도는 걸지 않고, 실패하면 1초 간격으로 세 번까지 시도하며, 끝내 실패하면 강등 상태로 시작한다.
-  `start()` 는 무엇이 나도 던지지 않는다(던지면 refresh 가 실패해 앱이 뜨지 않는다). `eagerInitialization` 은 연결 실패 시
-  기동을 실패시키므로 쓰지 않는다.
-  Redis 장애 신호는 필터의 강등 WARN 한 줄과, 연결이 열려 있던 중 끊겼다면 Lettuce 의 재연결 실패 WARN(`Cannot reconnect
-  to …` — 재연결 주기마다, 5초 안의 반복은 DEBUG)이다(둘 다 Discord 무관).
+- **API rate limit 은 앱 메모리 카운터다** — Redis 는 2026-10 에 뺐다(그 전에는 이 카운터 전용이었다). `RateLimitFilter` 가
+  클라이언트 IP(Caddy 가 덮어쓴 `X-Forwarded-For` 첫 값, 없으면 접속 주소)별로 1분 고정 창(UTC 정분)을 센다 — 인증 경로
+  (`/api/auth/**`) 30/분, 일반 API 60/분, 넘으면 429 + `Retry-After: 60`. Spring Security(order -100)가 이 필터보다 먼저 돌아
+  비인증 일반 API 요청은 401 로 끝나므로, 일반 API 한도는 로그인한 요청에 걸린다. 로그인 무차별 대입 상한은 인증 경로 한도다.
+  카운터는 인스턴스마다 따로이고 재시작·배포 때 0 이 된다 — 단일 인스턴스 전제다. 창은 UTC 정분 버킷이다 — 직전 분의 늦은
+  요청은 지금 창에 세고, 벽시계가 뒤로 가 두 분 이상 이전인 분이 되면 창을 새로 시작한다(창이 미래 분에 멈추면 시계가 따라잡을
+  때까지 잠긴다). 직전 분으로의 역행이면 그 창이 최대 약 2분 이어질 수 있다.
+  Redis 시절의 장애 비결합·기동 예열(#229·#278·#280) 서술은 이 페이지의 git 이력에 있다.
 - **렌더한 `.env` 는 업로드 전에 preflight 를 거친다**(#179, #230). `deploy.sh` 가 `deploy/vultr/preflight_exit_params.sh` 를
   부른다 — 청산·주문 파라미터의 형식·의미상 구간은 자동매매 여부와 무관하게, 자동매매 배포면 청산 5개 키의 선언까지 본다.
   앱이 아니라 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 청산이 평가되지 않는 공백이 생기고, 자동 롤백은 이미지만

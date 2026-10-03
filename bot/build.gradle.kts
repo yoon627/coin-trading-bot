@@ -34,9 +34,6 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
 
-    // Redis
-    implementation("org.springframework.boot:spring-boot-starter-data-redis-reactive")
-
     // Test
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.projectreactor:reactor-test")
