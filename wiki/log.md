@@ -275,3 +275,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-10-01] update | 빈 strategy 매수 행 실측 근거(#145)
 
 - [[trade-record-volume-semantics]] 의 구분 키 절에 빈 `strategy` 매수 행이 운영 0건(2026-10-01, 223건 중)이라는 조회 근거와, 그것이 불변식이 아니라는 점(null 허용 경로가 남아 있다)을 적었다. `TradeRoundTrip` KDoc 과 같은 내용이다.
+
+## [2026-10-03] update | Redis 제거 — rate limit 은 앱 메모리 카운터
+
+- [[deployment-stack]] 의 컨테이너 구성에서 redis 를 빼고, Redis 장애 비결합·기동 예열(#229·#278·#280) 블록을 rate limit 의 지금 동작으로 바꿨다 — IP 별 1분 창(인증 경로 30/분·일반 API 60/분), Spring Security 가 먼저 돌아 일반 API 한도는 로그인한 요청에 걸림, 카운터는 인스턴스마다 따로이고 재시작 때 0. 지금 메모리 제한 합계(1440m)를 더했다.
+- [[rightsizing-history]] 의 "Redis 는 남아 있다" 를 제거 사실로, [[lesson-ec2-sizing-oom]] "지금은 다른 것" 의 컨테이너 구성을 고쳤다.
