@@ -2,9 +2,9 @@
 title: 경량화(rightsizing) — 왜 collector·Kafka·ML·KIS 주식 봇이 없는가
 category: decision
 created: 2026-07-28
-updated: 2026-10-01
+updated: 2026-10-03
 claim_state: current
-verified: 2026-10-01 — fan-out sink 서술: 시세 DB 저장 제거 뒤 `MarketDataIngestionService` 의 sink 는 store·`CandleAggregator` 둘(각 try/catch) · 2026-10-01 — MVP 1단계(연구·백테 코드와 운영 밖 전략·전략 설정 제거) 항목 추가 — 운영 거래 분포는 2026-09-30 읽기 전용 조회(combined 212건·2026-07-14~09-30) · 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
+verified: 2026-10-03 — Redis 제거 반영(`RateLimitFilter` 원문·운영 compose 에 redis 서비스 없음 확인) · 2026-10-01 — fan-out sink 서술: 시세 DB 저장 제거 뒤 `MarketDataIngestionService` 의 sink 는 store·`CandleAggregator` 둘(각 try/catch) · 2026-10-01 — MVP 1단계(연구·백테 코드와 운영 밖 전략·전략 설정 제거) 항목 추가 — 운영 거래 분포는 2026-09-30 읽기 전용 조회(combined 212건·2026-07-14~09-30) · 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
 sources:
   - CLAUDE.md
   - PROJECT_ANALYSIS.md
@@ -26,7 +26,7 @@ sources:
 
 - 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다. **KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다** — 사용자 결정(유지 비용 대비 필요 없음). `kis/` 패키지·`/api/stock|kis/*`·주식 화면·`users.kis_*`·`stock_order_intent`·`stock_position_state` 가 V27 에서 사라졌고 `bot_state.exchange` 컬럼만 남았다(값은 UPBIT 뿐). "KIS"·"stock" 서술은 과거다.
 - 소비자 없이 남은 저장 경로가 잔재로 남는다. `price_snapshots` 가 그랬고 V19 에서 제거됐다([[persistence-schema]]) — 경량화 직후가 아니라 한참 뒤에야 드러났다는 점이 교훈이다. 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
-- Redis 는 남아 있다 — `RateLimitFilter` 가 조건부로 쓴다.
+- Redis 도 2026-10 에 뺐다 — API rate limit 카운터 전용이었고, 단일 인스턴스라 앱 메모리 카운터로 바꿨다([[deployment-stack]]). Redis·`REDIS_*` 서술은 과거다.
 - "백테"·"fixture"·"M1 replay"·`query/` 리포트를 인용하는 서술은 2026-10-01 이전 것이다. 지운 코드·리포트는 저장소 이력에 있다(마지막으로 있던 커밋 `288ec49`).
 
 ## 되돌릴 때의 기준
