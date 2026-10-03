@@ -121,8 +121,6 @@ coin-trading-bot/
 │       └── resources/
 │           ├── db/migration/     # Flyway V1~V28
 │           └── static/           # login.html, app.html, tide-app/
-├── deploy/aws/                   # AWS 생성·배포 스크립트와 prod Compose
-├── deploy/oci/                   # Oracle Cloud(Always Free) 생성·배포 스크립트와 prod Compose
 ├── deploy/vultr/                 # Vultr 서울 생성·배포 스크립트와 prod Compose (2GB 예산)
 ├── perf/                         # k6 시나리오(현재 API와 동기화 여부 확인 필요)
 └── docker-compose.yml            # 로컬/단일 호스트용 app, postgres
@@ -232,13 +230,13 @@ coin-trading-bot/
 | `JWT_SECRET` | JWT 서명 키. 변경하면 기존 세션이 무효화됩니다. |
 | `APP_ENCRYPTION_SECRET` | 사용자 Upbit 키 암호화 마스터 키. 변경하면 기존 암호문을 복호화할 수 없습니다. |
 
-`deploy/aws/deploy.sh setup`은 비어 있는 필수 시크릿을 생성해 `deploy/aws/.env`에 저장합니다. 이 파일과 특히 `APP_ENCRYPTION_SECRET`을 안전하게 백업하세요.
+`deploy/vultr/deploy.sh setup`·`deploy`는 비어 있는 `DB_PASSWORD`·`JWT_SECRET`만 생성해 `deploy/vultr/.env`에 적고, `APP_ENCRYPTION_SECRET`은 **자동 생성하지 않아** 비어 있으면 실패합니다. 새로 만들면 기존 암호문을 복호화할 수 없으니 운영 중인 값을 그대로 쓰세요(출처는 [`deploy/vultr/README.md`](deploy/vultr/README.md) 1절). `.env`, 특히 `APP_ENCRYPTION_SECRET`은 DB 백업과 다른 곳에 안전하게 보관하세요.
 
 ### 주요 선택값
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` | 없음 | 선택적 전역 fallback 키. 일반적으로 UI에서 사용자별 키 등록 |
+| `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` | 없음 | 쓰이지 않는다 — 거래 키는 UI 에서 사용자별로 등록하고 DB 에 암호화해 둔다(정리는 #300) |
 | `TRADING_TICKERS` | `KRW-BTC` | 쉼표로 구분한 기본 거래 종목 |
 | `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
@@ -251,16 +249,13 @@ coin-trading-bot/
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
 
-> **배포 시 주의** — 배포 계층(`deploy/*/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 5개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
+> **배포 시 주의** — 배포 계층(`deploy/vultr/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 5개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
 
-## AWS 배포 (historical)
+## AWS·OCI 배포 (historical)
 
-AWS EC2 `t4g.medium`은 2026-07-31 Vultr cutover 후 인스턴스·EBS·EIP까지 삭제됐다. `deploy/aws/`는
-구성·복구 설계의 historical reference로 보존하지만 현재 운영 경로가 아니며, AWS 롤백 명령을 실행할
-대상도 없다. 현재 운영은 아래 Vultr 섹션을 따른다.
-
-자세한 과거 설정은 [`deploy/aws/README.md`](deploy/aws/README.md)를 참고하되 현재 계정 자산에
-대해 `setup`/`start`/`destroy`를 실행하지 마세요.
+AWS EC2 `t4g.medium`은 2026-07-31 Vultr cutover 후 인스턴스·EBS·EIP까지 삭제됐고, Oracle Cloud(Always
+Free) 판은 프로비저닝하지 않았다. 두 판(`deploy/aws`·`deploy/oci`)은 2026-10 에 저장소에서도 지웠다 — 옛
+설정은 `git show 83fd87e:deploy/aws/README.md` 처럼 git 이력에서 본다. 운영은 아래 Vultr 판 하나다.
 
 ## Vultr 배포 (비용 절감 — 월 $10)
 
@@ -278,36 +273,16 @@ caddy 14MiB = 합계 818MiB, load average 0.00. 컨테이너 제한도 이에 �
 
 ```bash
 install -m 600 deploy/vultr/.env.example deploy/vultr/.env
-# VULTR_API_KEY + APP_ENCRYPTION_SECRET(AWS 값 복사) 입력
+# VULTR_API_KEY + APP_ENCRYPTION_SECRET(운영 중인 값 — 자동 생성 안 됨) 입력
 
 ./deploy/vultr/deploy.sh setup    # SSH 키 + 방화벽 + 인스턴스
 ./deploy/vultr/deploy.sh deploy
 ./deploy/vultr/deploy.sh mem      # 2GB 여유 확인
 ```
 
-운영 명령과 배포 동작(대상 SHA 고정, 헬스체크 실패 시 자동 롤백)은 historical AWS 판과 동일하고,
-메모리 실사용을 보는 `mem` 명령이 추가돼 있다. 계정 준비(⚠️ **API Access Control에 공인 IP 등록 필수**),
-완료된 AWS→Vultr **cutover 절차**, AWS 삭제 전용 historical rollback, S3 호환 백업 설정은
-[`deploy/vultr/README.md`](deploy/vultr/README.md)에 있다.
-
-## Oracle Cloud 배포 (비용 $0 대안)
-
-같은 스택을 OCI 서울 리전의 Always Free 인스턴스(`VM.Standard.A1.Flex`, 2 OCPU ARM / 12GB)에
-올리는 경로입니다. AWS 구성은 실측 **$39.29/월**(2026-06)인 반면 이쪽은 무료 한도 내에서 **$0**이고
-메모리는 4GB → 12GB로 늘어납니다. 컨테이너 메모리 제한은 AWS 판과 동일하게 유지합니다.
-
-```bash
-cp deploy/oci/.env.example deploy/oci/.env
-# ⚠️ APP_ENCRYPTION_SECRET은 자동 생성되지 않습니다 — 이전 시 AWS 값을 그대로 복사하세요.
-
-./deploy/oci/deploy.sh setup    # VCN/NSG + 버킷/IAM + A1.Flex 인스턴스 (capacity 재시도 포함)
-./deploy/oci/deploy.sh deploy
-```
-
-운영 명령(`status`/`logs`/`ssh`/`stop`/`start`/`destroy`)과 배포 동작(대상 SHA 고정, 헬스체크 실패 시
-자동 롤백)은 AWS 판과 동일합니다. 계정 준비 체크리스트(**홈 리전을 반드시 서울로** — 사후 변경 불가),
-AWS→OCI **cutover 절차**(같은 Upbit 계정에 두 봇이 붙지 않도록 하는 단일 실행 보장), 거래 활성화
-전/후로 나뉘는 **롤백 절차**, 무료 티어 리스크는 [`deploy/oci/README.md`](deploy/oci/README.md)에 있습니다.
+운영 명령(`status`/`logs`/`mem`/`ssh`/`stop`/`start`/`destroy`)과 배포 동작(대상 SHA 고정, 헬스체크 실패 시
+자동 롤백), 계정 준비(⚠️ **API Access Control에 공인 IP 등록 필수**), 호스트 재구축·백업 복원과 **단일 실행을
+보장하는 이전 절차**, S3 호환 백업 설정은 [`deploy/vultr/README.md`](deploy/vultr/README.md)에 있다.
 
 ## CI/CD
 
