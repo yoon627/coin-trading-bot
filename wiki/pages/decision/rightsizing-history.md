@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-10-03
 claim_state: current
-verified: 2026-10-03 — Redis 제거 반영(`RateLimitFilter` 원문·운영 compose 에 redis 서비스 없음 확인) · 2026-10-01 — fan-out sink 서술: 시세 DB 저장 제거 뒤 `MarketDataIngestionService` 의 sink 는 store·`CandleAggregator` 둘(각 try/catch) · 2026-10-01 — MVP 1단계(연구·백테 코드와 운영 밖 전략·전략 설정 제거) 항목 추가 — 운영 거래 분포는 2026-09-30 읽기 전용 조회(combined 212건·2026-07-14~09-30) · 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
+verified: 2026-10-03 — 인프라 대안 제거 반영(운영 배포는 `deploy.yml` 이 `deploy/vultr/deploy.sh` 만 부른다), #26 종료 사유는 이슈 코멘트(2026-09-23) 원문 · 2026-10-03 — Redis 제거 반영(`RateLimitFilter` 원문·운영 compose 에 redis 서비스 없음 확인) · 2026-10-01 — fan-out sink 서술: 시세 DB 저장 제거 뒤 `MarketDataIngestionService` 의 sink 는 store·`CandleAggregator` 둘(각 try/catch) · 2026-10-01 — MVP 1단계(연구·백테 코드와 운영 밖 전략·전략 설정 제거) 항목 추가 — 운영 거래 분포는 2026-09-30 읽기 전용 조회(combined 212건·2026-07-14~09-30) · 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
 sources:
   - CLAUDE.md
   - PROJECT_ANALYSIS.md
@@ -27,8 +27,9 @@ sources:
 - 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다. **KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다** — 사용자 결정(유지 비용 대비 필요 없음). `kis/` 패키지·`/api/stock|kis/*`·주식 화면·`users.kis_*`·`stock_order_intent`·`stock_position_state` 가 V27 에서 사라졌고 `bot_state.exchange` 컬럼만 남았다(값은 UPBIT 뿐). "KIS"·"stock" 서술은 과거다.
 - 소비자 없이 남은 저장 경로가 잔재로 남는다. `price_snapshots` 가 그랬고 V19 에서 제거됐다([[persistence-schema]]) — 경량화 직후가 아니라 한참 뒤에야 드러났다는 점이 교훈이다. 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
 - Redis 도 2026-10 에 뺐다 — API rate limit 카운터 전용이었고, 단일 인스턴스라 앱 메모리 카운터로 바꿨다([[deployment-stack]]). Redis·`REDIS_*` 서술은 과거다.
+- 운영에 쓰지 않는 인프라 대안도 2026-10 에 지웠다 — AWS·OCI 배포 판(`deploy/aws`·`deploy/oci`), 옛 모니터링 스택의 설정(`monitoring/`), k6 부하 테스트(`perf/`). 운영 경로는 Vultr 하나다([[deployment-stack]]). 옛 내용은 git 이력(`83fd87e`)에 있다.
 - "백테"·"fixture"·"M1 replay"·`query/` 리포트를 인용하는 서술은 2026-10-01 이전 것이다. 지운 코드·리포트는 저장소 이력에 있다(마지막으로 있던 커밋 `288ec49`).
 
 ## 되돌릴 때의 기준
 
-분산·다중 인스턴스로 다시 가려면 **부하 테스트로 단일 인스턴스 한계를 먼저 입증**한다는 조건이 붙어 있다(이슈 #26/#25). 추정으로 인프라를 늘리지 않는다는 뜻이고, 이 원칙은 [[github-issues-backlog]] 에 기록된 다른 조건부 작업들과 같은 성격이다.
+분산·다중 인스턴스로 다시 가려면 **부하 측정으로 단일 인스턴스 한계를 먼저 입증**한다는 조건이 붙어 있다(#26 — 운영이 한계와 두 자릿수 배 떨어져 있어 2026-09-23 조건 미성립으로 닫았다). 추정으로 인프라를 늘리지 않는다는 뜻이고, 이 원칙은 [[github-issues-backlog]] 에 기록된 다른 조건부 작업들과 같은 성격이다. 측정 도구였던 k6 스크립트(#25)는 지운 API 를 부르고 있어 2026-10 에 지웠다 — 그 조건을 다시 볼 때는 측정 도구부터 새로 만든다.

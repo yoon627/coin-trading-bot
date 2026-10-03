@@ -83,7 +83,7 @@ Browser ──HTTPS──> Caddy ──HTTP──> bot :8080 ──R2DBC──> 
 
 `bot`의 `marketdata` 패키지가 ticker와 candle을 직접 수집합니다. 현재 런타임에는 별도 collector, Kafka, research/ML 서비스나 모니터링 스택이 없습니다.
 
-운영 환경에서는 단일 EC2 인스턴스의 Docker Compose가 `caddy + app + postgres`를 실행합니다. Caddy만 80/443 포트를 공개하고 `app:8080`, PostgreSQL은 Compose 내부 네트워크에서만 접근할 수 있습니다.
+운영 환경에서는 Vultr 서울 인스턴스 하나의 Docker Compose가 `caddy + app + postgres`를 실행합니다. Caddy만 80/443 포트를 공개하고 `app:8080`, PostgreSQL은 Compose 내부 네트워크에서만 접근할 수 있습니다.
 
 ## 기술 스택
 
