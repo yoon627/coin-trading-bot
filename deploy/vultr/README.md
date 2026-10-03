@@ -94,6 +94,17 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 대상 커밋 SHA로 이미지를 고정하고, 헬스체크(180s) 실패 시 직전 정상 SHA로 **자동 롤백**한다.
 단 **DB migration이 포함된 배포**가 실패하면 자동 롤백을 건너뛰고 수동 개입을 안내한다.
 
+`Caddyfile` 은 배포가 서버로 복사만 하고 실행 중인 caddy 에 다시 읽히지 않는다 — caddy 컨테이너가 새로 뜰 때
+(`caddy:2-alpine` 의 새 digest 를 받은 배포·서버 재부팅) 적용된다. 바로 적용하려면 서버에서
+`cd /opt/app && docker compose restart caddy`(수 초 HTTPS 중단, 인증서는 `caddy_data` 볼륨에 남는다). 자동 롤백은 app
+헬스만 보고 HTTPS e2e 실패는 경고로 끝나므로, Caddyfile 을 바꿀 때는 머지 전에 같은 이미지로 검증한다
+(`{$APP_DOMAIN}` 이 비면 빈 문자열이 되므로 자리 도메인을 준다):
+
+```bash
+docker run --rm -e APP_DOMAIN=bot.example.test -v "$PWD/deploy/vultr/Caddyfile":/etc/caddy/Caddyfile:ro \
+  caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
 ### GitHub Actions 자동 배포
 
 `.github/workflows/deploy.yml`의 `deploy-vultr` job은 인스턴스 생성·삭제 없이 현재 운영 호스트에만
