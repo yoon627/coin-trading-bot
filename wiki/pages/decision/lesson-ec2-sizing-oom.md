@@ -2,9 +2,9 @@
 title: lesson — 소형 EC2 에서 OOM-killer 로 부팅 자체가 실패 (5컨테이너 시절)
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-10-03
 claim_state: historical
-verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 331426f. 전제(5컨테이너)는 현재 구조와 다름 — settings.gradle.kts 모듈 2개로 확인
+verified: 2026-10-03 — "지금은 다른 것" 의 컨테이너 구성을 redis 제거 뒤 운영 compose 원문으로 고침 · 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 331426f. 전제(5컨테이너)는 현재 구조와 다름 — settings.gradle.kts 모듈 2개로 확인
 sources:
   - docs/lessons.md
   - PROJECT_ANALYSIS.md
@@ -28,6 +28,6 @@ t2.micro(1GB)·t3.small(2GB) 에 올렸더니 두 JVM(app/collector) 동시 부�
 
 ## 지금은 다른 것
 
-collector 가 없어져 JVM 이 하나이므로 당시의 "동시 부팅 peak" 자체가 사라졌다. 컨테이너도 app + postgres + redis + caddy 구성이다. 따라서 **이 항목을 근거로 현재 인스턴스 크기를 논하지 말고**, 현재 구성 기준으로 다시 측정한다.
+collector 가 없어져 JVM 이 하나이므로 당시의 "동시 부팅 peak" 자체가 사라졌다. 컨테이너도 app + postgres + caddy 구성이다. 따라서 **이 항목을 근거로 현재 인스턴스 크기를 논하지 말고**, 현재 구성 기준으로 다시 측정한다.
 
 같은 작업에서 발견된 배포 스크립트 함정은 별도 항목으로 분리했다 — [[lesson-deploy-script-pitfalls]].
