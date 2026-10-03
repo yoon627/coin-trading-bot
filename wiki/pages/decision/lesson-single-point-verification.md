@@ -2,12 +2,12 @@
 title: lesson — 한 곳에서 통과한 검증을 일반화하지 말 것 (SG 단일 IP · 코드 분기 · 테스트 범위)
 category: decision
 created: 2026-07-28
-updated: 2026-09-28
+updated: 2026-10-03
 claim_state: current
-verified: 2026-09-28 — 테스트 범위 사례는 #227 작업에서 실제로 겪은 건: 대상 패턴 339건 통과 뒤 전체 `:bot:test` 1109건 중 `TradeAuditAtomicityTest` 1건 실패(매도 상태 저장 2→3회), 수정 후 전체 1082 통과/32 skip. · 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 331426f) 이관분 유지
+verified: 2026-10-03 — "현재 스택에서는" 절을 운영 판 `deploy/vultr/deploy.sh:245-291`(방화벽: 수동 SSH=`SSH_ALLOW_CIDR`, 443=`APP_ALLOW_CIDR` 기본 `0.0.0.0/0`, 80=ACME 전체, Actions 용 `ctb-ssh-github-actions` 22/tcp 별도) 기준으로 고침(AWS 판은 저장소에서 삭제) · 2026-09-28 — 테스트 범위 사례는 #227 작업에서 실제로 겪은 건: 대상 패턴 339건 통과 뒤 전체 `:bot:test` 1109건 중 `TradeAuditAtomicityTest` 1건 실패(매도 상태 저장 2→3회), 수정 후 전체 1082 통과/32 skip. · 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 331426f) 이관분 유지
 sources:
   - docs/lessons.md
-  - deploy/aws/deploy.sh
+  - deploy/vultr/deploy.sh
   - bot/src/main/kotlin/com/trading/bot/domain/TradingState.kt
   - bot/src/test/kotlin/com/trading/bot/engine/TradeAuditAtomicityTest.kt
 ---
@@ -28,10 +28,10 @@ sources:
 
 ## 현재 스택에서는
 
-당시의 "SG 를 열어라 / `http://IP:포트` 로 접속하라" 안내는 **지금 구성에 맞지 않는다.** `deploy/aws/deploy.sh` 기준으로:
+당시의 "SG 를 열어라 / `http://IP:포트` 로 접속하라" 안내는 **지금 구성에 맞지 않는다.** 운영 판 `deploy/vultr/deploy.sh` 의 Vultr 방화벽 기준으로:
 
-- **SSH(22)만** setup 머신 `/32` 로 제한된다.
-- **앱은 443**(Caddy HTTPS)이고 기본이 `0.0.0.0/0` 이다 — `APP_ALLOW_CIDR` 로 좁힐 수 있다.
+- **수동 SSH(22)** 는 `SSH_ALLOW_CIDR`(기본은 setup 머신의 공인 IP)로 제한된다. GitHub Actions 배포용 `ctb-ssh-github-actions` 규칙(22/tcp `0.0.0.0/0`, key-only 접속)은 따로 둔다.
+- **앱은 443**(Caddy HTTPS)이고 기본이 `0.0.0.0/0` 이다 — `APP_ALLOW_CIDR` 로 좁힐 수 있다. 80 은 인증서 발급(ACME)용으로 전체에 연다.
 - **8080 은 호스트에 노출되지 않는다.** 컨테이너 내부 포트라 `http://IP:8080` 은 애초에 닿지 않는다.
 
 따라서 지금 배포를 안내할 때는:

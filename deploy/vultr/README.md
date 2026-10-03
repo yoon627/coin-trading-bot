@@ -4,8 +4,7 @@ AWS EC2 t4g.medium(실측 **$39.29/월** — 2026-06 Cost Explorer)에서 Vultr 
 `vc2-1c-2gb`(1 vCPU x86_64 / 2GB / 55GB SSD / 2TB 대역폭)로 옮겨 **월 $10, -75%** 를 목표로 한다.
 
 > **현재 운영 상태(2026-08-01 확인)**: Vultr에서 거래 중이며 AWS 인스턴스·EBS·EIP는
-> 2026-07-31 삭제됐다. 아래 AWS cutover/rollback 절차는 당시 작업의 historical runbook이고,
-> 현재 AWS 롤백 경로로 실행하면 안 된다. 현재 복구의 기준은 Vultr DB 백업이다.
+> 2026-07-31 삭제됐다 — AWS 로 되돌아가는 경로는 없다. 복구는 Vultr DB 백업(6절)에서 3·5절 순서로 한다.
 
 | | AWS (historical) | Vultr (현재 운영) |
 |---|---|---|
@@ -59,7 +58,7 @@ OS/docker 약 250MB → 여유 약 350MB. postgres가 실측상 가장 빡빡해
 ```bash
 cd deploy/vultr
 install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
-# VULTR_API_KEY 와 APP_ENCRYPTION_SECRET(AWS 값 복사) 을 채운다
+# VULTR_API_KEY 와 APP_ENCRYPTION_SECRET(운영 중인 값 — 아래) 을 채운다
 
 ./deploy.sh setup      # SSH 키 + 방화벽 + 인스턴스 생성
 # cloud-init(Docker·AWS CLI 설치) 2~4분 대기
@@ -69,10 +68,13 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 
 `.env` 주의사항:
 
-- **`APP_ENCRYPTION_SECRET`은 자동 생성되지 않는다.** 비어 있으면 `setup`이 즉시 실패한다.
-  AWS `deploy/aws/.env`의 값을 **그대로** 복사할 것. 새로 만들면 앱은 정상 기동하면서 저장된
-  Upbit 키만 조용히 복호화 불능이 된다.
-- **이전 중에는 `UPBIT_*`를 비우고 `TRADING_AUTO_START=false`** 로 둔다(4절 cutover).
+- **`APP_ENCRYPTION_SECRET`은 자동 생성되지 않는다.** 비어 있으면 `setup`·`deploy`가 즉시 실패한다
+  (`DB_PASSWORD`·`JWT_SECRET`은 비어 있으면 생성해 `.env`에 적는다). 운영 중인 값을 **그대로** 쓸 것 —
+  서버 `/opt/app/.env`, 로컬 `deploy/vultr/.env`, 오프사이트 보관본(6절). GitHub secret `VULTR_DEPLOY_ENV`는
+  다시 읽을 수 없어 출처가 될 수 없다. 새로 만들면 앱은 정상 기동하면서 저장된 Upbit 키만 조용히
+  복호화 불능이 된다.
+- **호스트를 옮기는 중에는 `TRADING_AUTO_START=false`** 로 두고, 옛 앱이 멈춘 것을 확인하기 전에는 UI 에서 봇을 켜지
+  않는다(4절). `UPBIT_*` 는 거래에 쓰이지 않는다 — 거래 키는 사용자별로 DB 에 암호화돼 있어, 비워도 이중 거래를 막지 못한다.
 
 `setup`은 재진입 가능하다 — 중간에 실패해도 같은 명령을 다시 실행하면 이미 만든 리소스는 건너뛴다.
 
@@ -101,7 +103,7 @@ SSH로 배포한다. 다음 repository secrets가 필요하다.
 |---|---|
 | `VULTR_DEPLOY_ENV` | 운영 `.env` 내용(multiline) |
 | `VULTR_PUBLIC_IP` | 현재 운영 인스턴스 공인 IP |
-| `VULTR_SSH_PRIVATE_KEY` | `coin-trading-bot-key.pem` 원문 |
+| `VULTR_SSH_PRIVATE_KEY` | 운영 호스트 SSH 개인키 원문(`deploy/vultr/<APP_NAME>-key.pem`, 기본 `coin-trading-bot-key.pem` — workflow 는 이것을 `coin-trading-bot-key.pem` 이름으로 써서 쓴다) |
 | `VULTR_SSH_USER` | Vultr SSH 사용자(현재 `root`) |
 
 운영 호스트 키는 `deploy/vultr/known_hosts`에 고정되어 Actions와 배포 스크립트가 최초 접속부터
@@ -116,10 +118,10 @@ GitHub-hosted runner의 SSH 출발 IP는 실행마다 바뀌므로 Vultr cloud f
 되돌리거나 규칙을 삭제하면 Actions 배포가 timeout된다.
 
 현재 SSH 세션을 유지한 채 운영 호스트에서 hardening을 적용하고 확인한다. `sshd -t`가 실패하면
-reload하지 않는다.
+reload하지 않는다. `<APP_NAME>` 은 그 체크아웃 `.env` 의 값이다(기본 `coin-trading-bot`).
 
 ```bash
-ssh -i deploy/vultr/coin-trading-bot-key.pem root@<VULTR_PUBLIC_IP> 'sudo tee /etc/ssh/sshd_config.d/00-coin-trading-bot-hardening.conf >/dev/null <<"EOF"
+ssh -i deploy/vultr/<APP_NAME>-key.pem root@<VULTR_PUBLIC_IP> 'sudo tee /etc/ssh/sshd_config.d/00-coin-trading-bot-hardening.conf >/dev/null <<"EOF"
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
@@ -141,25 +143,42 @@ job은 원격 `/opt/app/.last-good-sha`의 성공 확인 SHA를 rollback 기준�
 또한 queued 실행의 SHA가 최신 `origin/main`과 다르면 오래된 배포를 건너뛴다. 배포 전후의 임시
 `.env`, `.state`, SSH key는 Actions runner에서 삭제한다. 수동 배포와 Actions 배포를 동시에 실행하지 않는다.
 
-## 3. AWS → Vultr 데이터 이전 (완료된 historical runbook)
+## 3. 백업 복원
+
+덤프로 DB 를 되살릴 때 쓴다 — 같은 호스트의 DB 를 백업으로 되돌릴 때와 호스트를 옮길 때(4절) 모두.
+`deploy.sh ssh` 는 그 체크아웃의 `.state` 가 가리키는 호스트에 붙는다.
 
 ```bash
-# 1) AWS 에서 덤프
-./deploy/aws/deploy.sh ssh
-  cd /opt/app && docker compose exec -T postgres pg_dump -U trading -d trading --no-owner \
-    | gzip -c > /tmp/trading.sql.gz
-  exit
-scp -i deploy/aws/coin-trading-bot-key.pem ec2-user@<AWS_IP>:/tmp/trading.sql.gz .
-
-# 2) Vultr 로 복원
-scp -i deploy/vultr/coin-trading-bot-key.pem trading.sql.gz root@<VULTR_IP>:/tmp/
+# 1) 복원할 호스트의 /tmp/trading.sql.gz 에 덤프를 둔다 — 둘 중 하나
 ./deploy/vultr/deploy.sh ssh
-  cd /opt/app && gunzip -c /tmp/trading.sql.gz | docker compose exec -T postgres psql -U trading -d trading
+  cd /opt/app
+  # a. 지금 DB 에서 뜬다(앱이 쓰지 않을 때 — 호스트 이전이면 옛 앱을 멈춘 뒤 옛 호스트에서)
+  docker compose exec -T postgres pg_dump -U trading -d trading --no-owner | gzip -c > /tmp/trading.sql.gz
+  # b. 6절의 S3 백업을 받는다(backup.sh 와 같은 자격증명·엔드포인트. 목록은 같은 식으로 s3 ls)
+  (set -a; . ./.env; set +a; aws ${BACKUP_S3_ENDPOINT:+--endpoint-url "$BACKUP_S3_ENDPOINT"} \
+    s3 cp "s3://$BACKUP_S3_BUCKET/${BACKUP_S3_PREFIX:-db-backups}/trading-<TS>.sql.gz" /tmp/trading.sql.gz)
+
+# 2) 복원 — 앱을 멈추고 DB 를 새로 만든 뒤 넣고, 봇을 멈춘 상태로 바꾼 다음 앱을 띄운다
+./deploy/vultr/deploy.sh ssh
+  cd /opt/app && docker compose stop app
+  docker compose exec -T postgres psql -U trading -d postgres -c 'DROP DATABASE trading' -c 'CREATE DATABASE trading'
+  gunzip -c /tmp/trading.sql.gz | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading
+  docker compose exec -T postgres psql -U trading -d trading -c 'UPDATE bot_state SET running = false'
+  docker compose start app
 ```
+
+- `UPDATE bot_state SET running = false` 가 없으면 `TRADING_AUTO_START=true` 인 운영 `.env` 에서 앱이 백업 시점의 봇을
+  검증 전에 되살린다. 아래 검증을 통과한 뒤 UI 에서 봇을 켠다.
+- 앱이 한 번이라도 뜬 DB 에는 Flyway 가 만든 스키마가 있어, 다시 만들지 않고 넣으면 `already exists` 로 멈춘다.
+  앱 연결이 남아 있으면 `DROP DATABASE` 가 실패한다 — `app` 이 멈췄는지 확인하고 다시 실행한다.
+- 덤프를 다른 호스트로 옮길 때는 저장소 밖(예: `~/ctb-migrate/`)을 거쳐 `scp -i deploy/vultr/<APP_NAME>-key.pem` 으로
+  복원할 호스트의 `/tmp/` 에 올린다(`<APP_NAME>` 은 그 체크아웃 `.env` 의 값). 덤프에는 암호화된 Upbit 키와 사용자 데이터가
+  들어 있다 — 체크아웃 안의 `*.sql.gz` 는 무시 대상이 아니라 커밋될 수 있다. 끝나면 로컬 `~/ctb-migrate/` 와 서버
+  `/tmp/trading.sql.gz` 를 지운다.
 
 복원 후 **거래 활성화 전에** 반드시 검증한다:
 
-- 테이블 수·핵심 테이블 행 수가 AWS와 일치하는가
+- 테이블 수·핵심 테이블 행 수가 옛 호스트(또는 백업 시점)와 일치하는가
 - 최신 거래 시각이 덤프 시점과 맞는가
 - **저장된 Upbit 키가 실제로 복호화되는가** (앱 UI에서 키 조회 — 실패면 `APP_ENCRYPTION_SECRET`이
   다른 것이다. 이 경우 **절대 거래를 켜지 말 것**)
@@ -170,51 +189,64 @@ scp -i deploy/vultr/coin-trading-bot-key.pem trading.sql.gz root@<VULTR_IP>:/tmp
 grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 ```
 
-## 4. Cutover 절차 (⚠️ 단일 실행 보장)
+## 4. 호스트 이전 (⚠️ 단일 실행 보장)
 
 **절대 원칙: 어느 시점에도 거래를 활성화한 인스턴스는 하나뿐이어야 한다.**
-같은 Upbit 계정에 두 봇이 붙으면 이중 주문·중복 청산이 발생한다.
+같은 Upbit 계정에 두 봇이 붙으면 이중 주문·중복 청산이 발생한다. 같은 계정 키를 가진 로컬 실행도 한 인스턴스로 센다.
 
-1. Vultr에 인프라와 앱만 올린다. `TRADING_AUTO_START=false`, `UPBIT_*` **비움**.
-   `setup` → `deploy` 로 헬스체크 통과와 `mem` 여유를 확인한다.
-2. AWS 앱 정지: `./deploy/aws/deploy.sh stop`
-3. AWS가 완전히 멈췄는지 로그로 확인(진행 중이던 tick·주문 후처리 종료. `stop_grace_period: 40s`).
-4. **Upbit에서 미체결 주문·잔고·보유 포지션 스냅샷을 기록한다**(복구 시 대조 기준).
-5. 이 시점에 **최종 `pg_dump`** 를 뜬다(3절). 미리 뜬 덤프는 버린다.
-6. Vultr에 복원하고 3절 검증을 모두 통과시킨다.
-7. Upbit API 키에 허용 IP를 쓰고 있다면 **Vultr IP를 등록**한다(당시에는 AWS IP를 rollback 대비 유지).
-8. `.env`에 `UPBIT_*`를 채우고 `./deploy.sh deploy` 후, **UI에서 수동으로** 거래를 켠다.
-9. AWS가 여전히 정지 상태인지 다시 확인한다.
+> ⚠️ 옛 호스트를 살려 둔 채 새 호스트로 옮기는 절차는 **스크립트가 지원하지 않고 리허설한 적도 없다**(#295).
+> 이전이 필요하면 먼저 #295 에서 절차를 만들어 리허설한다. 아래는 그때 지킬 제약과 빠뜨리면 안 되는 항목이다.
 
-> **Historical note**: 위 7~14일 롤백 창구는 2026-07-31 AWS 삭제로 종료됐다. 현재 AWS
-> 인스턴스/EBS/EIP를 start하거나 복구 경로로 사용하지 않는다.
+`deploy.sh` 는 체크아웃 하나에서 호스트 하나만 다룬다(2026-10-03 코드 확인):
 
-## 5. 롤백 — historical reference (현재 AWS 자산 없음)
+- `ssh`·`stop`·`deploy`·`destroy` 는 `deploy/vultr/.state` 가 가리키는 호스트에 작동하고, `destroy` 는 그 인스턴스와
+  방화벽 그룹을 지운다.
+- `setup` 은 `.state` 의 인스턴스를, 없으면 label 이 `APP_NAME` 인 인스턴스를 다시 쓴다 — 같은 체크아웃에서 새 호스트를
+  만들려 하면 운영 호스트에 배포된다.
+- `.env` 의 값이 명령줄 환경변수보다 우선한다(스크립트가 `.env` 를 먼저 읽고, 템플릿에 `APP_NAME`·`APP_VERSION` 이 들어
+  있다). label·SSH 키(`<APP_NAME>-key.pem`)·방화벽 그룹 이름이 `APP_NAME` 을 따르므로, 두 호스트를 함께 다루려면 별도
+  체크아웃과 다른 `APP_NAME` 이 필요하다.
+- Actions 배포 대상은 `.state` 가 아니라 secret `VULTR_PUBLIC_IP`·`VULTR_SSH_PRIVATE_KEY` 와 `deploy/vultr/known_hosts` 다.
 
-> **현재 적용 불가**: AWS 롤백 자산이 2026-07-31 삭제됐다. 아래 절차는 삭제 전 cutover 당시의
-> historical runbook이다. 현재 장애 복구는 거래 중지·최신 검증 백업 확보·새 Vultr 호스트 복원과
-> 수동 정합성 대조를 별도 승인으로 진행한다.
+빠뜨리면 안 되는 항목:
 
-당시 AWS를 남겨둔 것만으로는 롤백이 되지 않았다. **Vultr에서 거래가 시작된 뒤로는 AWS DB에 그
-거래 기록이 없기 때문에**, AWS를 그냥 켜는 것은 롤백이 아니라 데이터 분기였다.
+- **배포 동결** — 이전 동안 main 머지를 멈추고 Actions 배포를 끈다. 켜 두면 push 가 secret 의 옛 IP 로 배포해 멈춘 옛
+  호스트를 운영 `.env` 로 다시 띄운다. 배포 workflow 를 끄면 PR 테스트·이미지 빌드도 멈추므로, 그동안의 수동 `deploy` 는
+  `.env` 의 `APP_VERSION` 을 이미지가 있는 SHA(서버 `/opt/app/.last-good-sha`)로 고정한다.
+- **새 호스트는 거래 없이 먼저** — `TRADING_AUTO_START=false`. 복원·검증 전까지 `APP_ALLOW_CIDR` 를 운영자 IP/32 로 둔다
+  (빈 DB 로 443 이 열리면 먼저 가입한 사람이 유일한 사용자가 된다 — 7절). `APP_ENCRYPTION_SECRET` 은 운영 값 그대로.
+- **옛 앱만 멈추고 최종 덤프** — 옛 호스트는 `docker compose stop app` 으로 앱만 멈춘다(`./deploy.sh stop` 은
+  `docker compose down` 이라 postgres 까지 내려 덤프를 뜰 수 없다). 진행 중이던 tick·주문 후처리가 끝났는지 로그로
+  확인하고(`stop_grace_period: 40s`), **Upbit에서 미체결 주문·잔고·보유 포지션 스냅샷을 기록한다**(복구 시 대조 기준).
+  그 뒤에 최종 덤프(3절 1 a)를 뜬다. 미리 뜬 덤프는 버린다.
+- **복원·검증 뒤에만 거래** — 3절로 복원·검증하고, Upbit API 키에 허용 IP 를 쓰면 새 호스트 IP 를 등록한 뒤 UI 에서
+  수동으로 켠다.
+- **백업 cron 이전** — 스크립트는 cron 을 등록하지 않는다(6절은 수동). 옛 호스트의 cron 을 끄고(두면 멈춘 옛 DB 가 S3 의
+  최신 객체가 된다), 새 호스트에 6절 cron 을 등록해 `./backup.sh` 를 한 번 돌려 확인한다. 옛 호스트 `destroy` 는
+  `BACKUP_S3_BUCKET` 이 있으면 최종 백업을 한 번 더 올리므로, 그때는 옛 체크아웃 `.env` 의 `BACKUP_S3_BUCKET` 을 비운다
+  (옛 DB 는 최종 덤프로 이미 남아 있다).
+- **Actions 대상 전환** — 새 호스트에 2절 SSH hardening 을 적용·확인한 뒤 새 방화벽 그룹에 `ctb-ssh-github-actions` 규칙을
+  넣고(스크립트가 만들지 않는다), secret `VULTR_PUBLIC_IP`·`VULTR_SSH_PRIVATE_KEY` 와 `deploy/vultr/known_hosts`(2절)를
+  새 호스트로 바꾼 다음 배포를 다시 켠다.
+- **도메인** — `APP_DOMAIN` 을 비워 두면 주소가 새 IP 의 sslip 도메인으로 바뀐다. 보유 도메인을 쓰면 검증 동안은 비워
+  sslip 으로 보고, 끝나면 DNS A 레코드를 새 IP 로 바꾼 뒤 다시 넣고 `deploy` 한다.
+- **옛 호스트 정리** — 옛 앱이 여전히 멈춰 있는지 확인한 뒤 옛 호스트의 `.state` 로 `destroy` 한다. 새 호스트의 무시
+  파일(`.env`·`.state`·SSH 키)은 평소 쓰는 체크아웃으로 옮기고 오프사이트에도 보관한다.
 
-**① 거래 활성화 _전_ (안전)**
+## 5. 장애 복구
 
-```bash
-./deploy/vultr/deploy.sh stop
-./deploy/aws/deploy.sh start
-```
+장애 복구는 거래 중지 → 최신 검증 백업 확보 → 새 Vultr 호스트 복원(3·4절) → Upbit 실제 잔고·미체결과의
+수동 정합성 대조 순서로, 별도 승인을 받아 진행한다. 두 DB 에 각각 쓰기가 발생했다면 **자동 병합하지 말 것** —
+수동으로 정합성을 조사한다. 받은 S3 객체가 운영 호스트의 최신 백업인지(이전 직후라면 옛 호스트의 것이 아닌지) 확인한다.
 
-**② 거래 활성화 _후_ (신중)**
+옛 인스턴스가 Vultr 에 남아 있지 않으면(콘솔·API 에서 label 이 `APP_NAME` 인 인스턴스가 없음을 확인) 별도 체크아웃 없이,
+낡은 `.state` 를 다른 이름으로 옮겨 둔 뒤 같은 체크아웃에서 4절의 "새 호스트는 거래 없이 먼저" 조건으로 `setup` →
+`deploy` 하고 3절로 복원한다(덤프는 3절 1 b). 응답만 없는 인스턴스가 남아 있으면 `setup` 이 그것을 다시 쓰므로 4절의
+제약을 따른다. 백업 cron·Actions 대상·도메인은 4절 항목과 같다.
 
-1. Vultr에서 거래를 끄고(UI) 진행 중 주문이 정리될 때까지 기다린다.
-2. Upbit 미체결·잔고 스냅샷을 기록한다.
-3. Vultr에서 최종 `pg_dump`를 뜬다.
-4. **AWS DB에 그 덤프를 복원한다**(AWS의 옛 데이터를 그대로 쓰면 Vultr 기간의 거래가 사라진다).
-5. Upbit 실제 잔고/미체결과 복원된 DB를 대조한다.
-6. AWS에서만 거래를 다시 켠다.
-
-> 양쪽 DB에 각각 쓰기가 발생했다면 **자동 병합하지 말 것.** 수동으로 정합성을 조사한다.
+> 이력: 2026-07-30 AWS → Vultr 이전과 그 롤백 창구(AWS 인스턴스 정지 보존)는 2026-07-31 AWS 자원 삭제로
+> 끝났고, `deploy/aws`·`deploy/oci` 판은 2026-10 에 저장소에서도 지웠다. 당시 이전·롤백 런북은
+> `git show 83fd87e:deploy/vultr/README.md` 의 3~5절에 있다.
 
 ## 6. DB 백업
 
@@ -233,12 +265,9 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 # cron 등록 (./deploy.sh ssh 접속 후)
 crontab -e
 # 0 18 * * *  cd /opt/app && ./backup.sh >> /var/log/db-backup.log 2>&1   # UTC 18:00 = KST 03:00
-
-# 복원 (신규/스테이징 DB 로 — 운영 DB 덮어쓰기 주의)
-aws s3 cp s3://<버킷>/db-backups/trading-<TS>.sql.gz - | gunzip \
-  | docker compose exec -T postgres psql -U trading -d trading
 ```
 
+- 복원은 3절을 따른다(객체 받기는 3절 1 b). 앱이 띄운 DB 에 덤프를 그대로 흘려 넣으면 Flyway 스키마와 충돌한다.
 - 업로드는 크기 검증까지 통과해야 성공으로 본다. 실패하면 **exit≠0**으로 끝난다.
 - 보존 정리는 파일명이 아니라 객체의 `LastModified` 기준이며 삭제 실패는 경고로 남는다.
 - ⚠️ **"업로드 성공"은 "복원 가능"이 아니다.** 주기적으로 실제 복원 시험을 할 것.
