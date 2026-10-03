@@ -62,8 +62,7 @@ coin-trading-bot/
 │       └── notification/            # DiscordNotifier
 │
 ├── docker-compose.yml               # 로컬 인프라 (app, postgres)
-├── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
-└── perf/                            # k6 부하 테스트
+└── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
 ```
 
 > 운영 전략 `CombinedStrategy` 와 `TradingStrategy` 인터페이스는 `:common`에 거주한다. 나머지 전략·연구 코드는 2026-10-01 MVP 정리 1단계에서 지웠다.
