@@ -1,19 +1,18 @@
 # Slim production stack for a single Vultr vc2-1c-2gb (1 vCPU x86_64, 2GB).
-# Only what the committed `bot` module actually needs: app + Postgres + Redis.
+# Only what the committed `bot` module actually needs: app + Postgres.
 # No Kafka / collector / monitoring (those modules are not committed).
 #
 # The app image is built+pushed by GitHub Actions (multi-arch) to GHCR; this file only pulls it.
 # arm64(AWS Graviton) → amd64(Vultr) 전환이지만 이미지가 multi-arch 라 그대로 pull 된다.
-# Postgres/Redis are NOT published to the host — only the app reaches them over the compose network.
+# Postgres is NOT published to the host — only the app reaches it over the compose network.
 #
 # ── 2GB 예산 (AWS 4GB 판에서 하향) ──
 # 하향 근거는 추정이 아니라 **운영 59일차 EC2 실측**이다:
 #   app 420MiB / postgres 380MiB / redis 3.4MiB / caddy 14MiB = 합계 818MiB (host used 874MB)
-# 제한: caddy 64m + app 832m + postgres 512m + redis 64m = 1472m.
+# 제한: caddy 96m + app 832m + postgres 512m = 1440m.
 #   - postgres 는 실측이 380MiB 로 가장 빡빡해 **512m 를 그대로 유지**한다(검증된 값 보존).
 #   - app 은 실사용 420MiB 대비 832m 로 약 2배 여유. JVM heap 은 MaxRAMPercentage=70% → 약 582m.
-#   - redis 는 실사용이 3.4MiB 뿐이라 64m 로 충분(maxmemory 도 함께 하향).
-# 2048MB 중 1472m 사용 + OS/docker ≈ 250MB → 여유 약 320MB.
+# 2048MB 중 1440m 사용 + OS/docker ≈ 250MB → 여유 약 350MB.
 # ⚠️ 이 예산은 실측 기반 설계값이다. 배포 후 `docker stats` 로 재측정해 확인할 것.
 
 services:
@@ -81,8 +80,6 @@ services:
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
       - DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
       - DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
-      - REDIS_HOST=redis
-      - REDIS_ENABLED=true
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=trading
@@ -98,10 +95,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      # Redis 는 rate limit 전용이고 장애 때 in-memory 로 강등된다 — healthy 를 기다리면 Redis 가 unhealthy 인 동안
-      # compose up 이 실패해 배포가 health·자동 롤백에 닿기 전에 멈추고, 재생성된 app 이 뜨지 않은 채 남는다.
-      redis:
-        condition: service_started
     restart: unless-stopped
     # graceful shutdown: SIGTERM 후 진행 중이던 tick(주문 후처리 포함)이 끝나도록 대기.
     # 앱의 spring.lifecycle.timeout-per-shutdown-phase(30s)보다 넉넉히 크게 잡아 강제 kill(SIGKILL)을 피한다.
@@ -151,28 +144,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
-    expose:
-      - "6379"                 # internal only — never published to the host
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-    mem_limit: 64m
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 volumes:
   pgdata:
-  redisdata:
   caddy_data:
   caddy_config:

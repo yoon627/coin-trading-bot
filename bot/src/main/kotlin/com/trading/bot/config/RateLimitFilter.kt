@@ -1,189 +1,46 @@
 package com.trading.bot.config
 
-import org.slf4j.LoggerFactory
-import org.springframework.context.SmartLifecycle
-import org.springframework.data.redis.core.ReactiveRedisCallback
-import org.springframework.data.redis.core.ReactiveRedisTemplate
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import org.springframework.web.server.ServerWebExchange
 import org.springframework.web.server.WebFilter
 import org.springframework.web.server.WebFilterChain
 import reactor.core.publisher.Mono
-import reactor.core.scheduler.Schedulers
-import reactor.util.retry.Retry
 import java.time.Clock
-import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @Component
 class RateLimitFilter(
-    private val redisTemplate: ReactiveRedisTemplate<String, String>?,
     private val clock: Clock = Clock.systemUTC(),
-    // Redis 가 이 안에 답하지 않으면 in-memory 로 판정하고, 그 뒤 redisRetryDelay 동안은 Redis 를 부르지 않는다(#229).
-    private val redisTimeout: Duration = Duration.ofMillis(500),
-    private val redisRetryDelay: Duration = Duration.ofSeconds(30),
-    private val warmUpRetryDelay: Duration = Duration.ofSeconds(1),
-    private val warmUpWait: Duration = Duration.ofSeconds(15),
-) : WebFilter, SmartLifecycle {
-    private val log = LoggerFactory.getLogger(javaClass)
-    @Volatile private var running = false
+) : WebFilter {
 
-    // Redis 가 없거나 장애일 때 fail-open 되지 않도록 in-memory fixed-window 로 판정한다 (단일 인스턴스 기준 유효).
-    private val memoryHits = ConcurrentHashMap<String, Long>()
-    private val memoryWindowMinute = AtomicLong(-1)
-
-    // 0 이면 Redis 로 판정하고, 그 밖이면 이 시각(ms)까지 in-memory 로 판정한다(강등).
-    private val redisRetryAtMs = AtomicLong(0)
-    // 강등 중 지연이 지나면 한 요청만 Redis 를 다시 시도한다 — 나머지는 그 결과를 기다리지 않고 in-memory 로 판정한다.
-    private val probing = AtomicBoolean(false)
-
-    init {
-        if (redisTemplate == null) {
-            log.warn("Redis 미구성 — in-memory rate limiting 으로 대체. 다중 인스턴스 환경에선 Redis 필수.")
-        }
+    // 카운터는 프로세스 메모리에 있다 — 인스턴스마다 따로 세므로 단일 인스턴스 기준이다.
+    private class Window(val minute: Long) {
+        val hits = ConcurrentHashMap<String, Long>()
     }
+    private val window = AtomicReference(Window(-1))
 
     companion object {
         private const val MAX_REQUESTS_PER_MINUTE = 60
-        // Auth flows see natural retries on a mistyped password; 10/min was too tight for legitimate SPA use.
-        // Client IP is now resolved from Caddy's X-Forwarded-For (see clientIp()),
-        // so 30/min is a per-client brute-force ceiling rather than a shared bucket.
+        // 인증 경로는 비밀번호 오타로 재시도가 잦아 정상 사용에도 여유가 필요하다. [clientIp] 로 클라이언트마다 따로 세므로
+        // 이 값은 공유 버킷이 아니라 클라이언트별 무차별 대입 상한이다.
         private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30
-        private const val KEY_PREFIX = "ratelimit:"
-        private val WINDOW = Duration.ofMinutes(1)
-        private const val WARM_UP_RETRIES = 2L
     }
 
     override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
         val path = exchange.request.path.value()
         if (isExcluded(path)) return chain.filter(exchange)
 
-        val clientIp = clientIp(exchange)
         val isAuthEndpoint = path.startsWith("/api/auth")
         val limit = if (isAuthEndpoint) MAX_AUTH_REQUESTS_PER_MINUTE else MAX_REQUESTS_PER_MINUTE
 
         // 키에 넣는 클라이언트 식별자는 client IP 뿐이다 — 요청이 스스로 주장하는 식별자는 넣지 않는다. IP 의 신뢰는 [clientIp] 의 전제
         // (Caddy 뒤 `deploy/*` 판)에 달려 있다: 루트 docker-compose 처럼 8080 을 직접 노출하면 XFF 도 위조된다.
-        val minute = clock.millis() / 60000
         // 인증과 일반 API 는 한도가 다르므로 카운터도 따로 둔다 — 하나를 나눠 쓰면 폴링이 인증 한도를 대신 소모한다.
         val bucket = if (isAuthEndpoint) "auth" else "api"
-        val key = "$KEY_PREFIX$bucket:$clientIp:$minute"
-
-        val template = redisTemplate
-        val degradedUntil = redisRetryAtMs.get()
-        val probe = degradedUntil != 0L
-        if (template == null || (probe && (clock.millis() < degradedUntil || !probing.compareAndSet(false, true)))) {
-            return decide(exchange, chain, isMemoryRateLimited(key, minute, limit), limit)
-        }
-
-        // chain.filter 는 timeout·onErrorResume 밖에 둔다 — 하류의 오류·지연이 Redis 장애로 잡히면 요청이 두 번 처리된다.
-        return redisCount(template, key)
-            .map { count ->
-                if (probe) recovered(degradedUntil)
-                count > limit
-            }
-            .onErrorResume { error ->
-                redisFailed(error, degradedUntil)
-                Mono.just(isMemoryRateLimited(key, minute, limit))
-            }
-            // 클라이언트가 끊겨 시도가 취소돼도 자리를 돌려준다 — 안 그러면 다시는 Redis 를 시도하지 않는다.
-            .doFinally { if (probe) probing.set(false) }
-            .flatMap { limited -> decide(exchange, chain, limited, limit) }
+        return if (isRateLimited("$bucket:${clientIp(exchange)}", limit)) reject(exchange, limit) else chain.filter(exchange)
     }
-
-    // Lettuce 공유 연결은 첫 명령에서야 맺어진다(운영 약 2.5초). 웹 서버가 요청을 받은 뒤에 맺으면 그동안 온 요청이 팩토리
-    // lock 에서 기다리다 판정 한도에 끊겨, Redis 가 정상인데도 강등된다. 그래서 웹 서버보다 먼저 맺는다. 기동은 최대 warmUpWait
-    // 만큼만 늦추고 실패시키지 않는다 — 시간이 넘어도 구독은 끊지 않고(끊으면 worker 가 interrupt 돼 Lettuce 가 connect 를
-    // 버린다), 무엇이 나도 던지지 않는다(던지면 refresh 가 실패해 앱이 뜨지 않는다).
-    override fun start() {
-        running = true
-        try {
-            warmUpRedis().toFuture().get(warmUpWait.toMillis(), TimeUnit.MILLISECONDS)
-        } catch (e: TimeoutException) {
-            log.info("Redis rate limit 연결 준비가 {}ms 안에 끝나지 않아 기다리지 않고 기동한다 — 예열은 뒤에서 이어진다", warmUpWait.toMillis())
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            log.info("Redis rate limit 연결 준비를 기다리다 interrupt 됐다 — 기다리지 않고 기동한다")
-        } catch (e: Exception) {
-            redisFailed(e, 0L)
-        }
-    }
-
-    override fun stop() {
-        running = false
-    }
-
-    override fun isRunning(): Boolean = running
-
-    // 반응형 웹 서버(SMART_LIFECYCLE_PHASE - 1024)보다 먼저 시작한다.
-    override fun getPhase(): Int = 0
-
-    // 판정 한도는 걸지 않는다 — 느린 첫 연결은 장애가 아니다(상한은 Lettuce 타임아웃). 기동 직후엔 CPU 가 바빠 첫 시도가 그
-    // 타임아웃을 넘길 수 있어 몇 번 더 시도한 뒤에만 강등한다. 강등은 요청과 같은 전이 경로라 장애 한 번에 WARN 한 줄이다.
-    internal fun warmUpRedis(): Mono<Void> {
-        val template = redisTemplate ?: return Mono.empty()
-        return Mono.defer {
-            val started = System.nanoTime()
-            val attempts = AtomicInteger()
-            template.execute(ReactiveRedisCallback { it.ping() })
-                .doOnSubscribe { attempts.incrementAndGet() }
-                .subscribeOn(Schedulers.boundedElastic())
-                .then()
-                .retryWhen(Retry.fixedDelay(WARM_UP_RETRIES, warmUpRetryDelay).onRetryExhaustedThrow { _, signal -> signal.failure() })
-                .doOnSuccess { warmedUp(Duration.ofNanos(System.nanoTime() - started), attempts.get()) }
-        }.onErrorResume { error ->
-            redisFailed(error, 0L)
-            Mono.empty()
-        }
-    }
-
-    // 요청이 먼저 강등시켰으면 그대로 둔다(복귀는 다시 시도한 요청만 한다) — 이 줄이 복귀로 읽히지 않게 구분한다.
-    private fun warmedUp(elapsed: Duration, attempts: Int) {
-        val note = if (redisRetryAtMs.get() == 0L) "" else " (강등 중 — 다음 재시도에서 Redis 로 돌아간다)"
-        log.info("Redis rate limit 연결 준비 — {}ms, 시도 {}회{}", elapsed.toMillis(), attempts, note)
-    }
-
-    // 공유 연결이 아직 없으면 연결 획득이 구독한 스레드에서 동기로 막힌다(Lettuce connect) — 요청을 처리하는 이벤트 루프를
-    // 묶지 않게 worker 에서 구독한다. 연결이 끊긴 동안 Lettuce 는 명령을 쌓아 두고 명령 타임아웃까지 기다리므로 짧게 끊는다.
-    // 끊을 때 진행 중인 호출은 취소하지 않는다(suppressCancel) — worker 를 interrupt 하면 Lettuce 가 connect 를 버려 주인 없는
-    // 연결이 남는다. 남은 호출은 Lettuce 타임아웃(prod 1s) 안에 스스로 끝난다. 결과는 신호로 싸서(materialize) 넘긴다 —
-    // 끊긴 뒤 예외로 끝난 future 는 Reactor 가 onErrorDropped ERROR(스택 포함)로 찍는다.
-    private fun redisCount(template: ReactiveRedisTemplate<String, String>, key: String): Mono<Long> {
-        val call = template.opsForValue().increment(key)
-            .flatMap { count -> if (count == 1L) template.expire(key, WINDOW).thenReturn(count) else Mono.just(count) }
-            .subscribeOn(Schedulers.boundedElastic())
-            .materialize()
-        return Mono.fromFuture({ call.toFuture() }, true)
-            .timeout(redisTimeout)
-            .dematerialize()
-    }
-
-    // 상태는 요청이 관측한 값에서만 바꾼다(compareAndSet). 다시 시도한 요청만 강등을 푼다 — 강등 전에 나간 요청이 늦게
-    // 성공해도 장애 중인 Redis 로 되돌리지 않고, 그 사이 다른 시도가 이미 복귀시켰으면 아무것도 하지 않는다.
-    private fun recovered(observed: Long) {
-        if (redisRetryAtMs.compareAndSet(observed, 0)) log.info("Redis rate limit 복귀 — 다시 Redis 로 판정한다")
-    }
-
-    // 정상(0)에서의 실패만 강등하며 WARN 한 줄을 남긴다. 다시 시도의 실패는 지연만 다시 걸고, 강등 전에 나간 요청의 늦은
-    // 실패나 이미 바뀐 상태를 본 시도는 아무것도 바꾸지 않는다.
-    private fun redisFailed(error: Throwable, observed: Long) {
-        val retryAt = clock.millis() + redisRetryDelay.toMillis()
-        if (redisRetryAtMs.compareAndSet(observed, retryAt) && observed == 0L) {
-            log.warn(
-                "Redis rate limit 실패 — {}초 동안 in-memory 카운터로 판정하고 그 뒤 다시 시도한다: {}",
-                redisRetryDelay.seconds, error.toString(),
-            )
-        }
-    }
-
-    private fun decide(exchange: ServerWebExchange, chain: WebFilterChain, limited: Boolean, limit: Int): Mono<Void> =
-        if (limited) reject(exchange, limit) else chain.filter(exchange)
 
     // Caddy(reverse proxy)가 X-Forwarded-For 를 자신이 본 실제 peer IP 로 덮어써 전달한다
     // (Caddyfile: `header_up X-Forwarded-For {remote_host}` — client 위조 방지). app 은
@@ -201,14 +58,17 @@ class RateLimitFilter(
             path.startsWith("/tide-app") || path == "/" ||
             path.endsWith(".html")
 
-    private fun isMemoryRateLimited(key: String, minute: Long, limit: Int): Boolean {
-        // 분(window)이 바뀌면 카운터 초기화 → 맵 크기를 한 window 분량으로 제한.
-        if (memoryWindowMinute.getAndSet(minute) != minute) {
-            memoryHits.clear()
-        }
-        val count = memoryHits.merge(key, 1L) { a, b -> a + b } ?: 1L
+    // 1분 고정 창(UTC 정분 버킷). 지금 창의 분이거나 그 직전 분(정분 직전에 분을 계산한 늦은 요청)이면 지금 창에 센다 — 창을
+    // 되돌리면 지금 분 카운터가 지워진다. 그 밖(다음 분, 또는 벽시계가 뒤로 가 두 분 이상 이전인 분)은 새 창으로 바꾼다 — 창이
+    // 미래 분에 멈추면 시계가 따라잡을 때까지 잠긴다. 지난 창은 통째로 버려지므로 카운터는 한 창 분량만 남는다.
+    private fun isRateLimited(key: String, limit: Int): Boolean {
+        val minute = clock.millis() / 60000
+        val current = window.updateAndGet { if (minute == it.minute || minute == it.minute - 1) it else Window(minute) }
+        val count = current.hits.merge(key, 1L) { a, b -> a + b } ?: 1L
         return count > limit
     }
+
+    internal fun trackedKeys(): Int = window.get().hits.size
 
     private fun reject(exchange: ServerWebExchange, limit: Int): Mono<Void> {
         exchange.response.statusCode = HttpStatus.TOO_MANY_REQUESTS

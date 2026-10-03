@@ -23,12 +23,12 @@ AWS EC2 t4g.medium(실측 **$39.29/월** — 2026-06 Cost Explorer)에서 Vultr 
 |---|---|---|
 | app (JVM) | 420 MiB | 832m |
 | postgres | 380 MiB | 512m (유지) |
-| redis | 3.4 MiB | 64m |
-| caddy | 14 MiB | 64m |
-| **합계** | **818 MiB** | **1472m** |
+| redis | 3.4 MiB | 없음(2026-10 제거 — rate limit 은 앱 안 카운터) |
+| caddy | 14 MiB | 96m |
+| **합계** | **818 MiB** | **1440m** |
 
-호스트 전체도 `used 874MB` / 3835MB 였고 load average 0.00이었다. 2048MB에서 제한 합계 1472m +
-OS/docker 약 250MB → 여유 약 320MB. postgres가 실측상 가장 빡빡해 **512m를 그대로 유지**했다.
+호스트 전체도 `used 874MB` / 3835MB 였고 load average 0.00이었다. 2048MB에서 제한 합계 1440m +
+OS/docker 약 250MB → 여유 약 350MB. postgres가 실측상 가장 빡빡해 **512m를 그대로 유지**했다.
 
 > ⚠️ 이 예산은 실측 기반 설계값이다. 배포 후 반드시 `./deploy.sh mem` 으로 재확인할 것.
 > 부족하면 `vc2-2c-2gb`($15) 또는 `vc2-2c-4gb`($20)로 콘솔에서 리사이즈할 수 있다.
@@ -256,7 +256,7 @@ aws s3 cp s3://<버킷>/db-backups/trading-<TS>.sql.gz - | gunzip \
   남지 않는다. 사람이 직접 추가한 규칙은 건드리지 않는다.
 - 수동 배포 SSH는 `StrictHostKeyChecking=accept-new`, Actions 배포는 추적 중인
   `deploy/vultr/known_hosts`와 `StrictHostKeyChecking=yes`를 사용한다.
-- PostgreSQL/Redis는 호스트에 노출하지 않는다(compose 내부망 전용).
+- PostgreSQL은 호스트에 노출하지 않는다(compose 내부망 전용).
 - **회원가입은 계정이 하나도 없는 서버에서만 열린다**(첫 계정 = 소유자). 새 서버를 빈 DB 로 띄우면 443 이 열린 순간
   먼저 가입한 사람이 유일한 사용자가 된다 — DB 를 백업에서 복원한 뒤 공개하거나, 배포 직후 곧바로 가입한다.
 - `.env`는 로컬·서버 모두 `600`. 절대 커밋하지 말 것(`.gitignore` 처리됨).
