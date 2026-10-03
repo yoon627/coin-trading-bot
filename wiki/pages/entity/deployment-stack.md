@@ -25,7 +25,7 @@ sources:
 | 배포 | GitHub Actions `main` push → GHCR → SSH → `deploy/vultr/deploy.sh deploy` |
 
 > `verified` 주의: 위 구성과 2026-08-01 운영 상태는 저장소와 실제 `status`/HTTPS 확인으로 대조했고, 2026-08-02 자동 배포 workflow의 YAML·embedded shell 계약도 정적으로 검증했다. live Actions 배포 결과는 merge 후 별도로 관찰해야 한다.
-> AWS 경로는 2026-07-31 삭제된 historical reference이고, OCI는 보류 경로다.
+> 배포 판은 Vultr 하나다. AWS 는 2026-07-31 에 자원을 삭제했고 OCI 는 프로비저닝하지 않았으며, 두 판(`deploy/aws`·`deploy/oci`)은 2026-10 에 저장소에서도 지웠다(옛 내용은 git 이력).
 
 ## 이 구성이 나온 이유
 
