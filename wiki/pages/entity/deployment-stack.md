@@ -4,10 +4,11 @@ category: entity
 created: 2026-07-28
 updated: 2026-10-03
 claim_state: current
-verified: 2026-10-03 — Redis 제거를 `RateLimitFilter`·compose·`application-prod.yml` 원문과 `RateLimitFilterTest`(고정 시계 행동 테스트)로 확인했다. 필터 순서(Security 가 먼저 — 비인증 일반 API 는 401)는 로컬 컨테이너에서 비인증 `/api/bot/status` 가 401·필터 미도달인 것으로 관찰했다. 롤백 경로(옛 이미지 b8d227e + redis 없는 compose, `deploy.sh:593` 과 같은 `up -d --remove-orphans --pull missing`)를 로컬에서 재현해 redis 컨테이너 제거·볼륨 잔존·health UP 5s·강등 WARN 1줄·인증 경로 31번째 429 를 관찰했다 · 2026-10-01 — preflight 의 필수 선언 키가 5개(차트 청산 키 제거, `preflight_exit_params.sh` `EXIT_PARAM_KEYS`)임을 확인 · 2026-09-30 — 웹 서버 전 동기 예열(#280)을 `RateLimitFilter` 원문과 `RateLimitFilterTest` 로 확인했다. 실제 `GenericApplicationContext` refresh 에서 반응형 웹 서버 phase 대역이 시작될 때 연결이 이미 맺어져 있고, ping 이 실패해도 refresh 가 성공한다. 상한 초과 때 진행 중 호출을 interrupt 하지 않는다. 최소 Boot 반응형 앱과 로컬 redis:7(새 JVM 3회) 실측에서 `연결 준비`(155~181ms)가 `Netty started`·`Started` 보다 먼저 찍혔고, 요청 전에 연결 수가 1→2 가 됐으며, 첫 요청은 새 연결 없이 강등 WARN 0 이었다. 웹 서버 phase 는 Boot 3.4.1 `WebServerStartStopLifecycle` 소스 확인, 운영 첫 연결 2479ms 는 배포 `0cad9c3` 로그 · 2026-09-30 — 기동 예열(#278)을 `RateLimitFilter` 원문과 `RateLimitFilterTest`(예열·판정이 한 공유 연결을 쓰는 fake — 예열이 없으면 첫 요청이 강등되는 운영 결함을 재현)로 확인. 로컬 redis:7 새 JVM 실측에서 예열이 판정과 같은 연결을 맺어 첫 요청이 약 200ms→10ms(연결 수 그대로). 기동 뒤 첫 판정 강등은 운영 배포 `4d271cf` 로그로 관찰, Lettuce 재연결 WARN 은 lettuce 6.4.1 `ConnectionWatchdog` 소스 확인 · 2026-09-30 — Redis 장애 비결합(#229)을 `RateLimitFilter`·`application-prod.yml`·compose 원문과 `RateLimitFilterTest`·`RedisProdSettingsTest`(prod 프로필 로드·compose 파싱)로 확인, 로컬 redis:7 로 pause·stop·닫힌 포트·블랙홀 주소를 재현해 요청이 타임아웃(≈500ms) 안에 통과하고 WARN 1줄·복귀 INFO 가 남는 것을 관찰 · 2026-09-30 — 업로드 전 preflight(#230)를 `deploy.sh`·`preflight_exit_params.sh` 원문과 `ExitParamsPreflightScriptTest` 로 확인, 운영의 렌더된 `.env` 에 새 스크립트를 읽기 전용으로 돌려 통과(서버 bash 5.2·GNU Awk 5.2) · 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
+verified: 2026-10-03 — Caddyfile 반영 시점을 `deploy.sh`(scp 뒤 `compose pull`·`up -d` 뿐, e2e 실패는 WARN 후 exit 0)와 compose(`caddy:2-alpine`·`pull_policy: always`·단일 파일 bind mount) 원문으로 확인 · 2026-10-03 — `TradingEnvPassthroughTest` 의 양방향·이름만 단언을 변이 검사로 확인했다 — compose·`deploy.sh` 에 남은 가짜 키, 주석 처리한 실제 키, 값 붙은 compose 항목은 실패로 잡고, 배열 안 주석의 키·괄호는 통과한다(옛 정규식은 앞의 셋을 놓치고 주석 속 괄호에서 배열을 잘라 읽었다) · 2026-10-03 — Redis 제거를 `RateLimitFilter`·compose·`application-prod.yml` 원문과 `RateLimitFilterTest`(고정 시계 행동 테스트)로 확인했다. 필터 순서(Security 가 먼저 — 비인증 일반 API 는 401)는 로컬 컨테이너에서 비인증 `/api/bot/status` 가 401·필터 미도달인 것으로 관찰했다. 롤백 경로(옛 이미지 b8d227e + redis 없는 compose, `deploy.sh:593` 과 같은 `up -d --remove-orphans --pull missing`)를 로컬에서 재현해 redis 컨테이너 제거·볼륨 잔존·health UP 5s·강등 WARN 1줄·인증 경로 31번째 429 를 관찰했다 · 2026-10-01 — preflight 의 필수 선언 키가 5개(차트 청산 키 제거, `preflight_exit_params.sh` `EXIT_PARAM_KEYS`)임을 확인 · 2026-09-30 — 웹 서버 전 동기 예열(#280)을 `RateLimitFilter` 원문과 `RateLimitFilterTest` 로 확인했다. 실제 `GenericApplicationContext` refresh 에서 반응형 웹 서버 phase 대역이 시작될 때 연결이 이미 맺어져 있고, ping 이 실패해도 refresh 가 성공한다. 상한 초과 때 진행 중 호출을 interrupt 하지 않는다. 최소 Boot 반응형 앱과 로컬 redis:7(새 JVM 3회) 실측에서 `연결 준비`(155~181ms)가 `Netty started`·`Started` 보다 먼저 찍혔고, 요청 전에 연결 수가 1→2 가 됐으며, 첫 요청은 새 연결 없이 강등 WARN 0 이었다. 웹 서버 phase 는 Boot 3.4.1 `WebServerStartStopLifecycle` 소스 확인, 운영 첫 연결 2479ms 는 배포 `0cad9c3` 로그 · 2026-09-30 — 기동 예열(#278)을 `RateLimitFilter` 원문과 `RateLimitFilterTest`(예열·판정이 한 공유 연결을 쓰는 fake — 예열이 없으면 첫 요청이 강등되는 운영 결함을 재현)로 확인. 로컬 redis:7 새 JVM 실측에서 예열이 판정과 같은 연결을 맺어 첫 요청이 약 200ms→10ms(연결 수 그대로). 기동 뒤 첫 판정 강등은 운영 배포 `4d271cf` 로그로 관찰, Lettuce 재연결 WARN 은 lettuce 6.4.1 `ConnectionWatchdog` 소스 확인 · 2026-09-30 — Redis 장애 비결합(#229)을 `RateLimitFilter`·`application-prod.yml`·compose 원문과 `RateLimitFilterTest`·`RedisProdSettingsTest`(prod 프로필 로드·compose 파싱)로 확인, 로컬 redis:7 로 pause·stop·닫힌 포트·블랙홀 주소를 재현해 요청이 타임아웃(≈500ms) 안에 통과하고 WARN 1줄·복귀 INFO 가 남는 것을 관찰 · 2026-09-30 — 업로드 전 preflight(#230)를 `deploy.sh`·`preflight_exit_params.sh` 원문과 `ExitParamsPreflightScriptTest` 로 확인, 운영의 렌더된 `.env` 에 새 스크립트를 읽기 전용으로 돌려 통과(서버 bash 5.2·GNU Awk 5.2) · 2026-08-24 — **live Actions 배포를 처음으로 실제 관찰**(2026-08-23 03:40:44 KST, 앱 로그 `Successfully applied 1 migration ... now at version v21`). push 트리거와 stale 가드는 `.github/workflows/deploy.yml:61,75-87` 원문 확인. 배포 계층 기본값 제거(#75)는 2026-08-04 `docker compose config` 실측분, 인프라 구성은 2026-08-02 확인분 유지 · 2026-08-26 — 문서 전용 push 필터 도입, stale 가드를 코드 diff 기준으로 전환. 계기는 plan 커밋 `bcef6ec` 이 봇을 재시작시킨 일이고, 같은 실행 이력(`d21a3eb` skipped / `bcef6ec` success)이 자가치유 전제를 실증했다
 sources:
   - bot/src/main/kotlin/com/trading/bot/config/RateLimitFilter.kt
   - bot/src/main/resources/application-prod.yml
+  - bot/src/test/kotlin/com/trading/bot/config/TradingEnvPassthroughTest.kt
   - PROJECT_ANALYSIS.md
   - deploy/vultr/
   - .github/workflows/deploy.yml
@@ -25,7 +26,7 @@ sources:
 | 배포 | GitHub Actions `main` push → GHCR → SSH → `deploy/vultr/deploy.sh deploy` |
 
 > `verified` 주의: 위 구성과 2026-08-01 운영 상태는 저장소와 실제 `status`/HTTPS 확인으로 대조했고, 2026-08-02 자동 배포 workflow의 YAML·embedded shell 계약도 정적으로 검증했다. live Actions 배포 결과는 merge 후 별도로 관찰해야 한다.
-> AWS 경로는 2026-07-31 삭제된 historical reference이고, OCI는 보류 경로다.
+> 배포 판은 Vultr 하나다. AWS 는 2026-07-31 에 자원을 삭제했고 OCI 는 프로비저닝하지 않았으며, 두 판(`deploy/aws`·`deploy/oci`)은 2026-10 에 저장소에서도 지웠다(옛 내용은 git 이력).
 
 ## 이 구성이 나온 이유
 
@@ -33,7 +34,7 @@ sources:
 
 - **TLS 종단(Caddy)** — prod 프로파일이 항상 `Secure` 쿠키를 발급해 평문 HTTP 에서는 브라우저 로그인이 원천적으로 불가능했다([[lesson-secure-cookie-http]]).
 - **2GB 인스턴스** — 이전 EC2의 컨테이너 실측 818MiB를 근거로 rightsizing 했다. 지금 제한 합계는 caddy 96m + app 832m + postgres 512m = 1440m 다(redis 를 뺀 뒤). 예전 문서의 "1472m" 는 caddy 를 64m 로 적은 값이다 — compose 의 caddy 는 Vultr 이전 때부터 96m(실측 27MiB 에 64m 는 빠듯해 올림)라 당시 실제 합계는 1504m 였다.
-- **x86_64(Vultr)** — AWS arm64에서 전환하지만 GHCR 이미지와 공식 의존성 이미지가 multi-arch다.
+- **x86_64(Vultr)** — AWS arm64 에서 전환했다. GHCR 이미지와 공식 의존성 이미지가 multi-arch 라 그대로 돈다(arm64 빌드는 로컬 Mac 의 루트 compose 가 같은 GHCR 이미지를 받으므로 남겼다).
 
 ## 배포 시 주의
 
@@ -43,8 +44,10 @@ sources:
   그 상태였음이 발견됐다(운영에서 조정 불가). **전달 화이트리스트는 둘이고 둘 다 통과해야 한다** — `deploy.sh` 의 `TRADING_OVERRIDE_KEYS`(서버 `.env` 에 쓸지)와
   compose 의 `environment:`(컨테이너에 넘길지). 2026-09-05 에 compose 만 고치고 `deploy.sh` 를 빠뜨려 **세 번째** 같은 실패가 났다.
   이제 `TradingEnvPassthroughTest` 가 `trading.*` `@ConfigurationProperties` 생성자 파라미터를 전부 열거해
-  **두 목록 모두와** 대조하므로, 새 설정을 추가하면 그 테스트가 먼저 깨진다(변이 검사로 두 축 다 CAUGHT 확인).
-  테스트는 목록 누락만 잡는다 — **실제로 켜졌는지는 기동 로그로 확인한다**(예: `[shadow-exit] 관측 on/off`).
+  **두 목록 모두와 양방향으로** 대조한다 — 새 설정이 목록에 없거나, 지운 설정의 키가 목록에 남으면 깨진다. compose 의
+  `TRADING_*` 에 값이 붙어도 깨진다(이름만 — #75). `deploy.sh` 배열은 줄마다 `#` 뒤를 지운 뒤 읽으므로 배열 안 설명
+  주석의 키는 목록이 아니고, 주석 처리한 키는 빠진 키로 잡힌다.
+  테스트는 목록만 본다 — **실제로 켜졌는지는 기동 로그로 확인한다**(예: `[shadow-exit] 관측 on/off`).
   전달 계층이 넷(앱 기본값 → 시크릿 → 서버 `.env` → compose → 컨테이너)이라, 한 곳만 봐서는 알 수 없다.
 - **API rate limit 은 앱 메모리 카운터다** — Redis 는 2026-10 에 뺐다(그 전에는 이 카운터 전용이었다). `RateLimitFilter` 가
   클라이언트 IP(Caddy 가 덮어쓴 `X-Forwarded-For` 첫 값, 없으면 접속 주소)별로 1분 고정 창(UTC 정분)을 센다 — 인증 경로
@@ -62,6 +65,9 @@ sources:
   `ExitParamsPreflightScriptTest` 가 후보값으로 두 표와 실제 Spring 바인딩을 대조한다. 우회 플래그는 없다 — 오탐이면 모든 배포가
   막히므로, 검사를 바꿀 때는 머지 전에 서버의 렌더된 `/opt/app/.env` 에 새 스크립트를 읽기 전용으로 돌려 본다.
 - **앱 코드 변경은 이미지 재빌드가 있어야 반영된다.** `deploy.sh deploy`(pull)만으로는 안 바뀐다([[lesson-cors-origin-rebuild]]).
+- **Caddyfile 은 배포가 반영하지 않는다.** `deploy.sh` 는 복사만 하고 실행 중인 caddy 에 다시 읽히지 않아, caddy 컨테이너가
+  새로 뜰 때(새 이미지 digest·재부팅) 적용된다. 자동 롤백은 app 헬스만 보고 HTTPS e2e 실패는 WARN 이라, Caddyfile 변경의
+  게이트는 머지 전 같은 이미지로 돌리는 `caddy validate` 다(명령과 바로 적용하는 방법은 `deploy/vultr/README.md` 2절).
 - **자동 배포는 테스트·GHCR push 성공 뒤에만 실행된다.** Actions는 기존 Vultr 인스턴스만 갱신하고,
   고정한 호스트 키와 원격 `/opt/app/.last-good-sha`를 확인한 뒤 기존 migration gate·health check를 재사용한다.
   최초 실행은 healthy 컨테이너에서만 rollback 기준을 bootstrap한다(stale SHA 취급은 아래 두 항목).
