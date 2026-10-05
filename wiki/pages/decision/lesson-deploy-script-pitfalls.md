@@ -2,12 +2,12 @@
 title: lesson — deploy.sh 의 두 함정 (set -e 단락 종료, MSYS 경로 변환)
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-10-03
 claim_state: current
-verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 에서 분리 이관, 원본 커밋 331426f. 두 함정 모두 fix 된 채 보관 중이라고 원문에 기록
+verified: 2026-10-03 — sources 를 운영 판 `deploy/vultr/deploy.sh` 로 교체(AWS 판은 저장소에서 삭제). 두 함정의 수정이 거기도 있다 — `:4` `export MSYS_NO_PATHCONV=1`, `:68` `load_state` 가 `if` 형태 · 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 에서 분리 이관, 원본 커밋 331426f. 두 함정 모두 fix 된 채 보관 중이라고 원문에 기록
 sources:
   - docs/lessons.md
-  - deploy/aws/deploy.sh
+  - deploy/vultr/deploy.sh
 ---
 
 # lesson: deploy.sh 의 두 함정

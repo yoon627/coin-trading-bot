@@ -24,9 +24,7 @@ build/
 # Project meta — not used inside images
 .github/
 docs/
-perf/
 deploy/
-monitoring/
 scripts/
 *.md
 

@@ -12,9 +12,6 @@ export MSYS_NO_PATHCONV=1
 # AWS(4GB, $39.29/월 실측) 대비 -75%. 2GB 로 낮춘 근거는 운영 59일차 EC2 실측이다
 # (app 420MiB / postgres 380MiB / redis 3.4MiB / caddy 14MiB = 818MiB, load average 0.00).
 #
-# deploy/aws · deploy/oci 판과 배포 로직(대상 SHA 고정·migration 게이트·자동 롤백·헬스체크)이
-# 동일한 계약이다. 한쪽을 고치면 다른 쪽도 함께 고쳐야 한다.
-#
 # 사용법:
 #   ./deploy/vultr/deploy.sh setup    # 1회: SSH 키 + 방화벽 + 인스턴스 생성
 #   ./deploy/vultr/deploy.sh deploy   # GHCR 이미지 pull + compose 기동
@@ -108,7 +105,7 @@ require_vultr() {
     echo "  Vultr 계정 확인: $email"
 }
 
-# ⚠️ APP_ENCRYPTION_SECRET 은 생성하지 않고 실패시킨다 — AWS 에서 이전해 오는 DB 에는 이 키로
+# ⚠️ APP_ENCRYPTION_SECRET 은 생성하지 않고 실패시킨다 — 백업에서 복원한 DB 에는 이 키로
 # 암호화된 Upbit 키가 들어있어, 새 키를 만들면 앱은 정상 기동하면서 거래소 키만 조용히
 # 복호화 불능이 된다(가장 위험한 실패 모드).
 ensure_secrets() {
@@ -116,7 +113,7 @@ ensure_secrets() {
     if [[ -z "${APP_ENCRYPTION_SECRET:-}" ]]; then
         echo "ERROR: APP_ENCRYPTION_SECRET 이 비어 있습니다 — 자동 생성하지 않습니다."
         echo "  이 값은 저장된 Upbit API 키를 복호화하는 AES 키입니다. 새로 만들면 기존 키가 모두 무효화됩니다."
-        echo "  AWS 쪽 deploy/aws/.env 의 APP_ENCRYPTION_SECRET 값을 $ENV_FILE 에 그대로 복사하세요."
+        echo "  운영 중인 값(서버 /opt/app/.env 또는 오프사이트 보관본)을 $ENV_FILE 에 그대로 복사하세요."
         exit 1
     fi
     local appended=""
@@ -171,7 +168,7 @@ TRADING_OVERRIDE_KEYS=(
 )
 # ⚠️ 이 목록은 `docker-compose.prod.yml` 의 `environment:` 목록과 **쌍으로 유지**한다.
 # 한쪽에만 있으면 값이 서버 .env 까지 가고도 컨테이너에 안 들어가거나(그 반대) 조용히 기본값으로 돈다.
-# `TradingEnvPassthroughTest` 가 두 목록을 **모두** 앱 설정과 대조한다 — 새 설정을 추가하면 그 테스트가 깨진다.
+# `TradingEnvPassthroughTest` 가 두 목록을 **모두** 앱 설정과 양방향으로 대조한다 — 설정을 더하거나 지우면 그 테스트가 깨진다.
 # 변수에 담아야 [[ =~ ]] 가 공백을 패턴의 일부로 읽는다(따옴표로 감싸면 리터럴이 된다).
 # `-` 는 범위로 해석되지 않도록 클래스 끝에 둔다. 개행은 ^…$ 가 걸러낸다.
 TRADING_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
@@ -475,7 +472,7 @@ preflight_domain() {
 }
 
 # ── deploy ──
-# AWS/OCI 판과 동일한 계약(대상 SHA 고정 · migration 게이트 · 자동 롤백 · 헬스체크).
+# 대상 SHA 고정 · migration 게이트 · 자동 롤백 · 헬스체크.
 do_deploy() {
     load_state
     [[ -z "${PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }

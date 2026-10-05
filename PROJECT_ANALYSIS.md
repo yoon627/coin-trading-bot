@@ -14,7 +14,7 @@
 | **암호화** | AES-GCM 256-bit (사용자별 Upbit API 키 저장) |
 | **컨테이너** | Docker + Docker Compose |
 | **TLS** | Caddy 2 + Let's Encrypt (HTTPS 종단, sslip.io 자동 도메인) |
-| **배포** | Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 현행 / AWS EC2 t4g.medium (arm64, 4GB) — 2026-07-31 삭제·historical / OCI A1.Flex (arm64, 12GB, Always Free) — 보류 |
+| **배포** | Vultr 서울 vc2-1c-2gb (amd64, 2GB, $10) — 유일한 운영 경로. AWS EC2(2026-07-31 자원 삭제)·OCI(프로비저닝 안 함) 판은 2026-10 에 저장소에서 지웠다 |
 | **CI/CD** | GitHub Actions + GHCR (multi-arch 이미지 push) |
 
 > 경량화(rightsizing)로 Kafka, ML(Smile), Claude 분석, Resilience4j, Prometheus/Grafana/Loki, 별도 `:collector`/`:research` 모듈은 제거됐다. KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다(코드·`/api/stock/*`·`/api/kis/*`·UI·V27 스키마 정리). 설계 기록은 git 이력(`git log --all -- bot/src/main/kotlin/com/trading/bot/kis`).
@@ -62,10 +62,7 @@ coin-trading-bot/
 │       └── notification/            # DiscordNotifier
 │
 ├── docker-compose.yml               # 로컬 인프라 (app, postgres)
-├── deploy/aws/                      # AWS 배포 스크립트 + docker-compose.prod.yml
-├── deploy/oci/                      # OCI(Always Free) 배포 스크립트 + docker-compose.prod.yml
-├── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
-└── perf/                            # k6 부하 테스트
+└── deploy/vultr/                    # Vultr 서울 배포 스크립트 + docker-compose.prod.yml (2GB)
 ```
 
 > 운영 전략 `CombinedStrategy` 와 `TradingStrategy` 인터페이스는 `:common`에 거주한다. 나머지 전략·연구 코드는 2026-10-01 MVP 정리 1단계에서 지웠다.
@@ -203,8 +200,8 @@ trade_executions
 ```
 
 - 외부 진입점은 Caddy(:80/:443). `app`은 호스트에 노출되지 않고(`expose` 만) Caddy 가 `app:8080` 으로 리버스 프록시한다(Let's Encrypt 자동 발급).
-- 운영 배포(`deploy/vultr/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull,
-  AWS/OCI Compose 경로는 historical·보류 자산이다. 로컬(`docker-compose.yml`)은 caddy 없이 `build: .`
+- 운영 배포(`deploy/vultr/docker-compose.prod.yml`)는 caddy(TLS 종단) + GHCR `app` 이미지 pull 이다.
+  로컬(`docker-compose.yml`)은 caddy 없이 `build: .`
   로컬 빌드(`app:8080` 직접)다.
 
 ---
