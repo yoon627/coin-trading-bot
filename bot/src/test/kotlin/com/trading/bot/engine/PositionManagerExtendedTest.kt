@@ -265,22 +265,34 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `buy recognizes fill when awaitFill times out with executedVolume`() = runTest {
-        // 폴링 소진까지 state=wait 이지만 executed_volume>0 → 실제 체결분 존재. 매수 인정(회귀 보호).
+    fun `a buy still waiting with a partial fill stays pending until the order ends`() = runTest {
+        // 폴링 소진까지 wait+부분체결이면 확정하지 않는다 — 풀어 버리면 뒤의 체결분·수수료가 장부에 남지 않는다(#247).
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")),
-            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
+            listOf(Account(currency = "BTC", balance = "0.0005", avgBuyPrice = "52000000")),
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-wait")
-        coEvery { upbitClient.getOrder("buy-wait") } returns
-            Order(uuid = "buy-wait", state = "wait", executedVolume = "0.0003")
-
+        coEvery { upbitClient.getOrder("buy-wait") } returns Order(
+            uuid = "buy-wait", state = "wait", executedVolume = "0.0003", paidFee = "7.8",
+            trades = listOf(fill("KRW-BTC", 15_600.0, 0.0003, "bid")),
+        )
         val state = TradingState("KRW-BTC")
-        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")
 
-        assertNotNull(result)
+        assertNull(manager.buy("KRW-BTC", state, 50000000.0, "test"))
+        assertFalse(state.position)
+        assertEquals("buy-wait", state.pendingBuyUuid)
+
+        coEvery { upbitClient.getOrder("buy-wait") } returns Order(
+            uuid = "buy-wait", state = "done", executedVolume = "0.0005", paidFee = "13.0",
+            trades = listOf(fill("KRW-BTC", 15_600.0, 0.0003, "bid"), fill("KRW-BTC", 10_400.0, 0.0002, "bid")),
+        )
+        val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)!!
+
         assertTrue(state.position)
-        assertTrue(state.boughtToday)
+        assertNull(state.pendingBuyUuid)
+        assertEquals(0.0005, result.volume, 1e-12)
+        assertEquals(26_000.0, result.orderAmount!!, 1e-9)
+        assertEquals(FeeBasis.Measured(13.0), result.fee)
     }
 
     // --- sell tests ---
@@ -581,8 +593,8 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `reconcile completes buy when executed positive even while state wait`() = runTest {
-        // 강한우려1: executed>0 을 wait 보다 먼저 판정 (부분체결 방치 금지)
+    fun `reconcile keeps a partially filled buy pending while the order is still waiting`() = runTest {
+        // 부분체결을 무산으로 버리지도, 진행 중에 확정하지도 않는다 — 종료 응답에서 확정한다(#247).
         coEvery { upbitClient.getOrder("p1") } returns Order(uuid = "p1", state = "wait", executedVolume = "0.0003")
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")
@@ -591,11 +603,11 @@ class PositionManagerExtendedTest {
 
         val result = manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
 
-        assertNotNull(result)
-        assertTrue(state.position)
-        assertNull(state.pendingBuyUuid) // 체결 확정 → 해소
-        assertEquals(0.0003, state.holdVolume)
-        assertEquals("vb", state.entryStrategy)
+        assertNull(result)
+        assertFalse(state.position)
+        assertEquals("p1", state.pendingBuyUuid)
+        assertEquals("vb", state.pendingBuyStrategy)
+        coVerify(exactly = 0) { upbitClient.getAccounts() } // 잔고에 코인이 보여도 확정 근거로 쓰지 않는다
     }
 
     @Test
@@ -1954,25 +1966,6 @@ class PositionManagerExtendedTest {
         val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
 
         assertEquals(15_600.0, result!!.orderAmount!!, 1e-9)
-    }
-
-    @Test
-    fun `buy confirmed from a still-waiting response does not trust the running funds total`() = runTest {
-        // 폴링 소진 시 마지막 응답이 wait+부분체결이면 코인은 받았으니 매수 확정하지만, funds 는 아직 늘어날 수 있다.
-        coEvery { upbitClient.getAccounts() } returnsMany listOf(
-            listOf(Account(currency = "KRW", balance = "200000")),
-            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")),
-        )
-        coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-wait")
-        coEvery { upbitClient.getOrder("buy-wait") } returns Order(
-            uuid = "buy-wait", state = "wait", executedVolume = "0.0003",
-            trades = listOf(fill("KRW-BTC", 15_600.0, 0.0003, "bid")),
-        )
-
-        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")
-
-        assertNotNull(result)
-        assertNull(result!!.orderAmount)
     }
 
     @Test
