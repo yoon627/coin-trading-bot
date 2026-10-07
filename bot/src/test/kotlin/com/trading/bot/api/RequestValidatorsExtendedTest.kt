@@ -66,6 +66,13 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.validatePassword("a".repeat(73)) } // > 72 (bcrypt limit)
     }
 
+    @Test
+    fun `validatePassword limits the UTF-8 byte length, not the character count`() {
+        assertDoesNotThrow { validators.validatePassword("a".repeat(72)) }
+        assertDoesNotThrow { validators.validatePassword("가".repeat(24)) } // 24 chars = 72 bytes
+        assertThrows<ResponseStatusException> { validators.validatePassword("가".repeat(25)) } // 25 chars = 75 bytes
+    }
+
     // --- normalizeApiKey ---
 
     @Test
