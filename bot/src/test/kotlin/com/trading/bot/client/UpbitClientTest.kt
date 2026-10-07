@@ -1,7 +1,6 @@
 package com.trading.bot.client
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
@@ -32,14 +31,12 @@ class UpbitClientTest {
         mockServer = MockWebServer()
         mockServer.start()
 
-        val properties = UpbitProperties(
+        val authProvider = UpbitAuthProvider(
             accessKey = "test-key",
             secretKey = "test-secret-key-that-is-long-enough",
-            baseUrl = mockServer.url("/").toString().trimEnd('/'),
         )
-        val authProvider = UpbitAuthProvider(properties)
         val webClient = WebClient.builder()
-            .baseUrl(properties.baseUrl)
+            .baseUrl(mockServer.url("/").toString().trimEnd('/'))
             .build()
         client = UpbitClientImpl(webClient, authProvider)
     }
