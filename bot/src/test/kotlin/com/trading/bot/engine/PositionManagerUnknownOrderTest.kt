@@ -523,6 +523,17 @@ class PositionManagerUnknownOrderTest {
     }
 
     @Test
+    fun `a buy found by identifier while still waiting with a partial fill is adopted but not confirmed`() = runTest {
+        val (state, identifier) = unknownBuy()
+        coEvery { upbit.getOrderByIdentifier(identifier) } returns Order(uuid = "u-part", state = "wait", executedVolume = "0.0003")
+
+        assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
+
+        assertEquals("u-part", state.pendingBuyUuid)
+        assertFalse(state.position)
+    }
+
+    @Test
     fun `a released sell resyncs the position before dropping the order, as it does today`() = runTest {
         // 재시작 뒤처럼 position=false 로 복원된 행. 현행 순서(동기화 → pending 해제)를 고정한다. 실제로는 요청량 ≤ 주문 전 보유라
         // 순서가 결과를 바꾸지 않는다 — 순서를 드러내려고 요청량(0.001)이 주문 전 보유(0.0005)보다 큰, 운영에서 생기지 않는 행을 쓴다.
