@@ -3,7 +3,6 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitClientImpl
-import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
@@ -381,11 +380,10 @@ class UserTradingManager(
     }
 
     fun createUpbitClient(user: UserEntity): UpbitClient {
-        val props = UpbitProperties(
+        val authProvider = UpbitAuthProvider(
             accessKey = user.upbitAccessKey ?: "",
             secretKey = user.upbitSecretKey ?: "",
         )
-        val authProvider = UpbitAuthProvider(props)
         return UpbitClientImpl(upbitWebClient, authProvider)
     }
 
