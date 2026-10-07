@@ -144,6 +144,16 @@ class ErrorAlertRateLimiterTest {
     }
 
     @Test
+    fun `쿨다운 뒤 다시 허용된 fingerprint 도 삽입순 맨 뒤로 가 곧바로 밀려나지 않는다`() {
+        val rl = ErrorAlertRateLimiter(dedupCooldownMs = 300_000, globalPerMinute = 10, maxEntries = 2)
+        rl.decide("x", 0L)       // [x]
+        rl.decide("y", 1L)       // [x, y]
+        rl.decide("x", 400_000L) // 쿨다운 밖 → 허용, x 를 맨 뒤로 → [y, x]
+        rl.decide("z", 400_001L) // 가장 오래된 y 가 밀려난다 → [x, z]
+        assertFalse(rl.decide("x", 400_002L).allow) // x 는 방금 허용됐다 — 쿨다운 중
+    }
+
+    @Test
     fun `size cap 초과 시 오래된 entry 가 evict 되어 즉시 허용`() {
         val rl = ErrorAlertRateLimiter(maxEntries = 2, dedupCooldownMs = 300_000)
         rl.decide("a", 0L)

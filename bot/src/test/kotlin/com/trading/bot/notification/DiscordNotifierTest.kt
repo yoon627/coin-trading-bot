@@ -7,6 +7,7 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import io.mockk.*
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -214,6 +215,28 @@ class DiscordNotifierTest {
         val embed = (payloadSlot.captured["embeds"] as List<*>).first() as Map<*, *>
         (embed["fields"] as List<*>).map { it as Map<*, *> }.forEach {
             assertTrue((it["value"] as String).length <= 1024, "field ${it["name"]} exceeds 1024")
+        }
+    }
+
+    @Test
+    fun `sendErrorAlert 는 자르는 자리의 서로게이트 쌍을 가르지 않는다`() {
+        notifier.sendErrorAlert(
+            loggerName = "l".repeat(255) + "😀",
+            message = "x".repeat(999) + "😀",
+            stackSummary = "y".repeat(949) + "😀",
+            suppressedSince = 0,
+            webhookUrl = "https://discord.com/api/webhooks/789/errwebhook",
+        )
+
+        val payloadSlot = slot<Map<String, Any>>()
+        verify { requestBodySpec.bodyValue(capture(payloadSlot)) }
+        val embed = (payloadSlot.captured["embeds"] as List<*>).first() as Map<*, *>
+        (embed["fields"] as List<*>).map { it as Map<*, *> }.forEach {
+            val value = it["value"] as String
+            val lone = value.indices.any { i ->
+                Character.isHighSurrogate(value[i]) && (i + 1 >= value.length || !Character.isLowSurrogate(value[i + 1]))
+            }
+            assertFalse(lone, "field ${it["name"]} ends with half a surrogate pair")
         }
     }
 
