@@ -8,7 +8,8 @@ package com.trading.bot.notification
  * - 전역 상한: 최근 1분간 허용 건수가 [globalPerMinute] 이상이면 개별로 보내지 않고 요약용으로 보류해 [drainHeld] 가
  *   한 번에 돌려준다 — 버리면 한 번만 찍히는 ERROR 는 다시 오지 않아 영구 유실된다(#249). 요약으로 나간 fingerprint 도
  *   그 시각부터 쿨다운이다(요약과 개별로 두 번 보내지 않는다).
- * - 메모리: slot 은 [maxEntries] 삽입순(FIFO), 보류는 [maxHeld] 건, 넘친 보류는 로거별 발생 수만 센다.
+ * - 메모리: slot 은 [maxEntries] 건 — 마지막으로 허용·요약된 순서가 오래된 것부터 밀려난다. 보류는 [maxHeld] 건, 넘친 보류는
+ *   로거별 발생 수만 센다.
  * - logback appender lock 안에서 불린다 — 여기서 로깅·블로킹하지 않고, [drainHeld] 는 사본을 돌려준다.
  */
 class ErrorAlertRateLimiter(
@@ -56,6 +57,8 @@ class ErrorAlertRateLimiter(
             return Decision(allow = false, suppressedSince = 0)
         }
         if (recentAllows.size >= globalPerMinute) return hold(fingerprint, slot, logger, summary)
+        // remove 뒤 put — 제자리 put 은 삽입순을 그대로 둬, 방금 허용한 fingerprint 가 가장 먼저 밀려나 쿨다운을 잃는다.
+        slots.remove(fingerprint)
         slots[fingerprint] = Slot(nowMs, 0)
         recentAllows.addLast(nowMs)
         return Decision(allow = true, suppressedSince = slot?.suppressed ?: 0)
