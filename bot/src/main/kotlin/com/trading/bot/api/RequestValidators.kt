@@ -22,9 +22,12 @@ class RequestValidators {
         if (password.length < MIN_PASSWORD_LENGTH) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at least $MIN_PASSWORD_LENGTH characters")
         }
-        // bcrypt 는 72바이트 초과를 잘라내므로 상한을 둬 silent truncation/해싱 비용 DoS 를 차단.
-        if (password.length > MAX_PASSWORD_LENGTH) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at most $MAX_PASSWORD_LENGTH characters")
+        // bcrypt 입력 한계는 문자가 아니라 UTF-8 바이트다 — 한글은 한 글자에 3바이트라 72자 이하도 넘을 수 있다.
+        if (password.toByteArray(Charsets.UTF_8).size > MAX_PASSWORD_BYTES) {
+            throw ResponseStatusException(
+                HttpStatus.BAD_REQUEST,
+                "Password must be at most $MAX_PASSWORD_BYTES bytes in UTF-8 (non-ASCII characters take 2-4 bytes each)",
+            )
         }
     }
 
@@ -85,6 +88,6 @@ class RequestValidators {
         private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
         private const val MIN_PASSWORD_LENGTH = 10
-        private const val MAX_PASSWORD_LENGTH = 72  // bcrypt 입력 한계
+        private const val MAX_PASSWORD_BYTES = 72
     }
 }
