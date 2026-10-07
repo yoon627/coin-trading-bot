@@ -235,7 +235,6 @@ coin-trading-bot/
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` | 없음 | 쓰이지 않는다 — 거래 키는 UI 에서 사용자별로 등록하고 DB 에 암호화해 둔다(정리는 #300) |
 | `TRADING_TICKERS` | `KRW-BTC` | 쉼표로 구분한 기본 거래 종목 |
 | `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
