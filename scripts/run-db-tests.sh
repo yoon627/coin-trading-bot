@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 CTR="coin-trading-bot-db-tests-$$"
 IMAGE="postgres:17-alpine"   # 운영과 같은 이미지
 # DB 통합테스트 클래스 목록 — 새 클래스를 추가하면 여기와 deploy.yml 의 같은 목록에 함께 올린다.
-DB_TEST_CLASSES=(TradingStateRoundTripTest TradeRecordAggregateRoundTripTest)
+DB_TEST_CLASSES=(TradingStateRoundTripTest TradeRecordAggregateRoundTripTest UserSettingsUpdateRoundTripTest)
 xml_of() { echo "bot/build/test-results/test/TEST-com.trading.bot.persistence.$1.xml"; }
 
 # 내가 만든 컨테이너만 지운다(이름에 PID 가 있으므로 남의 것과 겹치지 않는다).

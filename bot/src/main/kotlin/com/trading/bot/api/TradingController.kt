@@ -7,8 +7,11 @@ import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.security.UserSecretsService
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -79,19 +82,12 @@ class TradingController(
     @PostMapping("/user/keys")
     suspend fun setUpbitKeys(@RequestBody req: UpbitKeysRequest): Map<String, String> {
         val userId = currentUserId()
-        val user = userRepository.findById(userId).awaitSingleOrNull()
+        userRepository.findById(userId).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found")
         val accessKey = requestValidators.normalizeApiKey(req.accessKey, "accessKey")
         val secretKey = requestValidators.normalizeApiKey(req.secretKey, "secretKey")
         val (encryptedAccessKey, encryptedSecretKey) = userSecretsService.encryptUpbitKeys(accessKey, secretKey)
-        userRepository.save(
-            user.copy(upbitAccessKey = encryptedAccessKey, upbitSecretKey = encryptedSecretKey)
-        ).awaitSingle()
-        try {
-            userTradingManager.reloadUserRuntime(userId)
-        } catch (e: RuntimeReloadFailedException) {
-            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
-        }
+        saveThenReload(userId) { userRepository.updateUpbitKeys(userId, encryptedAccessKey, encryptedSecretKey).awaitSingle() }
         return mapOf("status" to "saved")
     }
 
@@ -105,13 +101,8 @@ class TradingController(
             ?: return mapOf("has_discord_webhook" to !user.discordWebhookUrl.isNullOrBlank())
         // 해제는 빈 문자열이다(normalizeDiscordWebhookUrl 이 null 로 만든다).
         val nextWebhook = requestValidators.normalizeDiscordWebhookUrl(requested)
-        val saved = userRepository.save(user.copy(discordWebhookUrl = nextWebhook)).awaitSingle()
-        try {
-            userTradingManager.reloadUserRuntime(userId)
-        } catch (e: RuntimeReloadFailedException) {
-            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
-        }
-        return mapOf("has_discord_webhook" to !saved.discordWebhookUrl.isNullOrBlank())
+        saveThenReload(userId) { userRepository.updateDiscordWebhookUrl(userId, nextWebhook).awaitSingle() }
+        return mapOf("has_discord_webhook" to !nextWebhook.isNullOrBlank())
     }
 
     @GetMapping("/user/me")
@@ -125,6 +116,28 @@ class TradingController(
             "has_upbit_keys" to (!user.upbitAccessKey.isNullOrBlank()),
             "has_discord_webhook" to (!user.discordWebhookUrl.isNullOrBlank()),
         )
+    }
+
+    /**
+     * 저장한 설정을 도는 엔진에 반영한다. 저장은 요청이 끊겨도 끝까지 마친다(#283) — 커밋 뒤에 끊겨 reload 가 불리지 않으면 DB 와
+     * 도는 엔진이 조용히 갈린다. 끝까지 가면 끊긴 요청은 reload 의 첫 대기에서 드러나 미반영을 알린다([UserTradingManager.reloadUserRuntime]).
+     * 저장이 상한을 넘으면 커밋됐는지 알 수 없다 — reload 는 DB 를 다시 읽을 뿐이라 그래도 부르고, 결과를 모른다고 알린다.
+     */
+    private suspend fun saveThenReload(userId: Long, save: suspend () -> Unit) {
+        val saved = withContext(NonCancellable) { withTimeoutOrNull(SETTINGS_SAVE_TIMEOUT_MS) { save() } != null }
+        try {
+            userTradingManager.reloadUserRuntime(userId)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
+        if (!saved) throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, SETTINGS_SAVE_UNCONFIRMED_MESSAGE)
+    }
+
+    internal companion object {
+        // 끊긴 요청에서도 기다리는 시간이라 상한을 둔다 — 걸린 DB 호출이 요청을 무기한 붙잡지 않게.
+        private const val SETTINGS_SAVE_TIMEOUT_MS = 10_000L
+        const val SETTINGS_SAVE_UNCONFIRMED_MESSAGE =
+            "저장이 늦어져 반영됐는지 확인하지 못했습니다. 잠시 후 다시 저장하세요."
     }
 }
 

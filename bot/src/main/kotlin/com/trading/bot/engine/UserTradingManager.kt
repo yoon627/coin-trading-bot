@@ -415,8 +415,18 @@ class UserTradingManager(
     private suspend fun reloadLocked(userId: Long) {
         if (shuttingDown) return // 종료 중 — 엔진 교체·재기동 안 함(M5 일관)
         val existing = engines[userId] ?: return
-        val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
-        val decryptedUser = userSecretsService.decryptUserSecrets(user)
+        val decryptedUser = try {
+            val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
+            userSecretsService.decryptUserSecrets(user)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 옛 엔진은 아직 멈추지 않았다 — 저장은 됐는데 반영만 못 했고 이전 설정으로 계속 돈다. 원래 예외(500)로 올리면 저장
+            // 실패로 읽힌다(#283). 도는 엔진이 없으면 반영할 곳이 없다 — 다음 시작이 저장된 설정을 읽는다.
+            if (existing.isRunning()) throw RuntimeReloadFailedException(userId, e, engineRestored = true)
+            log.warn("reload: user {} 정지 엔진의 설정을 읽지 못해 그대로 둔다 — 다음 시작이 저장된 설정을 읽는다: {}", userId, e.message)
+            return
+        }
         val wasRunning = existing.isRunning()
         // 사용자 목록 그대로 — 활성 집합(잔류 포함)을 넘기면 잔류 티커가 새 엔진의 신규 진입 대상이 되고,
         // 빈 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다(#226).
