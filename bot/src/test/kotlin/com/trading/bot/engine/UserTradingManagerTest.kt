@@ -7,6 +7,8 @@ import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
+import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
@@ -24,9 +26,11 @@ import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
 import io.mockk.CapturingSlot
 import io.mockk.Ordering
+import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.spyk
@@ -45,6 +49,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.TestScope
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -1323,5 +1328,186 @@ class UserTradingManagerTest {
         assertTrue(thrown is CancellationException, "취소를 삼키면 안 된다: $thrown")
         assertTrue(errors.any { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 알려야 한다: $errors")
         verify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), any()) }
+    }
+
+    // --- 막힌 pending 의 수동 해제 (#246) — 정지된 봇에서만 ---
+
+    private val SELL_SINCE = java.time.Instant.parse("2026-10-08T00:00:00Z")
+
+    private fun stoppedRow() {
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L).copy(running = false))
+    }
+
+    private fun pendingRow(state: TradingState): CapturingSlot<TradingState> {
+        coEvery { tradingStateService.loadState(1L, state.ticker) } returns state
+        val saved = slot<TradingState>()
+        coEvery { tradingStateService.upsert(1L, capture(saved)) } just Runs
+        return saved
+    }
+
+    private inline fun warnsDuring(block: () -> Unit): List<String> {
+        val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            block()
+        } finally {
+            logger.detachAppender(appender)
+        }
+        return appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
+    }
+
+    @Test
+    fun `a stopped bot's buy pending is cleared with the entry trace and every cleared field reported`() = runTest {
+        stoppedRow()
+        val saved = pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined", pendingBuyPriorVolume = 0.0))
+
+        lateinit var result: Map<String, Any>
+        val warns = warnsDuring { runBlocking { result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) } }
+
+        assertEquals("cleared", result["status"], "$result")
+        assertEquals("ctb-1", (result["cleared"] as Map<*, *>)["pending_buy_identifier"])
+        assertFalse(saved.captured.hasPendingBuy())
+        assertEquals("combined", saved.captured.entryStrategy, "다음 시작이 목록 밖이어도 싣도록 진입 흔적을 남긴다")
+        assertNotNull(saved.captured.buyDate)
+        assertEquals(1, warns.count { it.contains("KRW-BTC") && it.contains("ctb-1") && it.contains("pending_buy_strategy") }, "$warns")
+    }
+
+    @Test
+    fun `a stopped bot's sell pending is cleared and the position is left for the next start to sync`() = runTest {
+        stoppedRow()
+        val state = TradingState("KRW-BTC", position = true, holdVolume = 0.001).apply {
+            beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = SELL_SINCE, volume = 0.001, triggerPrice = 1.0, priorVolume = 0.001)
+        }
+        val saved = pendingRow(state)
+
+        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.SELL)
+
+        assertEquals("cleared", result["status"], "$result")
+        assertFalse(saved.captured.hasPendingSell())
+        assertTrue(saved.captured.position)
+    }
+
+    @Test
+    fun `clearing is refused while the engine runs, and nothing is written`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+
+        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
+
+        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    @Test
+    fun `clearing is refused while the saved state still says running, as during a restore`() = runTest {
+        // 엔진이 없어도 복원 재시도·자동 시작 대기면 곧 기동된다 — 운영자가 거래소를 확인하기 전에 해제된 행으로 돈다.
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+
+        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
+
+        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    @Test
+    fun `a stop whose save is still pending counts as stopped`() = runTest {
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        unpersistedStops().add(1L)
+        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"))
+
+        assertEquals("cleared", manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)["status"])
+    }
+
+    @Test
+    fun `nothing to clear is reported as not pending`() = runTest {
+        stoppedRow()
+        coEvery { tradingStateService.loadState(1L, "KRW-ETH") } returns null
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
+
+        assertEquals("not_pending", manager.clearPending(1L, "KRW-ETH", TradeSide.BUY)["status"])
+        assertEquals("not_pending", manager.clearPending(1L, "KRW-BTC", TradeSide.SELL)["status"])
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    @Test
+    fun `a stopped engine left in the map is recorded and dropped before the row is changed`() = runTest {
+        // 남겨 두면 다음 시작의 기록이 메모리 값으로 해제를 되돌린다.
+        stoppedRow()
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
+        val engineGoneAtSave = mutableListOf<Boolean>()
+        coEvery { tradingStateService.upsert(1L, any()) } coAnswers { engineGoneAtSave += engines()[1L] == null }
+
+        manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
+
+        coVerify(ordering = Ordering.ORDERED) {
+            mockEngine.flushUnpersisted()
+            tradingStateService.loadState(1L, "KRW-BTC")
+        }
+        assertEquals(listOf(true), engineGoneAtSave, "저장 전에 맵에서 빠져야 한다")
+    }
+
+    @Test
+    fun `a stopped engine whose sell cannot be recorded is kept and nothing is cleared`() = runTest {
+        // 버리면 메모리에만 있는 매도 주문의 유일한 기록이 사라진다 — 남겨 두면 다음 시도·시작이 다시 기록한다.
+        stoppedRow()
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { mockEngine.unpersistedSells() } returns
+            listOf(TradingState("KRW-ETH", position = true, pendingSellIdentifier = "ctb-sell-9", pendingPersistFailed = true))
+
+        val ex = assertThrows(BotControlPersistFailedException::class.java) {
+            runBlocking { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }
+        }
+
+        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
+        assertSame(mockEngine, engines()[1L])
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    @Test
+    fun `a clear whose save fails is a 503 and reports no clear`() = runTest {
+        stoppedRow()
+        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
+        coEvery { tradingStateService.upsert(1L, any()) } throws RuntimeException("db down")
+
+        val ex = assertThrows(BotControlPersistFailedException::class.java) {
+            runBlocking { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }
+        }
+
+        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
+    }
+
+    @Test
+    fun `clearing is refused while shutting down`() = runTest {
+        stoppedRow()
+        markShuttingDown()
+
+        assertEquals("Service is shutting down", manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)["error"])
+        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    @Test
+    fun `status shows each position's pending order by uuid or identifier`() {
+        engines()[1L] = mockEngine
+        every { mockEngine.getStates() } returns mapOf(
+            "KRW-BTC" to TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"),
+            "KRW-ETH" to TradingState("KRW-ETH", position = true).apply {
+                beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = SELL_SINCE, volume = 0.1, triggerPrice = 1.0, priorVolume = 0.1)
+                adoptSellOrder("u-s")
+            },
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val positions = (manager.getStatus(1L)["positions"] as List<Map<String, Any?>>).associateBy { it["ticker"] }
+
+        assertEquals(mapOf("by" to "identifier", "ref" to "ctb-1"), positions["KRW-BTC"]!!["pending_buy"])
+        assertNull(positions["KRW-BTC"]!!["pending_sell"])
+        val sell = positions["KRW-ETH"]!!["pending_sell"] as Map<*, *>
+        assertEquals("uuid", sell["by"])
+        assertEquals("u-s", sell["ref"])
+        assertEquals(SELL_SINCE.toString(), sell["since"])
     }
 }

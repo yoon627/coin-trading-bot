@@ -1,5 +1,6 @@
 package com.trading.bot.api
 
+import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
@@ -70,6 +71,26 @@ class TradingControllerTest {
             authed { controller.startBot(null) }
         }
         assertEquals(HttpStatus.CONFLICT, ex.statusCode)
+    }
+
+    @Test
+    fun `clearing a pending order on a running bot surfaces as 409`() {
+        coEvery { manager.clearPending(userId, "KRW-BTC", TradeSide.SELL) } returns
+            mapOf("error" to "Stop the bot before clearing a pending order", "code" to "conflict")
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.clearPending(ClearPendingRequest("krw-btc", "Sell")) }
+        }
+        assertEquals(HttpStatus.CONFLICT, ex.statusCode)
+    }
+
+    @Test
+    fun `clearing a pending order rejects an unknown side before touching the bot`() {
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.clearPending(ClearPendingRequest("KRW-BTC", "both")) }
+        }
+        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
+        coVerify(exactly = 0) { manager.clearPending(any(), any(), any()) }
     }
 
     @Test

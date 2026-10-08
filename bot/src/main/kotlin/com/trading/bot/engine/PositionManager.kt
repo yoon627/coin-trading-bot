@@ -704,7 +704,8 @@ class PositionManager(
         // 알린 **뒤에** 표시한다. 먼저 표시하면 그 사이 크래시·전송 실패 시 재알림이 막혀 알림이
         // 영구 유실된다 — 중복 알림이 유실보다 낫다. (전송 성공까지 보장하려면 outbox 가 필요하다.)
         log.error(
-            "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요.",
+            "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요 — " +
+                "봇을 정지하고 Upbit 주문 내역을 확인한 뒤(미체결이면 먼저 취소) POST /api/bot/pending/clear 로 해제할 수 있습니다.",
             stuckFor.seconds, ticker, orderRef,
         )
         state.pendingSellAlerted = true

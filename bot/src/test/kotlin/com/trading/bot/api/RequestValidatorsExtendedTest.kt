@@ -1,5 +1,6 @@
 package com.trading.bot.api
 
+import com.trading.bot.domain.TradeSide
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -64,6 +65,13 @@ class RequestValidatorsExtendedTest {
     @Test
     fun `validatePassword rejects overly long passwords`() {
         assertThrows<ResponseStatusException> { validators.validatePassword("a".repeat(73)) } // > 72 (bcrypt limit)
+    }
+
+    @Test
+    fun `normalizeTradeSide accepts buy and sell in any case and rejects anything else`() {
+        assertEquals(TradeSide.BUY, validators.normalizeTradeSide("buy"))
+        assertEquals(TradeSide.SELL, validators.normalizeTradeSide(" SELL "))
+        assertThrows<ResponseStatusException> { validators.normalizeTradeSide("both") }
     }
 
     // --- normalizeApiKey ---

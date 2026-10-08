@@ -1,5 +1,6 @@
 package com.trading.bot.api
 
+import com.trading.bot.domain.TradeSide
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import org.springframework.web.server.ResponseStatusException
@@ -47,6 +48,12 @@ class RequestValidators {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid market format")
         }
         return normalized
+    }
+
+    fun normalizeTradeSide(side: String): TradeSide = when (side.trim().lowercase()) {
+        "buy" -> TradeSide.BUY
+        "sell" -> TradeSide.SELL
+        else -> throw ResponseStatusException(HttpStatus.BAD_REQUEST, "side must be buy or sell")
     }
 
     fun normalizeMarkets(markets: List<String>): List<String> {

@@ -4,6 +4,8 @@ import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.config.UpbitProperties
+import com.trading.bot.domain.TradeSide
+import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
@@ -366,10 +368,58 @@ class UserTradingManager(
                     "halted" to state.halted,
                     // 보유 여부 미확정으로 매수가 막힌 상태 — 로그를 안 보고도 원인을 알 수 있게 노출한다.
                     "unsynced" to state.unsynced,
+                    // 미해소 주문이 있으면 그 티커의 매매 평가가 멈춘다(#246) — 해제하려면 정지 뒤 /api/bot/pending/clear.
+                    "pending_buy" to state.pendingRef(TradeSide.BUY)?.let { mapOf("by" to it.by, "ref" to it.ref) },
+                    "pending_sell" to state.pendingRef(TradeSide.SELL)?.let {
+                        mapOf("by" to it.by, "ref" to it.ref, "since" to state.pendingSellSince?.toString())
+                    },
                 )
-            } ?: emptyList<Map<String, Any>>()),
+            } ?: emptyList<Map<String, Any?>>()),
             "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
         )
+    }
+
+    /**
+     * #246: 자동으로 풀리지 않는 pending(흔적 있는 identifier-only 주문, 오래 막힌 매도)을 사람이 거래소를 확인한 뒤 지운다.
+     * **정지된 봇에서만** 받는다 — 도는 엔진은 매 tick 그 티커를 reconcile 하므로 같은 state 를 동시에 고치게 된다. 엔진이 없어도
+     * 저장 행이 running 이면(복원 재시도·자동 시작 대기) 곧 기동되므로 거절한다. 다음 시작의 잔고 동기화가 보유를 다시 맞춘다.
+     */
+    suspend fun clearPending(userId: Long, ticker: String, side: TradeSide): Map<String, Any> = lockFor(userId).withLock {
+        // 종료의 기록(lock 밖)과 겹치면 해제 전 메모리 값으로 되쓸 수 있다.
+        if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
+        val engine = engines[userId]
+        val running = engine?.isRunning() == true || (
+            userId !in unpersistedStops &&
+                botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()?.running == true
+            )
+        if (running) {
+            return@withLock mapOf("error" to "Stop the bot before clearing a pending order", "code" to CONFLICT_CODE)
+        }
+        // 맵에 남은 정지 엔진의 미기록 행을 먼저 남긴다 — 남겨 둔 채 해제하면 다음 시작의 기록이 메모리 값으로 해제를 되돌린다.
+        // 그래도 DB 에 없을 수 있는 매도가 남으면 해제하지 않는다: 엔진을 버리면 그 주문의 유일한 기록이 사라지고, 남겨 두면
+        // 다음 시도·시작이 다시 기록한다(loadInitialStates 와 같은 규칙).
+        if (engine != null) {
+            val unrecorded = withContext(NonCancellable) { flushOrLog(userId, engine) }
+            if (unrecorded.isNotEmpty()) {
+                throw BotControlPersistFailedException(
+                    PENDING_CLEAR_UNPERSISTED_MESSAGE,
+                    IllegalStateException("정지 엔진의 매도 주문 기록을 DB 에 남기지 못함: ${sellRefs(unrecorded)}"),
+                )
+            }
+        }
+        val state = tradingStateService.loadState(userId, ticker)
+        val ref = state?.pendingRef(side) ?: return@withLock mapOf("status" to "not_pending")
+        if (engine != null) engines.remove(userId, engine)
+        val cleared = state.pendingFields(side)
+        // 지운 값의 유일한 기록이다 — 저장 뒤에 남기면 저장은 됐는데 요청이 끊긴 경우 사라진다. 체결됐다면 이 값으로 거래 기록을 맞춘다.
+        log.warn("Clearing pending {} {} ({} {}) by hand for user {} — fields: {}", side, ticker, ref.by, ref.ref, userId, cleared)
+        state.releasePending(side, TradingDay.of(LocalDateTime.now(TradingDay.KST)))
+        persistOrFail(userId, PENDING_CLEAR_UNPERSISTED_MESSAGE) {
+            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { tradingStateService.upsert(userId, state) }
+                ?: throw IllegalStateException("trading_states 저장 시간 초과")
+        }
+        log.info("Pending {} {} cleared for user {}", side, ticker, userId)
+        mapOf("status" to "cleared", "ticker" to ticker, "side" to side.name.lowercase(), "cleared" to cleared)
     }
 
     /** #19: halt 된 ticker 수동 해제 — 다음 tick 부터 reconcile/매매 재개. */
