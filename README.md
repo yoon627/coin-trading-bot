@@ -229,7 +229,7 @@ coin-trading-bot/
 | `JWT_SECRET` | JWT 서명 키. 변경하면 기존 세션이 무효화됩니다. |
 | `APP_ENCRYPTION_SECRET` | 사용자 Upbit 키 암호화 마스터 키. 변경하면 기존 암호문을 복호화할 수 없습니다. |
 
-`deploy/vultr/deploy.sh setup`·`deploy`는 비어 있는 `DB_PASSWORD`·`JWT_SECRET`만 생성해 `deploy/vultr/.env`에 적고, `APP_ENCRYPTION_SECRET`은 **자동 생성하지 않아** 비어 있으면 실패합니다. 새로 만들면 기존 암호문을 복호화할 수 없으니 운영 중인 값을 그대로 쓰세요(출처는 [`deploy/vultr/README.md`](deploy/vultr/README.md) 1절). `.env`, 특히 `APP_ENCRYPTION_SECRET`은 DB 백업과 다른 곳에 안전하게 보관하세요.
+`deploy/vultr/deploy.sh setup`은 인스턴스를 **새로 만들 때만** 비어 있는 `DB_PASSWORD`·`JWT_SECRET`을 생성해 `deploy/vultr/.env`에 적습니다. 기존 인스턴스를 다시 쓰는 `setup`과 `deploy`는 세 값 중 하나라도 비어 있으면 생성하지 않고 실패합니다 — 새 `DB_PASSWORD`는 기존 DB 볼륨의 비밀번호와 달라 앱과 자동 롤백이 함께 기동하지 못하기 때문입니다. `APP_ENCRYPTION_SECRET`은 setup 도 **자동 생성하지 않아** 비어 있으면 실패합니다. 새로 만들면 기존 암호문을 복호화할 수 없으니 운영 중인 값을 그대로 쓰세요(출처는 [`deploy/vultr/README.md`](deploy/vultr/README.md) 1절). `.env`, 특히 `APP_ENCRYPTION_SECRET`은 DB 백업과 다른 곳에 안전하게 보관하세요.
 
 ### 주요 선택값
 
