@@ -69,7 +69,9 @@ install -m 600 .env.example .env   # 600 중요 — 시크릿이 들어간다
 `.env` 주의사항:
 
 - **`APP_ENCRYPTION_SECRET`은 자동 생성되지 않는다.** 비어 있으면 `setup`·`deploy`가 즉시 실패한다
-  (`DB_PASSWORD`·`JWT_SECRET`은 비어 있으면 생성해 `.env`에 적는다). 운영 중인 값을 **그대로** 쓸 것 —
+  (`DB_PASSWORD`·`JWT_SECRET`은 `setup`이 인스턴스를 **새로 만들 때만** 비어 있으면 생성해 `.env`에 적는다. 기존
+  인스턴스를 다시 쓰는 `setup`과 `deploy`는 비어 있으면 실패한다 — 새 `DB_PASSWORD`는 기존 DB 볼륨과 맞지 않아 앱과
+  자동 롤백이 함께 기동하지 못한다). 운영 중인 값을 **그대로** 쓸 것 —
   서버 `/opt/app/.env`, 로컬 `deploy/vultr/.env`, 오프사이트 보관본(6절). GitHub secret `VULTR_DEPLOY_ENV`는
   다시 읽을 수 없어 출처가 될 수 없다. 새로 만들면 앱은 정상 기동하면서 저장된 Upbit 키만 조용히
   복호화 불능이 된다.
