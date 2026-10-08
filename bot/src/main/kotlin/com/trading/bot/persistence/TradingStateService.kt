@@ -42,6 +42,10 @@ class TradingStateService(
         return result
     }
 
+    /** 한 티커의 행 — [loadStates] 와 같은 매핑(손상 필드는 필드 단위로만 버린다). 없으면 null. */
+    suspend fun loadState(userId: Long, ticker: String): TradingState? =
+        tradingStateRepository.findByUserIdAndTicker(userId, ticker).awaitSingleOrNull()?.toDomain()
+
     private fun TradingState.toEntity(userId: Long, id: Long?): TradingStateEntity =
         TradingStateEntity(
             id = id,
