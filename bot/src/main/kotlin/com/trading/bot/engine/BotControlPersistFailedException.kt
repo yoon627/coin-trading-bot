@@ -20,3 +20,6 @@ const val RUNNING_UNPERSISTED_MESSAGE: String =
 
 const val HALT_CLEAR_UNPERSISTED_MESSAGE: String =
     "halt 해제를 저장하지 못해 해제하지 않았습니다. 잠시 후 다시 시도하세요."
+
+const val PENDING_CLEAR_UNPERSISTED_MESSAGE: String =
+    "pending 해제를 저장하지 못해 해제하지 않았습니다. 잠시 후 다시 시도하세요."
