@@ -191,6 +191,8 @@ coin-trading-bot/
 
 시작·정지·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
 
+자동으로 풀리지 않는 미해소 주문(응답을 못 받았는데 잔고가 달라진 주문, 오래 막힌 매도)은 그 티커의 매매를 멈춥니다. `GET /api/bot/status` 의 `positions[].pending_buy`·`pending_sell`(`{by: uuid|identifier, ref}`, 매도는 `since` 포함)로 보이고, **봇을 정지한 뒤** `POST /api/bot/pending/clear {"ticker": "KRW-BTC", "side": "buy"|"sell"}` 로 지웁니다(브라우저 콘솔에서 `TideAPI.clearPending('KRW-BTC', 'buy')`). 봇이 돌거나 복원 중이면 409 입니다(정지는 했는데 정지 상태 저장만 실패한 경우는 허용) — `halt/clear` 는 엔진이 없으면 `not_running` 으로 답하는 것과 다릅니다. 메모리에만 남은 매도 기록이 있으면 해제하지 않고 503 이니 잠시 후 다시 시도합니다. 먼저 Upbit 주문 내역을 확인해 미체결이면 취소하고, 체결된 매도를 지우면 SELL 기록이 남지 않으니 응답(`cleared`, 지운 필드 전부 — 키는 `trading_states` 컬럼명)으로 거래 기록을 맞춥니다. 다시 시작하면 기동 시 잔고 동기화가 매수로 들어온 코인을 보유로 편입합니다(보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터). 그 티커가 halt 였다면 시작한 뒤 `halt/clear` 로 풉니다.
+
 `GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 티커 — 사용자 목록), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·청산 대기를 나눠 보여 줍니다.
 
 ## 웹 UI
@@ -210,7 +212,7 @@ coin-trading-bot/
 |---|---|---|---|
 | 인증 | POST | `/api/auth/register`(계정이 하나도 없을 때만, 있으면 403), `/login`, `/logout` | Public |
 | 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
-| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/halt/clear` | 필요 |
+| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/halt/clear`, `/pending/clear` | 필요 |
 | 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
 | 전략 성과 | GET | `/api/strategies/performance` | 필요 |
 | 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
