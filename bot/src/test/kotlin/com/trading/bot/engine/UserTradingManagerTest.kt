@@ -119,6 +119,42 @@ class UserTradingManagerTest {
         coVerify(exactly = 1) { mockEngine.start(any(), any()) } // 재시도에서 실제로 기동돼야 한다
     }
 
+    // 옛 엔진을 멈추기 전의 실패 — 저장은 됐고 엔진은 이전 설정으로 계속 돈다. 저장 실패(500)로 읽히지 않게 알린다(#283).
+    @Test
+    fun `a reload that cannot read the user before stopping reports the old settings are still trading`() = runTest {
+        runningEngineToReload()
+        every { userRepository.findById(1L) } returns Mono.error(RuntimeException("db down"))
+
+        val ex = assertThrows(RuntimeReloadFailedException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+
+        assertTrue(ex.engineRestored, "엔진은 멈추지 않았으니 이전 설정으로 거래 중이다")
+        coVerify(exactly = 0) { mockEngine.stop() }
+    }
+
+    @Test
+    fun `a reload that cannot decrypt the saved keys before stopping reports the old settings are still trading`() = runTest {
+        runningEngineToReload()
+        every { userSecretsService.decryptUserSecrets(any()) } throws IllegalStateException("bad key material")
+
+        val ex = assertThrows(RuntimeReloadFailedException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+
+        assertTrue(ex.engineRestored)
+        coVerify(exactly = 0) { mockEngine.stop() }
+    }
+
+    @Test
+    fun `a reload of a stopped engine that cannot read the user leaves it for the next start`() = runTest {
+        // 도는 엔진이 없으니 반영할 곳도 없다 — 다음 시작이 저장된 설정을 읽는다.
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        every { userRepository.findById(1L) } returns Mono.error(RuntimeException("db down"))
+
+        manager.reloadUserRuntime(1L)
+
+        assertSame(mockEngine, engines()[1L])
+        verify(exactly = 0) { manager.createEngine(any()) }
+    }
+
     @Test
     fun `reload restores the running engine when durable state load fails`() = runTest {
         // 교체 실패는 정지 의도가 아니다. 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
