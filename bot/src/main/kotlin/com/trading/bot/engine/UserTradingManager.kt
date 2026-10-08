@@ -283,7 +283,11 @@ class UserTradingManager(
             throw e
         }
         unpersistedStops.remove(userId)
+        // 맨 앞 확인 뒤 조회·저장 중에 종료가 시작됐을 수 있다 — 루프를 띄우지 않는다. 기동 뒤에도 한 번 더 본다: 그 사이 종료가
+        // 맵을 보고 지나갔을 수 있다. 어느 쪽이든 저장한 running=true 는 두어 재시작 복원이 이 시작을 잇는다.
+        if (shuttingDown) return@withLock mapOf("error" to START_SAVED_SHUTTING_DOWN_MESSAGE)
         engine.start(tickerList, initialStates)
+        if (stopIfShutdownStarted(userId, engine)) return@withLock mapOf("error" to START_SAVED_SHUTTING_DOWN_MESSAGE)
         mapOf("status" to "started", "strategy" to strategy.name)
     }
 
@@ -502,13 +506,13 @@ class UserTradingManager(
     }
 
     /**
-     * 되살리거나 교체해 기동한 뒤 종료가 시작됐는지 다시 본다 — [leftToShutdown] 과 기동 사이에 종료가 맵을 보고 지나갔을 수 있다.
-     * 종료는 플래그를 쓴 뒤 맵을 보고, 여기는 맵·엔진 상태를 바꾼 뒤 플래그를 읽으므로 둘 중 하나는 반드시 상대를 본다.
-     * 이중 정지는 엔진이 막는다(stopMutex).
+     * 엔진을 기동한 뒤(reload 의 되살리기·교체, startBot) 종료가 시작됐는지 다시 본다 — 기동 전 확인과 기동 사이에 종료가 맵을 보고
+     * 지나갔을 수 있다. 종료는 플래그를 쓴 뒤 맵을 보고, 여기는 맵·엔진 상태를 바꾼 뒤 플래그를 읽으므로 둘 중 하나는 반드시
+     * 상대를 본다. 이중 정지는 엔진이 막는다(stopMutex).
      */
     private suspend fun stopIfShutdownStarted(userId: Long, engine: TradingEngine): Boolean {
         if (!shuttingDown) return false
-        log.info("reload: user {} 기동 중 종료가 시작됐다 — 방금 기동한 엔진을 멈추고 기록한다", userId)
+        log.info("user {} 엔진 기동 중 종료가 시작됐다 — 방금 기동한 엔진을 멈추고 기록한다", userId)
         withContext(NonCancellable) {
             engine.stop()
             flushOrAlert(userId, engine)
@@ -675,6 +679,9 @@ class UserTradingManager(
 
         private const val RESTORE_MAX_ATTEMPTS = 5
         private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 안쪽 self-bound
+        // 맨 앞의 "Service is shutting down"(저장 안 함 — 재시작해도 뜨지 않는다)과 구별한다.
+        internal const val START_SAVED_SHUTTING_DOWN_MESSAGE =
+            "Service is shutting down — the start is saved and the bot resumes after the restart"
         private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L
         private const val STOP_SAVE_TIMEOUT_MS = 10_000L
         private const val FLUSH_TIMEOUT_MS = 5_000L
