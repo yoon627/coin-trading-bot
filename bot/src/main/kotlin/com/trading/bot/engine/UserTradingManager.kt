@@ -424,8 +424,7 @@ class UserTradingManager(
         // 요청이 끊겨도 루프 join 까지 기다린다 — 취소가 여기서 새면 정지된 엔진만 남고(#262), join 전에 복귀하면 옛 루프의
         // 꼬리와 되살린 루프가 겹친다. 도는 엔진이었으면 취소는 아래 첫 취소 확인(기록의 시간 상한)에서 드러나 복귀 경로를 탄다.
         withContext(NonCancellable) { existing.stop() }
-        // 종료가 이 엔진을 멈추고 기록한다 — 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
-        if (shuttingDown) return
+        if (leftToShutdown(userId)) return
         // stop 이후에 읽어야 마지막 tick 의 기록까지 잡힌다 — 먼저 읽으면 그 사이 발생한 주문이 스냅샷에서 빠져 orphan pending
         // 이 된다(#20). tick 안에서 기록하지 못한 매도는 flush 가 한 번 더 남기고, 그래도 못 남기면 새 엔진은 DB 에 없는 그
         // 주문을 모르므로 교체하지 않고 아래 복귀 경로를 탄다 — 옛 엔진이 메모리의 그 주문을 다음 tick 에 다시 기록한다.
@@ -438,13 +437,17 @@ class UserTradingManager(
                 // 취소여도 stop() 은 이미 일어났다 — 복구를 건너뛰면 정지된 엔진이 남아 손절이
                 // 무기한 멈추고, 이후 reload 는 wasRunning=false 로 보아 되살리지도 않는다.
                 // 복구는 취소에 영향받지 않도록 NonCancellable 로 돌린 뒤 취소를 재전파한다(미반영은 [reloadUserRuntime] 이 알린다).
-                withContext(NonCancellable) {
-                    // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
-                    runCatching { existing.resume() }
-                        .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
+                if (!leftToShutdown(userId)) {
+                    withContext(NonCancellable) {
+                        // 직전 사용자 목록·메모리 상태 그대로 — 빈 상태로 되살리면 목록 밖 잔류 포지션의 청산 관리가 끊긴다.
+                        runCatching { existing.resume() }
+                            .onFailure { log.error("reload: user {} 취소 중 기존 엔진 복귀 실패 — 엔진 정지 상태", userId, it) }
+                        stopIfShutdownStarted(userId, existing)
+                    }
                 }
                 throw e
             } catch (e: Exception) {
+                if (leftToShutdown(userId, e)) return
                 // 교체 실패는 정지 의도가 아니다 — 여기서 포기하면 stop 된 엔진만 남아 보유 포지션의 손절이
                 // 무기한 중단된다(무증상). 옛 엔진을 원래 상태로 되살린다.
                 log.error("reload: user {} 새 엔진에 넘길 상태를 준비하지 못함 — 기존 엔진으로 복귀: {}", userId, e.message, e)
@@ -463,6 +466,7 @@ class UserTradingManager(
                     restoreFailure.addSuppressed(e)
                     throw RuntimeReloadFailedException(userId, restoreFailure, engineRestored = false)
                 }
+                if (stopIfShutdownStarted(userId, existing)) return
                 // 되살린 엔진은 교체 전 자격증명·webhook 을 그대로 쓴다. 조용히 반환하면 호출자가
                 // 키 교체를 성공으로 응답해, 사용자는 이전 계정에서 계속 주문되는 것을 모른다(#51).
                 // 재기동을 마친 뒤에 던져야 손절 연속성이 유지된다.
@@ -473,11 +477,43 @@ class UserTradingManager(
             flushOrAlert(userId, existing)
             emptyMap()
         }
+        if (leftToShutdown(userId)) return
         val replacement = createEngine(decryptedUser)
         engines[userId] = replacement
         if (wasRunning) {
             replacement.start(tickers, initialStates)
+            stopIfShutdownStarted(userId, replacement)
         }
+    }
+
+    /**
+     * 옛 엔진을 멈춘 뒤 되살리거나 교체하기 전에 종료가 시작됐으면, 옛 엔진을 맵에 정지 상태로 두고 종료에 맡긴다(#262, #263).
+     * 종료는 플래그를 세운 뒤 맵의 엔진을 멈추고 기록하므로, 그 뒤에 되살리거나 교체한 엔진은 아무도 멈추지 않는다.
+     * 종료는 웹 서버가 진행 중 요청을 먼저 끝낸(phase 순서) 뒤에 시작하므로 여기 닿는 것은 그 대기를 넘긴 reload 뿐이다.
+     */
+    private fun leftToShutdown(userId: Long, cause: Exception? = null): Boolean {
+        if (!shuttingDown) return false
+        if (cause == null) {
+            log.info("reload: user {} 종료가 시작돼 엔진을 되살리거나 교체하지 않는다 — 종료가 정지 상태를 기록한다", userId)
+        } else {
+            log.warn("reload: user {} 종료 중 상태 준비 실패 — 엔진을 되살리지 않고 종료가 기록한다: {}", userId, cause.message, cause)
+        }
+        return true
+    }
+
+    /**
+     * 되살리거나 교체해 기동한 뒤 종료가 시작됐는지 다시 본다 — [leftToShutdown] 과 기동 사이에 종료가 맵을 보고 지나갔을 수 있다.
+     * 종료는 플래그를 쓴 뒤 맵을 보고, 여기는 맵·엔진 상태를 바꾼 뒤 플래그를 읽으므로 둘 중 하나는 반드시 상대를 본다.
+     * 이중 정지는 엔진이 막는다(stopMutex).
+     */
+    private suspend fun stopIfShutdownStarted(userId: Long, engine: TradingEngine): Boolean {
+        if (!shuttingDown) return false
+        log.info("reload: user {} 기동 중 종료가 시작됐다 — 방금 기동한 엔진을 멈추고 기록한다", userId)
+        withContext(NonCancellable) {
+            engine.stop()
+            flushOrAlert(userId, engine)
+        }
+        return true
     }
 
     internal fun createEngine(user: UserEntity): TradingEngine {
