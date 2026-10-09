@@ -1,5 +1,9 @@
 package com.trading.bot.notification
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
 import com.trading.bot.domain.FeeBasis
@@ -11,8 +15,15 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
+import org.springframework.core.ParameterizedTypeReference
+import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpMethod
+import org.springframework.http.HttpRequest
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import reactor.core.publisher.Mono
+import java.net.URI
 
 class DiscordNotifierTest {
 
@@ -238,6 +249,40 @@ class DiscordNotifierTest {
             }
             assertFalse(lone, "field ${it["name"]} ends with half a surrogate pair")
         }
+    }
+
+    @Test
+    fun `전송 실패 로그에 webhook token 을 남기지 않는다`() {
+        // 두 번째는 검증기는 통과하지만 URL 패턴 마스킹은 놓치는 모양(대문자 host·포트)이다.
+        listOf(
+            "https://discord.com/api/webhooks/123/secret-token",
+            "https://Discord.com:443/api/webhooks/123/secret-token",
+        ).forEach { url ->
+            val logs = failureLogs(url)
+            assertTrue(logs.any { it.level == Level.WARN && it.formattedMessage.startsWith("Discord notification failed") }, "$logs")
+            logs.forEach { assertFalse(it.formattedMessage.contains("secret-token"), it.formattedMessage) }
+        }
+    }
+
+    // WebClientResponseException 메시지는 "<status> <reason> from POST <URI>" — URI 끝이 webhook token 이다.
+    private fun failureLogs(url: String): List<ILoggingEvent> {
+        val request = mockk<HttpRequest>()
+        every { request.method } returns HttpMethod.POST
+        every { request.uri } returns URI(url)
+        every { request.headers } returns HttpHeaders()
+        every { request.attributes } returns mutableMapOf()
+        val rejected = WebClientResponseException.create(400, "Bad Request", HttpHeaders(), ByteArray(0), null, request)
+        // Kotlin 의 bodyToMono<String>() 은 ParameterizedTypeReference 오버로드를 부른다.
+        every { responseSpec.bodyToMono(any<ParameterizedTypeReference<String>>()) } returns Mono.error(rejected)
+        val logger = LoggerFactory.getLogger(DiscordNotifier::class.java) as Logger
+        val captured = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(captured)
+        try {
+            notifier.sendErrorAlert("logger", "boom", null, 0, url)
+        } finally {
+            logger.detachAppender(captured)
+        }
+        return captured.list
     }
 
     private fun digestEmbed(digest: ErrorAlertRateLimiter.Digest): Map<*, *> {
