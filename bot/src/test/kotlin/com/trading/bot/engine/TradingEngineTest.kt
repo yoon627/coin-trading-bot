@@ -35,6 +35,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
@@ -233,6 +234,22 @@ class TradingEngineTest {
             writes.indexOfLast { it.startsWith("pending:") } < writes.indexOfFirst { it.startsWith("peak:") },
             "pending 을 모두 쓴 뒤에 고점을 써야 한다: $writes",
         )
+    }
+
+    @Test
+    fun `start that fails before the loop is launched does not leave the engine marked running`(): Unit = runBlocking {
+        // 루프 없이 isRunning=true 로 남으면 reload·startBot·상태 API 가 도는 엔진으로 본다(#287).
+        val engine = createEngine()
+        val unreadable = object : AbstractMap<String, TradingState>() {
+            override val entries: Set<Map.Entry<String, TradingState>> get() = throw IllegalStateException("broken states")
+        }
+
+        assertThrows<IllegalStateException> { engine.start(listOf("KRW-BTC"), unreadable) }
+
+        assertFalse(engine.isRunning())
+        engine.start(listOf("KRW-BTC"))
+        assertTrue(engine.isRunning(), "되돌린 뒤에는 다시 시작할 수 있어야 한다")
+        engine.stop()
     }
 
     @Test
