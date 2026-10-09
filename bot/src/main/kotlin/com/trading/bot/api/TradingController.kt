@@ -30,11 +30,14 @@ class TradingController(
     suspend fun startBot(@RequestBody(required = false) req: StartBotRequest?): Map<String, Any> {
         val userId = currentUserId()
         val tickers = req?.tickers?.let(requestValidators::normalizeMarkets)
-        val result = persisting { userTradingManager.startBot(userId, tickers) }
-        // UserTradingManager returns {"error": "..."} for precondition failures
-        // (no API keys, user missing, running with another ticker list). Surface those as proper 4xx
-        // so clients can branch on status instead of having to inspect the body. Codes go first so the message wording
-        // never decides a status that has a code.
+        return failOnError(persisting { userTradingManager.startBot(userId, tickers) })
+    }
+
+    // UserTradingManager returns {"error": "..."} for precondition failures
+    // (no API keys, user missing, running with another ticker list). Surface those as proper 4xx
+    // so clients can branch on status instead of having to inspect the body. Codes go first so the message wording
+    // never decides a status that has a code.
+    private fun failOnError(result: Map<String, Any>): Map<String, Any> {
         result["error"]?.let { msg ->
             val status = when {
                 result["code"] == UserTradingManager.CONFLICT_CODE -> HttpStatus.CONFLICT
@@ -62,6 +65,14 @@ class TradingController(
         val ticker = requestValidators.normalizeMarkets(listOf(request.ticker)).firstOrNull()
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid ticker: ${request.ticker}")
         return persisting { userTradingManager.clearHalt(currentUserId(), ticker) }
+    }
+
+    /** #246: 막힌 pending 해제 — 정지된 자기 봇만(도는 중이면 409). 거래소에서 주문을 확인한 뒤 부른다. */
+    @PostMapping("/bot/pending/clear")
+    suspend fun clearPending(@RequestBody request: ClearPendingRequest): Map<String, Any> {
+        val ticker = requestValidators.normalizeMarket(request.ticker)
+        val side = requestValidators.normalizeTradeSide(request.side)
+        return failOnError(persisting { userTradingManager.clearPending(currentUserId(), ticker, side) })
     }
 
     @GetMapping("/account")
@@ -138,5 +149,6 @@ private inline fun <T> persisting(block: () -> T): T =
 
 data class StartBotRequest(val tickers: List<String>? = null)
 data class ClearHaltRequest(val ticker: String)
+data class ClearPendingRequest(val ticker: String, val side: String)
 data class UserSettingsRequest(val discordWebhookUrl: String? = null)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)
