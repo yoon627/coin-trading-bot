@@ -257,4 +257,83 @@ class TradingStateTest {
         assertNull(state.haltReason)
         assertEquals(0, state.reconcileFailureCount)
     }
+
+    // --- 사람이 거래소를 확인하고 막힌 pending 을 지운다 (#246) ---
+
+    private val today = LocalDate.of(2026, 10, 8)
+
+    @Test
+    fun `releasing a buy pending clears its fields and leaves the entry trace a fill would leave`() {
+        // 주문 전에 진입 메타를 지워 두므로 pending 만 지우면 흔적이 없다 — 목록 밖이면 다음 시작이 싣지 않고, 실려도 보유상한이 안 걸린다.
+        val state = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined", pendingBuyPriorVolume = 0.0, reconcileFailureCount = 2)
+
+        state.releasePending(TradeSide.BUY, today)
+
+        assertFalse(state.hasPendingBuy())
+        assertNull(state.pendingBuyStrategy)
+        assertNull(state.pendingBuyPriorVolume)
+        assertEquals("combined", state.entryStrategy)
+        assertEquals(today, state.buyDate)
+        assertTrue(state.boughtToday)
+        assertEquals(today, state.boughtDate)
+        assertEquals(0, state.reconcileFailureCount)
+        assertFalse(state.position, "보유 여부는 다음 시작의 잔고 동기화가 정한다")
+    }
+
+    @Test
+    fun `releasing a sell pending clears all its fields and keeps the position`() {
+        val state = TradingState("KRW-BTC", position = true, holdVolume = 0.001, entryStrategy = "combined", buyDate = today).apply {
+            beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = java.time.Instant.EPOCH, volume = 0.001, triggerPrice = 1.0, priorVolume = 0.001)
+            adoptSellOrder("u-s")
+        }
+
+        state.releasePending(TradeSide.SELL, today)
+
+        assertFalse(state.hasPendingSell())
+        assertEquals(state.copy().apply { clearPendingSell() }, state, "매도 pending 필드가 남았다")
+        assertTrue(state.position)
+        assertEquals(0.001, state.holdVolume)
+        assertEquals("combined", state.entryStrategy)
+    }
+
+    @Test
+    fun `the pending reference names the uuid when known and the identifier otherwise`() {
+        val byIdentifier = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
+        val byUuid = TradingState("KRW-BTC", pendingSellUuid = "u-1", pendingSellIdentifier = null)
+
+        assertEquals(PendingRef("identifier", "ctb-1"), byIdentifier.pendingRef(TradeSide.BUY))
+        assertEquals(PendingRef("uuid", "u-1"), byUuid.pendingRef(TradeSide.SELL))
+        assertNull(byIdentifier.pendingRef(TradeSide.SELL))
+    }
+
+    @Test
+    fun `the cleared fields are listed in full by column name so a release can be undone by hand`() {
+        val buy = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined").pendingFields(TradeSide.BUY)
+        assertEquals(4, buy.size)
+        assertEquals("ctb-1", buy["pending_buy_identifier"])
+        assertEquals("combined", buy["pending_buy_strategy"])
+        assertEquals(9, TradingState("KRW-BTC").pendingFields(TradeSide.SELL).size)
+    }
+
+    @Test
+    fun `releasing a buy pending keeps an entry trace that is already there`() {
+        // dust 흡수처럼 기존 보유 위의 주문이면 원래 진입 메타가 정본이다.
+        val earlier = LocalDate.of(2026, 10, 1)
+        val state = TradingState("KRW-BTC", position = true, entryStrategy = "first", buyDate = earlier, pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "second")
+
+        state.releasePending(TradeSide.BUY, today)
+
+        assertEquals("first", state.entryStrategy)
+        assertEquals(earlier, state.buyDate)
+    }
+
+    @Test
+    fun `releasing the sell of a position with no entry trace leaves today as its buy date`() {
+        // 잔고 동기화로만 잡힌 보유는 흔적이 pending 매도뿐이다 — 지운 뒤 목록 밖이면 다음 시작이 싣지 않아 코인이 방치된다.
+        val state = TradingState("KRW-BTC", position = true, holdVolume = 0.001, pendingSellIdentifier = "ctb-s")
+
+        state.releasePending(TradeSide.SELL, today)
+
+        assertEquals(today, state.buyDate)
+    }
 }
