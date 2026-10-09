@@ -87,7 +87,9 @@ class TradingEngine(
         tickers: List<String> = tradingProperties.tickerList(),
         initialStates: Map<String, TradingState> = emptyMap(),
     ) {
-        if (running.compareAndSet(false, true)) {
+        if (!running.compareAndSet(false, true)) return
+        // 루프를 띄우기 전에 던지면 되돌린다 — 루프 없이 isRunning=true 로 남으면 reload·startBot·상태 API 가 도는 엔진으로 본다(#287).
+        try {
             userTickers = tickers.toList()
             // 목록 밖이라도 엔진이 산 스윙 포지션·미해소 주문(진입 흔적이 있는 durable 행)은 싣는다 — 사용자가 목록에서 뺀
             // 티커는 bot_state.tickers 에 없어 안 실으면 아무도 청산·reconcile 하지 않는다(#226).
@@ -120,6 +122,9 @@ class TradingEngine(
             warnIfExitConfigInert()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, strategy.name)
             loopJob = scope.launch { runLoop() }
+        } catch (e: Throwable) {
+            running.set(false)
+            throw e
         }
     }
 
