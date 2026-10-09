@@ -6,14 +6,15 @@ import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
-import io.mockk.CapturingSlot
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.slot
 import io.mockk.verify
+import kotlinx.coroutines.reactor.asCoroutineContext
 import kotlinx.coroutines.reactor.mono
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -23,6 +24,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
+import reactor.core.publisher.Sinks
 
 class TradingControllerTest {
 
@@ -135,11 +137,11 @@ class TradingControllerTest {
 
     private val webhook = "https://discord.com/api/webhooks/1/token"
 
-    private fun stubSettingsUser(storedWebhook: String?): CapturingSlot<UserEntity> {
+    private fun stubSettingsUser(storedWebhook: String?): MutableList<String?> {
         every { userRepo.findById(userId) } returns
             Mono.just(UserEntity(id = userId, username = "u", password = "p", discordWebhookUrl = storedWebhook))
-        val saved = slot<UserEntity>()
-        every { userRepo.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        val saved = mutableListOf<String?>()
+        every { userRepo.updateDiscordWebhookUrl(userId, any()) } answers { saved += secondArg<String?>(); Mono.just(1) }
         coEvery { manager.reloadUserRuntime(userId) } returns Unit
         return saved
     }
@@ -150,7 +152,7 @@ class TradingControllerTest {
 
         val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = "  $webhook ")) }
 
-        assertEquals(webhook, saved.captured.discordWebhookUrl)
+        assertEquals(listOf<String?>(webhook), saved)
         assertEquals(true, res["has_discord_webhook"])
         coVerify(exactly = 1) { manager.reloadUserRuntime(userId) }
     }
@@ -163,7 +165,7 @@ class TradingControllerTest {
         val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = null)) }
 
         assertEquals(true, res["has_discord_webhook"])
-        verify(exactly = 0) { userRepo.save(any()) }
+        verify(exactly = 0) { userRepo.updateDiscordWebhookUrl(any(), any()) }
         coVerify(exactly = 0) { manager.reloadUserRuntime(any()) }
     }
 
@@ -175,7 +177,7 @@ class TradingControllerTest {
             authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = webhook)) }
         }
         assertEquals(HttpStatus.UNAUTHORIZED, ex.statusCode)
-        verify(exactly = 0) { userRepo.save(any()) }
+        verify(exactly = 0) { userRepo.updateDiscordWebhookUrl(any(), any()) }
     }
 
     @Test
@@ -184,7 +186,40 @@ class TradingControllerTest {
 
         val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = "")) }
 
-        assertNull(saved.captured.discordWebhookUrl)
+        assertEquals(listOf<String?>(null), saved)
         assertEquals(false, res["has_discord_webhook"])
+    }
+
+    @Test
+    fun `a save that outlasts the limit still reloads and reports the result as unconfirmed`() = runTest {
+        // 상한을 넘긴 저장은 커밋됐는지 모른다 — reload 는 DB 를 다시 읽을 뿐이라 그래도 부르고, 저장 실패(500)가 아니라 확인 불가로 알린다.
+        every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
+        every { userRepo.updateDiscordWebhookUrl(userId, webhook) } returns Mono.never()
+        coEvery { manager.reloadUserRuntime(userId) } returns Unit
+
+        val ex = runCatching {
+            withContext(authContext.asCoroutineContext()) { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = webhook)) }
+        }.exceptionOrNull() as ResponseStatusException
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.statusCode)
+        assertEquals(TradingController.SETTINGS_SAVE_UNCONFIRMED_MESSAGE, ex.reason)
+        coVerify(exactly = 1) { manager.reloadUserRuntime(userId) }
+    }
+
+    @Test
+    fun `a request cut off while the setting is being saved still finishes the save and reloads`() {
+        // 저장이 커밋된 뒤 끊겨 reload 가 불리지 않으면 DB 와 도는 엔진이 조용히 갈린다(#283). 끝까지 가면 끊긴 reload 가 미반영을 알린다.
+        every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
+        val saving = Sinks.one<Int>()
+        every { userRepo.updateDiscordWebhookUrl(userId, webhook) } returns saving.asMono()
+        coEvery { manager.reloadUserRuntime(userId) } returns Unit
+
+        val request = mono { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = webhook)) }
+            .contextWrite(authContext).subscribe({}, {})
+        verify(timeout = 2_000) { userRepo.updateDiscordWebhookUrl(userId, webhook) }
+        request.dispose()
+        saving.tryEmitValue(1)
+
+        coVerify(timeout = 2_000) { manager.reloadUserRuntime(userId) }
     }
 }

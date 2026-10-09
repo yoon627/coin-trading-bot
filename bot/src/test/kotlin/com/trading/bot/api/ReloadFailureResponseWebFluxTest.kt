@@ -9,6 +9,7 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import io.mockk.coEvery
 import io.mockk.every
+import io.mockk.verify
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpStatus
@@ -50,7 +51,7 @@ class ReloadFailureResponseWebFluxTest {
     @Test
     fun `키 저장 후 런타임 교체가 실패하면 503 과 안내 문구가 나온다`() {
         every { userRepository.findById(1L) } returns Mono.just(user())
-        every { userRepository.save(any()) } returns Mono.just(user())
+        every { userRepository.updateUpbitKeys(1L, any(), any()) } returns Mono.just(1)
         every { userSecretsService.encryptUpbitKeys(any(), any()) } returns ("enc-a" to "enc-s")
         coEvery { userTradingManager.reloadUserRuntime(1L) } throws
             RuntimeReloadFailedException(1L, RuntimeException("db down"), engineRestored = true)
@@ -68,7 +69,7 @@ class ReloadFailureResponseWebFluxTest {
     @Test
     fun `설정 저장 후 런타임 교체가 실패하면 503 이 나온다`() {
         every { userRepository.findById(1L) } returns Mono.just(user())
-        every { userRepository.save(any()) } returns Mono.just(user())
+        every { userRepository.updateDiscordWebhookUrl(1L, any()) } returns Mono.just(1)
         coEvery { userTradingManager.reloadUserRuntime(1L) } throws
             RuntimeReloadFailedException(1L, RuntimeException("db down"), engineRestored = true)
 
@@ -116,7 +117,7 @@ class ReloadFailureResponseWebFluxTest {
     @Test
     fun `런타임 교체가 성공하면 종전대로 200 이다`() {
         every { userRepository.findById(1L) } returns Mono.just(user())
-        every { userRepository.save(any()) } returns Mono.just(user())
+        every { userRepository.updateUpbitKeys(1L, "enc-a", "enc-s") } returns Mono.just(1)
         every { userSecretsService.encryptUpbitKeys(any(), any()) } returns ("enc-a" to "enc-s")
         coEvery { userTradingManager.reloadUserRuntime(1L) } returns Unit
 
@@ -126,5 +127,7 @@ class ReloadFailureResponseWebFluxTest {
             .exchange()
             .expectStatus().isOk
             .expectBody().jsonPath("$.status").isEqualTo("saved")
+        // 평문이나 뒤바뀐 순서로 저장하면 키가 DB 에 노출되거나 거래가 인증에 실패한다.
+        verify(exactly = 1) { userRepository.updateUpbitKeys(1L, "enc-a", "enc-s") }
     }
 }
