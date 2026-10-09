@@ -29,8 +29,6 @@ management:
         include: health,info
 
 upbit:
-  access-key: ${UPBIT_ACCESS_KEY:}
-  secret-key: ${UPBIT_SECRET_KEY:}
   base-url: https://api.upbit.com
 
 # trading.* 기본값은 TradingProperties 가 유일한 정의처다(#75). 여기서 다시 적으면 두 값이 갈린다.
