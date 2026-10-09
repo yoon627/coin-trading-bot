@@ -5,7 +5,8 @@ plugins {
 
 dependencyManagement {
     imports {
-        mavenBom("org.springframework.boot:spring-boot-dependencies:3.4.1")
+        // common 은 Boot 플러그인을 적용하지 않는다 — 루트에 선언한 플러그인 버전의 BOM 을 그대로 따른다.
+        mavenBom(org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES)
     }
 }
 
