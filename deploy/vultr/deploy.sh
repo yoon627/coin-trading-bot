@@ -108,14 +108,34 @@ require_vultr() {
 # ⚠️ APP_ENCRYPTION_SECRET 은 생성하지 않고 실패시킨다 — 백업에서 복원한 DB 에는 이 키로
 # 암호화된 Upbit 키가 들어있어, 새 키를 만들면 앱은 정상 기동하면서 거래소 키만 조용히
 # 복호화 불능이 된다(가장 위험한 실패 모드).
-ensure_secrets() {
-    command -v openssl >/dev/null || { echo "ERROR: openssl 필요"; exit 1; }
+require_encryption_secret() {
     if [[ -z "${APP_ENCRYPTION_SECRET:-}" ]]; then
         echo "ERROR: APP_ENCRYPTION_SECRET 이 비어 있습니다 — 자동 생성하지 않습니다."
         echo "  이 값은 저장된 Upbit API 키를 복호화하는 AES 키입니다. 새로 만들면 기존 키가 모두 무효화됩니다."
         echo "  운영 중인 값(서버 /opt/app/.env 또는 오프사이트 보관본)을 $ENV_FILE 에 그대로 복사하세요."
         exit 1
     fi
+}
+
+# 이미 있는 인스턴스에는 secret 을 만들지 않는다(#231) — 새 DB_PASSWORD 는 기존 postgres 볼륨의 비밀번호와 달라 앱이
+# 기동하지 못하고, 자동 롤백도 같은 서버 .env 를 쓴다. 새 JWT_SECRET 은 모든 세션을 끊는다.
+require_app_secrets() {
+    require_encryption_secret
+    local key
+    for key in DB_PASSWORD JWT_SECRET; do
+        if [[ -z "${!key:-}" ]]; then
+            echo "ERROR: $key 이 비어 있습니다 — 이미 있는 인스턴스에는 자동 생성하지 않습니다."
+            echo "  새 값은 기존 DB 볼륨과 맞지 않아 앱과 자동 롤백이 함께 기동하지 못합니다."
+            echo "  운영 중인 값(서버 /opt/app/.env 또는 오프사이트 보관본)을 $ENV_FILE 에 그대로 복사하세요."
+            echo "  CI 배포라면 GitHub secret VULTR_DEPLOY_ENV 에 넣으세요."
+            echo "  아직 한 번도 deploy 하지 않은 인스턴스라면 값을 직접 만들어 넣으세요(예: openssl rand -hex 16)."
+            exit 1
+        fi
+    done
+}
+
+# 인스턴스를 새로 만들기 직전에만 부른다 — DB 볼륨이 아직 없어 어떤 값이든 맞는다. 비어 있는 값만 만들어 .env 에 적는다.
+generate_missing_secrets() {
     local appended=""
     if [[ -z "${DB_PASSWORD:-}" ]]; then
         DB_PASSWORD="$(openssl rand -hex 16)"; appended+=$'\n'"DB_PASSWORD=$DB_PASSWORD"
@@ -375,6 +395,10 @@ launch_instance() {
         INSTANCE_ID="$existing"; save_state INSTANCE_ID "$INSTANCE_ID"; return
     fi
 
+    # 여기서부터는 새로 만든다 — DB 볼륨이 아직 없으니 비어 있는 secret 을 만들어도 된다. 생성 요청 전에 적어 두면
+    # 요청이 끊겨 다시 실행할 때(위 label 재사용 경로) 이미 채워져 있다.
+    generate_missing_secrets
+
     local ud; ud="$(mktemp)"; write_userdata "$ud"
     # shellcheck disable=SC2064
     trap "rm -f '$ud'" EXIT
@@ -416,10 +440,13 @@ wait_for_active() {
 
 do_setup() {
     require_vultr
-    ensure_secrets
+    command -v openssl >/dev/null || { echo "ERROR: openssl 필요"; exit 1; }
+    require_encryption_secret
     ensure_ssh_key
     setup_firewall
-    launch_instance
+    launch_instance # 새로 만들 때만 비어 있는 secret 을 만든다
+    # .state·같은 label 로 다시 쓰는 인스턴스에는 이미 DB 볼륨이 있을 수 있다 — 거기에는 만들지 않는다.
+    require_app_secrets
     wait_for_active
 
     log "Setup 완료"
@@ -474,7 +501,7 @@ preflight_domain() {
 do_deploy() {
     load_state
     [[ -z "${PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
-    ensure_secrets
+    require_app_secrets
     local domain="${APP_DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
 
     local repo_root; repo_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
