@@ -172,8 +172,7 @@ internal class UnknownOrderResolver(
         if (trace == true && !prev.traced) {
             log.error(
                 "{} 주문 {}({}) 을 거래소가 찾지 못하는데 잔고가 주문 전과 다릅니다 — 자동 처리하지 않습니다(이 티커의 매매가 멈춥니다). " +
-                    "봇을 정지하고 Upbit 주문 내역을 확인한 뒤 trading_states 의 pending 을 정리하고 재기동하세요 — " +
-                    "봇이 도는 중에 DB 를 고치면 다음 tick 이 메모리 상태로 다시 덮어씁니다.",
+                    "봇을 정지하고 Upbit 주문 내역을 확인한 뒤(미체결이면 먼저 취소) POST /api/bot/pending/clear 로 해제하고 다시 시작하세요.",
                 label, identifier, ticker,
             )
         }
