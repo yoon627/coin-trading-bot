@@ -13,6 +13,7 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import org.springframework.web.reactive.function.client.bodyToMono
 import reactor.core.publisher.Mono
 import reactor.util.retry.Retry
+import java.net.URI
 import java.time.Duration
 
 @Component
@@ -187,16 +188,33 @@ class DiscordNotifier internal constructor(
                     }
                 })
                 .onErrorResume { e ->
-                    log.warn("Discord notification failed: {}", e.message)
+                    log.warn("Discord notification failed: {}", safeMessage(e, url))
                     Mono.empty()
                 }
                 .subscribe(
                     { log.debug("Discord notification sent") },
-                    { e -> log.warn("Discord notification error: {}", e.message) },
+                    { e -> log.warn("Discord notification error: {}", safeMessage(e, url)) },
                 )
         } catch (e: Exception) {
-            log.warn("Failed to send Discord notification: {}", e.message)
+            log.warn("Failed to send Discord notification: {}", safeMessage(e, url))
         }
+    }
+
+    /**
+     * 응답 오류(WebClientResponseException)의 메시지는 요청 URI 를 싣고, webhook URL 의 token 이 그 안에 있다.
+     * 보낸 URL 에서 token 을 꺼내 직접 지운다 — 검증기는 대문자 host·포트 등도 통과시켜 URL 패턴 마스킹만으로는 놓친다.
+     */
+    private fun safeMessage(e: Throwable, url: String): String {
+        var message = e.message.orEmpty()
+        webhookToken(url)?.let { message = message.replace(it, "***") }
+        return "${e.javaClass.simpleName}: ${LogMessageSanitizer.sanitize(message)}"
+    }
+
+    // 경로는 검증기가 정한 /api/webhooks/<id>/<token>[/...] 이다.
+    private fun webhookToken(url: String): String? {
+        val segments = runCatching { URI(url).path }.getOrNull()?.split('/')?.filter { it.isNotEmpty() } ?: return null
+        val at = segments.indexOf("webhooks")
+        return segments.getOrNull(at + 2)?.takeIf { at >= 0 }
     }
 
     /**
