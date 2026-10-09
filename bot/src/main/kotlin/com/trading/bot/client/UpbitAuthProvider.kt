@@ -1,18 +1,18 @@
 package com.trading.bot.client
 
-import com.trading.bot.config.UpbitProperties
 import io.jsonwebtoken.Jwts
 import io.jsonwebtoken.security.Keys
-import org.springframework.stereotype.Component
 import java.security.MessageDigest
 import java.util.UUID
 
-@Component
-class UpbitAuthProvider(private val upbitProperties: UpbitProperties) {
+class UpbitAuthProvider(
+    private val accessKey: String,
+    private val secretKey: String,
+) {
 
     fun createToken(queryString: String? = null): String {
         val claims = mutableMapOf<String, Any>(
-            "access_key" to upbitProperties.accessKey,
+            "access_key" to accessKey,
             "nonce" to UUID.randomUUID().toString(),
         )
 
@@ -24,7 +24,7 @@ class UpbitAuthProvider(private val upbitProperties: UpbitProperties) {
             claims["query_hash_alg"] = "SHA512"
         }
 
-        val key = Keys.hmacShaKeyFor(upbitProperties.secretKey.toByteArray())
+        val key = Keys.hmacShaKeyFor(secretKey.toByteArray())
 
         return Jwts.builder()
             .claims(claims)
