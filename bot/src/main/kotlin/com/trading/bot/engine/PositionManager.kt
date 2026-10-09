@@ -338,9 +338,11 @@ class PositionManager(
     }
 
     /**
-     * 체결 판정 후 상태 반영 (buy 후처리·reconcile 공용). C1 과 동일하게 executedVolume>0 을 state 보다 우선 판정.
-     * 전제: Upbit 시장가 매수(ord_type=price)는 즉시 체결 후 소액잔량을 환불하며 종료(done/cancel)되어 wait 로
-     * 장기 잔존하지 않는다. 지정가(limit) 매수 도입 시 wait+부분체결의 잔여주문 취소 확인 로직이 필요하다.
+     * 체결 판정 후 상태 반영 (buy 후처리·reconcile 공용). 매도판([applySellFillOutcome])과 같은 규칙이다.
+     * wait 는 executedVolume>0(부분 진행중)이어도 확정하지 않는다 — 여기서 확정하면 pending 이 풀려 그 뒤의 체결분·수수료가
+     * 장부에 남을 길이 없다(#247). 시장가 매수(ord_type=price)는 곧 done/cancel 로 끝나므로 확정이 한 tick 늦어질 뿐이다.
+     * 종료 응답에서는 executedVolume>0 이면 state 와 무관하게 확정한다 — 소액 잔량을 환불하며 cancel 로 끝난 시장가 매수도
+     * 실제 코인을 받았다(C1).
      */
     private suspend fun applyFillOutcome(
         ticker: String,
@@ -349,17 +351,25 @@ class PositionManager(
         filled: Order?,
     ): TradeRecord? {
         val executed = filled?.executedVolume?.toDoubleOrNull() ?: 0.0
+        if (filled?.state == "wait") {
+            val snapshot = "${filled.executedVolume}/${filled.remainingVolume}"
+            if (executed > 0.0 && state.partialBuyFillLogged != snapshot) {
+                log.info(
+                    "Partial fill while waiting for {} buy order {}: executed={} remaining={} — kept pending",
+                    ticker, filled.uuid, filled.executedVolume, filled.remainingVolume,
+                )
+                state.partialBuyFillLogged = snapshot
+            }
+            return null // 진행중 — pending 유지, 다음 tick 재시도
+        }
         return when {
             // filled != null 은 executed > 0.0 이 이미 함의하지만, 명시하면 smart-cast 가 걸려
             // 아래에서 도달 불가 분기 없이 filled 를 그대로 쓸 수 있다.
             filled != null && executed > 0.0 -> {
-                // 부분체결(cancel/wait) 포함 — 실제 코인을 받았으므로 매수 확정. 실수량/평단은 실잔고로 재확인.
+                // 실수량/평단은 실잔고로 재확인.
                 val account = findAccount(ticker.substringAfter("-"))
-                // wait(폴링 소진)로 여기 왔으면 funds 는 아직 진행 중인 값이고, completeBuy 가 pending 을 해소해
-                // 뒤에 갱신할 길이 없다 — terminal 응답의 합만 이 주문의 금액으로 믿는다(#146).
                 completeBuy(ticker, state, currentPrice, executed, account, filled.feeBasis(), terminalFunds(filled))
             }
-            filled?.state == "wait" -> null // 아직 진행중 — pending 유지, 다음 tick 재시도
             else -> {
                 // cancel+0 등 미체결 — 주문 무산, pending 해소
                 log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
