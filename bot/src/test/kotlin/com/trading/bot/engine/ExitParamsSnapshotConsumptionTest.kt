@@ -2,7 +2,6 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClientImpl
-import com.trading.bot.config.UpbitProperties
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
@@ -36,7 +35,7 @@ class ExitParamsSnapshotConsumptionTest {
 
     private val dummyClient = UpbitClientImpl(
         WebClient.builder().build(),
-        UpbitAuthProvider(UpbitProperties(accessKey = "x", secretKey = "x")),
+        UpbitAuthProvider(accessKey = "x", secretKey = "x"),
     )
     private val manager = PositionManager(dummyClient, globalConfig, mockk(relaxed = true), 1L)
 

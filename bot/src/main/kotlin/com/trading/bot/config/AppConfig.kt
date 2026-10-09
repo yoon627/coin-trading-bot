@@ -11,8 +11,6 @@ data class AppProperties(
 
 @ConfigurationProperties(prefix = "upbit")
 data class UpbitProperties(
-    val accessKey: String = "",
-    val secretKey: String = "",
     val baseUrl: String = "https://api.upbit.com",
 )
 
