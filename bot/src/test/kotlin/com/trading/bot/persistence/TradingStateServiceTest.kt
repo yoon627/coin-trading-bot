@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 
 class TradingStateServiceTest {
 
@@ -19,6 +20,16 @@ class TradingStateServiceTest {
 
     private fun rows(vararg entities: TradingStateEntity) {
         every { repository.findByUserId(1L) } returns Flux.fromIterable(entities.toList())
+    }
+
+    @Test
+    fun `a single ticker row is read with the same mapping, and a missing row is null`() = runTest {
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns
+            Mono.just(TradingStateEntity(userId = 1L, ticker = "KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined"))
+        every { repository.findByUserIdAndTicker(1L, "KRW-ETH") } returns Mono.empty()
+
+        assertEquals("ctb-1", service.loadState(1L, "KRW-BTC")?.pendingBuyIdentifier)
+        assertNull(service.loadState(1L, "KRW-ETH"))
     }
 
     @Test

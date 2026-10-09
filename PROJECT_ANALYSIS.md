@@ -171,7 +171,7 @@ trade_executions
 | 그룹 | 컨트롤러 | 대표 경로 |
 |------|----------|-----------|
 | 인증 | AuthController | `/api/auth/{register,login,logout}` |
-| 봇 제어 | TradingController | `/api/bot/{start,stop,status,halt/clear}` |
+| 봇 제어 | TradingController | `/api/bot/{start,stop,status,halt/clear,pending/clear}` |
 | 사용자 | TradingController | `/api/user/{me,keys,settings}` |
 | 트레이딩 | Portfolio/TradeHistory | `/api/{portfolio,account,trades}` (수동 매수 2026-09-16·수동 매도 2026-09-28 제거) |
 | 전략 성과 | StrategyController | `/api/strategies/performance` |

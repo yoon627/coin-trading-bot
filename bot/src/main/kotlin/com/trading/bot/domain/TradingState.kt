@@ -239,6 +239,57 @@ data class TradingState(
         pendingSellPriorVolume = null
     }
 
+    /** 화면·해제 응답이 쓰는 pending 표현 — 거래소 uuid 를 알면 uuid, 응답을 못 받은 주문이면 identifier. */
+    fun pendingRef(side: TradeSide): PendingRef? = when (side) {
+        TradeSide.BUY -> pendingBuyUuid?.let { PendingRef("uuid", it) } ?: pendingBuyIdentifier?.let { PendingRef("identifier", it) }
+        TradeSide.SELL -> pendingSellUuid?.let { PendingRef("uuid", it) } ?: pendingSellIdentifier?.let { PendingRef("identifier", it) }
+    }
+
+    /** [releasePending] 이 지우는 필드 전부(키는 `trading_states` 컬럼명) — 해제를 사람이 되돌리거나 거래 기록을 맞출 유일한 근거라 그대로 남긴다. */
+    fun pendingFields(side: TradeSide): Map<String, Any?> = when (side) {
+        TradeSide.BUY -> linkedMapOf(
+            "pending_buy_uuid" to pendingBuyUuid,
+            "pending_buy_identifier" to pendingBuyIdentifier,
+            "pending_buy_strategy" to pendingBuyStrategy,
+            "pending_buy_prior_volume" to pendingBuyPriorVolume,
+        )
+        TradeSide.SELL -> linkedMapOf(
+            "pending_sell_uuid" to pendingSellUuid,
+            "pending_sell_identifier" to pendingSellIdentifier,
+            "pending_sell_reason" to pendingSellReason?.name,
+            "pending_sell_volume" to pendingSellVolume,
+            "pending_sell_avg_price" to pendingSellAvgPrice,
+            "pending_sell_since" to pendingSellSince?.toString(),
+            "pending_sell_alerted" to pendingSellAlerted,
+            "pending_sell_trigger_price" to pendingSellTriggerPrice,
+            "pending_sell_prior_volume" to pendingSellPriorVolume,
+        )
+    }
+
+    /**
+     * 사람이 거래소를 확인하고 막힌 pending 을 지운다(#246). 매수는 체결이 남겼을 진입 흔적(전략·매수일·당일 진입)을 남긴다 —
+     * 주문 전에 진입 메타를 지워 두므로 pending 만 지우면 흔적이 없어, 목록 밖 티커는 다음 시작이 싣지 않고(들어온 코인 방치)
+     * 실려도 보유상한이 걸리지 않는다. 보유 여부는 다음 시작의 잔고 동기화가 정한다. 매도도 보유 중인데 매수일이 없으면(체결 기록 없이
+     * 잔고 동기화로만 잡힌 포지션) 오늘로 남긴다 — 흔적이 pending 매도뿐이었다면 지운 뒤 목록 밖에서 실리지 않는다. 청산 파라미터
+     * 스냅샷·고점은 만들지 않는다(현재 설정, 다음 시작의 첫 가격부터). 지운 pending 의 조회 실패 카운터도 비운다.
+     */
+    fun releasePending(side: TradeSide, today: LocalDate) {
+        when (side) {
+            TradeSide.BUY -> {
+                entryStrategy = entryStrategy ?: pendingBuyStrategy
+                buyDate = buyDate ?: today
+                boughtToday = true
+                boughtDate = today
+                clearPendingBuy()
+            }
+            TradeSide.SELL -> {
+                if (position && buyDate == null) buyDate = today
+                clearPendingSell()
+            }
+        }
+        reconcileFailureCount = 0
+    }
+
     /** #19: 수동 해제 — halt 플래그·사유·실패 카운터를 초기화해 다음 tick 부터 reconcile/매매를 재개한다. */
     fun clearHalt() {
         halted = false
@@ -246,3 +297,6 @@ data class TradingState(
         reconcileFailureCount = 0
     }
 }
+
+/** [by] 는 `uuid`(거래소가 아는 주문) 또는 `identifier`(응답을 못 받아 클라이언트 식별자만 아는 주문). */
+data class PendingRef(val by: String, val ref: String)
