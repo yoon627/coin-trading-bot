@@ -1,5 +1,33 @@
 # Git hooks
 
+## pre-commit — 민감 경로 검사 (#299)
+
+`check-staged-sensitive.sh` 가 스테이징된 변경 중 **삭제를 뺀** 파일을 본다. Claude Code 의 PreToolUse 훅
+(`.claude/settings.json`)과 이 git 훅이 같은 스크립트를 부른다. Claude Code 훅만으로는 두 경우를 놓친다 — 스크립트 안에서
+부른 커밋, 그리고 명령을 실행하기 **전** index 를 보므로 `git add X && git commit`·`git commit -a` 로 같은 명령에서 올린 파일.
+git 훅은 실제 커밋 시점에 돈다.
+
+```bash
+cp scripts/git-hooks/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"
+chmod +x "$(git rev-parse --git-path hooks)/pre-commit"
+```
+
+`.git/hooks` 는 모든 worktree 가 공유한다 — 이 스크립트가 없는 옛 브랜치의 worktree 에서는 git 훅이 경고만 하고 통과시킨다
+(그 브랜치의 PreToolUse 훅은 그대로 돈다). PreToolUse 훅은 스크립트를 찾지 못하면 커밋을 막는다.
+
+| 스테이징 | 판정 |
+|---|---|
+| `.env*`·`*.env`·`*.pem`·`*credentials*`·`*secret*` 경로(대소문자 무시, dotenv 템플릿 제외) | BLOCK |
+| dotenv 템플릿(`.env.example`·`*.env.sample` 등)의 비밀 키(`KEY`·`SECRET`·`PASSWORD`·`TOKEN`·`WEBHOOK`·`PRIVATE`·`CREDENTIAL`)에 실제 값 | BLOCK |
+| dotenv 템플릿에 닫히지 않은 따옴표(여러 줄 값) | BLOCK — 뒤 줄을 판정할 수 없다 |
+| dotenv 템플릿의 빈 값·placeholder(`your_..._here`·`<...>`·`changeme`·`example`)·비밀이 아닌 키(`VULTR_REGION=icn` 등) | Allow |
+| 줄 끝에 `# not-a-secret` 표시가 있는 값(로컬 개발 기본값 등) | Allow — 리뷰에서 보이는 예외 |
+| dotenv 가 아닌 템플릿(`credentials.json.template`·`secrets.yml.example`) | BLOCK — 줄 단위로 판정할 수 없어 경로로 본다 |
+| 파일 삭제 | Allow |
+
+`*secret*`·`*credentials*` 은 경로 어디든 걸려 `UserSecretsService.kt` 같은 소스도 막는다(옛 패턴을 그대로 옮긴 과차단).
+git 훅을 설치하면 사람이 직접 하는 그 파일들의 커밋도 막힌다.
+
 ## pre-push
 
 `deploy.yml` 의 `paths-ignore` 가 워크플로 자신을 제외하는 변경만 막는다(#151). 그 외에는 아무것도
