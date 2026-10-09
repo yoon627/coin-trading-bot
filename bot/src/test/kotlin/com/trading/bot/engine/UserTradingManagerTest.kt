@@ -489,6 +489,38 @@ class UserTradingManagerTest {
         assertEquals("combined", saved.captured.strategy)
     }
 
+    // 맨 앞 확인 뒤에 종료가 시작돼도 저장한 running=true 는 둔다 — 재시작 복원이 이 시작을 잇는다(#263 과 같은 틈).
+    @Test
+    fun `startBot does not launch the loop when shutdown starts while the start is being saved`() = runTest {
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<BotStateEntity>()
+        every { botStateRepository.save(any()) } answers { markShuttingDown(); saved += firstArg<BotStateEntity>(); Mono.just(firstArg()) }
+
+        val result = manager.startBot(1L, listOf("KRW-BTC"))
+
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) }
+        assertEquals(UserTradingManager.START_SAVED_SHUTTING_DOWN_MESSAGE, result["error"], "$result")
+        assertEquals(listOf(true), saved.map { it.running }, "저장한 시작을 되돌리지 않는다")
+    }
+
+    @Test
+    fun `a shutdown that starts while startBot is starting the engine finds it stopped`() = runTest {
+        // 종료가 엔진을 맵에서 본 뒤 기동하면 아무도 멈추지 않는다 — 기동 뒤 다시 보고 직접 멈춘다.
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<BotStateEntity>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>(); Mono.just(firstArg()) }
+        every { mockEngine.start(any(), any()) } answers { markShuttingDown() }
+
+        val result = manager.startBot(1L, listOf("KRW-BTC"))
+
+        coVerify(exactly = 1) { mockEngine.stop() }
+        coVerify(exactly = 1) { mockEngine.flushUnpersisted() }
+        assertEquals(UserTradingManager.START_SAVED_SHUTTING_DOWN_MESSAGE, result["error"], "$result")
+        assertEquals(listOf(true), saved.map { it.running }, "저장한 시작을 되돌리지 않는다")
+    }
+
     // --- 사용자 목록과 파생 활성 집합의 분리 (#226) ---
     // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(잔류 포함)을 사용자 의도로 넘기면
     // 목록에서 뺀 티커가 신규 진입 대상으로 승격된다.
