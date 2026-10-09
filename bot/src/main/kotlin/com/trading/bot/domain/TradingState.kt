@@ -58,6 +58,7 @@ data class TradingState(
     var unattributableLockWarned: Boolean = false,
     // wait 중 부분체결 관측 로그의 직전 값(executed/remaining) — 값이 바뀔 때만 찍는다(비영속, #120).
     var partialSellFillLogged: String? = null,
+    var partialBuyFillLogged: String? = null,
     // 신고점 flush 가 실패하면 true — 갱신 tick 에만 flush 하므로 그대로 두면 재시도 기회가
     // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서, 멈춘 엔진이면 그 states 를 버리거나 덮기 전의
     // flush 에서 재기록한다(비영속).
