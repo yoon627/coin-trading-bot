@@ -240,8 +240,8 @@ coin-trading-bot/
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
 | `WATCHLIST_TICKERS` | 주요 KRW 종목 | 시세 수집(WS ticker·분봉 폴링) 대상 종목 — 목록 밖 티커는 REST 시세 폴백 |
-| `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅 |
-| `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다 |
+| `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅. 전송이 429·5xx·연결 실패로 막히면 최대 2번 더 보낸다(429 는 `Retry-After` 를 따르되 30초를 넘으면 포기). 5xx·응답 지연 뒤 재전송은 같은 알림이 두 번 갈 수 있다 |
+| `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다. 전송 재시도는 거래 알림과 같다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |
 | `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
 

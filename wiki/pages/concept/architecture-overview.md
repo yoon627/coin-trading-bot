@@ -2,9 +2,9 @@
 title: 아키텍처 개관 — 단일 Spring Boot 프로세스 안의 Upbit 봇·API·시세수집
 category: concept
 created: 2026-07-28
-updated: 2026-10-01
+updated: 2026-10-07
 claim_state: current
-verified: 2026-10-01 — api/ 에서 차트·실시간 가격·watchlist 컨트롤러, domain/ 에서 `RealtimePrice`, persistence/ 에서 시세 repository·엔티티 삭제 — 패키지 표 서술은 그대로 유효 · 2026-10-01 — stream/ 행: `MarketDataPersistenceService`·`DataRetentionService` 삭제 뒤 `bot/src/main/kotlin/com/trading/bot/stream/` 에 `CandleAggregator` 하나 · 2026-10-01 — common 행을 TradingStrategy + 운영 전략 combined 로(나머지 전략 삭제) · 2026-10-01 — engine/ 행에서 BacktestEngine 삭제(백테스트 코드 제거) · 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
+verified: 2026-10-07 — 알림 전송 재시도(#269)를 `DiscordNotifier` 원문과 `DiscordNotifierRetryTest`(MockWebServer 로 429·503·400 재전송 횟수, `retryDelay` 단위 테스트로 Retry-After 30초 상한·폴백·지수 backoff)로 확인 · 2026-10-01 — api/ 에서 차트·실시간 가격·watchlist 컨트롤러, domain/ 에서 `RealtimePrice`, persistence/ 에서 시세 repository·엔티티 삭제 — 패키지 표 서술은 그대로 유효 · 2026-10-01 — stream/ 행: `MarketDataPersistenceService`·`DataRetentionService` 삭제 뒤 `bot/src/main/kotlin/com/trading/bot/stream/` 에 `CandleAggregator` 하나 · 2026-10-01 — common 행을 TradingStrategy + 운영 전략 combined 로(나머지 전략 삭제) · 2026-10-01 — engine/ 행에서 BacktestEngine 삭제(백테스트 코드 제거) · 2026-09-30 — ERROR 알림의 상한·요약(#249)을 `notification/` 코드와 `DiscordErrorLogAppenderTest`·`ErrorAlertRateLimiterTest` 로 확인 · 2026-09-28 — 가입을 첫 계정만 받도록 바꾼 뒤 `auth/AuthController.kt` 확인 · 2026-09-16 — KIS 패키지·`/api/stock|kis` 제거 후 `bot/src/main/kotlin/com/trading/bot/` 디렉토리 재실측 · 2026-08-02 — settings.gradle.kts, 디렉토리 실측
 sources:
   - settings.gradle.kts
   - PROJECT_ANALYSIS.md
@@ -34,7 +34,7 @@ Gradle 멀티모듈이지만 배포 단위는 **JVM 프로세스 하나**다. `s
 | `stream/` | `CandleAggregator` — 분봉을 상위 봉(엔진이 읽는 D1 포함)으로 접어 `MarketDataStore` 에 올린다. 시세 DB 저장·보존 서비스는 2026-10-01 제거 |
 | `persistence/` | R2DBC Entity/Repository ([[persistence-schema]]) |
 | `security/` | `SecretsCrypto`(AES-GCM), `UserSecretsService` — 사용자별 거래소 키 암호화 |
-| `notification/` | `DiscordNotifier`(거래·오류 알림 전송), `DiscordErrorLogAppender`(ERROR 로그 → Discord — 같은 에러 5분 1회·분당 5건, 넘친 알림은 상한에 처음 걸린 뒤 60초에 요약 1건(에러마다 한 줄·로거별로 번갈아), 요약으로 넘어간 에러는(끝 줄 건수로만 실렸어도) 5분간 개별로 다시 안 옴, 종료 직전 보류분은 로그 파일에만) |
+| `notification/` | `DiscordNotifier`(거래·오류 알림 전송 — 429·5xx·연결 실패는 non-blocking 으로 최대 2회 재시도, 429 는 `Retry-After` 30초 상한), `DiscordErrorLogAppender`(ERROR 로그 → Discord — 같은 에러 5분 1회·분당 5건, 넘친 알림은 상한에 처음 걸린 뒤 60초에 요약 1건(에러마다 한 줄·로거별로 번갈아), 요약으로 넘어간 에러는(끝 줄 건수로만 실렸어도) 5분간 개별로 다시 안 옴, 종료 직전 보류분은 로그 파일에만) |
 
 ## 이 구조에서 나오는 성질
 
