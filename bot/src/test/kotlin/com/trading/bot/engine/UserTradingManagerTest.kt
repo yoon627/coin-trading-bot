@@ -976,6 +976,78 @@ class UserTradingManagerTest {
         assertSame(mockEngine, engines()[1L], "종료의 정지 대상에 남아 있어야 한다")
     }
 
+    // 정지 뒤 기록·로드 중에 종료가 시작되면 종료가 이미 이 엔진을 멈추고 기록했을 수 있다 — 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다(#263).
+    @Test
+    fun `a reload cancelled while loading state during shutdown does not bring the old engine back`() = runTest {
+        runningEngineToReload()
+        every { mockEngine.isRunning() } returnsMany listOf(true, false) // 옛 엔진은 정지 뒤 멈춘 채다
+        coEvery { tradingStateService.loadStates(1L) } coAnswers { markShuttingDown(); delay(1_000); emptyMap() }
+
+        val errors = errorsDuring {
+            val reload = launch { manager.reloadUserRuntime(1L) }
+            advanceTimeBy(500)
+            reload.cancelAndJoin()
+        }
+
+        verify(exactly = 0) { mockEngine.resume() }
+        verify(exactly = 0) { manager.createEngine(any()) }
+        assertSame(mockEngine, engines()[1L], "종료의 정지 대상에 남아 있어야 한다")
+        // 재시작 복원이 저장된 새 설정을 읽는다 — "다시 저장" 안내는 과잉이다.
+        assertEquals(0, errors.count { it.contains("반영되지 않았") }, "$errors")
+    }
+
+    @Test
+    fun `a reload whose state load fails during shutdown does not bring the old engine back`() = runTest {
+        runningEngineToReload()
+        coEvery { tradingStateService.loadStates(1L) } coAnswers { markShuttingDown(); throw RuntimeException("pool closed") }
+
+        // 정상 반환한다 — 이전 엔진으로 돌아간 것이 아니라 RuntimeReloadFailedException 의 어느 문구도 맞지 않는다.
+        manager.reloadUserRuntime(1L)
+
+        verify(exactly = 0) { mockEngine.resume() }
+        verify(exactly = 0) { manager.createEngine(any()) }
+        assertSame(mockEngine, engines()[1L])
+    }
+
+    @Test
+    fun `a reload that finishes loading state during shutdown does not start a replacement`() = runTest {
+        runningEngineToReload()
+        coEvery { tradingStateService.loadStates(1L) } coAnswers { markShuttingDown(); emptyMap() }
+
+        manager.reloadUserRuntime(1L)
+
+        verify(exactly = 0) { manager.createEngine(any()) }
+        verify(exactly = 0) { mockEngine.resume() }
+        assertSame(mockEngine, engines()[1L])
+    }
+
+    // 확인 직후, 되살리거나 교체하는 도중에 종료가 시작되면 종료의 스냅샷·정지가 그보다 먼저일 수 있다 — reload 가 직접 다시 멈춘다.
+    @Test
+    fun `a shutdown that starts while the old engine is brought back finds it stopped again`() = runTest {
+        runningEngineToReload()
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+        every { mockEngine.resume() } answers { markShuttingDown() }
+
+        manager.reloadUserRuntime(1L)
+
+        coVerify(exactly = 2) { mockEngine.stop() } // 교체 전 정지 + 종료와 엇갈려 되살린 뒤의 정지
+        coVerify(atLeast = 1) { mockEngine.flushUnpersisted() }
+    }
+
+    @Test
+    fun `a shutdown that starts while the replacement is being started finds it stopped`() = runTest {
+        runningEngineToReload()
+        coEvery { tradingStateService.loadStates(1L) } returns emptyMap()
+        val replacement = mockk<TradingEngine>(relaxed = true)
+        every { manager.createEngine(any()) } returns replacement
+        every { replacement.start(any(), any()) } answers { markShuttingDown() }
+
+        manager.reloadUserRuntime(1L)
+
+        coVerify(exactly = 1) { replacement.stop() }
+        coVerify(exactly = 1) { replacement.flushUnpersisted() }
+    }
+
     @Test
     fun `stop records pending after the stop is settled and reports a sell it could not record`() = runTest {
         engines()[1L] = mockEngine
