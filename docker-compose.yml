@@ -1,30 +1,22 @@
+# 로컬 개발 전용이다 — 운영 배포는 deploy/vultr(docker-compose.prod.yml + deploy.sh)만 쓴다.
+# 포트는 127.0.0.1 에만 연다(기본 DB 비밀번호가 trading 이다). app 은 prod 프로필이 아니라
+# JWT_SECRET·APP_ENCRYPTION_SECRET 이 비면 임시 키로 뜬다 — 재시작 뒤 세션·저장한 Upbit 키를 유지하려면 .env 에 고정한다.
 services:
   app:
     image: ghcr.io/yoon627/coin-trading-bot:${APP_VERSION:-latest}
     build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    # 설정은 .env 를 통째로 받는다 — 전달 키 목록을 따로 두면 운영 판처럼 목록 drift 가 생긴다.
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - SPRING_PROFILES_ACTIVE=prod
-      # TRADING_* 는 값 없이 이름만 적는다(#75) — .env 에 있으면 전달되고, 없으면 compose 가 변수를
-      # 컨테이너에서 제거해 TradingProperties 기본값이 적용된다. 여기에 기본값을 쓰면 앱과 갈린다.
-      - TRADING_TICKERS
-      - TRADING_AUTO_START
-      - TRADING_TAKE_PROFIT_PCT
-      - TRADING_MAX_LOSS_PCT
-      - TRADING_TRAILING_STOP_PCT
-      - TRADING_TRAILING_ARM_PCT
-      - TRADING_MAX_HOLD_DAYS
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
-      - DISCORD_ERROR_ALERT_ENABLED=${DISCORD_ERROR_ALERT_ENABLED:-false}
-      - DISCORD_ERROR_WEBHOOK_URL=${DISCORD_ERROR_WEBHOOK_URL:-}
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=trading
       - DB_USER=trading
       - DB_PASSWORD=${DB_PASSWORD:-trading}
-      - JWT_SECRET=${JWT_SECRET:-}
-      - APP_ENCRYPTION_SECRET=${APP_ENCRYPTION_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,7 +34,7 @@ services:
       POSTGRES_USER: trading
       POSTGRES_PASSWORD: ${DB_PASSWORD:-trading}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
