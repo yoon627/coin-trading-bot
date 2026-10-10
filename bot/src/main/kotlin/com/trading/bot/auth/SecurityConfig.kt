@@ -15,7 +15,7 @@ import reactor.core.publisher.Mono
 @Configuration
 @EnableWebFluxSecurity
 class SecurityConfig(
-    private val jwtAuthFilter: JwtAuthFilter,
+    private val jwtProvider: JwtProvider,
     @Value("\${APP_DOMAIN:}") private val appDomain: String,
 ) {
 
@@ -38,7 +38,7 @@ class SecurityConfig(
                     .pathMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
                     .anyExchange().authenticated()
             }
-            .addFilterAt(jwtAuthFilter, SecurityWebFiltersOrder.AUTHENTICATION)
+            .addFilterAt(JwtAuthFilter(jwtProvider), SecurityWebFiltersOrder.AUTHENTICATION)
             .build()
     }
 
