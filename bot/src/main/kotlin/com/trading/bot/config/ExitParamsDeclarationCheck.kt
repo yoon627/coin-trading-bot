@@ -80,7 +80,7 @@ class ExitParamsDeclarationCheck(
         /**
          * 청산 판정을 직접 바꾸는 프로퍼티. 이름은 [TradingProperties] 생성자에서 **파생**한다 —
          * 문자열로 적으면 rename 시 옛 키가 계속 선언돼 있어 검사가 조용히 무력해진다
-         * (`TradingEnvPassthroughTest` 가 같은 이유로 리플렉션을 쓴다).
+         * (`DeployEnvPassthroughTest` 가 같은 이유로 리플렉션을 쓴다).
          */
         private val REQUIRED_PROPERTIES = listOf(
             TradingProperties::takeProfitPct,

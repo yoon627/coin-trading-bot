@@ -1,28 +1,26 @@
 package com.trading.bot.config
 
 import com.trading.common.config.ExitParamRanges
-import com.trading.common.config.ShadowExitProperties
-import com.trading.common.config.TradingProperties
 import java.io.File
 import java.math.BigDecimal
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.KProperty1
-import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.createInstance
 import kotlin.reflect.full.memberProperties
-import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaGetter
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
-import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.bind.Binder
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources
+import org.springframework.core.env.StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME as SYSTEM_ENV
 import org.springframework.core.env.SystemEnvironmentPropertySource
 
 /**
  * 배포 preflight(`deploy/vultr/preflight_exit_params.sh`)가 앱의 구간 정의([ExitParamRanges])와 같은 판정을 내는가 (#230).
+ * 불리언·양의 정수 검사 대상은 배포가 넘기는 설정([DeployPassthrough])에서 도출한다(#232).
  *
  * 스크립트의 표는 사본이다 — 이 테스트가 없으면 한쪽만 고쳐도 아무것도 깨지지 않는다(#75 의 목록 drift 와 같은 구조).
  * 계약은 비대칭이다: preflight 는 앱보다 엄격해도 되지만(업로드 전에 멈출 뿐) 느슨하면 안 된다 — 스크립트가 받은 값을
@@ -46,14 +44,22 @@ class ExitParamsPreflightScriptTest {
         Key(envName(entry.key), ownerOf(entry.property), entry.key.substringBeforeLast('.'), entry.property, if (integer) INTEGER else DECIMAL, entry)
     }
 
-    // 두 설정 클래스의 불리언 전부 — 오기(`ture`)는 바인딩 실패로 기동을 막는다. 스위치를 더하면 스크립트 BOOLEAN_KEYS 에도 넣어야 한다.
-    private val booleanKeys: List<Key> = listOf(TradingProperties::class, ShadowExitProperties::class).flatMap { owner ->
-        val prefix = owner.findAnnotation<ConfigurationProperties>()!!.prefix
-        owner.primaryConstructor!!.parameters.filter { it.type.classifier == Boolean::class }.map { param ->
-            val property = owner.memberProperties.single { it.name == param.name }
-            Key(envName("$prefix.${kebab(property.name)}"), owner.java, prefix, property, BOOLEAN, null)
+    // 배포가 넘기는 설정의 불리언 전부 — 오기(`ture`)는 바인딩 실패로 기동을 막고 롤백도 같은 .env 로 뜬다.
+    // 스위치를 더하면 스크립트 BOOLEAN_KEYS 에도 넣어야 한다.
+    private val booleanKeys: List<Key> = keysOf(DeployPassthrough.PASSED, BOOLEAN) { it == Boolean::class }
+
+    // 0·음수는 대부분 바인딩에 성공해 헬스체크를 지나므로 형식만으로는 못 막는다(워치독 stale 0 = 매 주기 재연결).
+    private val positiveIntegerKeys: List<Key> =
+        keysOf(DeployPassthrough.POSITIVE_INTEGER_CLASSES, POSITIVE_INTEGER) { it == Long::class || it == Int::class }
+
+    private fun keysOf(owners: List<kotlin.reflect.KClass<*>>, format: Regex, typeMatches: (Any?) -> Boolean): List<Key> =
+        owners.flatMap { owner ->
+            val prefix = DeployPassthrough.prefix(owner)
+            DeployPassthrough.parameters(owner).filter { typeMatches(it.type.classifier) }.map { param ->
+                val property = owner.memberProperties.single { it.name == param.name }
+                Key(DeployPassthrough.envName(prefix, property.name), owner.java, prefix, property, format, null)
+            }
         }
-    }
 
     private val requiredEnvs = ExitParamsDeclarationCheck.REQUIRED_KEYS.map(::envName)
 
@@ -93,7 +99,8 @@ class ExitParamsPreflightScriptTest {
 
     /** 앱이 이 env 한 줄을 바인딩한 값 — 바인딩에 실패하면(기동 실패) null. 운영과 같은 `SystemEnvironmentPropertySource` 로 건다. */
     private fun appValue(key: Key, value: String): Any? {
-        val source = SystemEnvironmentPropertySource("preflight-candidate", mapOf(key.env to value))
+        // 이름이 -systemEnvironment 로 끝나야 Boot 가 운영과 같은 env 매퍼를 고른다.
+        val source = SystemEnvironmentPropertySource("preflight-$SYSTEM_ENV", mapOf(key.env to value))
         val bound = runCatching {
             Binder(ConfigurationPropertySources.from(source)).bind(key.prefix, key.owner).orElse(null)
         }.getOrNull() ?: return null
@@ -125,13 +132,15 @@ class ExitParamsPreflightScriptTest {
         )
         assertThat(ENV_NAME.findAll(array("BOOLEAN_KEYS")).map { it.value }.toList())
             .containsExactlyInAnyOrderElementsOf(booleanKeys.map { it.env })
+        assertThat(ENV_NAME.findAll(array("POSITIVE_INTEGER_KEYS")).map { it.value }.toList())
+            .containsExactlyInAnyOrderElementsOf(positiveIntegerKeys.map { it.env })
         assertThat(ENV_NAME.findAll(array("EXIT_PARAM_KEYS")).map { it.value }.toList())
             .containsExactlyInAnyOrderElementsOf(requiredEnvs)
     }
 
     @Test
     fun `후보마다 스크립트 판정은 문법과 구간이 낸 답과 같고, 받은 값은 앱도 같은 구간 안으로 받는다`() {
-        val keys = rangeKeys + booleanKeys
+        val keys = rangeKeys + booleanKeys + positiveIntegerKeys
         val mismatches = mutableListOf<String>()
         val accepted = mutableMapOf<String, Int>()
         val rejected = mutableMapOf<String, Int>()
@@ -174,7 +183,20 @@ class ExitParamsPreflightScriptTest {
             "TRADING_ROUND_TRIP_FEE_RATE=0.001",
             "TRADING_SHADOW_EXIT_ENABLED=true",
             "TRADING_TICKERS=KRW-BTC, KRW-ETH",
+            "WATCHLIST_TICKERS=KRW-BTC,KRW-ETH",
+            "MARKETDATA_WATCHDOG_ENABLED=false",
+            "MARKETDATA_WATCHDOG_STALE_MS=60000",
         )
+        assertThat(run.exit).describedAs(run.stderr).isEqualTo(0)
+    }
+
+    @Test
+    fun `앱 기본값을 그대로 적어도 통과한다`() {
+        // 운영자가 기본값을 secret 에 명시해도 배포가 막히면 안 된다 — 기본값이 preflight 형식 밖으로 바뀌면 여기서 깨진다.
+        val lines = (booleanKeys + positiveIntegerKeys).map { key ->
+            "${key.env}=${key.property.getter.call(key.owner.kotlin.createInstance())}"
+        }
+        val run = run(*lines.toTypedArray())
         assertThat(run.exit).describedAs(run.stderr).isEqualTo(0)
     }
 
@@ -249,8 +271,6 @@ class ExitParamsPreflightScriptTest {
 
     private fun ownerOf(property: KProperty1<*, *>): Class<*> = property.javaGetter!!.declaringClass
 
-    private fun kebab(name: String) = name.replace(Regex("([A-Z])"), "-$1").lowercase()
-
     /** `trading.shadow-exit.trailing-stop-pct` → `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT`. */
     private fun envName(key: String) = key.replace('.', '_').replace('-', '_').uppercase()
 
@@ -268,14 +288,15 @@ class ExitParamsPreflightScriptTest {
         val DECIMAL = Regex("""-?[0-9]{1,9}(\.[0-9]+)?""")
         val INTEGER = Regex("""-?[0-9]{1,9}""")
         val BOOLEAN = Regex("""true|false""")
+        val POSITIVE_INTEGER = Regex("""[1-9][0-9]{0,8}""")
 
-        val FLAGGED = Regex("""(?m)^ {2}(TRADING_[A-Z0-9_]+): """)
+        val FLAGGED = Regex("""(?m)^ {2}([A-Z][A-Z0-9_]+): """)
         val RANGE_ROW = Regex(""""(TRADING_[A-Z0-9_]+) (decimal|integer) (\S+) ([01]) (\S+) ([01])""")
-        val ENV_NAME = Regex("""TRADING_[A-Z0-9_]+""")
+        val ENV_NAME = Regex("""[A-Z][A-Z0-9]*_[A-Z0-9_]+""")
 
         val CANONICAL = listOf("-5", "5", "5.0", "-0", "-0.0", "1.5", "123.456789", "999999999", "999999999.5")
 
-        // 렌더 필터(`deploy.sh` 의 TRADING_VALUE_PATTERN)가 통과시키는 문자(영숫자 . _ , - 공백)로 만들 수 있는 값을 주로 넣는다.
+        // 렌더 필터(`deploy.sh` 의 OVERRIDE_VALUE_PATTERN)가 통과시키는 문자(영숫자 . _ , - 공백)로 만들 수 있는 값을 주로 넣는다.
         val NON_CANONICAL = listOf(
             "", " ", " 5", "5 ", "5 0", "5,0", "5_0", "5x", "5d", "5f", "0x10", "0x1p3", "#10",
             "1e-3", "1E-3", "1e3", "Infinity", "-Infinity", "NaN", "5.", ".5", "+5", "--5", "-", ".",

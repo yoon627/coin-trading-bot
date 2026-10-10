@@ -169,42 +169,48 @@ AWS_ACCESS_KEY_ID=${BACKUP_ACCESS_KEY_ID:-}
 AWS_SECRET_ACCESS_KEY=${BACKUP_SECRET_ACCESS_KEY:-}
 AWS_DEFAULT_REGION=${BACKUP_REGION:-ap-northeast-2}
 EOF
-    append_trading_overrides "$1"
+    append_app_overrides "$1"
     chmod 600 "$1"
 }
 
-# TRADING_* 의 기본값은 TradingProperties 가 유일한 정의처다(#75). 여기서 폴백을 주면 앱 기본값을
-# 덮어써 두 값이 갈린다 — .env 에 실제로 설정된 키만 넘기고, 없으면 줄 자체를 쓰지 않는다.
-# 빈 문자열을 넘기는 것도 안 된다: Spring 이 "정의됨"으로 보고 Double 바인딩에서 기동에 실패한다.
-TRADING_OVERRIDE_KEYS=(
+# 이 키들의 기본값은 설정 클래스(TradingProperties·WatchlistProperties·MarketDataWatchdogProperties 등)가 유일한
+# 정의처다(#75). 여기서 폴백을 주면 앱 기본값을 덮어써 두 값이 갈린다 — .env 에 실제로 설정된 키만 넘기고, 없으면
+# 줄 자체를 쓰지 않는다. 빈 문자열을 넘기는 것도 안 된다: Spring 이 "정의됨"으로 보고 숫자 바인딩에서 기동에 실패한다.
+APP_OVERRIDE_KEYS=(
     TRADING_TICKERS TRADING_INVEST_RATIO TRADING_MAX_INVEST_AMOUNT
     TRADING_AUTO_START TRADING_TAKE_PROFIT_PCT TRADING_MAX_LOSS_PCT TRADING_TRAILING_STOP_PCT
     TRADING_TRAILING_ARM_PCT TRADING_MAX_HOLD_DAYS
     TRADING_ROUND_TRIP_FEE_RATE TRADING_K_VALUE TRADING_INTERVAL_SECONDS
     TRADING_RECONCILE_HALT_THRESHOLD
     TRADING_SHADOW_EXIT_ENABLED TRADING_SHADOW_EXIT_TRAILING_STOP_PCT TRADING_SHADOW_EXIT_TRAILING_ARM_PCT
+    WATCHLIST_TICKERS
+    MARKETDATA_WATCHDOG_ENABLED MARKETDATA_WATCHDOG_STALE_MS MARKETDATA_WATCHDOG_INTERVAL_MS
+    MARKETDATA_WATCHDOG_INITIAL_DELAY_MS MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
 )
 # ⚠️ 이 목록은 `docker-compose.prod.yml` 의 `environment:` 목록과 **쌍으로 유지**한다.
 # 한쪽에만 있으면 값이 서버 .env 까지 가고도 컨테이너에 안 들어가거나(그 반대) 조용히 기본값으로 돈다.
-# `TradingEnvPassthroughTest` 가 두 목록을 **모두** 앱 설정과 양방향으로 대조한다 — 설정을 더하거나 지우면 그 테스트가 깨진다.
+# `DeployEnvPassthroughTest` 가 두 목록을 **모두** 앱 설정과 양방향으로 대조한다 — 설정을 더하거나 지우면 그 테스트가 깨진다.
 # 변수에 담아야 [[ =~ ]] 가 공백을 패턴의 일부로 읽는다(따옴표로 감싸면 리터럴이 된다).
 # `-` 는 범위로 해석되지 않도록 클래스 끝에 둔다. 개행은 ^…$ 가 걸러낸다.
-TRADING_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
+OVERRIDE_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
 
-append_trading_overrides() {
-    local key value
-    for key in "${TRADING_OVERRIDE_KEYS[@]}"; do
+append_app_overrides() {
+    local key value written=()
+    for key in "${APP_OVERRIDE_KEYS[@]}"; do
         value="${!key:-}"
         [[ -z "$value" ]] && continue
         # dotenv 는 quoting 규칙이 제각각이라 값을 그대로 쓴다 — 개행은 파일을 깨고 #·$·따옴표는
         # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV 뿐이므로 그 형태만 허용한다.
-        # 공백은 허용한다: TradingProperties.tickerList() 가 "KRW-BTC, KRW-ETH" 를 trim 해 받는다.
-        if [[ ! "$value" =~ $TRADING_VALUE_PATTERN ]]; then
+        # 공백은 허용한다: tickerList() 가 "KRW-BTC, KRW-ETH" 를 trim 해 받는다.
+        if [[ ! "$value" =~ $OVERRIDE_VALUE_PATTERN ]]; then
             echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , - 공백)." >&2
             exit 1
         fi
         printf '%s=%s\n' "$key" "$value" >> "$1"
+        written+=("$key")
     done
+    # 키 이름만 남긴다(배포 로그는 공개 CI 로그다) — secret 에 남은 키가 효력을 갖는지 이 줄로 본다.
+    if (( ${#written[@]} > 0 )); then log "서버 .env override 키: ${written[*]}"; else log "서버 .env override 키: 없음(앱 기본값)"; fi
     return 0
 }
 
@@ -533,7 +539,7 @@ do_deploy() {
     local tmp_env; tmp_env="$(mktemp)"
     trap "rm -f '$tmp_env'" EXIT
     render_server_env "$tmp_env"
-    # 청산·주문 파라미터의 값(형식·구간)과 자동매매 배포의 선언을 업로드 전에 검사한다(#179, #230) —
+    # 청산·주문 파라미터·시세 워치독의 값과 자동매매 배포의 선언을 업로드 전에 검사한다(#179, #230, #232) —
     # 잘못된 .env 가 서버에 닿으면 롤백도 그걸 되돌리지 않는다. 실행 비트에 기대지 않도록 bash 로 부른다.
     bash "$SCRIPT_DIR/preflight_exit_params.sh" "$tmp_env"
     ssh_inst 'mkdir -p /opt/app'

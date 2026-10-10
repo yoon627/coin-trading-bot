@@ -49,7 +49,7 @@ tasks.test {
     // `,` 가 아닌 로케일에서는 깨진다. en·ko 에서는 고정 없이도 통과해 드러나지 않으므로 테스트 JVM 로케일을 고정한다.
     systemProperty("user.language", "en")
     systemProperty("user.country", "US")
-    // 배포 스크립트·compose 를 읽는 테스트가 있다(TradingEnvPassthroughTest·ExitParamsPreflightScriptTest) —
+    // 배포 스크립트·compose 를 읽는 테스트가 있다(DeployEnvPassthroughTest·ExitParamsPreflightScriptTest) —
     // 입력으로 선언하지 않으면 그 파일만 고쳤을 때 테스트가 UP-TO-DATE 로 건너뛰어진다.
     inputs.files(
         rootProject.file("deploy/vultr/deploy.sh"),

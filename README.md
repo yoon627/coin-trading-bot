@@ -242,6 +242,8 @@ coin-trading-bot/
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
 | `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
 | `WATCHLIST_TICKERS` | 주요 KRW 종목 | 시세 수집(WS ticker·분봉 폴링) 대상 종목 — 목록 밖 티커는 REST 시세 폴백 |
+| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WS 무수신(half-open) 자동복구 워치독. 재연결 폭주 등 오작동 시 `false` 로 끄는 kill-switch |
+| `MARKETDATA_WATCHDOG_STALE_MS` · `_INTERVAL_MS` · `_INITIAL_DELAY_MS` · `_RESTART_BACKOFF_MS` | `60000` · `20000` · `30000` · `1000` | 무수신 판정 임계, 점검 주기, 첫 점검 지연, 수집 재시작 대기(ms, 1 이상 정수 — preflight 가 검사) |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅. 전송이 429·5xx·연결 실패로 막히면 최대 2번 더 보낸다(429 는 `Retry-After` 를 따르되 30초를 넘으면 포기). 5xx·응답 지연 뒤 재전송은 같은 알림이 두 번 갈 수 있다 |
 | `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다. 전송 재시도는 거래 알림과 같다 |
 | `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |
@@ -249,7 +251,7 @@ coin-trading-bot/
 
 리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
 
-> **배포 시 주의** — 배포 계층(`deploy/vultr/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고, 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 5개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
+> **배포 시 주의** — 배포 계층(`deploy/vultr/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*`·`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고(배포 로그에 `서버 .env override 키:` 로 이름만 찍힌다), 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 5개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
 
 ## AWS·OCI 배포 (historical)
 
