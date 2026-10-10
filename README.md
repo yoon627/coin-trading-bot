@@ -25,11 +25,13 @@ Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션*
 
 ### 1. PostgreSQL 실행
 
-기본 개발 프로필은 PostgreSQL을 사용합니다. 루트 Compose가 PostgreSQL을 호스트의 `5432` 포트에 공개하므로 다음과 같이 실행합니다.
+기본 개발 프로필은 PostgreSQL을 사용합니다. 루트 Compose(로컬 개발 전용 — 운영은 [Vultr 배포](#vultr-배포-비용-절감--월-10))가 PostgreSQL을 `127.0.0.1:5432` 에만 공개하므로 다음과 같이 실행합니다.
 
 ```bash
 docker compose up -d postgres
 ```
+
+루트 Compose 는 `env_file` 의 `required: false` 를 쓰므로 Docker Compose 2.24 이상이 필요합니다. app 까지 띄우면 기본은 GHCR 이미지(`APP_VERSION`, 기본 `latest`)이고, 로컬 소스로 띄우려면 `docker compose up -d --build` 를 씁니다.
 
 ### 2. 애플리케이션 실행
 
@@ -122,7 +124,7 @@ coin-trading-bot/
 │           ├── db/migration/     # Flyway V1~V28
 │           └── static/           # login.html, app.html, tide-app/
 ├── deploy/vultr/                 # Vultr 서울 생성·배포 스크립트와 prod Compose (2GB 예산)
-└── docker-compose.yml            # 로컬/단일 호스트용 app, postgres
+└── docker-compose.yml            # 로컬 개발용 app, postgres (127.0.0.1 바인딩, 기본 프로필, .env 를 env_file 로)
 ```
 
 ## 트레이딩 전략
