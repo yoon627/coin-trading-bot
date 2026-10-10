@@ -21,6 +21,17 @@ class WatchlistPropertiesTest {
     }
 
     @Test
+    fun `default is the operating watchlist`() {
+        assertEquals(
+            listOf(
+                "KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE", "KRW-ADA", "KRW-AVAX",
+                "KRW-LINK", "KRW-DOT", "KRW-SHIB", "KRW-NEAR", "KRW-SUI", "KRW-HBAR",
+            ),
+            WatchlistProperties().tickerList(),
+        )
+    }
+
+    @Test
     fun `tickerList is empty when blank`() {
         assertTrue(WatchlistProperties("").tickerList().isEmpty())
     }
