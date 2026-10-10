@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 배포 preflight — 렌더된 서버 .env 의 청산·주문 파라미터를 **업로드 전에** 검사한다 (#179, #230).
+# 배포 preflight — 렌더된 서버 .env 의 청산·주문 파라미터와 시세 워치독 설정을 **업로드 전에** 검사한다 (#179, #230, #232).
 # deploy.sh 가 render_server_env 직후 부른다.
 #
 # 앱이 아니라 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 손절·트레일링이 평가되지 않는 공백이 생기고,
@@ -8,8 +8,9 @@
 #   선언 자동매매 배포면 청산 5개 키가 모두 선언됐는가. 빠지면 앱이 코드 기본값으로 조용히 거래한다.
 #
 # 아래 표는 사본이다. 구간의 정의처는 common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt,
-# 선언 키의 정의처는 ExitParamsDeclarationCheck.REQUIRED_KEYS, 불리언은 TradingProperties·ShadowExitProperties 의
-# Boolean 설정 전부이고, ExitParamsPreflightScriptTest 가 셋을 대조한다.
+# 선언 키의 정의처는 ExitParamsDeclarationCheck.REQUIRED_KEYS, 불리언은 배포가 넘기는 설정 클래스(테스트의
+# DeployPassthrough.PASSED)의 Boolean 전부, 양의 정수는 MarketDataWatchdogProperties 의 Long 전부이고,
+# ExitParamsPreflightScriptTest 가 넷을 대조한다.
 # 형식은 앱(Spring)보다 좁다 — 여기서 받는 값은 앱도 같은 수로 받는다. 값은 찍지 않는다(배포 로그가 공개 CI 로그다).
 # bash 3.2(macOS)에서도 돈다 — ${v,,}·declare -A·mapfile 을 쓰지 않는다.
 #
@@ -42,6 +43,15 @@ RANGE_RULES=(
 BOOLEAN_KEYS=(
     TRADING_AUTO_START
     TRADING_SHADOW_EXIT_ENABLED
+    MARKETDATA_WATCHDOG_ENABLED
+)
+# 워치독 주기·임계(ms). interval 0·음수는 스케줄 등록이 기동을 막고(롤백도 같은 .env), 나머지는 앱이 받아 기동은 되지만
+# stale 0 은 매 주기 재연결, backoff 0 은 재구독 tight loop 다.
+POSITIVE_INTEGER_KEYS=(
+    MARKETDATA_WATCHDOG_STALE_MS
+    MARKETDATA_WATCHDOG_INTERVAL_MS
+    MARKETDATA_WATCHDOG_INITIAL_DELAY_MS
+    MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
 )
 EXIT_PARAM_KEYS=(
     TRADING_TAKE_PROFIT_PCT
@@ -55,6 +65,7 @@ EXIT_PARAM_KEYS=(
 DECIMAL_FORMAT='^-?[0-9]{1,9}([.][0-9]+)?$'
 INTEGER_FORMAT='^-?[0-9]{1,9}$'
 BOOLEAN_FORMAT='^(true|false)$'
+POSITIVE_INTEGER_FORMAT='^[1-9][0-9]{0,8}$'
 
 # 키의 선언 값들 — 같은 키가 여러 줄이어도 모두 검사한다.
 values_of() { grep "^$1=" "$env_file" | cut -d= -f2- || true; }
@@ -98,6 +109,11 @@ for key in "${BOOLEAN_KEYS[@]}"; do
         [[ $value =~ $BOOLEAN_FORMAT ]] || violations+=("$key: 형식 — true 또는 false(소문자)로 적으세요")
     done < <(values_of "$key")
 done
+for key in "${POSITIVE_INTEGER_KEYS[@]}"; do
+    while IFS= read -r value; do
+        [[ $value =~ $POSITIVE_INTEGER_FORMAT ]] || violations+=("$key: 형식 — 1 이상 정수(ms, 9자리까지, 단위 없이)로 적으세요")
+    done < <(values_of "$key")
+done
 
 # 게이트는 앱과 같게 읽는다: 선언하지 않으면 앱 기본값(false)이다. 형식이 틀린 값은 위에서 이미 위반이고,
 # 켜졌을 수도 있으니 선언까지 본다.
@@ -118,7 +134,7 @@ if $check_declared; then
 fi
 
 if (( ${#violations[@]} + ${#missing[@]} > 0 )); then
-    echo "ERROR: 청산·주문 파라미터 검사에 걸려 배포를 중단합니다(값은 출력하지 않습니다)." >&2
+    echo "ERROR: 배포 설정 검사(청산·주문 파라미터, 시세 워치독)에 걸려 배포를 중단합니다(값은 출력하지 않습니다)." >&2
     if (( ${#violations[@]} > 0 )); then printf '  %s\n' "${violations[@]}" >&2; fi
     if (( ${#missing[@]} > 0 )); then
         for key in "${missing[@]}"; do echo "  $key: 미선언 — $missing_reason" >&2; done
@@ -127,7 +143,7 @@ if (( ${#violations[@]} + ${#missing[@]} > 0 )); then
     exit 1
 fi
 if $check_declared; then
-    log "청산·주문 파라미터 값 확인, 청산 파라미터 ${#EXIT_PARAM_KEYS[@]}개 선언 확인"
+    log "청산·주문 파라미터·시세 워치독 값 확인, 청산 파라미터 ${#EXIT_PARAM_KEYS[@]}개 선언 확인"
 else
-    log "청산·주문 파라미터 값 확인 (자동매매 off — 선언 검사 생략)"
+    log "청산·주문 파라미터·시세 워치독 값 확인 (자동매매 off — 선언 검사 생략)"
 fi
