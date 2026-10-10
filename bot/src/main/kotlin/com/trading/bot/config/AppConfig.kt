@@ -16,7 +16,7 @@ data class UpbitProperties(
 
 @ConfigurationProperties(prefix = "watchlist")
 data class WatchlistProperties(
-    val tickers: String = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL",
+    val tickers: String = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-ADA,KRW-AVAX,KRW-LINK,KRW-DOT,KRW-SHIB,KRW-NEAR,KRW-SUI,KRW-HBAR",
 ) {
     fun tickerList(): List<String> =
         tickers.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct()
@@ -26,6 +26,7 @@ data class WatchlistProperties(
  * 시세 수집 WS 무수신(half-open) 자동복구 워치독 설정.
  * 매매 정확성은 TradingEngine 의 30s staleness 게이팅+REST 폴백이 이미 보호하므로 이 워치독은 피드 복구용 —
  * 오판(저유동 마켓 등) 시 재연결 폭주를 막기 위해 enabled 로 런타임 비활성(kill-switch)할 수 있게 property 화한다.
+ * stale-ms 는 watchlist 유동성에 맞춰 조정한다. 점검 주기(interval·initialDelay)는 SchedulerConfig 가 이 값으로 등록한다.
  */
 @ConfigurationProperties(prefix = "marketdata.watchdog")
 data class MarketDataWatchdogProperties(

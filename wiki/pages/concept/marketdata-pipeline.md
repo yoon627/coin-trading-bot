@@ -2,14 +2,16 @@
 title: 시세 수집 파이프라인 — WS ticker + REST 캔들, 무수신 워치독
 category: concept
 created: 2026-07-28
-updated: 2026-10-01
+updated: 2026-10-10
 claim_state: current
-verified: 2026-10-01 — 차트·SSE·watchlist API 제거 뒤 `MarketDataStore` 의 공개 API 는 `updateTicker`·`addCandle`·`getLatestTicker`·`getCandles` 넷(rg — 엔진·수집기만 호출) · 2026-10-01 — 시세 DB 저장·보존 제거: `MarketDataIngestionService` 가 `CandleAggregator` 를 직접 부른다(`onMinuteCandle`·`startFrom(UPBIT, …)`·`prime`) — 실제 store·집계기 특성 테스트 `MarketDataIngestionAggregationTest` 3건(변경 전 저장 서비스 경유로 먼저 Green), 변이 4종(집계 호출·바닥·prime 제거, prime 시각 오전달) 각각 검출 · 2026-10-01 — 전략별 최소 봉수·volume 서술을 운영 전략 combined 기준으로(나머지 전략 삭제) · 2026-09-18 — 운영 DB M1 재구성 일봉 vs Upbit `candles/days`(13마켓, read-only): 구 규칙 09-10~15 78마켓·일 volume 비율 중앙값 0.66(최소 0.47)·레인지 비율 중앙값 1.000/p10 0.967/최소 0.875, 신 규칙 09-17 13마켓 전부 1.000/1.000 · 2026-09-17 — M1 폴링 `count=5` + `CandleAggregator` 분 단위 멱등(base/provisional/lastFolded, `prime(candle, fetchedAt)`)으로 상위봉이 완결 분봉으로 접힌다(`CandleAggregatorTest` 재수신 대체·꼬리 복원·자정 경계·prime 겹침, `MarketDataIngestionServiceTest` 오름차순·count 양 경로 검증). 2026-09-16 — `seedDailyCandles` 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 seed 를 대체하지 않고 이어받는다(`CandleAggregatorTest` 재현 테스트 Red→Green, `MarketDataIngestionServiceTest` prime 검증). 2026-08-23 seedDailyCandles 200봉·실패 시 무재시도·전략별 minCandles 확인분 유지
+verified: 2026-10-10 — 워치독 주기 등록이 `@Scheduled` placeholder 에서 `SchedulerConfig` 의 `FixedDelayTask`(프로퍼티 값)로 옮겨졌고 기본값 정의처가 `AppConfig.kt` 하나임을 `MarketDataPropertiesBindingTest`(yml 미정의 단언·env 바인딩·`ScheduledTaskHolder` 의 interval/initialDelay)로 확인, 기동 INFO `[watchdog] …` 를 테스트 로그로 관찰 · 2026-10-01 — 차트·SSE·watchlist API 제거 뒤 `MarketDataStore` 의 공개 API 는 `updateTicker`·`addCandle`·`getLatestTicker`·`getCandles` 넷(rg — 엔진·수집기만 호출) · 2026-10-01 — 시세 DB 저장·보존 제거: `MarketDataIngestionService` 가 `CandleAggregator` 를 직접 부른다(`onMinuteCandle`·`startFrom(UPBIT, …)`·`prime`) — 실제 store·집계기 특성 테스트 `MarketDataIngestionAggregationTest` 3건(변경 전 저장 서비스 경유로 먼저 Green), 변이 4종(집계 호출·바닥·prime 제거, prime 시각 오전달) 각각 검출 · 2026-10-01 — 전략별 최소 봉수·volume 서술을 운영 전략 combined 기준으로(나머지 전략 삭제) · 2026-09-18 — 운영 DB M1 재구성 일봉 vs Upbit `candles/days`(13마켓, read-only): 구 규칙 09-10~15 78마켓·일 volume 비율 중앙값 0.66(최소 0.47)·레인지 비율 중앙값 1.000/p10 0.967/최소 0.875, 신 규칙 09-17 13마켓 전부 1.000/1.000 · 2026-09-17 — M1 폴링 `count=5` + `CandleAggregator` 분 단위 멱등(base/provisional/lastFolded, `prime(candle, fetchedAt)`)으로 상위봉이 완결 분봉으로 접힌다(`CandleAggregatorTest` 재수신 대체·꼬리 복원·자정 경계·prime 겹침, `MarketDataIngestionServiceTest` 오름차순·count 양 경로 검증). 2026-09-16 — `seedDailyCandles` 가 오늘 D1 을 `CandleAggregator.prime` 으로 등록해 첫 M1 이 seed 를 대체하지 않고 이어받는다(`CandleAggregatorTest` 재현 테스트 Red→Green, `MarketDataIngestionServiceTest` prime 검증). 2026-08-23 seedDailyCandles 200봉·실패 시 무재시도·전략별 minCandles 확인분 유지
 sources:
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataStore.kt
   - bot/src/main/kotlin/com/trading/bot/marketdata/UpbitMarketFeed.kt
   - bot/src/main/kotlin/com/trading/bot/stream/CandleAggregator.kt
+  - bot/src/main/kotlin/com/trading/bot/config/AppConfig.kt
+  - bot/src/main/kotlin/com/trading/bot/config/SchedulerConfig.kt
 ---
 
 # 시세 수집 파이프라인
@@ -42,7 +44,9 @@ UpbitMarketFeed ──ticker(WS)──┐
 
 ## half-open 워치독
 
-TCP 는 살아 있는데 데이터가 안 오는 상태는 flow 재구독으로 풀리지 않는다. `@Scheduled` 워치독(기본 20초 간격)이 `lastTickerAt` 을 보고 임계 초과면 **ticker job 을 취소·재생성**해 새 연결을 만든다.
+TCP 는 살아 있는데 데이터가 안 오는 상태는 flow 재구독으로 풀리지 않는다. 워치독(`checkTickerHealth`, 기본 20초 간격)이 `lastTickerAt` 을 보고 임계 초과면 **ticker job 을 취소·재생성**해 새 연결을 만든다.
+
+- 설정은 `MarketDataWatchdogProperties`(`AppConfig.kt`) 한 곳이 기본값을 갖고(`application.yml` 에 없다), 운영은 `MARKETDATA_WATCHDOG_*` env 로 바꾼다 — `ENABLED=false` 가 kill-switch. 주기는 `SchedulerConfig` 가 그 값으로 `FixedDelayTask` 를 등록하고, 기동 때 `[watchdog] enabled=… staleMs=…` INFO 한 줄로 실효값을 남긴다. 전달 경로는 [[deployment-stack]].
 
 - mutex 로 재시작을 직렬화하고, cancel 직전 staleness 를 재확인해 TOCTOU(대기 중 tick 도착)를 막는다.
 - 부팅·재시작 시 `lastTickerAt` 을 now 로 리셋해 오발동을 막는다.

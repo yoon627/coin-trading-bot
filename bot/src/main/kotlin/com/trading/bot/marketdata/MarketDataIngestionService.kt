@@ -26,7 +26,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
-import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
@@ -174,11 +173,7 @@ class MarketDataIngestionService(
 
     // half-open(TCP 살아있으나 무수신) 자동복구: 임계 초과 시 수집 코루틴을 재기동한다. half-open 은 flow 재구독이
     // 아니라 새 연결로만 풀리므로 job 을 취소·재생성한다. 매매 정확성은 TradingEngine staleness 게이팅이 이미 보호하므로
-    // 여기선 수집 복구가 목적이고, 오판 시 enabled 로 런타임 비활성할 수 있다.
-    @Scheduled(
-        fixedDelayString = "\${marketdata.watchdog.interval-ms:20000}",
-        initialDelayString = "\${marketdata.watchdog.initial-delay-ms:30000}",
-    )
+    // 여기선 수집 복구가 목적이고, 오판 시 enabled 로 런타임 비활성할 수 있다. 주기 등록은 SchedulerConfig.
     fun checkTickerHealth() {
         if (!watchdogProperties.enabled || shuttingDown.get()) return
         val m = markets
