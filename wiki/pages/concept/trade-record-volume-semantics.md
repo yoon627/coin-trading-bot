@@ -2,9 +2,9 @@
 title: trade_records.volume 의 두 의미 — 엔진은 스냅샷, 수동은 증분
 category: concept
 created: 2026-08-24
-updated: 2026-10-07
+updated: 2026-10-12
 claim_state: current
-verified: 2026-10-07 — 엔진 매수가 `wait`+부분체결에서 확정하지 않고 pending 을 유지해 종료 응답에서 기록함을 `PositionManagerExtendedTest`(wait→done 흐름·reconcile wait 유지)로 확인, base 코드에서 Red 확인 (#247) · 2026-10-01 — 빈 `strategy` 매수 행 0건(운영 읽기 전용 조회, `trade_records` 223건), null 허용 경로는 `PositionManager.kt` 에 남아 있음(rg) — `TradeRoundTrip` KDoc 과 같은 문장 · 2026-10-01 — 적립 프로파일 제거(MVP 2단계): `buildSellRecord` 의 전략 귀속이 진입 전략 하나(`state.entryStrategy`)로 · 2026-09-28 — 수동 매도 경로 제거(`ManualTradeController`·`executeSell*` 삭제, grep 0건) 뒤 수동 매도 서술을 과거 행 서술로 · 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
+verified: 2026-10-12 — 잔량이 남은 그룹 뒤의 엔진 스냅샷 BUY 가 잔량을 넘겨받아 이전 그룹을 닫음(#147)을 `TradeRoundTripTest` 3건(이슈의 10·4·6·2 시나리오에서 열린 잔량 합 4, dust 0.0001 이월, 수동 증분은 이월 없음 — 앞의 둘은 수정 전 Red)과 OrdersPage 서버 렌더(이월 행에만 표시)로 확인 · 2026-10-07 — 엔진 매수가 `wait`+부분체결에서 확정하지 않고 pending 을 유지해 종료 응답에서 기록함을 `PositionManagerExtendedTest`(wait→done 흐름·reconcile wait 유지)로 확인, base 코드에서 Red 확인 (#247) · 2026-10-01 — 빈 `strategy` 매수 행 0건(운영 읽기 전용 조회, `trade_records` 223건), null 허용 경로는 `PositionManager.kt` 에 남아 있음(rg) — `TradeRoundTrip` KDoc 과 같은 문장 · 2026-10-01 — 적립 프로파일 제거(MVP 2단계): `buildSellRecord` 의 전략 귀속이 진입 전략 하나(`state.entryStrategy`)로 · 2026-09-28 — 수동 매도 경로 제거(`ManualTradeController`·`executeSell*` 삭제, grep 0건) 뒤 수동 매도 서술을 과거 행 서술로 · 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — dust 흡수 매수의 BUY 스냅샷(총보유 = dust + 체결분)은 `PositionManagerDustTest`, 라운드트립 병합은 `TradeRoundTrip.assembleRoundTrips` 의 연속 BUY 그룹핑을 코드로 확인 · 2026-09-16 — 수동 매도 귀속·durable 정리는 `UserTradingManagerTest` 8건·`ManualTradeControllerTest` 6건(#129 절)으로 확인 · 수동 매도의 terminal 체결량 기록·미확정 무기록은 `TradeExecutionServiceTest` 8건(#105 절)으로 확인 · 2026-09-15 — `pnl_amount_net` 합산·all-or-nothing null 조건은 `TradeRoundTripTest` 6건(#115 절)으로 확인(SPA 의 net 우선·`≈` 폴백 표시는 정적 확인만) · 2026-09-14 — `order_amount` 경로별 규칙은 `PositionManagerExtendedTest` 5건(#146 절)·`TradeExecutionServiceTest`·`DiscordNotifierTest` 로, V26 매핑·집계 SQL 은 `TradeRecordAggregateRoundTripTest`(CI 실 Postgres)로 확인. 엔진 매도 fee 실측화는 `PositionManagerExtendedTest` 3건(즉시 done·reconcile·paid_fee 부재→추정)으로 확인 · 2026-08-24 — 운영 DB(user_id=4, 2026-06~08) 조회로 확인. SELL 30건이 **모두** 직전 BUY 와 수량이 정확히 일치(불일치 0건)하고, 연속 BUY 2건은 수량이 증가해 스냅샷 해석과 정합. `strategy` 분포는 combined 30 / manual 2 / rsi_bounce 1 · 2026-08-26 — 보유량 규칙을 `BuySide` 가 실제로 구현하도록 수정(#132), 추정 오차 부호는 코드로 미정 확인. 허용오차 상한은 기존 계약 테스트가 결정
 sources:
   - bot/src/main/kotlin/com/trading/bot/engine/PositionManager.kt
   - bot/src/main/kotlin/com/trading/bot/persistence/TradeRecordRepository.kt
@@ -165,6 +165,18 @@ reconcile 로 늦게 확정된 매도(체결 확인 창을 넘김·응답을 못
 팔 수 없는 dust 위에 엔진이 사면([[trading-engine-loop]] "팔 수 없는 보유") 그 BUY 행도 위 규칙 그대로다 — `volume` 은 dust 를 포함한 총보유 스냅샷, `total_amount` 는 계좌 평단(dust 원가가 섞임) × 총보유, `order_amount` 는 이번 주문의 체결 대금뿐이다.
 
 **라운드트립 표시 한계**: `assembleRoundTrips` 는 SELL 없이 이어지는 BUY 를 한 그룹으로 묶는다. 봇 자신의 포지션이 손실로 dust 가 된 경우(사이에 SELL 이 없다) 흡수 BUY 가 옛 그룹에 합쳐져 진입 시각·전략이 옛 값으로 보인다. SELL 기록의 전략은 새 진입 전략이라 둘이 갈린다. 부분체결 잔량(과거에는 봇 화면의 수동 매도로 판 잔량도)은 사이에 SELL 이 있어 따로 묶인다. 거래소 앱에서 직접 판 잔량은 SELL 기록이 없어(봇은 거래소 주문 내역을 가져오지 않는다) 합쳐진다.
+
+**잔량 이월 (#147)**: SELL 뒤 잔량이 남은 채 엔진 BUY 가 오면 새 그룹으로 끊는데, 그 BUY 의 `volume` 은 총보유 스냅샷이라 이전 그룹의
+잔량을 이미 담고 있다. 이전 그룹을 열어 두면 같은 코인이 두 그룹에 잡혀 화면의 보유량이 부풀었다. 그래서 이전 그룹을 닫고 잔량을
+`carried_volume` 으로 남긴다(화면 "잔량 다음 매수로 이월"). 이전 그룹의 실현 손익은 매도 행 그대로이고, 잔량의 원가는 새 그룹의
+스냅샷 `total_amount`(계좌 평단 × 총보유)에 들어간다. 새 그룹의 진입 시각은 새 BUY 시각이라 이월분의 실제 보유 시작보다 늦다.
+과거 수동 증분 BUY 는 그 주문 수량뿐이라 잔량을 담지 않으므로 이월하지 않고 이전 그룹을 열어 둔다.
+한계 — (1) 스냅샷이 잔량보다 작으면 이월하지 않는다: 잔량이 거래소 앱에서 처분·출금됐거나(엔진은 기록 없이 정리한다)
+잠겨 있어(`completeBuy` 는 free 만 센다) 그 BUY 가 잔량을 담지 않은 경우다 — 이전 그룹은 예전처럼 열린 채 남는다.
+(2) 바로 앞 그룹만 본다: 과거 수동 증분 BUY 가 그룹을 끊은 체인(`E10·SELL4·M3·…·E15`)이면 더 앞의 열린 그룹은 그대로다.
+수동 매수가 제거돼 과거 행에만 해당한다.
+기각: 잔량이 남은 채 산 BUY 를 같은 그룹으로 합치기(보유기간·손익 표시가 크게 바뀌고 "매도 뒤 매수는 새 라운드트립" 규칙과 충돌),
+표시만 보정(숫자는 계속 이중).
 
 ## 왜 중요한가
 

@@ -38,12 +38,17 @@ data class TradeRoundTrip(
     val holdingSeconds: Long?,
     val reason: String?,
     val strategy: String?,
-    /** 아직 전량 청산되지 않았다(미매수 잔량 보유). */
+    /** 아직 전량 청산되지 않았고 잔량을 다음 그룹에 넘기지도 않았다 — 이 그룹이 잔량을 보유 중이다. */
     val open: Boolean,
-    /** 매도는 있었지만 매수 수량의 일부가 아직 남아 있다. */
+    /** 매도는 있었지만 매수 수량의 일부가 아직 이 그룹에 남아 있다([carriedVolume] 으로 넘긴 그룹은 아니다). */
     val partiallyClosed: Boolean,
     /** 매수 기록이 없거나 일부만 남아 매수 기반 값(평단·손익금액)을 믿을 수 없다. */
     val partial: Boolean,
+    /**
+     * 다음 그룹의 엔진 매수가 넘겨받은 이 그룹의 잔량. 엔진 매수 기록은 그 시점 거래소 전체 보유량이라 이 잔량을 이미
+     * 담고 있어, 이 그룹은 그만큼 남긴 채 닫는다(#147). 그렇게 닫혔을 때만 값이 있다.
+     */
+    val carriedVolume: Double?,
 )
 
 /** 코인 수량은 소수라 잔량 0 을 정확히 비교할 수 없다. 이 이하면 청산된 것으로 본다. */
@@ -139,7 +144,8 @@ private data class BuySide(
 }
 
 /**
- * 한 포지션은 "매수 누적 → 매도 누적으로 잔량이 0 이 될 때까지" 이다.
+ * 한 포지션은 "매수 누적 → 매도 누적으로 잔량이 0 이 될 때까지" 이다. 잔량이 남은 채 엔진 매수가 오면 그 잔량을 다음
+ * 그룹에 넘기고 닫는다([TradeRoundTrip.carriedVolume]).
  *
  * 한 포지션이 여러 SELL 로 나뉠 수 있다 — 부분 체결 뒤 남은 수량의 매도, 과거 수동 매도(수량 지정, 2026-09-28 제거),
  * 과거 적립 단계 매도(`ACCUMULATE_STEP`, 2026-10-01 제거). 그래서 SELL 하나를 곧 포지션 종료로 보지 않고 수량 잔량으로 판정한다.
@@ -159,8 +165,8 @@ fun assembleRoundTrips(
         var sells = mutableListOf<TradeRecordEntity>()
         var isFirstGroup = true
 
-        fun flush(closed: Boolean) {
-            result.add(roundTrip(ticker, buys, sells, closed, headCut = truncatedHead && isFirstGroup))
+        fun flush(closed: Boolean, carriedVolume: Double? = null) {
+            result.add(roundTrip(ticker, buys, sells, closed, headCut = truncatedHead && isFirstGroup, carriedVolume))
             isFirstGroup = false
             buys = mutableListOf()
             sells = mutableListOf()
@@ -171,11 +177,26 @@ fun assembleRoundTrips(
             return side.volume - sells.sumOf { it.volume } <= side.closureTolerance
         }
 
+        /**
+         * 이 매수가 넘겨받는 현재 그룹의 잔량. 엔진 매수는 그 시점 전체 보유량이라 잔량을 이미 담고 있다 — 이 그룹을 열어 두면
+         * 같은 코인이 두 그룹에 잡힌다(#147). 스냅샷이 잔량보다 작으면 잔량이 거래소 밖에서 처분·잠긴 것이라 넘기지 않는다.
+         * 과거 수동 증분 매수 행은 그 주문 수량뿐이라 잔량을 담지 않는다.
+         */
+        fun carriedBy(buy: TradeRecordEntity): Double? {
+            if (!buy.isSnapshotBuy()) return null
+            val side = BuySide.of(buys)
+            val remaining = side.volume - sells.sumOf { it.volume }
+            return remaining.takeIf { it > side.closureTolerance && buy.volume >= it - side.closureTolerance }
+        }
+
         for (row in rows) {
             if (row.side.equals("BUY", ignoreCase = true)) {
                 // 매도가 시작된 뒤에 들어온 매수는 새 포지션이다. 잔량이 남아 있어도 여기서 끊지 않으면
                 // BUY→부분SELL→BUY→SELL 이 한 행으로 뭉쳐 보유기간과 손익이 뒤섞인다.
-                if (sells.isNotEmpty()) flush(closed = isClosed())
+                if (sells.isNotEmpty()) {
+                    val carried = carriedBy(row)
+                    flush(closed = carried != null || isClosed(), carriedVolume = carried)
+                }
                 buys.add(row)
             } else {
                 sells.add(row)
@@ -194,6 +215,7 @@ private fun roundTrip(
     sells: List<TradeRecordEntity>,
     closed: Boolean,
     headCut: Boolean,
+    carriedVolume: Double?,
 ): TradeRoundTrip {
     val buySide = BuySide.of(buys)
     val buyAmount = buySide.amount
@@ -251,10 +273,11 @@ private fun roundTrip(
         strategy = buys.firstOrNull { it.strategy != null && !it.strategy.equals(MANUAL_STRATEGY, ignoreCase = true) }
             ?.strategy
             ?: buys.firstOrNull()?.strategy,
-        // open 은 "아직 전량 청산되지 않았다" 는 뜻을 그대로 유지한다 — 일부만 팔았어도 잔량은 보유 중이다.
+        // 일부만 팔았어도 잔량은 보유 중이다 — 잔량을 다음 그룹에 넘겨 닫힌 경우만 예외다(closed 로 들어온다).
         open = !closed,
         partiallyClosed = hasSells && !closed,
         partial = untrustedBuys,
+        carriedVolume = carriedVolume,
     )
 }
 
