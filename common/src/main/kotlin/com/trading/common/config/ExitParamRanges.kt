@@ -10,7 +10,7 @@ import kotlin.reflect.KProperty1
  * 이 표를 셋이 쓴다.
  * - 앱(`ExitParamsDeclarationCheck`)은 구간 밖 전역값을 **알리기만** 한다. 기동을 막으면 보유 포지션의
  *   손절·트레일링이 평가되지 않는 공백이 생기고, 그 손해가 잘못된 값보다 크다(#179).
- * - [ShadowExitProperties] 는 관측 전용이라 기동 때 막는다.
+ * - 그림자 관측([ShadowExitProperties])은 구간 밖이면 관측기를 만들지 않고 알린다 — 관측 전용이라 거래는 그대로다.
  * - 배포 preflight(`deploy/vultr/preflight_exit_params.sh`)가 사본으로 업로드 전에 막는다 —
  *   `ExitParamsPreflightScriptTest` 가 두 표를 대조한다.
  *
@@ -65,11 +65,13 @@ object ExitParamRanges {
 
     val SHADOW: List<Entry<ShadowExitProperties>> = listOf(
         Entry("trading.shadow-exit", ShadowExitProperties::trailingStopPct, TRAILING_STOP),
-        // 라이브 arm 의 상한 100 은 판정식 근거가 없어(#288) 그림자에는 두지 않는다 — 두면 새 기동 차단 조건이 된다.
+        // 라이브 arm 의 상한 100 은 판정식 근거가 없어(#288) 그림자에는 두지 않는다 — 두면 관측을 끄는 조건이 근거 없이 는다.
         Entry("trading.shadow-exit", ShadowExitProperties::trailingArmPct, Range(0.0, true, null, false)),
     )
 
     fun violations(properties: TradingProperties): List<String> = TRADING.mapNotNull { it.violation(properties) }
+
+    fun violations(properties: ShadowExitProperties): List<String> = SHADOW.mapNotNull { it.violation(properties) }
 
     private fun plain(value: Double): String = BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
 }

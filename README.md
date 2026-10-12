@@ -177,7 +177,7 @@ coin-trading-bot/
 > 형식·구간은 항상, 선언은 자동매매 배포에서 봅니다. 위 표의 키는 구간으로, 배포가 넘기는 나머지 키는 형식으로 봅니다 — 불리언은 소문자 `true`/`false`,
 > 정수(`TRADING_INTERVAL_SECONDS`·`TRADING_RECONCILE_HALT_THRESHOLD`·워치독 값)는 1 이상, `TRADING_K_VALUE`·`TRADING_MAX_INVEST_AMOUNT` 는 평범한 소수,
 > `TRADING_TICKERS`·`WATCHLIST_TICKERS` 는 쉼표로 구분한 대문자 마켓 코드(`KRW-BTC,KRW-ETH`). 앱은 기동·봇 시작 시 실효값을 로그하고 미선언·구간 밖이면 ERROR 알림을 내되
-> 거래를 멈추지는 않습니다. 다만 그림자 관측 두 키(`TRADING_SHADOW_EXIT_*`)는 구간 밖이면 앱이 기동하지 않습니다 — preflight 가 먼저 거릅니다.
+> 거래를 멈추지는 않습니다. 그림자 관측 두 키(`TRADING_SHADOW_EXIT_*`)가 구간 밖이면 관측이 켜져 있어도 관측만 끄고 ERROR 로 알립니다 — 거래는 그대로이고, preflight 가 먼저 거릅니다.
 > 구간의 정의처는 `common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt` 입니다.
 
 매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다.

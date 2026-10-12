@@ -15,6 +15,7 @@ import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.bot.config.ExitParamsDeclarationCheck
+import com.trading.common.config.ExitParamRanges
 import com.trading.common.config.TradingProperties
 import com.trading.bot.persistence.ShadowExitObservationRepository
 import com.trading.common.config.ShadowExitProperties
@@ -611,13 +612,19 @@ class UserTradingManager(
      * 그림자 관측기. 설정이 꺼져 있거나 저장소가 없으면 null(=관측 없음)이다 —
      * 저장할 곳 없이 켜면 매 tick 계산만 하고 결과가 사라져 "돌고 있다"는 착각만 남는다.
      */
-    private fun shadowExitObserver(userId: Long): ShadowExitObserver? {
+    internal fun shadowExitObserver(userId: Long): ShadowExitObserver? {
         // 켜짐/꺼짐을 **둘 다** 로그로 남긴다. 이 값은 앱 기본값 → GitHub 시크릿 → 서버 .env → compose 전달목록
         // → 컨테이너 순으로 네 계층을 지나며, 어느 한 곳에서 빠지면 조용히 기본값으로 돈다(이 repo 에서 세 번 났다).
         // 그때 "켰다고 믿는데 안 켜진" 상태를 로그만으로 구분할 수 있어야 한다 — 첫 관측이 몇 주 뒤일 수 있어
         // `[shadow-exit]` 발동 로그를 기다리는 것으로는 늦다.
         if (!shadowExitProperties.enabled) {
             log.info("[shadow-exit] 관측 off (trading.shadow-exit.enabled=false) — user {}", userId)
+            return null
+        }
+        // ERROR 는 ExitParamsDeclarationCheck 가 기동·시작 때 한 번 낸다 — 엔진을 만들 때마다(사용자·reload) 반복하지 않는다.
+        val outOfRange = ExitParamRanges.violations(shadowExitProperties)
+        if (outOfRange.isNotEmpty()) {
+            log.warn("[shadow-exit] 관측 off — 설정이 구간 밖이다 {} — user {}", outOfRange, userId)
             return null
         }
         val repository = shadowExitObservationRepository ?: run {
