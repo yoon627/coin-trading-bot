@@ -104,7 +104,8 @@ class UserTradingManager(
 
     override fun isRunning(): Boolean = lifecycleRunning
 
-    // web 요청 드레이닝(WebServer phase = Integer.MAX_VALUE) 이후에 엔진을 멈추도록 낮은 phase. appender detach(@PreDestroy)는
+    // web 요청 드레이닝 이후에 엔진을 멈추도록 낮은 phase — Boot 3.4 반응형 웹 서버는 graceful shutdown 이
+    // DEFAULT_PHASE - 1024, start/stop 이 DEFAULT_PHASE - 2048 로 둘 다 0 보다 훨씬 크다. appender detach(@PreDestroy)는
     // 모든 SmartLifecycle.stop 뒤라 자동 후행(@DependsOn 불필요).
     override fun getPhase(): Int = 0
 
