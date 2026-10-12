@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# 배포 preflight — 렌더된 서버 .env 의 청산·주문 파라미터와 시세 워치독 설정을 **업로드 전에** 검사한다 (#179, #230, #232).
+# 배포 preflight — 렌더된 서버 .env 에서 배포가 넘기는 설정 키 전부를 **업로드 전에** 검사한다 (#179, #230, #232, #271).
 # deploy.sh 가 render_server_env 직후 부른다.
 #
 # 앱이 아니라 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 손절·트레일링이 평가되지 않는 공백이 생기고,
 # 자동 롤백은 이미지만 되돌려 같은 .env 로 다시 기동한다. 여기서 멈추면 잘못된 설정이 서버에 닿지 않는다.
 #   값   선언된 키가 형식·의미상 구간 안인가. 자동매매 여부와 무관하다 — 수동 시작도 이 값으로 거래한다.
+#        청산·주문 파라미터는 구간 표로, 나머지 키는 형식(불리언·1 이상 정수·소수·티커 목록)으로 본다.
 #   선언 자동매매 배포면 청산 5개 키가 모두 선언됐는가. 빠지면 앱이 코드 기본값으로 조용히 거래한다.
 #
 # 아래 표는 사본이다. 구간의 정의처는 common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt,
-# 선언 키의 정의처는 ExitParamsDeclarationCheck.REQUIRED_KEYS, 불리언은 배포가 넘기는 설정 클래스(테스트의
-# DeployPassthrough.PASSED)의 Boolean 전부, 양의 정수는 MarketDataWatchdogProperties 의 Long 전부이고,
-# ExitParamsPreflightScriptTest 가 넷을 대조한다.
+# 선언 키의 정의처는 ExitParamsDeclarationCheck.REQUIRED_KEYS 다. 형식 배열은 배포가 넘기는 설정 클래스(테스트의
+# DeployPassthrough.PASSED)에서 표에 없는 키를 타입으로 나눈 것이다 — Boolean·Long/Int·Double·티커 목록 String.
+# ExitParamsPreflightScriptTest 가 표·배열을 대조하고, 넘기는 키가 전부 어느 한 검사에 들어 있는지 단언한다.
 # 형식은 앱(Spring)보다 좁다 — 여기서 받는 값은 앱도 같은 수로 받는다. 값은 찍지 않는다(배포 로그가 공개 CI 로그다).
 # bash 3.2(macOS)에서도 돈다 — ${v,,}·declare -A·mapfile 을 쓰지 않는다.
 #
@@ -45,13 +46,27 @@ BOOLEAN_KEYS=(
     TRADING_SHADOW_EXIT_ENABLED
     MARKETDATA_WATCHDOG_ENABLED
 )
-# 워치독 주기·임계(ms). interval 0·음수는 스케줄 등록이 기동을 막고(롤백도 같은 .env), 나머지는 앱이 받아 기동은 되지만
-# stale 0 은 매 주기 재연결, backoff 0 은 재구독 tight loop 다.
+# 1 이상 정수. 주기·횟수·임계라 0·음수는 require·스케줄 등록이 기동을 막거나(롤백도 같은 .env), 앱이 받아도
+# 폭주한다(워치독 stale 0 은 매 주기 재연결, backoff 0 은 재구독 tight loop). 단위는 키마다 다르다(초·회·ms).
 POSITIVE_INTEGER_KEYS=(
+    TRADING_INTERVAL_SECONDS
+    TRADING_RECONCILE_HALT_THRESHOLD
     MARKETDATA_WATCHDOG_STALE_MS
     MARKETDATA_WATCHDOG_INTERVAL_MS
     MARKETDATA_WATCHDOG_INITIAL_DELAY_MS
     MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
+)
+# 구간 없이 형식만 보는 소수 — 오기(abc·1,000)는 앱 바인딩에 실패해 기동을 막는다.
+DECIMAL_KEYS=(
+    TRADING_MAX_INVEST_AMOUNT
+    TRADING_K_VALUE
+)
+# 쉼표로 구분한 대문자 마켓 코드(KRW-BTC, 1글자 자산 KRW-T 포함). 공백 구분·조각 수 오류는 앱이 마켓으로 쓰지 못한다 —
+# watchlist 는 하나만 틀려도 WS 구독 메시지 생성이 깨져 전 마켓 실시간 피드가 끊긴다. trading 은 소문자를 그대로 주문에 쓰므로
+# 소문자를 막는다(watchlist 는 앱이 대문자화하지만 같은 규칙으로 본다). 빈 조각은 앱이 걸러 받는다.
+TICKER_LIST_KEYS=(
+    TRADING_TICKERS
+    WATCHLIST_TICKERS
 )
 EXIT_PARAM_KEYS=(
     TRADING_TAKE_PROFIT_PCT
@@ -66,6 +81,8 @@ DECIMAL_FORMAT='^-?[0-9]{1,9}([.][0-9]+)?$'
 INTEGER_FORMAT='^-?[0-9]{1,9}$'
 BOOLEAN_FORMAT='^(true|false)$'
 POSITIVE_INTEGER_FORMAT='^[1-9][0-9]{0,8}$'
+# 길이는 보지 않는다 — Upbit 에는 1글자 자산(KRW-T·KRW-W 등)이 있다.
+MARKET_FORMAT='^[A-Z]+-[A-Z0-9]+$'
 
 # 키의 선언 값들 — 같은 키가 여러 줄이어도 모두 검사한다.
 values_of() { grep "^$1=" "$env_file" | cut -d= -f2- || true; }
@@ -78,6 +95,21 @@ in_range() {
         if (hi != "-" && (hii == 1 ? x > hi + 0 : x >= hi + 0)) exit 1
         exit 0
     }'
+}
+
+# 쉼표로 나눈 조각마다 앞뒤 공백을 떼고, 빈 조각은 건너뛴다. 조각이 하나도 없으면 실패다.
+ticker_list_ok() {
+    local rest="$1," piece count=0
+    while [[ -n $rest ]]; do
+        piece=${rest%%,*}
+        rest=${rest#*,}
+        piece=${piece#"${piece%%[! ]*}"}
+        piece=${piece%"${piece##*[! ]}"}
+        [[ -z $piece ]] && continue
+        [[ $piece =~ $MARKET_FORMAT ]] || return 1
+        count=$((count + 1))
+    done
+    (( count > 0 ))
 }
 
 interval() {
@@ -111,7 +143,17 @@ for key in "${BOOLEAN_KEYS[@]}"; do
 done
 for key in "${POSITIVE_INTEGER_KEYS[@]}"; do
     while IFS= read -r value; do
-        [[ $value =~ $POSITIVE_INTEGER_FORMAT ]] || violations+=("$key: 형식 — 1 이상 정수(ms, 9자리까지, 단위 없이)로 적으세요")
+        [[ $value =~ $POSITIVE_INTEGER_FORMAT ]] || violations+=("$key: 형식 — 1 이상 정수(9자리까지, 앞자리 0·단위·부호·소수점 없이)로 적으세요")
+    done < <(values_of "$key")
+done
+for key in "${DECIMAL_KEYS[@]}"; do
+    while IFS= read -r value; do
+        [[ $value =~ $DECIMAL_FORMAT ]] || violations+=("$key: 형식 — 소수로 적으세요(정수부 9자리까지, 부호는 - 만, 지수·공백·쉼표 없이)")
+    done < <(values_of "$key")
+done
+for key in "${TICKER_LIST_KEYS[@]}"; do
+    while IFS= read -r value; do
+        ticker_list_ok "$value" || violations+=("$key: 형식 — 쉼표로 구분한 대문자 마켓 코드로 적으세요(예: KRW-BTC,KRW-ETH)")
     done < <(values_of "$key")
 done
 
@@ -134,7 +176,7 @@ if $check_declared; then
 fi
 
 if (( ${#violations[@]} + ${#missing[@]} > 0 )); then
-    echo "ERROR: 배포 설정 검사(청산·주문 파라미터, 시세 워치독)에 걸려 배포를 중단합니다(값은 출력하지 않습니다)." >&2
+    echo "ERROR: 배포 설정 검사에 걸려 배포를 중단합니다(값은 출력하지 않습니다)." >&2
     if (( ${#violations[@]} > 0 )); then printf '  %s\n' "${violations[@]}" >&2; fi
     if (( ${#missing[@]} > 0 )); then
         for key in "${missing[@]}"; do echo "  $key: 미선언 — $missing_reason" >&2; done
@@ -143,7 +185,7 @@ if (( ${#violations[@]} + ${#missing[@]} > 0 )); then
     exit 1
 fi
 if $check_declared; then
-    log "청산·주문 파라미터·시세 워치독 값 확인, 청산 파라미터 ${#EXIT_PARAM_KEYS[@]}개 선언 확인"
+    log "배포 설정 값 확인, 청산 파라미터 ${#EXIT_PARAM_KEYS[@]}개 선언 확인"
 else
-    log "청산·주문 파라미터·시세 워치독 값 확인 (자동매매 off — 선언 검사 생략)"
+    log "배포 설정 값 확인 (자동매매 off — 선언 검사 생략)"
 fi
