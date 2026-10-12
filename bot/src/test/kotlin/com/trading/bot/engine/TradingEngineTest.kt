@@ -262,7 +262,8 @@ class TradingEngineTest {
 
         engine.start(listOf("KRW-ETH"), mapOf("KRW-BTC" to released))
 
-        assertTrue("KRW-BTC" in engine.getActiveTickers(), "${engine.getActiveTickers()}")
+        // 활성 목록이 아니라 동기화 호출을 본다 — 동기화 뒤 지킬 것이 없으면 루프가 곧바로 목록에서 빼므로 목록 단언은 루프와 경쟁한다.
+        coVerify(timeout = 5_000) { positionManager.syncPosition("KRW-BTC", released) }
         engine.stop()
     }
 
