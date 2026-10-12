@@ -17,8 +17,8 @@ import org.springframework.web.reactive.function.server.bodyValueAndAwait
 import org.springframework.web.reactive.function.server.coRouter
 
 /**
- * JWT 검증은 Security 체인 안에서 요청당 한 번만 돈다(#293). auth 패키지를 실제 애노테이션 그대로 스캔해,
- * 필터가 전역 WebFilter 빈으로도 등록되는 구성을 잡는다.
+ * Security 체인을 auth 패키지의 실제 애노테이션 그대로 스캔해 띄운다 — 필터가 전역 WebFilter 빈으로도 등록되는 구성(#293)과
+ * 허용 경로 목록(#297)을 잡는다.
  */
 class JwtAuthFilterRegistrationTest {
 
@@ -52,6 +52,23 @@ class JwtAuthFilterRegistrationTest {
 
             val jwtProvider = ctx.getBean(JwtProvider::class.java)
             verify(exactly = 1) { jwtProvider.validateAndGetUserId(TOKEN) }
+        }
+    }
+
+    @Test
+    fun `only health and info are open among actuator paths without a token`() {
+        // 노출 목록을 넓혀도 인증 없이 열리지 않게 — 허용은 노출하는 두 경로뿐이다(#297). health 는 컨테이너·배포 헬스체크가 쓴다.
+        // 이 컨텍스트에는 actuator 가 없어 허용된 경로는 404, 막힌 경로는 Security 가 401 을 낸다.
+        ReactiveWebApplicationContextRunner().withUserConfiguration(Config::class.java).run { ctx ->
+            assertThat(ctx).hasNotFailed()
+            val client = WebTestClient.bindToApplicationContext(ctx).build()
+
+            listOf("/actuator/health", "/actuator/info").forEach {
+                client.get().uri(it).exchange().expectStatus().isNotFound
+            }
+            listOf("/actuator", "/actuator/env", "/actuator/heapdump", "/actuator/prometheus").forEach {
+                client.get().uri(it).exchange().expectStatus().isUnauthorized
+            }
         }
     }
 
