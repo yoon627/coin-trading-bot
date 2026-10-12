@@ -8,7 +8,6 @@ import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.javaGetter
 import org.assertj.core.api.Assertions.assertThat
-import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
@@ -121,14 +120,14 @@ class ExitParamRangesTest {
     }
 
     @Test
-    fun `그림자 설정은 같은 표로 기동 때 막는다`() {
-        assertThatThrownBy { ShadowExitProperties(trailingStopPct = 0.0) }
-            .isInstanceOf(IllegalArgumentException::class.java)
-            .hasMessageContaining("trading.shadow-exit.trailing-stop-pct")
-        assertThatThrownBy { ShadowExitProperties(trailingArmPct = -1.0) }
-            .isInstanceOf(IllegalArgumentException::class.java)
-            .hasMessageContaining("trading.shadow-exit.trailing-arm-pct")
-        ShadowExitProperties(trailingStopPct = 1.5, trailingArmPct = 1000.0)
+    fun `그림자 설정은 구간 밖이어도 만들어지고 같은 표로 위반을 돌려준다`() {
+        // 관측 전용이라 기동을 막지 않는다 — 관측만 끄고 알린다(#271).
+        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = 0.0)).single())
+            .contains("trading.shadow-exit.trailing-stop-pct")
+        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingArmPct = -1.0)).single())
+            .contains("trading.shadow-exit.trailing-arm-pct")
+        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = Double.NaN))).hasSize(1)
+        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = 1.5, trailingArmPct = 1000.0))).isEmpty()
     }
 
     companion object {

@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.notification.DiscordErrorLogAppender
+import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
 import io.mockk.every
 import io.mockk.mockk
@@ -48,6 +49,18 @@ class ExitParamsDeclarationCheckTest {
             logger.detachAppender(appender)
             appender.stop()
         }
+    }
+
+    @Test
+    fun `그림자 관측이 켜져 있고 구간 밖이면 관측을 끈다고 ERROR 로 알리고, 꺼져 있으면 알리지 않는다`() {
+        val outOfRange = ShadowExitProperties(enabled = true, trailingStopPct = 0.0)
+        val declared = envWith(ExitParamsDeclarationCheck.REQUIRED_KEYS)
+
+        val errors = errorsWhileReporting(ExitParamsDeclarationCheck(TradingProperties(), declared, outOfRange))
+        assertThat(errors.single()).contains("trading.shadow-exit.trailing-stop-pct").contains("관측")
+        // 꺼진 관측의 값은 쓰이지 않는다 — 켜는 배포는 preflight 가 막는다.
+        assertThat(errorsWhileReporting(ExitParamsDeclarationCheck(TradingProperties(), declared, outOfRange.copy(enabled = false))))
+            .isEmpty()
     }
 
     @Test
