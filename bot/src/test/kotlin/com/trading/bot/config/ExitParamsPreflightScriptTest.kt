@@ -1,11 +1,14 @@
 package com.trading.bot.config
 
 import com.trading.common.config.ExitParamRanges
+import com.trading.common.domain.Exchange
+import com.trading.common.domain.MarketPair
 import java.io.File
 import java.math.BigDecimal
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.KProperty1
 import kotlin.reflect.full.createInstance
+import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.jvm.javaGetter
 import org.assertj.core.api.Assertions.assertThat
@@ -20,7 +23,7 @@ import org.springframework.core.env.SystemEnvironmentPropertySource
 
 /**
  * 배포 preflight(`deploy/vultr/preflight_exit_params.sh`)가 앱의 구간 정의([ExitParamRanges])와 같은 판정을 내는가 (#230).
- * 불리언·양의 정수 검사 대상은 배포가 넘기는 설정([DeployPassthrough])에서 도출한다(#232).
+ * 배포가 넘기는 키([DeployPassthrough.PASSED])는 전부 검사 하나를 받는다 — 구간 표에 없으면 타입으로 정한다(#232, #271).
  *
  * 스크립트의 표는 사본이다 — 이 테스트가 없으면 한쪽만 고쳐도 아무것도 깨지지 않는다(#75 의 목록 drift 와 같은 구조).
  * 계약은 비대칭이다: preflight 는 앱보다 엄격해도 되지만(업로드 전에 멈출 뿐) 느슨하면 안 된다 — 스크립트가 받은 값을
@@ -29,8 +32,24 @@ import org.springframework.core.env.SystemEnvironmentPropertySource
 @DisabledOnOs(OS.WINDOWS, disabledReason = "bash 스크립트 — 배포는 CI(Linux)·macOS 에서 돈다")
 class ExitParamsPreflightScriptTest {
 
-    /** 스크립트가 형식을 보는 키 하나. [entry] 가 있으면 구간도 본다. */
-    private class Key(val env: String, val owner: Class<*>, val prefix: String, val property: KProperty1<*, *>, val format: Regex, val entry: ExitParamRanges.Entry<*>?)
+    /** 스크립트의 검사 종류. [array] 는 그 키들을 담는 스크립트 배열이다(구간은 RANGE_RULES 표). */
+    private enum class Grammar(val array: String?) {
+        RANGE_DECIMAL(null), RANGE_INTEGER(null),
+        BOOLEAN("BOOLEAN_KEYS"), POSITIVE_INTEGER("POSITIVE_INTEGER_KEYS"), DECIMAL("DECIMAL_KEYS"), TICKER_LIST("TICKER_LIST_KEYS");
+
+        fun accepts(value: String): Boolean = when (this) {
+            RANGE_DECIMAL, DECIMAL -> DECIMAL_FORMAT.matches(value)
+            RANGE_INTEGER -> INTEGER_FORMAT.matches(value)
+            BOOLEAN -> BOOLEAN_FORMAT.matches(value)
+            POSITIVE_INTEGER -> POSITIVE_INTEGER_FORMAT.matches(value)
+            // 빈 조각은 앱이 거르므로 받는다 — 조각이 하나도 없으면 막는다.
+            TICKER_LIST -> value.split(',').map { it.trim(' ') }.filter { it.isNotEmpty() }
+                .let { pieces -> pieces.isNotEmpty() && pieces.all { MARKET_FORMAT.matches(it) } }
+        }
+    }
+
+    /** 스크립트가 보는 키 하나. [entry] 가 있으면 구간도 본다. */
+    private class Key(val env: String, val owner: Class<*>, val prefix: String, val property: KProperty1<*, *>, val grammar: Grammar, val entry: ExitParamRanges.Entry<*>?)
 
     private class Run(val exit: Int, val stdout: String, val stderr: String) {
         /** 스크립트는 위반마다 `  KEY: 사유` 한 줄을 stderr 에 쓴다. */
@@ -40,26 +59,32 @@ class ExitParamsPreflightScriptTest {
     private val script = repoFile("deploy/vultr/preflight_exit_params.sh")
 
     private val rangeKeys: List<Key> = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW).map { entry ->
-        val integer = entry.property.returnType.classifier == Int::class
-        Key(envName(entry.key), ownerOf(entry.property), entry.key.substringBeforeLast('.'), entry.property, if (integer) INTEGER else DECIMAL, entry)
+        val grammar = if (entry.property.returnType.classifier == Int::class) Grammar.RANGE_INTEGER else Grammar.RANGE_DECIMAL
+        Key(envName(entry.key), ownerOf(entry.property), entry.key.substringBeforeLast('.'), entry.property, grammar, entry)
     }
 
-    // 배포가 넘기는 설정의 불리언 전부 — 오기(`ture`)는 바인딩 실패로 기동을 막고 롤백도 같은 .env 로 뜬다.
-    // 스위치를 더하면 스크립트 BOOLEAN_KEYS 에도 넣어야 한다.
-    private val booleanKeys: List<Key> = keysOf(DeployPassthrough.PASSED, BOOLEAN) { it == Boolean::class }
-
-    // 0·음수는 대부분 바인딩에 성공해 헬스체크를 지나므로 형식만으로는 못 막는다(워치독 stale 0 = 매 주기 재연결).
-    private val positiveIntegerKeys: List<Key> =
-        keysOf(DeployPassthrough.POSITIVE_INTEGER_CLASSES, POSITIVE_INTEGER) { it == Long::class || it == Int::class }
-
-    private fun keysOf(owners: List<kotlin.reflect.KClass<*>>, format: Regex, typeMatches: (Any?) -> Boolean): List<Key> =
-        owners.flatMap { owner ->
-            val prefix = DeployPassthrough.prefix(owner)
-            DeployPassthrough.parameters(owner).filter { typeMatches(it.type.classifier) }.map { param ->
-                val property = owner.memberProperties.single { it.name == param.name }
-                Key(DeployPassthrough.envName(prefix, property.name), owner.java, prefix, property, format, null)
+    // 표에 없는 키는 타입으로 검사를 정한다 — 손으로 고르면 새 키가 검사를 빠져나간다. 오기는 바인딩·require 실패로
+    // 기동을 막고 자동 롤백도 같은 .env 로 뜬다.
+    private val typedKeys: List<Key> = DeployPassthrough.PASSED.flatMap { owner ->
+        val prefix = DeployPassthrough.prefix(owner)
+        val rangeEnvs = rangeKeys.map { it.env }.toSet()
+        DeployPassthrough.parameters(owner).mapNotNull { param ->
+            val property = owner.memberProperties.single { it.name == param.name }
+            val env = DeployPassthrough.envName(prefix, property.name)
+            val grammar = when {
+                env in rangeEnvs -> return@mapNotNull null
+                param.type.classifier == Boolean::class -> Grammar.BOOLEAN
+                // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 0 을 허용할 정수는 구간 표로 옮긴다.
+                param.type.classifier == Long::class || param.type.classifier == Int::class -> Grammar.POSITIVE_INTEGER
+                param.type.classifier == Double::class -> Grammar.DECIMAL
+                DeployPassthrough.TICKER_LIST.any { it.name == property.name && ownerOf(it) == owner.java } -> Grammar.TICKER_LIST
+                else -> error("$env: preflight 검사 배정이 없다 — 구간 표나 DeployPassthrough.TICKER_LIST 에 넣거나 여기 규칙을 더할 것")
             }
+            Key(env, owner.java, prefix, property, grammar, null)
         }
+    }
+
+    private val allKeys: List<Key> = rangeKeys + typedKeys
 
     private val requiredEnvs = ExitParamsDeclarationCheck.REQUIRED_KEYS.map(::envName)
 
@@ -97,15 +122,34 @@ class ExitParamsPreflightScriptTest {
         }
     }
 
-    /** 앱이 이 env 한 줄을 바인딩한 값 — 바인딩에 실패하면(기동 실패) null. 운영과 같은 `SystemEnvironmentPropertySource` 로 건다. */
-    private fun appValue(key: Key, value: String): Any? {
-        // 이름이 -systemEnvironment 로 끝나야 Boot 가 운영과 같은 env 매퍼를 고른다.
+    /**
+     * 스크립트가 받은 값을 앱이 쓸 수 없으면 그 이유, 쓸 수 있으면 null. 바인딩(기동)은 운영과 같은 `SystemEnvironmentPropertySource` 로 건다 —
+     * 이름이 -systemEnvironment 로 끝나야 Boot 가 운영과 같은 env 매퍼를 고른다.
+     */
+    private fun appProblem(key: Key, value: String): String? {
         val source = SystemEnvironmentPropertySource("preflight-$SYSTEM_ENV", mapOf(key.env to value))
         val bound = runCatching {
             Binder(ConfigurationPropertySources.from(source)).bind(key.prefix, key.owner).orElse(null)
-        }.getOrNull() ?: return null
-        return key.property.getter.call(bound)
+        }.getOrNull() ?: return "바인딩 실패"
+        val app = key.property.getter.call(bound)
+        return when {
+            key.entry != null -> if ((app as? Number)?.toDouble()?.let { it in key.entry.range } == true) null else "구간 밖 $app"
+            // 문자열은 무엇이든 바인딩된다 — 티커는 앱이 실제로 쓰는 목록을 꺼내 마켓마다 본다.
+            key.grammar == Grammar.TICKER_LIST -> tickerListOf(bound).firstOrNull { !usableMarket(it) }?.let { "쓸 수 없는 마켓 '$it'" }
+            else -> null
+        }
     }
+
+    private fun tickerListOf(bound: Any): List<String> =
+        (bound::class.memberFunctions.single { it.name == "tickerList" }.call(bound) as List<*>).map { it.toString() }
+
+    /**
+     * 정규화(`BTC/KRW`) 왕복이 원래 코드로 돌아오고 소문자·공백이 없는 마켓만 앱이 쓴다 — 거래 티커는 그대로 주문에 들어간다.
+     * 스크립트의 형식 문법과 독립이어야 대조가 뜻을 가진다.
+     */
+    private fun usableMarket(market: String): Boolean =
+        market.none { it.isLowerCase() || it.isWhitespace() } &&
+            runCatching { MarketPair.toUpbitFormat(MarketPair.normalize(Exchange.UPBIT, market)) == market }.getOrDefault(false)
 
     @Test
     fun `스크립트의 표는 Kotlin 표와 키·형식·구간이 같다`() {
@@ -122,7 +166,7 @@ class ExitParamsPreflightScriptTest {
             rangeKeys.associate { key ->
                 val range = key.entry!!.range
                 key.env to listOf(
-                    if (key.format == INTEGER) "integer" else "decimal",
+                    if (key.grammar == Grammar.RANGE_INTEGER) "integer" else "decimal",
                     plain(range.min.toString()),
                     if (range.minInclusive) "1" else "0",
                     range.max?.let { plain(it.toString()) } ?: "-",
@@ -130,17 +174,23 @@ class ExitParamsPreflightScriptTest {
                 ).joinToString(" ")
             },
         )
-        assertThat(ENV_NAME.findAll(array("BOOLEAN_KEYS")).map { it.value }.toList())
-            .containsExactlyInAnyOrderElementsOf(booleanKeys.map { it.env })
-        assertThat(ENV_NAME.findAll(array("POSITIVE_INTEGER_KEYS")).map { it.value }.toList())
-            .containsExactlyInAnyOrderElementsOf(positiveIntegerKeys.map { it.env })
+        Grammar.entries.mapNotNull { grammar -> grammar.array?.let { grammar to it } }.forEach { (grammar, name) ->
+            assertThat(ENV_NAME.findAll(array(name)).map { it.value }.toList()).describedAs(name)
+                .containsExactlyInAnyOrderElementsOf(typedKeys.filter { it.grammar == grammar }.map { it.env })
+        }
         assertThat(ENV_NAME.findAll(array("EXIT_PARAM_KEYS")).map { it.value }.toList())
             .containsExactlyInAnyOrderElementsOf(requiredEnvs)
     }
 
     @Test
-    fun `후보마다 스크립트 판정은 문법과 구간이 낸 답과 같고, 받은 값은 앱도 같은 구간 안으로 받는다`() {
-        val keys = rangeKeys + booleanKeys + positiveIntegerKeys
+    fun `배포가 넘기는 키는 전부 preflight 검사 하나를 받는다`() {
+        assertThat(allKeys.map { it.env })
+            .containsExactlyInAnyOrderElementsOf(DeployPassthrough.PASSED.flatMap(DeployPassthrough::envNames))
+    }
+
+    @Test
+    fun `후보마다 스크립트 판정은 문법과 구간이 낸 답과 같고, 받은 값은 앱도 쓸 수 있다`() {
+        val keys = allKeys
         val mismatches = mutableListOf<String>()
         val accepted = mutableMapOf<String, Int>()
         val rejected = mutableMapOf<String, Int>()
@@ -149,14 +199,12 @@ class ExitParamsPreflightScriptTest {
             val run = run(*keys.map { "${it.env}=$value" }.toTypedArray())
             keys.forEach { key ->
                 val scriptAccepts = key.env !in run.flagged
-                val expected = key.format.matches(value) && (key.entry == null || value.toDouble() in key.entry.range)
+                val expected = key.grammar.accepts(value) && (key.entry == null || value.toDouble() in key.entry.range)
                 if (scriptAccepts != expected) {
                     mismatches += "${key.env}='$value': 스크립트 ${verdict(scriptAccepts)}, 문법·구간 ${verdict(expected)}"
                 }
                 if (scriptAccepts) {
-                    val app = appValue(key, value)
-                    val inRange = key.entry == null || (app as? Number)?.toDouble()?.let { it in key.entry.range } == true
-                    if (app == null || !inRange) mismatches += "${key.env}='$value': 스크립트는 받았는데 앱은 ${app ?: "바인딩 실패"}"
+                    appProblem(key, value)?.let { mismatches += "${key.env}='$value': 스크립트는 받았는데 앱은 $it" }
                 }
                 (if (scriptAccepts) accepted else rejected).merge(key.env, 1) { a, b -> a + b }
             }
@@ -193,7 +241,7 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `앱 기본값을 그대로 적어도 통과한다`() {
         // 운영자가 기본값을 secret 에 명시해도 배포가 막히면 안 된다 — 기본값이 preflight 형식 밖으로 바뀌면 여기서 깨진다.
-        val lines = (booleanKeys + positiveIntegerKeys).map { key ->
+        val lines = allKeys.map { key ->
             "${key.env}=${key.property.getter.call(key.owner.kotlin.createInstance())}"
         }
         val run = run(*lines.toTypedArray())
@@ -257,12 +305,12 @@ class ExitParamsPreflightScriptTest {
     private fun candidates(): List<String> {
         val fromBounds = rangeKeys.flatMap { key ->
             val range = key.entry!!.range
-            val steps = if (key.format == INTEGER) listOf("-1", "0", "1") else listOf("-1", "-0.001", "0", "0.001", "1")
+            val steps = if (key.grammar == Grammar.RANGE_INTEGER) listOf("-1", "0", "1") else listOf("-1", "-0.001", "0", "0.001", "1")
             listOfNotNull(range.min, range.max).flatMap { bound ->
                 steps.map { BigDecimal.valueOf(bound).add(BigDecimal(it)).stripTrailingZeros().toPlainString() }
             }
         }
-        return (fromBounds + CANONICAL + NON_CANONICAL).distinct()
+        return (fromBounds + CANONICAL + NON_CANONICAL + TICKERS).distinct()
     }
 
     private fun verdict(accepts: Boolean) = if (accepts) "통과" else "거부"
@@ -284,11 +332,16 @@ class ExitParamsPreflightScriptTest {
     }
 
     private companion object {
+        // 정수부 자릿수 상한 — 넘치면 앱이 Int 바인딩에 실패하거나 Double 이 무한대가 된다.
+        const val MAX_INTEGER_DIGITS = 9
+
         // 스크립트의 형식 문법과 같아야 한다 — 다르면 후보 대조가 깨진다.
-        val DECIMAL = Regex("""-?[0-9]{1,9}(\.[0-9]+)?""")
-        val INTEGER = Regex("""-?[0-9]{1,9}""")
-        val BOOLEAN = Regex("""true|false""")
-        val POSITIVE_INTEGER = Regex("""[1-9][0-9]{0,8}""")
+        val DECIMAL_FORMAT = Regex("""-?[0-9]{1,$MAX_INTEGER_DIGITS}(\.[0-9]+)?""")
+        val INTEGER_FORMAT = Regex("""-?[0-9]{1,$MAX_INTEGER_DIGITS}""")
+        val BOOLEAN_FORMAT = Regex("""true|false""")
+        val POSITIVE_INTEGER_FORMAT = Regex("""[1-9][0-9]{0,${MAX_INTEGER_DIGITS - 1}}""")
+        // 길이는 보지 않는다 — Upbit 에는 1글자 자산(KRW-T 등)이 있다.
+        val MARKET_FORMAT = Regex("""[A-Z]+-[A-Z0-9]+""")
 
         val FLAGGED = Regex("""(?m)^ {2}([A-Z][A-Z0-9_]+): """)
         val RANGE_ROW = Regex(""""(TRADING_[A-Z0-9_]+) (decimal|integer) (\S+) ([01]) (\S+) ([01])""")
@@ -302,6 +355,13 @@ class ExitParamsPreflightScriptTest {
             "1e-3", "1E-3", "1e3", "Infinity", "-Infinity", "NaN", "5.", ".5", "+5", "--5", "-", ".",
             "1000000000", "2147483648", "1.0", "abc",
             "true", "false", "TRUE", "True", "yes", "on", "1", "0", " true", "ture",
+        )
+
+        // 티커 목록 후보 — 앞쪽은 받아야 할 값(쉼표 뒤 공백·앞뒤 공백·빈 조각·숫자로 시작하는 자산·1글자 자산·다른 통화),
+        // 뒤쪽은 막아야 할 값(공백 구분·소문자·조각 수·구분자·빈 자산/통화·조각 없음).
+        val TICKERS = listOf(
+            "KRW-BTC", "KRW-BTC,KRW-ETH", "KRW-BTC, KRW-ETH", " KRW-BTC ", "KRW-BTC,", ",KRW-BTC", "KRW-BTC,,KRW-ETH", "KRW-1INCH", "KRW-T", "USDT-BTC",
+            "KRW-BTC KRW-ETH", "krw-btc", "KRW-btc", "KRW-BTC-X", "KRW-", "-BTC", "KRW_BTC", "KRWBTC", ",", ",,",
         )
     }
 }

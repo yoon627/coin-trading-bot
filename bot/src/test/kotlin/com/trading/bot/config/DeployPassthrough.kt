@@ -3,6 +3,7 @@ package com.trading.bot.config
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
 import kotlin.reflect.KClass
+import kotlin.reflect.KProperty1
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.primaryConstructor
 import org.springframework.boot.context.properties.ConfigurationProperties
@@ -29,8 +30,11 @@ internal object DeployPassthrough {
         ErrorAlertProperties::class to "compose 가 값과 함께 따로 넘긴다 — enabled 오기는 preflight 가 보지 않는다",
     )
 
-    /** 이 클래스들의 Long·Int 는 전부 양의 ms 다 — preflight 가 1 이상 정수만 받는다. TRADING_* 의 정수는 #271. */
-    val POSITIVE_INTEGER_CLASSES: List<KClass<*>> = listOf(MarketDataWatchdogProperties::class)
+    /**
+     * 티커 목록으로 검사할 String 프로퍼티. String 은 타입만으로 뜻이 정해지지 않아 손으로 분류한다 — 여기 없는 String 은
+     * [ExitParamsPreflightScriptTest] 가 preflight 검사 배정이 없다고 실패시킨다.
+     */
+    val TICKER_LIST: Set<KProperty1<*, String>> = setOf(TradingProperties::tickers, WatchlistProperties::tickers)
 
     fun prefix(klass: KClass<*>): String = klass.findAnnotation<ConfigurationProperties>()?.prefix
         ?: error("${klass.simpleName} 에 @ConfigurationProperties prefix 가 없다")
