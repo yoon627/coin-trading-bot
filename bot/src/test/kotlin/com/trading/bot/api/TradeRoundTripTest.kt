@@ -421,7 +421,7 @@ class TradeRoundTripTest {
             "ticker", "entry_at", "entry_price", "buy_count", "buy_amount", "buy_volume",
             "sell_count", "exit_at", "exit_price", "sell_amount", "sell_volume",
             "pnl_percent", "pnl_amount_net", "pnl_amount_gross", "holding_seconds", "reason", "strategy",
-            "open", "partially_closed", "partial",
+            "open", "partially_closed", "partial", "carried_volume",
         ).forEach { key ->
             assertTrue(json.contains("\"$key\""), "직렬화 JSON 에 키가 없다: $key — $json")
         }
@@ -509,6 +509,83 @@ class TradeRoundTripTest {
         )
 
         assertEquals(2, rts.size, "매도가 시작된 뒤의 매수는 새 포지션으로 끊어야 한다")
+    }
+
+    // ── #147: 잔량이 남은 채 들어온 엔진 매수 스냅샷 ─────────────────────────────────
+
+    @Test
+    fun `잔량이 남은 채 엔진 매수가 들어오면 이전 그룹은 잔량을 넘기고 닫혀 보유량이 한 번만 잡힌다`() {
+        // 엔진 매수의 수량은 그 시점 거래소 전체 보유량이다 — 8 = 이전 그룹 잔량 6 + 새로 산 2.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-ETH", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-ETH", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 9.9),
+                rec("KRW-ETH", "BUY", 105.0, 8.0, "2026-08-02T10:00", strategy = "combined"),
+                rec("KRW-ETH", "SELL", 120.0, 2.0, "2026-08-02T15:00", pnlPercent = 14.0),
+            )
+        ).sortedBy { it.entryAt }
+
+        assertEquals(2, rts.size)
+        val (first, second) = rts
+        assertFalse(first.open, "잔량을 다음 그룹에 넘겼으므로 닫는다")
+        assertFalse(first.partiallyClosed)
+        assertEquals(6.0, first.carriedVolume!!, 1e-9)
+        assertEquals(9.9, first.pnlPercent, "실현된 매도는 그대로 남는다")
+        assertTrue(second.open)
+        assertNull(second.carriedVolume)
+        val held = rts.filter { it.open }.sumOf { it.buyVolume - (it.sellVolume ?: 0.0) }
+        assertEquals(6.0, held, 1e-9, "열린 그룹의 잔량 합이 실제 보유량(10 - 4 + 2 - 2)과 같아야 한다")
+    }
+
+    @Test
+    fun `전량 청산된 그룹이나 잔량보다 적게 담긴 엔진 매수에는 이월을 붙이지 않는다`() {
+        // 앞: 청산 뒤 재진입 — 넘길 잔량이 없다. 뒤: 잔량 6 이 거래소 밖에서 처분돼 스냅샷이 새로 산 2 만 담았다.
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T12:00", pnlPercent = 9.9),
+                rec("KRW-BTC", "BUY", 105.0, 1.0, "2026-08-02T10:00", strategy = "combined"),
+                rec("KRW-ETH", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-ETH", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 9.9),
+                rec("KRW-ETH", "BUY", 105.0, 2.0, "2026-08-02T10:00", strategy = "combined"),
+            ).sortedBy { it.createdAt }
+        ).sortedBy { it.entryAt }
+
+        val btc = rts.filter { it.ticker == "KRW-BTC" }
+        assertFalse(btc[0].open)
+        assertNull(btc[0].carriedVolume, "청산된 그룹은 넘길 잔량이 없다")
+        val eth = rts.filter { it.ticker == "KRW-ETH" }
+        assertNull(eth[0].carriedVolume, "스냅샷 2 는 잔량 6 을 담을 수 없다 — 넘어갔다고 표시하지 않는다")
+        assertTrue(eth[0].open)
+    }
+
+    @Test
+    fun `팔고 남은 dust 위에 엔진이 다시 사면 dust 는 새 그룹으로 넘어간다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-BTC", "SELL", 110.0, 0.9999, "2026-08-01T12:00", pnlPercent = 9.9),
+                rec("KRW-BTC", "BUY", 105.0, 0.5001, "2026-08-03T10:00", strategy = "combined"),
+            )
+        ).sortedBy { it.entryAt }
+
+        assertFalse(rts[0].open)
+        assertEquals(0.0001, rts[0].carriedVolume!!, 1e-9)
+        assertTrue(rts[1].open)
+    }
+
+    @Test
+    fun `수동 증분 매수는 이전 잔량을 담지 않으므로 이전 그룹을 열어 둔다`() {
+        val rts = assembleRoundTrips(
+            listOf(
+                rec("KRW-ETH", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "combined"),
+                rec("KRW-ETH", "SELL", 110.0, 4.0, "2026-08-01T12:00", pnlPercent = 9.9),
+                rec("KRW-ETH", "BUY", 120.0, 3.0, "2026-08-02T10:00", strategy = "manual"),
+            )
+        ).sortedBy { it.entryAt }
+
+        assertTrue(rts[0].open, "잔량 6 은 여전히 이 그룹의 보유분이다")
+        assertNull(rts[0].carriedVolume)
     }
 
     // ── #132: 엔진 스냅샷 이후의 수동 매수 ────────────────────────────────────────

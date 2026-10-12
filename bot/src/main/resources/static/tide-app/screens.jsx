@@ -310,6 +310,10 @@ function OrdersPage({ user, setActive }) {
               {r.open && <span style={{ display: 'block', fontSize: 10.5, color: 'var(--up)', fontWeight: 600 }}>
                 {r.partially_closed ? '일부 매도 · 보유 중' : '보유 중'}
               </span>}
+              {/* 남은 수량은 다음 매수 기록(그 시점 전체 보유량)에 포함돼 그 행의 매수 수량으로 잡힌다 */}
+              {r.carried_volume != null && <span style={{ display: 'block', fontSize: 10.5, color: 'var(--ink-500)', fontWeight: 600 }}>
+                잔량 다음 매수로 이월
+              </span>}
             </span>
             <span>
               {r.buy_count === 0 ? <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>매수 기록 없음</span> : <>
