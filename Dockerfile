@@ -1,6 +1,7 @@
 # Builds the :bot module only (the committed app). When the collector/research
 # modules are added, re-add their build.gradle.kts COPY lines for dep caching.
-FROM gradle:8.12-jdk21 AS build
+# jar 는 플랫폼 무관 — 빌드 단계를 빌더 플랫폼에 고정해 multi-platform 빌드에서 gradle 이 QEMU 로 돌지 않게 한다.
+FROM --platform=$BUILDPLATFORM gradle:8.12-jdk21 AS build
 WORKDIR /app
 COPY build.gradle.kts settings.gradle.kts ./
 COPY gradle ./gradle
