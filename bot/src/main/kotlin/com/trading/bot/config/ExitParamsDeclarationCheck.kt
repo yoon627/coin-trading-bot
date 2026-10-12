@@ -1,6 +1,7 @@
 package com.trading.bot.config
 
 import com.trading.common.config.ExitParamRanges
+import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.event.ApplicationReadyEvent
@@ -21,12 +22,13 @@ import org.springframework.stereotype.Component
  * **기동이나 거래를 막지 않는다.** 막으면 보유 포지션의 손절·트레일링·보유상한이 전부 평가되지 않는
  * 공백이 생기는데, 그 손해가 파라미터 오류보다 크다. 실제 차단은 배포 앞단(`deploy/vultr/preflight_exit_params.sh`)이
  * 맡는다 — 잘못된 `.env` 가 서버에 닿기 전에 배포를 멈춘다. 여기는 그 그물을 빠져나온 경우(수동 `.env` 편집 등)를
- * 위한 **탐지**다.
+ * 위한 **탐지**다. 켜진 그림자 관측의 설정이 구간 밖이면 관측이 꺼졌다는 것도 여기서 알린다.
  */
 @Component
 class ExitParamsDeclarationCheck(
     private val tradingProperties: TradingProperties,
     private val environment: Environment,
+    private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
 ) {
 
     /** 환경에 선언되지 않아 코드 기본값으로 떨어진 청산 키. 비어 있으면 정상이다. */
@@ -60,6 +62,13 @@ class ExitParamsDeclarationCheck(
                     "[{}] 청산·주문 파라미터가 의미상 구간 밖입니다: {} — 이 값으로 거래합니다. 이 값으로 연 포지션은 청산될 때까지 " +
                         "진입 시점 값을 유지합니다. 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요.",
                     context, outOfRange,
+                )
+            }
+            val shadowOutOfRange = if (shadowExitProperties.enabled) ExitParamRanges.violations(shadowExitProperties) else emptyList()
+            if (shadowOutOfRange.isNotEmpty()) {
+                log.error(
+                    "[{}] 그림자 관측 설정이 구간 밖이라 관측을 끕니다: {} — 거래에는 영향이 없습니다. 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요.",
+                    context, shadowOutOfRange,
                 )
             }
             if (undeclaredKeys.isNotEmpty()) {
