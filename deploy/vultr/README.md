@@ -259,7 +259,7 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 
 > 이력: 2026-07-30 AWS → Vultr 이전과 그 롤백 창구(AWS 인스턴스 정지 보존)는 2026-07-31 AWS 자원 삭제로
 > 끝났고, `deploy/aws`·`deploy/oci` 판은 2026-10 에 저장소에서도 지웠다. 당시 이전·롤백 런북은
-> `git show 83fd87e:deploy/vultr/README.md` 의 3~5절에 있다.
+> `git show 37008a7:deploy/vultr/README.md` 의 3~5절에 있다.
 
 ## 6. DB 백업
 

@@ -85,7 +85,7 @@ chmod +x .git/hooks/pre-push
 가드 자체가 오탐이면(정당한 `.github/...` 항목) 롤백해도 같은 가드가 돌아온다 — 그때는 hook 의
 regex 를 고치고 재설치한다.
 
-codex 게이트가 있던 마지막 정본은 `ffd6ec9:scripts/git-hooks/pre-push`(2026-09-03 이전 main).
+codex 게이트가 있던 마지막 정본은 `bad0465:scripts/git-hooks/pre-push`(2026-09-03 이전 main).
 되돌리면 `codex`·`python3`·`perl` 요구와 `CODEX_SKIP`/`CODEX_ACK` 우회, `.git/codex-pre-push/` 로그가
 함께 돌아온다.
 
