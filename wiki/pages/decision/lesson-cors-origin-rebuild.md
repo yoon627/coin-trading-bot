@@ -6,7 +6,7 @@ updated: 2026-10-03
 claim_state: current
 verified: 2026-10-03 — sources 의 compose 를 운영 판으로 교체(AWS 판은 저장소에서 삭제). 같은 해결이 `deploy/vultr/docker-compose.prod.yml:93-94` 에 있다(`APP_DOMAIN` 주입 → CORS allowedOrigins) · 2026-07-28 — docs/lessons.md 원문 항목(2026-06-02) 이관, 원본 커밋 331426f
 sources:
-  - docs/lessons.md
+  - f517f0c:docs/lessons.md
   - bot/src/main/kotlin/com/trading/bot/auth/SecurityConfig.kt
   - deploy/vultr/docker-compose.prod.yml
 ---

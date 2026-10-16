@@ -6,7 +6,7 @@ updated: 2026-07-28
 claim_state: current
 verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 331426f
 sources:
-  - docs/lessons.md
+  - f517f0c:docs/lessons.md
 ---
 
 # lesson: resume 질문엔 6곳을 확인한다

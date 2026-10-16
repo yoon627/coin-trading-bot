@@ -6,7 +6,7 @@ updated: 2026-07-28
 claim_state: current
 verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-06-01) 이관, 원본 커밋 331426f
 sources:
-  - docs/lessons.md
+  - f517f0c:docs/lessons.md
 ---
 
 # lesson: checkout 이 미커밋 변경을 끌고 간다
