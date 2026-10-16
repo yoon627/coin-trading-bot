@@ -18,9 +18,9 @@ sources:
 |---|---|
 | 외부 visible behavior / public API / CLI | `README.md` |
 | 모듈 구조·의존성·아키텍처 | `README.md` 해당 절 + `wiki/` 해당 페이지 |
-| 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
-| 운영/배포 절차 | `docs/runbook/`(있으면) 또는 README 운영 절 |
-| 보안 정책 | `SECURITY.md`(있으면) |
+| 설계 결정·신규 서브시스템 | `wiki/pages/decision/` 새 페이지 |
+| 운영/배포 절차 | `deploy/vultr/README.md` + README 배포 절 |
+| 보안 정책 | README 해당 절(환경변수·배포) |
 | 이 wiki 의 페이지 추가·변경 | `wiki/index.md` 동기화 |
 
 내부 리팩터·테스트 전용·invisible 버그 수정은 문서 갱신이 불필요하다.
@@ -36,6 +36,5 @@ sources:
 - `plans/` — 진행 중 작업 하나의 상태([[plan-git-tracking]])
 - GitHub Issues — 백로그([[github-issues-backlog]])
 - `wiki/` — 작업을 가로지르는 누적 지식
-- `docs/superpowers/specs/` — 특정 작업의 설계 스펙(작성 시점 고정)
 
 wiki 페이지를 건드리면 `wiki/index.md` 등재를 함께 맞춰야 한다. 링크 검사기가 index 누락·잉여를 둘 다 위반으로 잡는다.

@@ -2,7 +2,7 @@
 title: 백로그는 GitHub Issues 단일 소스 (TODO 파일 금지)
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-10-17
 claim_state: current
 verified: 2026-07-28 — repo CLAUDE.md "TODO / 백로그 = GitHub Issues" 절 대조, gh issue list 로 이슈가 실제 백로그로 쓰이는지 확인 (이슈 개수는 변하므로 기록하지 않는다)
 sources:
@@ -15,7 +15,7 @@ sources:
 할 일·백로그·미룬 항목은 **GitHub Issues 에만** 둔다. `TODO.md` 같은 추적 파일을 새로 만들지 않는다.
 
 - 작업 아이디어·버그·후속 작업은 이슈로 만들고, PR/커밋에서 `Closes #N` 으로 연결한다.
-- `docs/superpowers/specs/` 의 설계 스펙과 `.claude/plans/` 의 plan 은 **진행 중 작업의 설계·상태 기록 전용**이며 백로그 저장소가 아니다([[plan-git-tracking]]).
+- `.claude/plans/` 의 plan 은 **진행 중 작업의 설계·상태 기록 전용**이며 백로그 저장소가 아니다([[plan-git-tracking]]).
 
 ## wiki 도 백로그가 아니다
 
