@@ -327,7 +327,7 @@ SSH는 `SSH_ALLOW_CIDR`로 제한하고 Actions 전용 규칙만 동적 runner I
 
 - 현재 지원 거래소는 Upbit뿐입니다.
 - `collector`, `research`, Kafka, ML/스캘핑/Claude 분석, 모니터링 스택(Prometheus·Grafana·Loki), k6 부하 테스트는 현재 저장소에 포함되지 않습니다.
-- 설계 배경과 경량화 이력은 [`PROJECT_ANALYSIS.md`](PROJECT_ANALYSIS.md)를 참고하세요.
+- 설계 배경과 경량화 이력은 [`wiki/pages/decision/rightsizing-history.md`](wiki/pages/decision/rightsizing-history.md)를, 모듈·패키지 구조는 [`wiki/pages/concept/architecture-overview.md`](wiki/pages/concept/architecture-overview.md)를 참고하세요.
 - 누적 지식베이스(아키텍처 개념·결정 배경·겪은 함정)는 [`wiki/index.md`](wiki/index.md)에 있습니다. 운영 규약은 [`wiki/WIKI.md`](wiki/WIKI.md). 페이지를 고쳤으면 **세 가지를 모두** 돌립니다 — 하나만 돌리면 나머지 위반을 놓칩니다:
   ```bash
   uv run --no-project python "$HOME/.claude/skills/wiki/check_links.py" wiki  # 링크·index 동기화

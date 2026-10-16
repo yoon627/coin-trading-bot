@@ -61,13 +61,11 @@ Thumbs.db
 *.log
 hs_err_pid*
 replay_pid*
-# Ignore .claude/ contents EXCEPT versioned artifacts (task plans).
-# Using .claude/* rather than .claude/ so git still descends into the
-# directory and the negation below can re-include specific subpaths.
+# .claude/ 는 머신 로컬 작업 상태(plans·tasks·로컬 설정)라 추적하지 않는다.
+# .claude/* (디렉토리 자체가 아니라 내용) 로 무시해야 아래 negation 이 동작한다.
 .claude/*
-# Keep task plans version-controlled so multi-session / multi-machine
-# workflows can resume from them.
-!.claude/tasks/
+# 예외: 공유 훅 설정 — 커밋 전 민감 파일 검사(scripts/git-hooks/check-staged-sensitive.sh)를 모든 클론에서 돌린다.
+!.claude/settings.json
 
 ### Worktrees ###
 .worktrees/
