@@ -2,12 +2,11 @@
 title: 문서 동기화 규칙 — 어떤 변경이 어떤 문서를 갱신시키는가
 category: decision
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-10-17
 claim_state: current
 verified: 2026-07-28 — repo CLAUDE.md "문서 동기화 대상" 표 대조
 sources:
   - CLAUDE.md
-  - PROJECT_ANALYSIS.md
   - README.md
 ---
 
@@ -18,7 +17,7 @@ sources:
 | 변경 종류 | 갱신 대상 |
 |---|---|
 | 외부 visible behavior / public API / CLI | `README.md` |
-| 모듈 구조·의존성·아키텍처 | `PROJECT_ANALYSIS.md` + `README.md` 해당 절 |
+| 모듈 구조·의존성·아키텍처 | `README.md` 해당 절 + `wiki/` 해당 페이지 |
 | 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
 | 운영/배포 절차 | `docs/runbook/`(있으면) 또는 README 운영 절 |
 | 보안 정책 | `SECURITY.md`(있으면) |
@@ -28,7 +27,7 @@ sources:
 
 ## 문서를 근거로 삼지 말 것
 
-문서가 코드와 어긋난 전례가 실제로 있다. `PROJECT_ANALYSIS.md` 가 실거래 리스크 파라미터를 **정반대로**(손절 −3%/익절 +5% — 실제는 익절 +2%/손절 −5%) 기재하고, 라이브에 없는 MA50 매수 차단을 있다고 서술한 건이 `docs-sync` 작업에서 잡혔다. 운영자의 리스크 오인으로 직결되는 종류의 오류다.
+문서가 코드와 어긋난 전례가 실제로 있다. `PROJECT_ANALYSIS.md`(README·wiki 와 겹치는 구조 문서, 2026-10-17 삭제)가 실거래 리스크 파라미터를 **정반대로**(손절 −3%/익절 +5% — 실제는 익절 +2%/손절 −5%) 기재하고, 라이브에 없는 MA50 매수 차단을 있다고 서술한 건이 `docs-sync` 작업에서 잡혔다. 운영자의 리스크 오인으로 직결되는 종류의 오류다.
 
 그래서 이 wiki 의 규약은 **"문서가 아니라 코드를 확인하고, 확인한 것만 쓴다"** 이다(`wiki/WIKI.md` §4). 실제 파라미터는 [[architecture-overview]] 가 가리키는 코드 경로에서 확인한다.
 

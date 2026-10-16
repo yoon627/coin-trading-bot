@@ -11,7 +11,6 @@ sources:
   - bot/src/main/resources/application-prod.yml
   - bot/src/test/kotlin/com/trading/bot/config/DeployEnvPassthroughTest.kt
   - bot/src/test/kotlin/com/trading/bot/config/DeployPassthrough.kt
-  - PROJECT_ANALYSIS.md
   - deploy/vultr/
   - .github/workflows/deploy.yml
   - README.md

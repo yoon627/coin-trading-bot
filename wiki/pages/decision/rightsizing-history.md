@@ -7,7 +7,6 @@ claim_state: current
 verified: 2026-10-03 — 인프라 대안 제거 반영(운영 배포는 `deploy.yml` 이 `deploy/vultr/deploy.sh` 만 부른다), #26 종료 사유는 이슈 코멘트(2026-09-23) 원문 · 2026-10-03 — Redis 제거 반영(`RateLimitFilter` 원문·운영 compose 에 redis 서비스 없음 확인) · 2026-10-01 — fan-out sink 서술: 시세 DB 저장 제거 뒤 `MarketDataIngestionService` 의 sink 는 store·`CandleAggregator` 둘(각 try/catch) · 2026-10-01 — MVP 1단계(연구·백테 코드와 운영 밖 전략·전략 설정 제거) 항목 추가 — 운영 거래 분포는 2026-09-30 읽기 전용 조회(combined 212건·2026-07-14~09-30) · 2026-09-16 — KIS 경로 제거(V27) 반영 · 2026-08-19 — price_snapshots 제거(V19) 반영
 sources:
   - CLAUDE.md
-  - PROJECT_ANALYSIS.md
   - bot/src/main/kotlin/com/trading/bot/marketdata/MarketDataIngestionService.kt
 ---
 

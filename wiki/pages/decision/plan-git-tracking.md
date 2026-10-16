@@ -2,9 +2,9 @@
 title: .claude/plans/ 는 git 추적하지 않는다 (2026-09-15 되돌림)
 category: decision
 created: 2026-07-28
-updated: 2026-09-15
+updated: 2026-10-17
 claim_state: current
-verified: 2026-09-15 — .gitignore 의 `.claude/*` + `!.claude/tasks/` 만 남고 `!.claude/plans/` 제거, git check-ignore .claude/plans = ignored
+verified: 2026-10-17 — `!.claude/tasks/` 제거·`!.claude/settings.json` 추가, git check-ignore .claude/tasks = ignored · 2026-09-15 — .gitignore 의 `.claude/*` + `!.claude/tasks/` 만 남고 `!.claude/plans/` 제거, git check-ignore .claude/plans = ignored
 sources:
   - .gitignore
   - CLAUDE.md
@@ -12,7 +12,7 @@ sources:
 
 # `.claude/plans/` 는 gitignored 다
 
-`.gitignore` 는 `.claude/*` 를 무시하고 `!.claude/tasks/` 만 negation 으로 되살린다. `.claude/plans/` 는 글로벌 규약(`~/.claude/CLAUDE.md` §10, `/e`·`/c`·`/wt` 스킬)의 기본 전제대로 **추적하지 않는다**.
+`.gitignore` 는 `.claude/*` 를 무시하고 공유 훅 설정 `!.claude/settings.json` 만 negation 으로 되살린다. `.claude/tasks/` 도 2026-10-17 에 같은 이유(코드와 무관한 작업 메모가 히스토리에 쌓임)로 추적을 풀었다 — 그 전 메모는 git 이력에 있다. `.claude/plans/` 는 글로벌 규약(`~/.claude/CLAUDE.md` §10, `/e`·`/c`·`/wt` 스킬)의 기본 전제대로 **추적하지 않는다**.
 
 ## 이력
 

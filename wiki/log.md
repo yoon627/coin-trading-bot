@@ -287,3 +287,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 - [[deployment-stack]] 에 배포 판이 Vultr 하나라는 이력 한 줄을 더하고, `TradingEnvPassthroughTest` 서술을 양방향 계약(지운 설정의 키가 남거나 compose 항목에 값이 붙어도 실패)으로 바꿨다. x86_64 전환 서술은 과거형으로. "배포 시 주의" 에 Caddyfile 은 배포가 반영하지 않는다(caddy 컨테이너가 새로 뜰 때 적용, 게이트는 머지 전 `caddy validate`)는 항목을 더했다.
 - [[lesson-ec2-sizing-oom]] 의 "현재 운영은 t4g.medium" 을 고쳤다 — 4GB 하한은 당시 5컨테이너 구성의 값이고 지금은 Vultr 2GB(제한 합계 1440m)다.
 - [[rightsizing-history]] 에 인프라 대안(AWS·OCI 판·monitoring 설정·k6) 제거를 더하고, 되돌릴 때의 기준에서 #26 종료 사유와 측정 도구가 없어졌다는 점을 적었다.
+
+## [2026-10-17] lint | PROJECT_ANALYSIS.md 삭제·.claude/tasks 추적 해제
+
+- `PROJECT_ANALYSIS.md` 를 지웠다 — 구조·스택은 `README.md`, 패키지는 [[architecture-overview]], 마이그레이션은 [[persistence-schema]], 경량화 이력은 [[rightsizing-history]] 가 같은 내용을 갖고 있었고, 트레일링 운영값(1.5/arm 0)을 옛 기본값으로 적은 채 남아 있었다. 그 파일을 `sources` 로 둔 6페이지에서 항목을 빼고, [[docs-code-sync]] 의 갱신 대상 표를 `README.md` + wiki 로 바꿨다.
+- `.claude/tasks/` 추적을 풀고 `.gitignore` 의 negation 을 공유 훅 설정 `.claude/settings.json` 하나로 좁혔다([[plan-git-tracking]]).

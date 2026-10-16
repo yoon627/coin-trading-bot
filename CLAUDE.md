@@ -26,7 +26,7 @@
 
 ## 스펙 문서
 
-- 아키텍처 변경은 `PROJECT_ANALYSIS.md`에 반영
+- 아키텍처 변경은 `README.md`(아키텍처·프로젝트 구조 절)와 `wiki/pages/concept/architecture-overview.md` 에 반영
 - 설계 스펙은 `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 
 ## TODO / 백로그 = GitHub Issues
@@ -49,11 +49,12 @@
 | 변경 종류 | 업데이트 대상 |
 |-----------|---------------|
 | 외부 visible behavior / Public API / CLI 변경 | `README.md` |
-| 모듈 구조·의존성·아키텍처 변경 | `PROJECT_ANALYSIS.md` + `README.md` (해당 섹션) |
+| 모듈 구조·의존성·아키텍처 변경 | `README.md` (해당 섹션) + `wiki/` 해당 페이지 |
 | 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
 | 운영/배포 절차 변경 | `docs/runbook/` (존재 시) 또는 `README.md`의 운영 섹션 |
 | 보안 정책 변경 | `SECURITY.md` (존재 시) |
 | `wiki/pages/` 추가·변경 | `wiki/index.md` 등재 동기화 (누락·잉여 모두 lint 실패) |
+| 이 파일(`CLAUDE.md`) 변경 | `AGENTS.md` 동기화 (Codex 용 사본) |
 
 내부 리팩터·테스트 전용·invisible 버그 수정은 문서 업데이트 불필요.
 

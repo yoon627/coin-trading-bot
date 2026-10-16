@@ -2,6 +2,7 @@
 
 이 파일은 **환경/빌드 정보**만 담는다. 개발 워크플로우 규칙은 `~/.Codex/AGENTS.md` 참고.
 코드 리뷰(버그·보안·클린코드·테스트)는 구현 직후 리뷰 단계(Claude 와 Codex 가 각자 독립 리뷰, 통합은 메인 에이전트)가 담당한다. `.git/hooks/pre-push` 는 `deploy.yml` paths-ignore 자기제외 가드만 남았다(codex 게이트는 2026-09-03 제거, `scripts/git-hooks/README.md`).
+> 이 파일은 `CLAUDE.md` 의 Codex 용 사본이다. 한쪽을 바꾸면 다른 쪽도 같은 커밋에서 바꾼다.
 
 ## Build & Test
 
@@ -26,7 +27,7 @@
 
 ## 스펙 문서
 
-- 아키텍처 변경은 `PROJECT_ANALYSIS.md`에 반영
+- 아키텍처 변경은 `README.md`(아키텍처·프로젝트 구조 절)와 `wiki/pages/concept/architecture-overview.md` 에 반영
 - 설계 스펙은 `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 
 ## TODO / 백로그 = GitHub Issues
@@ -34,12 +35,6 @@
 - 이 레포의 할 일·백로그·미룬 항목은 **GitHub Issues** 로 관리한다 (`TODO.md` 등 추적용 파일을 새로 만들지 않는다).
 - 작업 아이디어·버그·후속 작업은 이슈로 생성하고, PR/커밋에서 `Closes #N` 으로 연결.
 - `docs/superpowers/specs/` 의 설계 스펙과 `~/.Codex/AGENTS.md` §10 의 plan 은 **진행 중 작업의 설계·상태 기록 전용** — 백로그 저장소가 아니다.
-
-## plan 버전관리 (이 repo 고유)
-
-- `~/.Codex/AGENTS.md` §10 의 plan 을 이 repo 는 **`.claude/plans/` 에 두고 git 추적**한다 (`.gitignore` 의 `!.claude/plans/` — `!.claude/tasks/` 와 동일 negation 패턴). worktree 삭제 시 plan 소실 방지가 목적. **경로는 `.claude/` 다 — `.codex/` 아래에 plan 을 만들지 않는다**(그 경로엔 ignore 예외가 없어 유실된다).
-- ⚠️ plan 이 gitignored 라고 전제하는 도구(예: worktree 삭제 전 plan 을 main 에 백업하려는 자동화)는 이 repo 에서 전제가 어긋난다 — plan 이 git 에 보존되므로 **worktree 삭제 전 별도 백업이 불필요**하다. 다만 **미커밋 plan 변경은 `git worktree remove` 가 거부하므로 삭제 전에 커밋·push 로 보존**한다.
-- 작업 worktree 에서 plan 은 코드와 별도 커밋(`chore(plan): ...`) 하거나 작업 커밋에 포함한다.
 
 ## 머지 후 main 동기화 (이 repo 고유)
 
@@ -55,11 +50,12 @@
 | 변경 종류 | 업데이트 대상 |
 |-----------|---------------|
 | 외부 visible behavior / Public API / CLI 변경 | `README.md` |
-| 모듈 구조·의존성·아키텍처 변경 | `PROJECT_ANALYSIS.md` + `README.md` (해당 섹션) |
+| 모듈 구조·의존성·아키텍처 변경 | `README.md` (해당 섹션) + `wiki/` 해당 페이지 |
 | 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
 | 운영/배포 절차 변경 | `docs/runbook/` (존재 시) 또는 `README.md`의 운영 섹션 |
 | 보안 정책 변경 | `SECURITY.md` (존재 시) |
 | `wiki/pages/` 추가·변경 | `wiki/index.md` 등재 동기화 (누락·잉여 모두 lint 실패) |
+| 이 파일(`AGENTS.md`) 변경 | `CLAUDE.md` 동기화 (원본) |
 
 내부 리팩터·테스트 전용·invisible 버그 수정은 문서 업데이트 불필요.
 
