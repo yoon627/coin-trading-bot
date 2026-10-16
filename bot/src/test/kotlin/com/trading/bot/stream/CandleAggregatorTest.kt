@@ -201,7 +201,7 @@ class CandleAggregatorTest {
     fun `aligns each interval to its period start`() {
         // 2024-01-17 = 수요일: interval 별 정렬 경계가 서로 달라(W1 월요일 01-15, MO1 01-01, D1 01-17)
         // 각 branch 를 독립 게이트한다. D1 정렬이 seed REST D1 openTime(UTC 자정)과 일치해야
-        // MarketDataStore upsert dedup 이 성립 — 과거 D1 오염(d6c6857) 재발 방지 불변식의 전제.
+        // MarketDataStore upsert dedup 이 성립 — 과거 D1 오염(f0a0a04) 재발 방지 불변식의 전제.
         aggregator.onMinuteCandle(m1("2024-01-17T15:37:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
 
         assertEquals(inst("2024-01-17T15:35:00Z"), openTimeOf(CandleInterval.M5))
