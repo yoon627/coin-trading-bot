@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-10-01
 claim_state: historical
-verified: 2026-10-01 — 연구·백테 코드(`BacktestEngine`·`IntrabarExitModel`·M1 replay) 삭제 후 historical 로 전환, 삭제된 코드를 서술하던 "머지된 정합 개선" 절을 뺌 · 2026-07-28 — strategy-evolution-loop plan 의 설계 합의 절, 머지된 PR #42(main bfb237f)로 Phase 0 ①③ 반영 확인
+verified: 2026-10-01 — 연구·백테 코드(`BacktestEngine`·`IntrabarExitModel`·M1 replay) 삭제 후 historical 로 전환, 삭제된 코드를 서술하던 "머지된 정합 개선" 절을 뺌 · 2026-07-28 — strategy-evolution-loop plan 의 설계 합의 절, 머지된 PR #42(main 0181602)로 Phase 0 ①③ 반영 확인
 sources:
   - .claude/plans/2026-07-10-strategy-evolution-loop/strategy-evolution-loop-plan.md
 ---

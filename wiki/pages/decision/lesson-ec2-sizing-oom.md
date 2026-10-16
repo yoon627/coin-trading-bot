@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-10-03
 claim_state: historical
-verified: 2026-10-03 — 4GB 하한을 당시 구성의 값으로 "지금은 다른 것" 에 옮기고, 지금 운영(Vultr 2GB·제한 합계 1440m)을 운영 compose 의 `mem_limit` 원문으로 확인 · 2026-10-03 — "지금은 다른 것" 의 컨테이너 구성을 redis 제거 뒤 운영 compose 원문으로 고침 · 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 331426f. 전제(5컨테이너)는 현재 구조와 다름 — settings.gradle.kts 모듈 2개로 확인
+verified: 2026-10-03 — 4GB 하한을 당시 구성의 값으로 "지금은 다른 것" 에 옮기고, 지금 운영(Vultr 2GB·제한 합계 1440m)을 운영 compose 의 `mem_limit` 원문으로 확인 · 2026-10-03 — "지금은 다른 것" 의 컨테이너 구성을 redis 제거 뒤 운영 compose 원문으로 고침 · 2026-07-28 — docs/lessons.md 원문 항목(2026-05-25) 이관, 원본 커밋 f517f0c. 전제(5컨테이너)는 현재 구조와 다름 — settings.gradle.kts 모듈 2개로 확인
 sources:
   - f517f0c:docs/lessons.md
   - deploy/vultr/docker-compose.prod.yml

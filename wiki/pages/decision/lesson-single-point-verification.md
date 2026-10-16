@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-10-03
 claim_state: current
-verified: 2026-10-03 — "현재 스택에서는" 절을 운영 판 `deploy/vultr/deploy.sh:245-291`(방화벽: 수동 SSH=`SSH_ALLOW_CIDR`, 443=`APP_ALLOW_CIDR` 기본 `0.0.0.0/0`, 80=ACME 전체, Actions 용 `ctb-ssh-github-actions` 22/tcp 별도) 기준으로 고침(AWS 판은 저장소에서 삭제) · 2026-09-28 — 테스트 범위 사례는 #227 작업에서 실제로 겪은 건: 대상 패턴 339건 통과 뒤 전체 `:bot:test` 1109건 중 `TradeAuditAtomicityTest` 1건 실패(매도 상태 저장 2→3회), 수정 후 전체 1082 통과/32 skip. · 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 331426f) 이관분 유지
+verified: 2026-10-03 — "현재 스택에서는" 절을 운영 판 `deploy/vultr/deploy.sh:245-291`(방화벽: 수동 SSH=`SSH_ALLOW_CIDR`, 443=`APP_ALLOW_CIDR` 기본 `0.0.0.0/0`, 80=ACME 전체, Actions 용 `ctb-ssh-github-actions` 22/tcp 별도) 기준으로 고침(AWS 판은 저장소에서 삭제) · 2026-09-28 — 테스트 범위 사례는 #227 작업에서 실제로 겪은 건: 대상 패턴 339건 통과 뒤 전체 `:bot:test` 1109건 중 `TradeAuditAtomicityTest` 1건 실패(매도 상태 저장 2→3회), 수정 후 전체 1082 통과/32 skip. · 2026-08-24 — 코드 분기 사례를 `TradingState.kt:95-116`(`resuming` 참조 5곳) 원문으로 확인. SG 단일 IP 사례는 2026-07-28 `docs/lessons.md`(2026-05-30 항목, 원본 커밋 f517f0c) 이관분 유지
 sources:
   - f517f0c:docs/lessons.md
   - deploy/vultr/deploy.sh

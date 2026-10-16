@@ -23,7 +23,7 @@
 
 | 소스 | 처리 |
 |---|---|
-| `docs/lessons.md` 6항목 | **ingested** — 7페이지로 분리 이관, 원본은 포인터로 축소(원문 커밋 `331426f`) |
+| `docs/lessons.md` 6항목 | **ingested** — 7페이지로 분리 이관, 원본은 포인터로 축소(원문 커밋 `f517f0c`) |
 | `PROJECT_ANALYSIS.md` | **ingested** — concept 페이지들의 근거로 사용. 단 수치는 코드로 재확인(과거 오기재 전례) |
 | plan: strategy-evolution-loop | **부분 ingested** — 확정 합의·머지된 정합 개선만. 진행 상태는 plan 소유 |
 | plan: trading-state-durability, marketdata-consolidation, docs-sync, ec2-tls-caddy 등 종결분 | **ingested(주제 재구성)** — 결정·교훈이 concept/decision 페이지에 녹아 있음. 페이지 1:1 대응은 없음 |
@@ -142,11 +142,11 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - [[take-profit-stop-loss-2026-09]] 신설: 진입일 1:1 페어링·전 거래일 이동블록·셀 공통 draw 의 단일단계 maxT(FWER 5%)로 19셀 동시 판정. 통과 9(익절 8·off 8셀 + TP5/SLoff), 후보 0 — 익절 축은 계기 편향 순방향이라 사전고정이 후보 제외, 손절 off 는 진입봉 손절을 종가로 판정하는 감도에서 미통과. 익절 3·손절 3 은 편향 무관 열세.
 - `LiveSemanticsArm` 에 `entryBarStopOnClose`·진단 필드 추가(기본값 종전 동작, `RUN_TRAILING_WIDTH` 리포트 md5 동일) → 그 파일을 sources 로 가진 [[trailing-width-2026-09]]·[[exit-resolution-verdict-2026-09]]·[[trailing-arm-finding-2026-09]] verified 갱신.
-- 근거: `TakeProfitStopLossIntradayTest`(`RUN_TP_SL_GRID=true`) 산출물, 사전고정 커밋 `a04ab34`(plan-reviewer 2회·codex 1회 검토 반영). 진행 상태는 plan 소유.
+- 근거: `TakeProfitStopLossIntradayTest`(`RUN_TP_SL_GRID=true`) 산출물, 사전고정 커밋 `6e7566e`(plan-reviewer 2회·codex 1회 검토 반영). 진행 상태는 plan 소유.
 
 ## [2026-09-09] query | exit-resolution-ladder-2026-09 — 240→15→5분봉 해상도 사다리 1페이지 추가 + sources 4페이지 verified 갱신
 
-- [[exit-resolution-ladder-2026-09]] 신설: 익절·손절·9시 유지 정책 7셀을 15분·5분봉으로 재판정(공통 frame·maxT·브래킷 family 2종·수렴 규칙 사전고정 `daf16c1`). 5분봉 통과 0 — 240분봉 우위는 계기 편향(TPoff +0.195 → +0.043 → +0.010/거래). 기준선 자체가 240분 +235.9 → 5분 −219.4%p 로 뒤집힘(진입 1,058 → 1,767건).
+- [[exit-resolution-ladder-2026-09]] 신설: 익절·손절·9시 유지 정책 7셀을 15분·5분봉으로 재판정(공통 frame·maxT·브래킷 family 2종·수렴 규칙 사전고정 `f3c3e00`). 5분봉 통과 0 — 240분봉 우위는 계기 편향(TPoff +0.195 → +0.043 → +0.010/거래). 기준선 자체가 240분 +235.9 → 5분 −219.4%p 로 뒤집힘(진입 1,058 → 1,767건).
 - `LiveSemanticsArm` 에 window 지연 생성·`keepWinnersUntilDays`·`pessimisticTrailing`·`Trade.keptPastLimit` 추가(기본값 종전 동작, md5 동일) → sources 인 [[trailing-width-2026-09]]·[[exit-resolution-verdict-2026-09]]·[[trailing-arm-finding-2026-09]]·[[take-profit-stop-loss-2026-09]] verified 갱신. 수집기 `--unit`·`backtest-cache/`(저장소 밖) 규약은 [[upbit-api]] 와 `scripts/collect_intraday_fixtures.py` docstring.
 - 리뷰(code-reviewer + codex) 정정 반영: [[take-profit-stop-loss-2026-09]] 의 "진입봉 유령 손절" 프레이밍은 코드와 어긋난다(`combined` 가 현재가 ≤ 돌파선을 거부해 체결은 항상 봉 시가 → 진입 봉 저가는 체결 이후). 답·손절 축·읽는 법·index 한 줄을 정정. 사다리 페이지의 진입 메커니즘·결측 허용치 방향·막힌 진입 정의도 같은 리뷰로 보강.
 - 근거: `ExitResolutionLadderTest`(`RUN_EXIT_LADDER=true`) 산출물, plan-reviewer 1회(NO-GO 반영)·code-reviewer·codex 검토. 진행 상태는 plan 소유.
@@ -157,7 +157,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 ## [2026-09-10] query | external-signal-gate-2026-09 — 외부 레짐 게이트 13셀 사전고정 판정 1페이지 추가
 
-- [[external-signal-gate-2026-09]] 신설: 김치프리미엄·BTC 펀딩·공포탐욕·ETH/BTC·테이커 매수 비율 13셀을 `combined` 진입 게이트로 얹어 5분봉 사전고정 판정(`ca3242e`). 5분봉 13셀 전부 양수·`FNG_FEAR` maxT 통과(+0.164/거래)지만 위상 이동 null 21/260 통과(상한 13) → 계기 무효·후보 0. 이득은 신호 정보가 아니라 음수 기준선(−219%p)에서 진입을 줄인 효과.
+- [[external-signal-gate-2026-09]] 신설: 김치프리미엄·BTC 펀딩·공포탐욕·ETH/BTC·테이커 매수 비율 13셀을 `combined` 진입 게이트로 얹어 5분봉 사전고정 판정(`34f8a7e`). 5분봉 13셀 전부 양수·`FNG_FEAR` maxT 통과(+0.164/거래)지만 위상 이동 null 21/260 통과(상한 13) → 계기 무효·후보 0. 이득은 신호 정보가 아니라 음수 기준선(−219%p)에서 진입을 줄인 효과.
 - 근거: `ExternalRegimeGateTest`(`RUN_EXTERNAL_GATE=true`) 산출물, fixture `backtest/external/` 5종(`scripts/collect_external_series.py`, 2026-09-10 수집). 진행 상태는 plan 소유.
 
 ## [2026-09-16] ingest | KIS(한국투자증권 국내주식) 경로 제거 반영
@@ -181,12 +181,12 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 ## [2026-09-16] ingest | entry-resolution-vs-live-2026-09 — 라이브 진입 vs 240/15/5분봉 계기 대조 (#190 잔여)
 
-- [[entry-resolution-vs-live-2026-09]] 신설: 운영 `combined` 매수 76건(07-14~09-14)을 계기 진입과 (마켓, UTC 일) 로 대조. 240분 F1 0.536·라이브가 0.97%p 싸게 삼(다른 계기), 15분=5분 진입 집합 동일(64건, 대칭차 0)·F1 0.743, 공통 표본 median(|Δ|) 5분 0.21 < 15분 0.37 < 240분 1.22. 사전고정 판정(F1 최대 ∧ 가격 최소, 결과 전 커밋 `ffe32d5`)은 F1 동률로 유보. 라이브 전용 24건 중 13건이 09:00 KST 직후 — 리셋 직후 전일 돌파선 진입 가설(미확인, 이슈 분리).
+- [[entry-resolution-vs-live-2026-09]] 신설: 운영 `combined` 매수 76건(07-14~09-14)을 계기 진입과 (마켓, UTC 일) 로 대조. 240분 F1 0.536·라이브가 0.97%p 싸게 삼(다른 계기), 15분=5분 진입 집합 동일(64건, 대칭차 0)·F1 0.743, 공통 표본 median(|Δ|) 5분 0.21 < 15분 0.37 < 240분 1.22. 사전고정 판정(F1 최대 ∧ 가격 최소, 결과 전 커밋 `564ba5d`)은 F1 동률로 유보. 라이브 전용 24건 중 13건이 09:00 KST 직후 — 리셋 직후 전일 돌파선 진입 가설(미확인, 이슈 분리).
 - [[entry-set-decomposition-2026-09]] 한계 절의 "라이브 대조 부재"를 포인터로 교체. 라이브 거래 원문은 저장소 밖 캐시(public repo) — 페이지는 집계만. `verify.sh` 페이지 수 43±2 → 46±2. 진행 상태는 plan 소유.
 
 ## [2026-09-16] ingest | breakout-entry-filters-2026-09 — combined 진입 필터 family 사전고정 판정 (#208)
 
-- [[breakout-entry-filters-2026-09]] 신설: 계기 `LiveSemanticsArm` 에 `EntryFilter`(기본 NONE = 기존 경로, 시가 규칙) 옵션을 더해 9셀을 5분봉 10창·진입일 기여·maxT 로 판정(규칙 결과 전 커밋 `4bdfae2`). 통과 0·후보 0 → 현행 유지. §2 분해: 지연은 제거 손실 ≈ 체결가 비용, 마진 1% 는 −964 제거 vs −832 체결가 비용, 마감 12h 는 오후 진입 696건 합계 −84. 예측(지연 양수·마진 음수)이 반쯤 틀림 — 기록.
+- [[breakout-entry-filters-2026-09]] 신설: 계기 `LiveSemanticsArm` 에 `EntryFilter`(기본 NONE = 기존 경로, 시가 규칙) 옵션을 더해 9셀을 5분봉 10창·진입일 기여·maxT 로 판정(규칙 결과 전 커밋 `ee575ad`). 통과 0·후보 0 → 현행 유지. §2 분해: 지연은 제거 손실 ≈ 체결가 비용, 마진 1% 는 −964 제거 vs −832 체결가 비용, 마감 12h 는 오후 진입 696건 합계 −84. 예측(지연 양수·마진 음수)이 반쯤 틀림 — 기록.
 - [[entry-set-decomposition-2026-09]]·[[entry-resolution-vs-live-2026-09]] "다음" 포인터 추가. `verify.sh` 페이지 수 47(46±2 안). 진행 상태는 plan 소유.
 
 ## [2026-09-16] ingest | lesson-seed-vs-stream-overwrite · marketdata-pipeline 갱신 — 재시작 뒤 전일 D1 절단 결함 (#209, #27 C3)
@@ -196,7 +196,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 ## [2026-09-16] ingest | reentry-premium-2026-09 — 리셋 뒤 재진입 프리미엄 분해·대조 (#143 대체, #144 입력)
 
-- [[reentry-premium-2026-09]] 신설: 5분봉 10창 재진입 300쌍 프리미엄 중앙값 +2.16% vs 대조군 +2.77%(돌파선 성분 1.86 vs 2.29, 오버슈트 0.20 vs 0.26, 10/10 창 부호 일치) — 리셋 고유의 가격 불이익 없음, #128 헤드라인은 돌파 진입 프리미엄. 단 왕복 비용(재진입 다리)은 남고 D1 반사실은 0 으로 그린다(≈0.8%p/TIME_EXIT). 기간정합 계기(2026-07~09) 10쌍 +1.68 vs 54건 +1.76. 라이브 12쌍 중앙값 +2.84% — #209 B 오염은 갭을 낮추는 방향이라 원인이 아니고 소표본으로 미해석. 지표 결과 전 커밋 `e0506ae`, 리뷰 반영(분위·경계·B 서명) 후속 커밋.
+- [[reentry-premium-2026-09]] 신설: 5분봉 10창 재진입 300쌍 프리미엄 중앙값 +2.16% vs 대조군 +2.77%(돌파선 성분 1.86 vs 2.29, 오버슈트 0.20 vs 0.26, 10/10 창 부호 일치) — 리셋 고유의 가격 불이익 없음, #128 헤드라인은 돌파 진입 프리미엄. 단 왕복 비용(재진입 다리)은 남고 D1 반사실은 0 으로 그린다(≈0.8%p/TIME_EXIT). 기간정합 계기(2026-07~09) 10쌍 +1.68 vs 54건 +1.76. 라이브 12쌍 중앙값 +2.84% — #209 B 오염은 갭을 낮추는 방향이라 원인이 아니고 소표본으로 미해석. 지표 결과 전 커밋 `74ccddc`, 리뷰 반영(분위·경계·B 서명) 후속 커밋.
 - [[reset-churn-measurement]] 미측정 성분 1 에 포인터. #143 M1 fixture 기각. 진행 상태는 plan 소유.
 
 ## [2026-09-17] update | marketdata-pipeline — M1 폴링 count=5 + 집계기 분 단위 멱등 (#27 C3 잔여)
@@ -219,7 +219,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 ## [2026-09-23] query | completed-bar-indicators-2026-09 — 완결 봉 MA/RSI 변형 사전고정 판정 (#27 J 후반)
 
-- [[completed-bar-indicators-2026-09]] 신설: #27 "미완성 당일봉 신호 제외"의 전제(라이브·백테 불일치)가 현재 코드에서 성립하지 않음을 확인(둘 다 부분봉 포함)하고, 완결 봉 MA/RSI 3셀을 5분봉 계기로 판정 — 후보 0, null(전이일 마스크 이동, 셀 규모 맞춤) N0 0/60 유효. 규칙 결과 전 커밋 `6bf68c7`.
+- [[completed-bar-indicators-2026-09]] 신설: #27 "미완성 당일봉 신호 제외"의 전제(라이브·백테 불일치)가 현재 코드에서 성립하지 않음을 확인(둘 다 부분봉 포함)하고, 완결 봉 MA/RSI 3셀을 5분봉 계기로 판정 — 후보 0, null(전이일 마스크 이동, 셀 규모 맞춤) N0 0/60 유효. 규칙 결과 전 커밋 `a8c06fb`.
 - [[breakout-entry-filters-2026-09]]·[[external-signal-gate-2026-09]] 결론 절에 포인터. 진행 상태는 plan·이슈 소유.
 
 ## [2026-09-23] update | backtest-engine — 기본 재진입 모델 LIVE_SAME_BAR 전환 (#144)
@@ -233,7 +233,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 ## [2026-10-01] update | MVP 1단계 — 연구·백테 리포트 19쪽 삭제와 링크 정리
 
-- 연구·백테 코드(D1 백테 엔진·intrabar 청산 모델·M1 replay·연구 전략·fixture·수집 스크립트)를 지우면서 그 코드를 sources 로 둔 `concept/backtest-engine` 과 `query/` 18쪽을 지웠다. 원문은 저장소 이력(`288ec49`).
+- 연구·백테 코드(D1 백테 엔진·intrabar 청산 모델·M1 replay·연구 전략·fixture·수집 스크립트)를 지우면서 그 코드를 sources 로 둔 `concept/backtest-engine` 과 `query/` 18쪽을 지웠다. 원문은 저장소 이력(`bb8c6c0`).
 - 링크·sources 정리: [[exit-gates]](백테와의 순서 차이 절 삭제) · [[accumulate-ladder]](백테 절 삭제) · [[trading-engine-loop]](운영 트레일링 1.5/arm 0 근거를 지운 리포트 수치로 옮김, 익절·arm 상한은 #288) · [[swing-strategies]] · [[architecture-overview]] · [[persistence-schema]] · [[upbit-api]] · [[lesson-bracket-needs-fill-semantics]] · [[lesson-llm-alpha-verification]] · [[lesson-seed-vs-stream-overwrite]] · [[strategy-evolution-expectations]](historical 로 전환). [[rightsizing-history]] 에 항목 추가.
 - `verify.sh` 쪽수 49±2 → 32±2, `smoke.sh` 의 백테 질문을 "운영 전략은 무엇인가" 로 교체.
 
