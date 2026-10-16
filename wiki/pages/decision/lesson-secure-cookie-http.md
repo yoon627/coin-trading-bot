@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-07-28
 claim_state: current
-verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-05-30) 이관, 원본 커밋 331426f
+verified: 2026-07-28 — docs/lessons.md 원문 항목(2026-05-30) 이관, 원본 커밋 f517f0c
 sources:
   - f517f0c:docs/lessons.md
   - bot/src/main/kotlin/com/trading/bot/auth/AuthController.kt

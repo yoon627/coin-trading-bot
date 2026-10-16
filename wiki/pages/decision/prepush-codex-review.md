@@ -26,7 +26,7 @@ push 직전 git hook. **지금 하는 일은 하나** — push 되는 tip 의 `.
 - fail-closed 라 크레딧 소진 시 코드 결함과 무관하게 모든 push 가 막혔다(PR #165 는 두 번 `CODEX_SKIP=1` 로 우회).
 - 대신 구현 후 code-reviewer 의 codex 병행을 브랜치 전체 diff·high·P0/P1 우선으로 강화했다(~/.claude PR #156). 잃는 것은 "Claude 가 리뷰를 건너뛰어도 막는 강제성"이고, 이는 dlc 규율에 맡긴다.
 
-되돌리려면 `ffd6ec9:scripts/git-hooks/pre-push` 를 재설치한다(README Rollback). 동시 push 가 직렬화되던 제약도 함께 사라졌다([[worktree-workflow]]).
+되돌리려면 `bad0465:scripts/git-hooks/pre-push` 를 재설치한다(README Rollback). 동시 push 가 직렬화되던 제약도 함께 사라졌다([[worktree-workflow]]).
 
 ## 실무 감각
 - 이 가드에 걸리는 push 는 `deploy.yml` 을 바꾼 것뿐이다. 다른 push 가 막히면 hook 이 아니라 원격(브랜치 보호)이나 네트워크 쪽을 본다.

@@ -261,7 +261,7 @@ coin-trading-bot/
 
 AWS EC2 `t4g.medium`은 2026-07-31 Vultr cutover 후 인스턴스·EBS·EIP까지 삭제됐고, Oracle Cloud(Always
 Free) 판은 프로비저닝하지 않았다. 두 판(`deploy/aws`·`deploy/oci`)은 2026-10 에 저장소에서도 지웠다 — 옛
-설정은 `git show 83fd87e:deploy/aws/README.md` 처럼 git 이력에서 본다. 운영은 아래 Vultr 판 하나다.
+설정은 `git show 37008a7:deploy/aws/README.md` 처럼 git 이력에서 본다. 운영은 아래 Vultr 판 하나다.
 
 ## Vultr 배포 (비용 절감 — 월 $10)
 

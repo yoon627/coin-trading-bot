@@ -26,8 +26,8 @@ sources:
 - 문서·주석에 "collector", "Kafka", "research 모듈" 이 나오면 **과거 서술**이다. **KIS(한국투자증권 국내주식) 봇도 2026-09-16 에 통째로 제거됐다** — 사용자 결정(유지 비용 대비 필요 없음). `kis/` 패키지·`/api/stock|kis/*`·주식 화면·`users.kis_*`·`stock_order_intent`·`stock_position_state` 가 V27 에서 사라졌고 `bot_state.exchange` 컬럼만 남았다(값은 UPBIT 뿐). "KIS"·"stock" 서술은 과거다.
 - 소비자 없이 남은 저장 경로가 잔재로 남는다. `price_snapshots` 가 그랬고 V19 에서 제거됐다([[persistence-schema]]) — 경량화 직후가 아니라 한참 뒤에야 드러났다는 점이 교훈이다. 이런 잔재의 정리 진행 상태는 GitHub 이슈 큐가 소유하며 여기 적지 않는다.
 - Redis 도 2026-10 에 뺐다 — API rate limit 카운터 전용이었고, 단일 인스턴스라 앱 메모리 카운터로 바꿨다([[deployment-stack]]). Redis·`REDIS_*` 서술은 과거다.
-- 운영에 쓰지 않는 인프라 대안도 2026-10 에 지웠다 — AWS·OCI 배포 판(`deploy/aws`·`deploy/oci`), 옛 모니터링 스택의 설정(`monitoring/`), k6 부하 테스트(`perf/`). 운영 경로는 Vultr 하나다([[deployment-stack]]). 옛 내용은 git 이력(`83fd87e`)에 있다.
-- "백테"·"fixture"·"M1 replay"·`query/` 리포트를 인용하는 서술은 2026-10-01 이전 것이다. 지운 코드·리포트는 저장소 이력에 있다(마지막으로 있던 커밋 `288ec49`).
+- 운영에 쓰지 않는 인프라 대안도 2026-10 에 지웠다 — AWS·OCI 배포 판(`deploy/aws`·`deploy/oci`), 옛 모니터링 스택의 설정(`monitoring/`), k6 부하 테스트(`perf/`). 운영 경로는 Vultr 하나다([[deployment-stack]]). 옛 내용은 git 이력(`37008a7`)에 있다.
+- "백테"·"fixture"·"M1 replay"·`query/` 리포트를 인용하는 서술은 2026-10-01 이전 것이다. 지운 코드·리포트는 저장소 이력에 있다(마지막으로 있던 커밋 `bb8c6c0`).
 
 ## 되돌릴 때의 기준
 
