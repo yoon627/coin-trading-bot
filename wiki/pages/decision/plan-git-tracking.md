@@ -4,7 +4,7 @@ category: decision
 created: 2026-07-28
 updated: 2026-10-17
 claim_state: current
-verified: 2026-10-17 — `!.claude/tasks/` 제거·`!.claude/settings.json` 추가, git check-ignore .claude/tasks = ignored · 2026-09-15 — .gitignore 의 `.claude/*` + `!.claude/tasks/` 만 남고 `!.claude/plans/` 제거, git check-ignore .claude/plans = ignored
+verified: 2026-10-17 — filter-repo 뒤 `git log --all -- .claude/plans .claude/tasks PROJECT_ANALYSIS.md` 0건, `!.claude/tasks/` 제거·`!.claude/settings.json` 추가, git check-ignore .claude/tasks = ignored · 2026-09-15 — .gitignore 의 `.claude/*` + `!.claude/tasks/` 만 남고 `!.claude/plans/` 제거, git check-ignore .claude/plans = ignored
 sources:
   - .gitignore
   - CLAUDE.md
@@ -12,7 +12,7 @@ sources:
 
 # `.claude/plans/` 는 gitignored 다
 
-`.gitignore` 는 `.claude/*` 를 무시하고 공유 훅 설정 `!.claude/settings.json` 만 negation 으로 되살린다. `.claude/tasks/` 도 2026-10-17 에 같은 이유(코드와 무관한 작업 메모가 히스토리에 쌓임)로 추적을 풀었다 — 그 전 메모는 git 이력에 있다. `.claude/plans/` 는 글로벌 규약(`~/.claude/CLAUDE.md` §10, `/e`·`/c`·`/wt` 스킬)의 기본 전제대로 **추적하지 않는다**.
+`.gitignore` 는 `.claude/*` 를 무시하고 공유 훅 설정 `!.claude/settings.json` 만 negation 으로 되살린다. `.claude/tasks/` 도 2026-10-17 에 같은 이유(코드와 무관한 작업 메모가 히스토리에 쌓임)로 추적을 풀었다. 같은 날 plans·tasks 를 git 이력에서도 지웠다(아래). `.claude/plans/` 는 글로벌 규약(`~/.claude/CLAUDE.md` §10, `/e`·`/c`·`/wt` 스킬)의 기본 전제대로 **추적하지 않는다**.
 
 ## 이력
 
@@ -24,7 +24,7 @@ sources:
 
 - **worktree 삭제 전 plan 백업이 다시 필요하다.** 글로벌 `/e` 가 삭제 전 main 으로 백업하는 절차를 그대로 따른다. `git worktree remove` 는 미커밋 plan 을 거부하지 않으니 `git status --porcelain --ignored` 로 확인한다([[worktree-workflow]]).
 - 다른 머신에서 이어가려면 plan 파일을 직접 옮기거나 PR·이슈·코드로 맥락을 복원한다.
-- 되돌리기 이전에 커밋된 plan 들은 git 이력에 남아 있다(`git log --all -- .claude/plans/`). 제거된 KIS 봇의 설계 기록(`.claude/plans/2026-06-14-stock-bot-kis/`)도 이력에서 본다.
+- **2026-10-17 에 `.claude/plans/`·`.claude/tasks/`·`PROJECT_ANALYSIS.md` 를 git 이력에서도 지웠다**(`git filter-repo --invert-paths`, 모든 브랜치 — 커밋 해시가 전부 바뀌었다). 그 전 plan(제거된 KIS 봇 설계 `2026-06-14-stock-bot-kis` 포함)은 소유자의 로컬 백업에만 있다. 다른 문서가 가리키는 plan 경로 — V15 마이그레이션 주석, `deploy/vultr/.env.example` 의 그림자 관측 판정 기준, [[strategy-evolution-expectations]] 의 sources — 는 그 백업 기준이다. V15 는 고치지 않는다: 적용된 마이그레이션은 주석까지 Flyway checksum 에 들어가 바꾸면 기동 validate 가 실패한다. 옛 해시는 GitHub 의 PR 참조(`refs/pull/*`)로 한동안 열릴 수 있다.
 
 ## plan 과 wiki 의 역할 분리
 

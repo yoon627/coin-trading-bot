@@ -292,3 +292,4 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 
 - `PROJECT_ANALYSIS.md` 를 지웠다 — 구조·스택은 `README.md`, 패키지는 [[architecture-overview]], 마이그레이션은 [[persistence-schema]], 경량화 이력은 [[rightsizing-history]] 가 같은 내용을 갖고 있었고, 트레일링 운영값(1.5/arm 0)을 옛 기본값으로 적은 채 남아 있었다. 그 파일을 `sources` 로 둔 6페이지에서 항목을 빼고, [[docs-code-sync]] 의 갱신 대상 표를 `README.md` + wiki 로 바꿨다.
 - `.claude/tasks/` 추적을 풀고 `.gitignore` 의 negation 을 공유 훅 설정 `.claude/settings.json` 하나로 좁혔다([[plan-git-tracking]]).
+- 같은 날 `.claude/plans/`·`.claude/tasks/`·`PROJECT_ANALYSIS.md` 를 모든 브랜치의 git 이력에서도 지웠다(커밋 해시 전부 변경). plan 을 가리키는 남은 경로와 V15 를 고치지 않는 이유는 [[plan-git-tracking]].
