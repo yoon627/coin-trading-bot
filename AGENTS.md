@@ -28,13 +28,13 @@
 ## 스펙 문서
 
 - 아키텍처 변경은 `README.md`(아키텍처·프로젝트 구조 절)와 `wiki/pages/concept/architecture-overview.md` 에 반영
-- 설계 스펙은 `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
+- 진행 중 작업의 설계는 plan(`.claude/plans/`, git 밖)에, 끝난 설계 결정은 `wiki/pages/decision/` 에 남긴다
 
 ## TODO / 백로그 = GitHub Issues
 
 - 이 레포의 할 일·백로그·미룬 항목은 **GitHub Issues** 로 관리한다 (`TODO.md` 등 추적용 파일을 새로 만들지 않는다).
 - 작업 아이디어·버그·후속 작업은 이슈로 생성하고, PR/커밋에서 `Closes #N` 으로 연결.
-- `docs/superpowers/specs/` 의 설계 스펙과 `~/.Codex/AGENTS.md` §10 의 plan 은 **진행 중 작업의 설계·상태 기록 전용** — 백로그 저장소가 아니다.
+- `~/.Codex/AGENTS.md` §10 의 plan 은 **진행 중 작업의 설계·상태 기록 전용** — 백로그 저장소가 아니다.
 
 ## 머지 후 main 동기화 (이 repo 고유)
 
@@ -51,9 +51,9 @@
 |-----------|---------------|
 | 외부 visible behavior / Public API / CLI 변경 | `README.md` |
 | 모듈 구조·의존성·아키텍처 변경 | `README.md` (해당 섹션) + `wiki/` 해당 페이지 |
-| 설계 결정·신규 서브시스템 | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` 신규 |
-| 운영/배포 절차 변경 | `docs/runbook/` (존재 시) 또는 `README.md`의 운영 섹션 |
-| 보안 정책 변경 | `SECURITY.md` (존재 시) |
+| 설계 결정·신규 서브시스템 | `wiki/pages/decision/` 새 페이지 |
+| 운영/배포 절차 변경 | `deploy/vultr/README.md` + `README.md` 의 배포 섹션 |
+| 보안 정책 변경 | `README.md` 해당 섹션(환경변수·배포) |
 | `wiki/pages/` 추가·변경 | `wiki/index.md` 등재 동기화 (누락·잉여 모두 lint 실패) |
 | 이 파일(`AGENTS.md`) 변경 | `CLAUDE.md` 동기화 (원본) |
 

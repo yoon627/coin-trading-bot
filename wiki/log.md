@@ -297,3 +297,7 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-10-17] lint | docs/lessons.md 포인터 파일 삭제
 
 - 교훈을 위키로 옮긴 뒤 이관 안내만 남아 있던 `docs/lessons.md` 를 지웠다. lesson 7페이지의 `sources` 는 이관 전 원문 커밋 `f517f0c:docs/lessons.md`(`git show` 로 열린다)를 가리키게 했다.
+
+## [2026-10-17] lint | 없는 문서 경로 안내 정리
+
+- `CLAUDE.md`·`AGENTS.md`·[[docs-code-sync]]·[[github-issues-backlog]] 이 가리키던 `docs/superpowers/specs/`(2026-10 적립 프로파일 제거 때 함께 지워짐)·`docs/runbook/`·`SECURITY.md` 는 저장소에 없다. 갱신 대상을 실제로 쓰는 곳 — 설계 결정은 `wiki/pages/decision/`, 운영 절차는 `deploy/vultr/README.md` + README 배포 절, 보안은 README 해당 절 — 로 바꿨다.
