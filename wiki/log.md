@@ -301,3 +301,8 @@ fixture `yearly/`(8종 × 365봉, 2025-09-03~2026-09-02) 위에서 스윙 9종(�
 ## [2026-10-17] lint | 없는 문서 경로 안내 정리
 
 - `CLAUDE.md`·`AGENTS.md`·[[docs-code-sync]]·[[github-issues-backlog]] 이 가리키던 `docs/superpowers/specs/`(2026-10 적립 프로파일 제거 때 함께 지워짐)·`docs/runbook/`·`SECURITY.md` 는 저장소에 없다. 갱신 대상을 실제로 쓰는 곳 — 설계 결정은 `wiki/pages/decision/`, 운영 절차는 `deploy/vultr/README.md` + README 배포 절, 보안은 README 해당 절 — 로 바꿨다.
+
+## [2026-10-17] update | V29 — 안 쓰는 테이블·컬럼 제거
+
+- [[persistence-schema]] 에 V29 행을 더하고 V10~V13·V23·V27 행에 제거 시점을 적었다. [[marketdata-pipeline]] "저장" 의 "스키마에 남아 있다" 를 고쳤다.
+- 근거: 빈 Postgres 에 V1~V29 적용, 남은 스키마와 엔티티 대조. 운영 데이터 행 수는 V29 가 기동 로그에 남긴다.

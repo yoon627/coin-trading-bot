@@ -2,9 +2,9 @@
 title: DB 스키마 — Flyway V1~V28 와 Upbit 핵심 테이블
 category: concept
 created: 2026-07-28
-updated: 2026-10-01
+updated: 2026-10-17
 claim_state: current
-verified: 2026-10-01 — V12 행: `BotConfigEntity`·`BotConfigRepository` 삭제 뒤 `bot_configs`·`user_exchange_keys` 를 참조하는 main 코드 0(rg), `bot_state.strategy` 는 `saveRunningState` 가 `combined` 로 계속 씀 · 2026-10-01 — 시세 테이블 서술: 저장·보존 서비스와 `MarketDataRepository`·`MarketTickerEntity`·`MarketCandleEntity` 삭제 뒤 `market_tickers`·`market_candles` 를 쓰거나 읽는 main 코드 0(rg) · 2026-10-01 — V23 행: 적립 프로파일 제거(MVP 2단계) 뒤 적립 전용 4컬럼은 엔티티가 매핑하지 않음(`TradingStateEntity`), 나머지 3컬럼의 사용처(`PositionManager`·`UnknownOrderResolver`)를 rg 로 확인 · 2026-10-01 — V24 행의 그림자 관측 목적을 지운 리포트 인용 없이 모델 청산가 기준으로 다시 적음(ShadowExitProperties KDoc 과 같은 문장) · 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — V28 을 `scripts/run-db-tests.sh`(실 Postgres 17)로 적용, TradingStateRoundTripTest 3건/skip 0 통과(identifier 두 컬럼 왕복 포함) · 2026-09-16 — V27(KIS DROP)을 `scripts/run-db-tests.sh`(실 Postgres 17)로 V1~V27 순차 적용, DB 통합테스트 5건/skip 0 통과. 빈 테이블이라 DELETE·아카이브는 구문만 증명. 이전 확인분: 2026-09-05 — V24 는 신규 테이블 추가만이라 기존 경로에 영향이 없고 `./gradlew build` 통과로만 확인했다(실제 Postgres 적용은 미실행 — `scripts/run-db-tests.sh` 필요). 이전 확인분: 2026-09-02 — V23 을 scripts/run-db-tests.sh(실제 Postgres 17)로 적용해 TradingStateRoundTripTest 3건/skip 0 통과. 이전 확인분: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
+verified: 2026-10-17 — V29: V1~V29 를 빈 Postgres 16 에 순서대로 적용(V29 재실행도 무해), 남은 테이블이 `@Table` 6개 + `*_v21_backup` 2개뿐이고 `trading_states` 컬럼 26개가 `TradingStateEntity` 필드와 1:1 임을 확인, main 코드에 지운 테이블·컬럼 참조 0 · 2026-10-01 — V12 행: `BotConfigEntity`·`BotConfigRepository` 삭제 뒤 `bot_configs`·`user_exchange_keys` 를 참조하는 main 코드 0(rg), `bot_state.strategy` 는 `saveRunningState` 가 `combined` 로 계속 씀 · 2026-10-01 — 시세 테이블 서술: 저장·보존 서비스와 `MarketDataRepository`·`MarketTickerEntity`·`MarketCandleEntity` 삭제 뒤 `market_tickers`·`market_candles` 를 쓰거나 읽는 main 코드 0(rg) · 2026-10-01 — V23 행: 적립 프로파일 제거(MVP 2단계) 뒤 적립 전용 4컬럼은 엔티티가 매핑하지 않음(`TradingStateEntity`), 나머지 3컬럼의 사용처(`PositionManager`·`UnknownOrderResolver`)를 rg 로 확인 · 2026-10-01 — V24 행의 그림자 관측 목적을 지운 리포트 인용 없이 모델 청산가 기준으로 다시 적음(ShadowExitProperties KDoc 과 같은 문장) · 2026-09-28 — reconcile 로 늦게 확정된 매도(uuid·identifier·적립 단·부분 체결 뒤 2차 매도)의 기록 price·pnl·totalAmount 가 판단 tick 가격(`pending_sell_trigger_price`)이고 옛 pending 은 확정 tick 가격으로 떨어짐을 `PositionManagerExtendedTest`·`PositionManagerUnknownOrderTest`·`PositionManagerAccumulateTest` 로 확인, 변이 2종 검출 · 2026-09-28 — V28 을 `scripts/run-db-tests.sh`(실 Postgres 17)로 적용, TradingStateRoundTripTest 3건/skip 0 통과(identifier 두 컬럼 왕복 포함) · 2026-09-16 — V27(KIS DROP)을 `scripts/run-db-tests.sh`(실 Postgres 17)로 V1~V27 순차 적용, DB 통합테스트 5건/skip 0 통과. 빈 테이블이라 DELETE·아카이브는 구문만 증명. 이전 확인분: 2026-09-05 — V24 는 신규 테이블 추가만이라 기존 경로에 영향이 없고 `./gradlew build` 통과로만 확인했다(실제 Postgres 적용은 미실행 — `scripts/run-db-tests.sh` 필요). 이전 확인분: 2026-09-02 — V23 을 scripts/run-db-tests.sh(실제 Postgres 17)로 적용해 TradingStateRoundTripTest 3건/skip 0 통과. 이전 확인분: 2026-08-25 — V1~V22 를 격리 컨테이너에 순차 적용해 확인(V22 `strategy varchar(64)`·`reason varchar(32)` 둘 다 nullable). 이전 확인분: V1~V21 을 실제 Postgres 17 에 순차 적용해 확인(V20 컬럼 타입·NOT NULL·default, V21 pnl_amount 컬럼·백업테이블 2개). 운영 데이터를 재현한 시드로 V21 backfill 귀속 5/5 일치(엔진 2-leg 포함), 재실행 값 변경 0
 sources:
   - bot/src/main/resources/db/migration/
   - bot/src/main/kotlin/com/trading/bot/persistence/
@@ -12,15 +12,15 @@ sources:
 
 # DB 스키마
 
-PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V28** 다.
+PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V29** 다.
 
 | 버전 | 내용 |
 |---|---|
 | V1~V9 | `trade_records`, `users`, `bot_state`, public profile, discord webhook, `price_snapshots`(V19 에서 제거), admin role, 인덱스 |
-| V10 | `market_tickers`, `market_candles` — 시계열 시세 ([[marketdata-pipeline]]) |
-| V11 | `trade_executions`, `positions`, `strategy_signals` |
-| V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정. 둘 다 코드가 쓰지 않는다 — `user_exchange_keys` 는 처음부터 미연결(실제 키는 `users`), `bot_configs` 는 2026-10-01 봇 설정 API 와 함께 엔티티·repository 를 지웠다 |
-| V13 | `bot_configs.trade_mode` 컬럼 |
+| V10 | `market_tickers`, `market_candles` — 시계열 시세 ([[marketdata-pipeline]]). V29 에서 제거 |
+| V11 | `trade_executions`, `positions`(V14 에서 제거), `strategy_signals`(V29 에서 제거) |
+| V12 | `user_exchange_keys`, `bot_configs` — 사용자별 설정. 둘 다 코드가 쓰지 않는다 — `user_exchange_keys` 는 처음부터 미연결(실제 키는 `users`), `bot_configs` 는 2026-10-01 봇 설정 API 와 함께 엔티티·repository 를 지웠다. 둘 다 V29 에서 제거 |
+| V13 | `bot_configs.trade_mode` 컬럼(V29 에서 테이블째 제거) |
 | V14 | `trading_states` 신설 + `trade_executions.exchange_order_id` + 부분 unique. 미사용 `positions` 제거 |
 | V15 | KIS 주문 WAL `stock_order_intent`(V27 에서 제거) |
 | V16 | `users.kis_*`(V27 에서 제거) |
@@ -32,10 +32,11 @@ PostgreSQL 17 + **R2DBC**(비동기 드라이버) + Flyway. 현재 최신은 **V
 | V22 | `stock_order_intent.strategy`·`reason`(V27 에서 테이블째 제거) |
 | V25 | `shadow_exit_observation.live_exit_vwap` — 실체결 단가. V24 는 모델 과대추정폭만 쟀고 남은 절반인 **실행 슬리피지**(판단 tick 가격 vs 실체결)를 여기서 얻는다. nullable 이며 값이 없으면 그 관측은 슬리피지 분모에서 빠진다(0 을 넣으면 "마찰 없음" 오독) |
 | V26 | `trade_records.order_amount` — **이 주문의 실체결 대금**(`Σ trades[].funds`, 수수료 미포함). 엔진 BUY 행의 `total_amount` 는 포지션 원가 스냅샷이라 집계·SPA·Discord 가 그것을 주문 금액으로 읽어 부풀려졌다(#146). nullable·백필 없음·롤백 시 DROP 하지 않는다. 경로별 규칙은 [[trade-record-volume-semantics]] |
-| V27 | **KIS 경로 제거** — 원자료를 `kis_archive_stock_order_intent`·`kis_archive_stock_position_state`·`kis_archive_users_keys`·`kis_archive_trade_executions` 4테이블에 복사한 뒤 `stock_order_intent`·`stock_position_state` DROP, `users.kis_*` 5컬럼 DROP, `bot_state`·`bot_configs`·`trade_executions` 의 `exchange='KIS'` 행 삭제. PR revert 는 복구가 아니다(Flyway validate 로 기동 실패) — 복구는 아카이브에서 새 마이그레이션으로(V28 은 아래 identifier 가 썼다. identity 재삽입은 `OVERRIDING SYSTEM VALUE` + sequence 재설정). 아카이브는 한 달 보관 후 DROP 예정(GitHub 이슈 소유). `bot_state.exchange` 컬럼·unique 는 Upbit 코드가 쓰므로 유지 |
+| V27 | **KIS 경로 제거** — 원자료를 `kis_archive_stock_order_intent`·`kis_archive_stock_position_state`·`kis_archive_users_keys`·`kis_archive_trade_executions` 4테이블에 복사한 뒤 `stock_order_intent`·`stock_position_state` DROP, `users.kis_*` 5컬럼 DROP, `bot_state`·`bot_configs`·`trade_executions` 의 `exchange='KIS'` 행 삭제. PR revert 는 복구가 아니다(Flyway validate 로 기동 실패) — 복구는 아카이브에서 새 마이그레이션으로(V28 은 아래 identifier 가 썼다. identity 재삽입은 `OVERRIDING SYSTEM VALUE` + sequence 재설정). 아카이브는 한 달 보관 후 V29 에서 DROP(#203). `bot_state.exchange` 컬럼·unique 는 Upbit 코드가 쓰므로 유지 |
 | V28 | `trading_states.pending_buy_identifier`·`pending_sell_identifier`(VARCHAR(64)) — 주문 전에 남기는 클라이언트 identifier. 응답을 못 받은 주문을 재시작 뒤 거래소에서 찾는 근거다([[trading-engine-loop]] "응답을 못 받은 주문", #227). 컬럼 추가만이라 옛 이미지는 무시하지만, 옛 코드는 identifier 만 있는 pending 을 모르고 다시 주문한다. 그래서 롤백은 **새 이미지 정지 → `SELECT ticker FROM trading_states WHERE pending_buy_identifier IS NOT NULL OR pending_sell_identifier IS NOT NULL` 0 행 확인 → 옛 이미지 기동** 순서다(도는 중에 확인하면 그 사이 새 행이 생긴다). 남은 행은 Upbit 주문 내역으로 확인해, 주문이 있으면 그 uuid 를 `pending_buy_uuid`/`pending_sell_uuid` 로 옮기고 identifier 를 NULL 로, 없으면 identifier 만 NULL 로 비운다(있는 주문을 NULL 로만 지우면 옛 코드가 그 체결을 기록할 근거를 잃는다) |
 | V24 | `shadow_exit_observation` — 후보 청산 파라미터의 **그림자 관측**. 라이브 매매에는 관여하지 않고(계산·기록 전용, 기본 off) 모델 청산가(트레일링 임계선 `peak × (1−trail/100)`)가 실제 10초 tick 에서 얼마나 낙관인지만 잰다. 되돌릴 때는 `trading.shadow-exit.enabled=false` 로 끈다(forward-off). #235 관측 보고 배포(2026-09-28) 뒤부터 reconcile 로 늦게 확정된 스윙 청산도 기록되고 그때 `live_exit_at` 은 판단 시각이다 — 그 전 행은 체결 확인 창 안에 끝난 매도만이다(재시작 때 발동 기록이 비므로 배포 시점에 열린 매도는 어느 쪽에도 남지 않는다) |
-| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`. 적립 프로파일은 2026-10-01 에 지웠고 앞 네 컬럼은 더 매핑하지 않는다 — insert 는 DB 기본값(NOT NULL DEFAULT 0 셋, nullable 하나), update 는 건드리지 않는다. DROP 은 옛 이미지 롤백이 그 컬럼을 매핑하므로 같은 배포에서 하지 않았다(MVP 3단계). 뒤 세 컬럼은 스윙이 쓴다 — `pending_buy_prior_volume`·`pending_sell_prior_volume` 은 주문 전 보유량(잔고 복원·응답 못 받은 주문 판정, #227), `pending_sell_trigger_price` 는 매도 판단가(2026-09-28, #235 — 매도 기록가, [[trade-record-volume-semantics]]) |
+| V23 | `trading_states` 에 적립 사다리 장부 — `rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`·`pending_buy_prior_volume`·`pending_sell_trigger_price`·`pending_sell_prior_volume`. 적립 프로파일은 2026-10-01 에 지웠고 앞 네 컬럼은 더 매핑하지 않는다 — insert 는 DB 기본값(NOT NULL DEFAULT 0 셋, nullable 하나), update 는 건드리지 않는다. DROP 은 옛 이미지 롤백이 그 컬럼을 매핑하므로 같은 배포에서 하지 않았고, 그 이미지가 롤백 대상에서 빠진 뒤 V29 에서 지웠다. 뒤 세 컬럼은 스윙이 쓴다 — `pending_buy_prior_volume`·`pending_sell_prior_volume` 은 주문 전 보유량(잔고 복원·응답 못 받은 주문 판정, #227), `pending_sell_trigger_price` 는 매도 판단가(2026-09-28, #235 — 매도 기록가, [[trade-record-volume-semantics]]) |
+| V29 | **안 쓰는 테이블·컬럼 제거** — `market_tickers`·`market_candles`·`strategy_signals`·`user_exchange_keys`·`bot_configs`·`kis_archive_*` 4개 DROP, `trading_states` 의 적립 장부 4컬럼(`rungs_filled`·`last_action_price`·`flat_peak`·`pending_buy_trigger_price`) DROP. 지우기 전 각 테이블 행 수를 `RAISE NOTICE 'V29 drop: … rows=…'` 로 기동 로그에 남긴다(#203). `CASCADE` 없이 지워 예상 밖 의존 객체가 있으면 마이그레이션 전체가 되돌려지고 기동이 실패한다(자동 롤백, V29 미적용). 자동 롤백 대상(직전 이미지)은 2026-10-01 이후 코드라 이 테이블·컬럼을 쓰지 않는다. 데이터 복구 경로는 **배포 직전 운영에서 뜬 대상 테이블 pg_dump** 하나뿐이다([[lesson-rollback-removal]]). `*_v21_backup` 2개는 남긴다(#137) |
 
 > ⚠️ `trade_records.volume` 은 기록 경로에 따라 **총 보유량 스냅샷**(엔진)과 **증분**(수동)이 섞인다.
 > 합산하면 조회·집계가 조용히 틀린다 — [[trade-record-volume-semantics]] 참조.
@@ -80,5 +81,5 @@ per-(user, ticker) 거래 상태를 durable 하게 보관한다. 이게 없으�
 ## 성질
 
 - **R2DBC 를 고수해야 한다.** 블로킹 JDBC 를 섞으면 WebFlux 이벤트 루프가 막힌다.
-- `market_tickers`·`market_candles`(V10)는 2026-10-01 부터 코드가 쓰지도 읽지도 않는다 — 시세 DB 저장과 그 보존 작업(`DataRetentionService`, ticker 7일·M1 30일), 이 테이블을 읽던 차트·watchlist API 와 repository·엔티티를 함께 지웠다([[marketdata-pipeline]] "저장"). 그래서 더 자라지도 정리되지도 않는다.
+- `market_tickers`·`market_candles`(V10)는 2026-10-01 부터 코드가 쓰지도 읽지도 않는다 — 시세 DB 저장과 그 보존 작업(`DataRetentionService`, ticker 7일·M1 30일), 이 테이블을 읽던 차트·watchlist API 와 repository·엔티티를 함께 지웠다([[marketdata-pipeline]] "저장"). V29 에서 테이블째 지웠다.
 - 사용자 거래소 키는 AES-GCM 256 으로 암호화해 저장한다(`SecretsCrypto`).
