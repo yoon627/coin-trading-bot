@@ -5,7 +5,7 @@ name: CI/CD (test + GHCR + Vultr)
 on:
   push:
     branches: [main]
-    # 문서·지식베이스·plan 만 바뀐 push 는 배포하지 않는다. main push 가 곧 운영 배포라
+    # 문서만 바뀐 push 는 배포하지 않는다. main push 가 곧 운영 배포라
     # 컨테이너 재생성 = 트레이딩 엔진 재시작인데, 아래 경로는 실행 이미지에 들어가지 않는다
     # (Dockerfile 이 COPY 하는 것은 `*.gradle.kts`·`gradle/` 래퍼·`common/`·`bot/` 뿐이고
     # 앱 리소스에 .md 가 없다).
@@ -23,8 +23,6 @@ on:
     # 문서만 바꾼 뒤 그래도 배포해야 하면 Actions 에서 workflow_dispatch 로 수동 실행한다.
     paths-ignore:
       - '**.md'
-      - '.claude/**'
-      - 'wiki/**'
       - 'docs/**'
   pull_request:
     branches: [main]
@@ -77,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           # scripts/run-db-tests.sh 의 DB_TEST_CLASSES 와 같은 목록을 유지한다.
-          for c in TradingStateRoundTripTest TradeRecordAggregateRoundTripTest; do
+          for c in TradingStateRoundTripTest TradeRecordRoundTripTest UserSettingsUpdateRoundTripTest; do
             XML="bot/build/test-results/test/TEST-com.trading.bot.persistence.$c.xml"
             if [ ! -f "$XML" ]; then
               echo "::error::DB 통합테스트 결과가 없다 — 실행되지 않았다 ($XML)"
@@ -153,7 +151,7 @@ jobs:
 
           # main 이 앞서 있어도 그 차이가 전부 배포 무관 경로면 배포를 진행한다.
           #
-          # 이 분기가 없으면 조용한 미배포가 생긴다: 코드 push 의 빌드가 도는 ~20분 사이에
+          # 이 분기가 없으면 조용한 미배포가 생긴다: 코드 push 의 빌드가 도는 동안
           # 문서 전용 push 가 들어오면, 그 push 는 on.push.paths-ignore 때문에 **자기 실행을
           # 만들지 않는다**. 그러면 여기서 stale 로 스킵된 코드를 배포해 줄 후속 실행이 없어
           # 결론만 success 인 채 옛 이미지가 계속 돈다.
@@ -162,7 +160,7 @@ jobs:
           # ⚠️ 아래 제외 목록은 파일 상단 on.push.paths-ignore 와 **반드시 같이** 유지한다.
           #    한쪽만 넓히면 그 경로가 다시 조용한 미배포 구간이 된다.
           code_changes="$(git diff --name-only "$GITHUB_SHA" "$current_main" -- . \
-            ':(exclude)**.md' ':(exclude).claude/**' ':(exclude)wiki/**' ':(exclude)docs/**')"
+            ':(exclude)**.md' ':(exclude)docs/**')"
 
           if [[ -z "$code_changes" ]]; then
             echo 'current=true' >> "$GITHUB_OUTPUT"

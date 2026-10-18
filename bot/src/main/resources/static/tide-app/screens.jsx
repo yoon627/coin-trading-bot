@@ -126,7 +126,6 @@ function Dashboard({ user, setActive }) {
 // ── BOT / STRATEGY ────────────────────────────────────────
 function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
-  const performance = useAPI(() => TideAPI.performance().catch(() => null));
   // 입력칸은 서버 기본 목록으로 채운다 — 고정 기본값을 두면 그대로 눌렀을 때 목록이 그 값 하나로 줄어 저장된다(#226).
   const [tickers, setTickers] = React.useState('');
   const [touched, setTouched] = React.useState(false);
@@ -202,7 +201,7 @@ function BotPage({ user, setActive }) {
         </Card>
 
         <div>
-          <Card padding={20} style={{ marginBottom: 12 }}>
+          <Card padding={20}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>현재 상태</div>
             {status.loading ? <span className="tide-spinner"/> :
               <div style={{ fontSize: 12 }}>
@@ -221,26 +220,6 @@ function BotPage({ user, setActive }) {
               </div>}
           </Card>
 
-          <Card padding={20}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>전략 성과</div>
-            {!performance.data?.strategies?.length ? (
-              <div style={{ fontSize: 12, color: 'var(--ink-500)', padding: '12px 0' }}>아직 거래 데이터가 없습니다</div>
-            ) : (
-              performance.data.strategies.slice(0, 5).map(s => (
-                <div key={s.strategy} style={{ padding: '10px 0', borderTop: '1px solid var(--ink-100)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                    <span style={{ fontWeight: 600 }}>{s.strategy}</span>
-                    <span className="num" style={{ color: s.total_pnl_pct >= 0 ? 'var(--up)' : 'var(--down)', fontWeight: 600 }}>{fmtPct(s.total_pnl_pct)}</span>
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 4 }}>
-                    {s.total_trades}건 · 승률 {(s.win_rate || 0).toFixed(1)}%
-                    {/* total_amount 는 실체결 대금이 기록된 행의 합(#146) — 미상 행 수를 같이 보여 축소로 읽히지 않게 한다 */}
-                    {' · 체결 '}{fmtKRW(s.total_amount || 0)}{s.amount_unknown_trades ? ` (미상 ${s.amount_unknown_trades}건 제외)` : ''}
-                  </div>
-                </div>
-              ))
-            )}
-          </Card>
         </div>
       </div>
       {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}

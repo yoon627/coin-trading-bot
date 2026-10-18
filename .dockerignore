@@ -19,7 +19,6 @@ build/
 # Local config / state
 .env
 .env.*
-.claude/
 
 # Project meta — not used inside images
 .github/
