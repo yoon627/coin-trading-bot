@@ -7,11 +7,7 @@ import com.trading.common.strategy.Indicators
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * indicator/strategy Indicators 통합(M12) 회귀 보호.
- * 같은 OHLC 를 Candle(엔진의 REST 폴백)과 NormalizedCandle(엔진의 store D1)로 만들어 모든 지표가 동일값을 내는지,
- * 그리고 NormalizedCandle 필드 매핑이 swap 없이 정확한지 검증한다.
- */
+/** 같은 OHLC 로 만든 Candle(REST 폴백)과 NormalizedCandle(store D1)이 모든 지표에서 같은 값을 내는지 본다. */
 class IndicatorsParityTest {
 
     private fun candle(open: Double, high: Double, low: Double, close: Double) =
@@ -28,7 +24,7 @@ class IndicatorsParityTest {
             volume = 0.0,
         )
 
-    // OHLC 를 서로 다른 값으로 구성 → close↔open 등 필드 swap 버그를 검출한다.
+    // OHLC 를 모두 다른 값으로 둬야 필드가 뒤바뀐 매핑이 드러난다.
     private val ohlc: List<DoubleArray> = (1..40).map { i ->
         val base = 100.0 + i
         doubleArrayOf(base, base + 5.0, base - 3.0, base + 2.0) // open, high, low, close

@@ -33,9 +33,8 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /**
- * 구 collector 모듈(Kafka 발행)을 흡수한 in-process 시세 수집기.
- * UpbitMarketFeed 에서 ticker(WS)/candle(REST 폴링)을 받아 MarketDataStore(메모리) 에 넣고, 분봉은
- * CandleAggregator 로도 보내 상위 봉(엔진이 읽는 D1 포함)을 store 에 접는다. 단일 JVM 이라 메시지 버스 불필요.
+ * Upbit ticker(WS)와 분봉(REST 폴링)을 받아 MarketDataStore 에 넣는다.
+ * 분봉은 CandleAggregator 로도 보내 엔진이 읽는 D1 등 상위 봉을 만든다.
  */
 @Component
 class MarketDataIngestionService(
@@ -54,7 +53,7 @@ class MarketDataIngestionService(
     @Volatile
     private var markets: List<String> = emptyList()
 
-    // 마지막 ticker ingest 시각 — half-open(무수신) 워치독 판정용. start/재시작 시 now 로 리셋해 폭주 방지.
+    // 워치독이 무수신을 판정하는 기준. 시작·재시작 때 now 로 맞춰 연속 재시작을 막는다.
     @Volatile
     private var lastTickerAt = 0L
 
@@ -62,26 +61,21 @@ class MarketDataIngestionService(
     private var tickerJob: Job? = null
     private val shuttingDown = AtomicBoolean(false)
 
-    // 워치독 재시작 직렬화 — 연속 tick 이 동시에 재시작을 시도해 다중 job/연결을 만들지 않도록.
+    // 연속 tick 이 동시에 재시작해 WS 연결이 여러 개 생기지 않게 한다.
     private val restartMutex = Mutex()
 
     companion object {
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
-        // 부팅 시 store D1 버퍼 1회 백필 개수. Upbit /v1/candles/days 최대 200.
+        // Upbit /v1/candles/days 의 최대 개수.
         private const val SEED_DAILY_CANDLE_COUNT = 200
 
-        // Upbit candles 그룹 제한은 초당 10회(응답 헤더 `remaining-req: group=candles; min=600; sec=N` 실측).
-        // 마켓 수만큼 요청을 몰아 보내면 그 상한을 넘겨 429 가 쏟아진다 — 요청 사이를 이 간격만큼 벌려
-        // 초당 약 6.7회로 유지한다. 마켓 13개면 한 사이클이 약 2초로, 수집 주기(60s)에 영향이 없다.
+        // Upbit candles 그룹 제한은 초당 10회다. 마켓별 요청을 몰아 보내면 429 가 나므로 간격을 둔다.
         internal const val CANDLE_REQUEST_SPACING_MS = 150L
 
-        // 한 라운드에 받는 M1 개수. 1 이면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(실측: 일봉 volume 이 Upbit 의 중앙값 66%).
-        // 5 면 라운드가 연속 3회(≈4분) 실패해도 그 사이 분의 완결본이 꼬리에 들어온다. Upbit 은 무거래 분을 생략하므로
-        // 꼬리가 수 시간 전 분봉을 실을 수 있다 — 그 재유입은 count 가 아니라 CandleAggregator 의 period 바닥이 막는다.
+        // 1 이면 진행 중인 분봉만 받아 완결본을 놓친다. 5 면 몇 라운드가 실패해도 그 사이 완결본이 들어온다.
+        // Upbit 은 무거래 분을 생략해 꼬리에 오래된 분봉이 섞일 수 있는데, 그 재유입은 CandleAggregator 가 막는다.
         internal const val M1_FETCH_COUNT = 5
 
-        // spacing 을 둬도 다른 호출과 겹치거나 순간 제한이 좁아지면 429 가 날 수 있다. 그때 1분봉을
-        // 그냥 버리지 않고 한 번만 되찾는다. 다음 사이클이 60초 뒤 다시 오므로 길게 물고 있지 않는다.
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
     }
 
@@ -93,7 +87,7 @@ class MarketDataIngestionService(
             return
         }
         markets = m
-        lastTickerAt = System.currentTimeMillis() // grace: 부팅 직후 워치독 오발동 방지
+        lastTickerAt = System.currentTimeMillis()
         log.info("Starting in-process market data ingestion for {} markets: {}", m.size, m)
         tickerJob = scope.launch { runTickerCollection(m) }
         scope.launch { collectCandlesPeriodically(m) }
@@ -106,14 +100,14 @@ class MarketDataIngestionService(
         scope.cancel()
     }
 
-    // WS flow 가 (에러/정상) 종료해도 backoff 후 재구독 — 구 구현은 catch 후 종료라 한 번 끊기면 영영 수집이 멈췄다.
+    // WS flow 가 에러로 끝나든 정상 종료하든 backoff 후 다시 구독한다.
     private suspend fun runTickerCollection(markets: List<String>) {
         while (currentCoroutineContext().isActive) {
             try {
                 upbitMarketFeed.tickerFlow(markets).collect { ticker -> ingestTicker(ticker) }
                 log.warn("Ticker flow completed unexpectedly; restarting in {}ms", watchdogProperties.restartBackoffMs)
             } catch (e: CancellationException) {
-                throw e // 취소는 정상 종료 경로(재시작/shutdown) — 재구독하지 않는다.
+                throw e
             } catch (e: Exception) {
                 log.error(
                     "Ticker collection error; restarting in {}ms: {}",
@@ -132,7 +126,6 @@ class MarketDataIngestionService(
         }
     }
 
-    // 한 사이클(전 마켓 1회 수집). 무한 루프에서 분리해 테스트가 가능하도록 internal 로 둔다.
     internal suspend fun collectCandlesRound(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
             if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
@@ -152,7 +145,7 @@ class MarketDataIngestionService(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // 429 만 재시도한다 — 연결 리셋·파싱 오류 등은 즉시 다시 해도 같은 결과다.
+            // 연결 리셋·파싱 오류는 바로 다시 해도 결과가 같아 429 만 재시도한다.
             if (!isRateLimited(e)) throw e
             log.debug("Rate limited on {}; retrying in {}ms", market, RATE_LIMIT_RETRY_DELAY_MS)
             delay(RATE_LIMIT_RETRY_DELAY_MS)
@@ -160,20 +153,17 @@ class MarketDataIngestionService(
         }
     }
 
-    // Upbit 은 최신순 — 집계기는 "더 새 분봉이 오면 이전 분봉을 확정" 하므로 오래된 것부터 넣는다.
+    // Upbit 은 최신순으로 준다. 집계기는 더 새 분봉이 와야 이전 분봉을 확정하므로 오래된 것부터 넣는다.
     private fun ingest(candles: List<NormalizedCandle>) {
         for (candle in candles.sortedBy { it.openTime }) ingestCandle(candle)
     }
 
-    // WebClient 는 429 를 WebClientResponseException.TooManyRequests 로 던지지만, 래핑되어 올 수도 있어
-    // 상태코드와 메시지를 함께 본다.
+    // 429 가 다른 예외에 감싸여 올 수 있어 메시지도 본다.
     private fun isRateLimited(e: Throwable): Boolean =
         (e as? WebClientResponseException)?.statusCode?.value() == 429 ||
             e.message?.contains("429") == true
 
-    // half-open(TCP 살아있으나 무수신) 자동복구: 임계 초과 시 수집 코루틴을 재기동한다. half-open 은 flow 재구독이
-    // 아니라 새 연결로만 풀리므로 job 을 취소·재생성한다. 매매 정확성은 TradingEngine staleness 게이팅이 이미 보호하므로
-    // 여기선 수집 복구가 목적이고, 오판 시 enabled 로 런타임 비활성할 수 있다. 주기 등록은 SchedulerConfig.
+    // TCP 는 살아 있는데 수신이 끊긴 half-open 상태는 재구독이 아니라 새 연결로만 풀려서 job 을 새로 띄운다.
     fun checkTickerHealth() {
         if (!watchdogProperties.enabled || shuttingDown.get()) return
         val m = markets
@@ -188,18 +178,17 @@ class MarketDataIngestionService(
         scope.launch {
             restartMutex.withLock {
                 if (shuttingDown.get()) return@withLock
-                // mutex 대기 중 새 tick 이 도착했으면(더 이상 stale 아님) 재시작하지 않는다 — late-tick 을
-                // 불필요한 WS 재연결로 만들지 않도록 cancel 직전에 재확인(TOCTOU).
+                // mutex 를 기다리는 사이 tick 이 들어왔으면 재시작하지 않는다.
                 if (!watchdogProperties.isStale(System.currentTimeMillis(), lastTickerAt)) return@withLock
-                tickerJob?.cancelAndJoin() // 이전 flow 완전 종료 후 재시작 — 이중 WS 연결 창 제거
+                // 이전 연결이 완전히 닫힌 뒤 새로 연다.
+                tickerJob?.cancelAndJoin()
                 if (shuttingDown.get()) return@withLock
-                lastTickerAt = System.currentTimeMillis() // reset grace
+                lastTickerAt = System.currentTimeMillis()
                 tickerJob = scope.launch { runTickerCollection(markets) }
             }
         }
     }
 
-    // store 실패가 수집 코루틴(Flow collect)을 죽이지 않게 감싼다.
     internal fun ingestTicker(ticker: NormalizedTicker) {
         lastTickerAt = System.currentTimeMillis()
         try {
@@ -209,7 +198,7 @@ class MarketDataIngestionService(
         }
     }
 
-    // fan-out 격리: store 와 집계기를 각각 독립 try/catch 로 감싼다 — 한쪽의 실패가 다른 쪽이나 수집 코루틴을 죽이지 않게.
+    // 한쪽 실패가 다른 쪽이나 수집 코루틴을 멈추지 않게 따로 감싼다.
     internal fun ingestCandle(candle: NormalizedCandle) {
         try {
             marketDataStore.addCandle(candle)
@@ -227,29 +216,24 @@ class MarketDataIngestionService(
         candleAggregator.prime(today, fetchedAt)
         true
     } catch (e: IllegalArgumentException) {
-        // seed 는 이미 store 에 들어갔다 — 실패는 등록만이라 "seed 실패" 와 구분해 남긴다(D1 경계가 UTC 자정이 아니게 바뀐 경우).
+        // seed 자체는 store 에 들어갔으므로 seed 실패와 구분해 남긴다.
         log.error("Failed to prime D1 aggregate for {}: {}", market, e.message)
         false
     }
 
-    // 부팅 직후 store D1 버퍼를 과거 일봉으로 1회 채운다. 미실행 시 매수/청산(TradingEngine.loadStoreDailyCandles)이
-    // store 부족으로 warm-up(D1 은 분봉 집계라 하루 1개씩만 누적 → 최대 ~21일) 동안 매 tick REST 폴백을 탄다.
-    // collectCandlesPeriodically 와 같은 코루틴에서 호출되므로 candle writer 단일성 유지(MarketDataStore trim race 방지).
-    // store.addCandle 직접 — ingestCandle 의 집계(onMinuteCandle)는 분봉 전용이라 D1 을 넣으면 오집계한다.
+    // 부팅 직후 과거 일봉을 store 에 채운다. D1 은 분봉 집계라 하루에 하나씩만 쌓이기 때문이다.
+    // 분봉 수집과 같은 코루틴에서 돌아 store 에 쓰는 쪽이 하나로 유지된다.
+    // 집계기는 분봉 전용이라 D1 은 store 에 바로 넣는다.
     internal suspend fun seedDailyCandles(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
-            // seed 는 부팅 시 마켓 수만큼 연속 호출돼 429 를 유발하던 두 경로 중 하나다
-            // (그 직후 collectCandlesRound 가 또 도므로 겹친다). 같은 간격으로 벌린다.
             if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
-            // 첫 라운드 꼬리(M1_FETCH_COUNT)가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 seed 를 덮는다 —
-            // seed 성공·오늘 행 유무와 무관하게 지금 이전 period 는 집계하지 않는다.
+            // 첫 분봉 라운드가 어제 분봉을 실어 오면 어제 일봉이 부분봉으로 덮이므로 지금 이전 period 는 집계하지 않는다.
             candleAggregator.startFrom(Exchange.UPBIT, market, Instant.now())
             try {
                 val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
                 val fetchedAt = Instant.now()
                 candles.forEach { marketDataStore.addCandle(it) }
-                // 오늘(UTC) 봉만 집계기에 등록한다 — 이후 M1 이 이어서 집계할 period 라 등록이 없으면 첫 M1 이 seed 를 대체한다.
-                // 어제 이전 봉은 M1 이 다시 오지 않아 seed 그대로다. 오늘 행이 아직 없으면(경계 직후 무거래) 등록하지 않는다.
+                // 오늘(UTC) 봉은 이후 분봉이 이어서 집계하므로 집계기에 등록해야 첫 분봉이 seed 를 덮지 않는다.
                 val today = fetchedAt.truncatedTo(ChronoUnit.DAYS)
                 val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it, fetchedAt) } ?: false
                 log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)

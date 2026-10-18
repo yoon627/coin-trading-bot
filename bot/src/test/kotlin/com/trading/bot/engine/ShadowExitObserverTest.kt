@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Test
 import reactor.core.publisher.Mono
 
 /**
- * 그림자 관측기는 **기록만** 한다. 이 테스트가 가두는 계약은 셋이다 —
- * 포지션당 1건, 저장 실패가 매매를 막지 않음, 그리고 `modeled ≥ observed`(모델이 낙관인 방향).
+ * 그림자 관측기는 기록만 한다. 포지션당 1건만 남기고, 저장 실패가 매매를 막지 않으며,
+ * 모델 체결가(modeled)는 실제 발동가(observed) 이상이다.
  */
 class ShadowExitObserverTest {
 
@@ -44,7 +44,7 @@ class ShadowExitObserverTest {
         val state = armedState()
 
         o.onTick("KRW-BTC", state, 108.0)
-        o.onTick("KRW-BTC", state, 107.0) // 두 번째 발동은 무시된다 — 이후는 두 팔이 갈라진다
+        o.onTick("KRW-BTC", state, 107.0) // 두 번째 발동은 무시된다
         o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "DAILY_RESET", executedVwap = 104.7)
 
         verify(exactly = 1) { repo.save(any<ShadowExitObservationEntity>()) }
@@ -53,10 +53,10 @@ class ShadowExitObserverTest {
         assertEquals(108.0, e.observedTickPrice)
         // 모델이 체결됐다고 보는 값(트레일링 임계선) = peak × (1 − 1.5/100)
         assertTrue(abs(e.modeledExitPrice - 110.0 * 0.985) < 1e-9)
-        // 모델은 실제 발동 tick 이상이다 — 이 부등호가 깨지면 "모델 과대추정폭" 이라는 해석 자체가 무너진다.
+        // 모델은 실제 발동 tick 이상이어야 그 차이를 모델의 과대추정폭으로 읽을 수 있다.
         assertTrue(e.modeledExitPrice >= e.observedTickPrice)
         assertEquals("DAILY_RESET", e.liveExitReason)
-        // 실행 슬리피지의 입력 — 판단가(105.0)와 실체결가(104.7)를 **둘 다** 남겨야 차이를 잴 수 있다.
+        // 슬리피지를 재려면 판단가(105.0)와 실체결가(104.7)를 둘 다 남겨야 한다.
         assertEquals(105.0, e.liveExitPrice)
         assertEquals(104.7, e.liveExitVwap)
         assertEquals(clock.instant(), e.liveExitAt) // 시각을 주지 않으면 보고 시각
@@ -87,7 +87,7 @@ class ShadowExitObserverTest {
         o.onTick("KRW-BTC", state, 108.0)
         o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "DAILY_RESET") // vwap 미제공
 
-        // 추정해서 채우면 마찰이 0 으로 보인다 — 모른다는 사실이 남아야 그 관측이 분모에서 빠진다.
+        // 추정해서 채우면 마찰이 0 으로 보인다. 비워 둬야 그 관측이 분모에서 빠진다.
         org.junit.jupiter.api.Assertions.assertNull(captured.captured.liveExitVwap)
     }
 
@@ -97,7 +97,7 @@ class ShadowExitObserverTest {
         val o = observer(repo)
         val state = armedState()
 
-        o.onTick("KRW-BTC", state, 109.9) // 고점 대비 −0.09% — 발동하지 않는다
+        o.onTick("KRW-BTC", state, 109.9) // 고점 대비 −0.09%, 발동하지 않는다
         o.onLiveExit("KRW-BTC", exitPrice = 109.0, reason = "DAILY_RESET")
 
         verify(exactly = 0) { repo.save(any<ShadowExitObservationEntity>()) }
@@ -111,7 +111,7 @@ class ShadowExitObserverTest {
         val state = armedState()
 
         o.onTick("KRW-BTC", state, 108.0)
-        // 던지면 이 호출이 매도 경로를 깨뜨린다 — 삼켜야 한다.
+        // 여기서 던지면 매도 경로가 깨지므로 삼켜야 한다.
         o.onLiveExit("KRW-BTC", exitPrice = 105.0, reason = "TRAILING_STOP")
     }
 

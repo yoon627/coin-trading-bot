@@ -40,7 +40,7 @@ class PositionManagerExtendedTest {
         manager = PositionManager(upbitClient, properties, tradingStateService, 1L)
     }
 
-    // --- syncPosition tests ---
+    // --- syncPosition ---
 
     @Test
     fun `syncPosition updates state when holding exists`() = runTest {
@@ -75,7 +75,7 @@ class PositionManagerExtendedTest {
 
         manager.syncPosition("KRW-BTC", state)
 
-        assertFalse(state.position) // unchanged
+        assertFalse(state.position)
     }
 
     @Test
@@ -122,8 +122,8 @@ class PositionManagerExtendedTest {
         coVerify(exactly = 0) { upbitClient.placeOrder(any()) } // 미동기화 시 신규매수 금지(이중포지션 방지)
     }
 
-    // #121: 기동 뒤 런타임에 생긴 귀속 불명 lock(출금 대기·수동 주문)은 syncPosition 이 안 돌아 못 봤다 —
-    // buy 가 사이징을 위해 이미 조회하는 잔고에서 같은 판정을 한다(추가 호출 없음). 차단 + unsynced 로 재동기화 위임.
+    // 기동 뒤 생긴 귀속 불명 lock(출금 대기·수동 주문)은 syncPosition 이 보지 못한다. buy 가 사이징용으로 이미
+    // 조회하는 잔고에서 같은 판정을 하고(추가 호출 없음), 매수를 막은 뒤 unsynced 로 재동기화를 맡긴다.
     @Test
     fun `buy is blocked and marks unsynced when the coin has a lock our orders do not explain`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -139,11 +139,11 @@ class PositionManagerExtendedTest {
         assertTrue(state.unsynced)
         assertTrue(state.unattributableLockWarned)
         assertFalse(state.position) // 판정만, 포지션은 건드리지 않는다(정리는 sell 의 phantom 경로)
-        coVerify(exactly = 1) { upbitClient.getAccounts() } // 사이징 조회를 재사용 — 추가 호출 없음
+        coVerify(exactly = 1) { upbitClient.getAccounts() } // 사이징 조회를 재사용해 추가 호출 없음
     }
 
-    // processTicker 는 tick 시작에 pending 매도면 매수 전에 return 하지만, dust 흡수 매수는 같은 tick 에 낸 매도가 결과 불명으로
-    // 남은 뒤에 buy 에 닿을 수 있다(#234) — 매도 확정이 새 코인과 섞이지 않게 buy 자체가 막는다.
+    // processTicker 는 pending 매도면 매수 전에 return 하지만, dust 흡수 매수는 같은 tick 에 낸 매도가 결과 불명으로
+    // 남은 뒤 buy 에 닿을 수 있다. 매도 확정에 새 코인이 섞이지 않게 buy 가 막는다.
     @Test
     fun `buy is blocked while our own sell is still pending`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -158,7 +158,7 @@ class PositionManagerExtendedTest {
         assertFalse(state.unsynced)
     }
 
-    // --- buy tests ---
+    // --- buy ---
 
     @Test
     fun `buy returns null when insufficient funds`() = runTest {
@@ -177,8 +177,8 @@ class PositionManagerExtendedTest {
     @Test
     fun `buy reconciles volume and avg price from exchange and sets boughtToday`() = runTest {
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
-            listOf(Account(currency = "KRW", balance = "200000")),                          // invest sizing
-            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")), // post-fill truth
+            listOf(Account(currency = "KRW", balance = "200000")), // 투자금 사이징
+            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")), // 체결 뒤 실잔고
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-123")
         coEvery { upbitClient.getOrder("buy-123") } returns
@@ -200,7 +200,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `buy applies investRatio and caps at maxInvestAmount`() = runTest {
-        // 5,000,000 * 0.1 = 500,000 → capped at maxInvestAmount 100,000
+        // 5,000,000 * 0.1 = 500,000 → maxInvestAmount 100,000 으로 제한
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "5000000")),
             listOf(Account(currency = "BTC", balance = "0.0019", avgBuyPrice = "52000000")),
@@ -243,10 +243,10 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `buy recognizes partial fill when state cancel but executedVolume positive`() = runTest {
-        // C1: Upbit 시장가 매수는 소액잔량 환불 시 state=cancel + executed_volume>0 으로 종료(researcher: faq-order).
-        // 실제 코인을 받았으므로 매수로 인정해야 phantom holding(손절·익절 영구 미작동)을 막는다.
+        // Upbit 시장가 매수는 소액 잔량 환불 시 state=cancel, executed_volume>0 으로 끝난다.
+        // 코인을 받았으므로 매수로 인정해야 손절·익절이 영영 동작하지 않는 유령 보유를 막는다.
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
-            listOf(Account(currency = "KRW", balance = "200000")),                          // invest sizing
+            listOf(Account(currency = "KRW", balance = "200000")), // 투자금 사이징
             listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")), // 부분체결 실잔고
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-partial")
@@ -266,7 +266,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `a buy still waiting with a partial fill stays pending until the order ends`() = runTest {
-        // 폴링 소진까지 wait+부분체결이면 확정하지 않는다 — 풀어 버리면 뒤의 체결분·수수료가 장부에 남지 않는다(#247).
+        // 폴링이 끝날 때까지 wait+부분체결이면 확정하지 않는다. 풀어 버리면 뒤의 체결분·수수료가 장부에 남지 않는다.
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")),
             listOf(Account(currency = "BTC", balance = "0.0005", avgBuyPrice = "52000000")),
@@ -295,7 +295,7 @@ class PositionManagerExtendedTest {
         assertEquals(FeeBasis.Measured(13.0), result.fee)
     }
 
-    // --- sell tests ---
+    // --- sell ---
 
     @Test
     fun `sell returns null when no position`() = runTest {
@@ -338,7 +338,7 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getOrder("s2") } returns Order(uuid = "s2", state = "done")
 
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 10_000.0, holdVolume = 1.0)
-        val result = manager.sell("KRW-BTC", state, 11_000.0, SellReason.MANUAL) // 5,500원 — 최소주문 이상
+        val result = manager.sell("KRW-BTC", state, 11_000.0, SellReason.MANUAL) // 5,500원, 최소주문 이상
 
         assertEquals("0.5", orderSlot.captured.volume)
         assertEquals(0.5, result!!.volume)
@@ -385,15 +385,15 @@ class PositionManagerExtendedTest {
         val result = manager.sell("KRW-BTC", state, 52000000.0, SellReason.MANUAL)
         assertNull(result)
         assertTrue(state.position)
-        // 연결 오류는 주문이 나갔는지 말해 주지 않는다 — identifier 로 확정될 때까지 다시 팔지 않는다(#227).
+        // 연결 오류만으로는 주문이 나갔는지 알 수 없어, identifier 로 확정될 때까지 다시 팔지 않는다.
         assertNotNull(state.pendingSellIdentifier)
     }
 
     @Test
     fun `sell clears the phantom and asks for a re-sync when the only balance is an unattributable lock`() = runTest {
-        // M4(#122): 여기 도달했다는 것은 pendingSellUuid 가 없다는 뜻이라 locked 는 우리 매도 주문의 것이 아니다(출금 대기·
-        // 사용자 직접 주문) — #56 의 heldVolume 상한 규칙과 같은 판정. 보류하면 syncPosition 과 서로 미뤄 유령 포지션이 영구히 남는다.
-        // unsynced 를 켜 두면 다음 tick 재동기화가 락이 풀려 돌아온 코인을 다시 편입하고, 여전히 불명이면 매수만 막는다.
+        // 여기 왔다면 pendingSellUuid 가 없으니 locked 는 우리 매도 주문의 것이 아니다(출금 대기·사용자 주문).
+        // 보류하면 syncPosition 과 서로 미뤄 유령 포지션이 영구히 남는다.
+        // unsynced 를 켜 두면 다음 tick 재동기화가 돌아온 코인을 다시 편입하고, 여전히 불명이면 매수만 막는다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000")
         )
@@ -407,7 +407,7 @@ class PositionManagerExtendedTest {
         assertNull(result)
         assertFalse(state.position, "귀속 불명 locked 만 남은 포지션은 phantom 이다")
         assertTrue(state.unsynced, "락이 풀려 코인이 돌아오면 재편입해야 하므로 재동기화를 요청한다")
-        // 재편입은 position·평단·수량만 복원한다 — 메타를 지우면 돌아온 포지션이 보유상한·트레일링을 영영 잃는다.
+        // 재편입은 position·평단·수량만 복원한다. 메타를 지우면 돌아온 포지션이 보유상한·트레일링을 잃는다.
         assertEquals(buyDate, state.buyDate)
         assertEquals("combined", state.entryStrategy)
         assertEquals(50000000.0, state.peakPrice)
@@ -417,7 +417,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `sell is skipped before the phantom check while our own sell order is pending`() = runTest {
-        // 우리 주문이 떠 있는 동안의 locked 는 M4 가 아니라 이 가드가 다룬다 — reconcile 이 확정할 때까지 상태를 건드리지 않는다.
+        // 우리 주문이 떠 있는 동안의 locked 는 reconcile 이 확정할 때까지 건드리지 않는다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000")
         )
@@ -435,7 +435,7 @@ class PositionManagerExtendedTest {
         coVerify(exactly = 0) { upbitClient.placeOrder(any()) }
     }
 
-    // --- checkTakeProfit tests ---
+    // --- checkTakeProfit ---
 
     @Test
     fun `checkTakeProfit returns false when no position`() {
@@ -447,7 +447,7 @@ class PositionManagerExtendedTest {
     fun `checkTakeProfit returns true when PnL exceeds threshold`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
-        // 5% profit: 50M -> 52.5M
+        // 수익 5%: 50M -> 52.5M
         assertTrue(manager.checkTakeProfit(state, 52500000.0))
     }
 
@@ -455,17 +455,17 @@ class PositionManagerExtendedTest {
     fun `checkTakeProfit returns false when PnL below threshold`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
-        // 2% profit: not enough (threshold is 5%)
+        // 수익 2%, 기준 5% 미달
         assertFalse(manager.checkTakeProfit(state, 51000000.0))
     }
 
-    // --- checkStopLoss tests ---
+    // --- checkStopLoss ---
 
     @Test
     fun `checkStopLoss returns true when loss exceeds threshold`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
-        // -3% loss: 50M -> 48.5M
+        // 손실 -3%: 50M -> 48.5M
         assertTrue(manager.checkStopLoss(state, 48500000.0))
     }
 
@@ -473,18 +473,18 @@ class PositionManagerExtendedTest {
     fun `checkStopLoss returns false when loss is small`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
-        // -1% loss
+        // 손실 -1%
         assertFalse(manager.checkStopLoss(state, 49500000.0))
     }
 
-    // --- checkTrailingStop tests ---
+    // --- checkTrailingStop ---
 
     @Test
     fun `checkTrailingStop returns false when not in profit`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
         state.updatePeakPrice(51000000.0)
-        // Price dropped but still below buy price
+        // 고점에서 내렸지만 매수가 아래다
         assertFalse(manager.checkTrailingStop(state, 49000000.0))
     }
 
@@ -492,8 +492,8 @@ class PositionManagerExtendedTest {
     fun `checkTrailingStop returns true when drop from peak exceeds threshold`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
-        state.updatePeakPrice(55000000.0) // peak at 55M (+10%)
-        // Drop from peak: (55M - 53.8M) / 55M = 2.18% > 2% threshold
+        state.updatePeakPrice(55000000.0) // 고점 55M (+10%)
+        // 고점 대비 하락: (55M - 53.8M) / 55M = 2.18% > 2%
         assertTrue(manager.checkTrailingStop(state, 53800000.0))
     }
 
@@ -501,12 +501,12 @@ class PositionManagerExtendedTest {
     fun `checkTrailingStop returns false when drop is small`() {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
-        state.updatePeakPrice(55000000.0) // peak at 55M
-        // Drop from peak: (55M - 54.5M) / 55M = 0.9% < 2% threshold
+        state.updatePeakPrice(55000000.0) // 고점 55M
+        // 고점 대비 하락: (55M - 54.5M) / 55M = 0.9% < 2%
         assertFalse(manager.checkTrailingStop(state, 54500000.0))
     }
 
-    // --- trailingArmPct (#27 trailing dead 해소 경로) ---
+    // --- trailingArmPct ---
 
     private fun managerWithArm(armPct: Double) = PositionManager(
         upbitClient,
@@ -523,8 +523,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `checkTrailingStop arm zero preserves current behavior on small profit`() {
-        // arm=0: peak +2.5%, pnl +0.3%, drop 2.15% → 발동 (arm>trail 이면 막혔을 입력의 회귀 핀).
-        // arm 을 명시한다 — 기본값이 3.0 이 되면서 "디폴트가 0" 전제가 깨졌다.
+        // arm=0: 고점 +2.5%, 손익 +0.3%, 하락 2.15% 면 발동한다.
         val m = managerWithArm(0.0)
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
@@ -534,7 +533,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `checkTrailingStop blocks before peak reaches arm`() {
-        // arm(5%) > trail(2%): peak +3% 는 미arm — 현행(arm=0)이면 매도였을 입력을 막는다.
+        // arm(5%) > trail(2%): 고점 +3% 는 아직 arm 전이라 arm=0 이면 매도였을 입력을 막는다.
         val m = managerWithArm(5.0)
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
@@ -559,11 +558,11 @@ class PositionManagerExtendedTest {
         val state = TradingState("KRW-BTC")
         state.markBought(50000000.0, 0.001)
         state.updatePeakPrice(53000000.0) // peak +6% >= arm
-        // drop (53M-49.5M)/53M = 6.6% >= 2% 이지만 pnl -1% — 기존 pnl>0 게이트 유지
+        // drop (53M-49.5M)/53M = 6.6% >= 2% 이지만 pnl -1% 라 pnl>0 게이트에 막힌다
         assertFalse(m.checkTrailingStop(state, 49500000.0))
     }
 
-    // --- H8: pending-reconcile tests ---
+    // --- pending reconcile ---
 
     @Test
     fun `buy keeps pending when post-order processing throws`() = runTest {
@@ -594,7 +593,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcile keeps a partially filled buy pending while the order is still waiting`() = runTest {
-        // 부분체결을 무산으로 버리지도, 진행 중에 확정하지도 않는다 — 종료 응답에서 확정한다(#247).
+        // 부분체결을 무산으로 버리지도, 진행 중에 확정하지도 않고 종료 응답에서 확정한다.
         coEvery { upbitClient.getOrder("p1") } returns Order(uuid = "p1", state = "wait", executedVolume = "0.0003")
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")
@@ -636,7 +635,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcile recovers position from balance when getOrder fails`() = runTest {
-        // 강한우려3: getOrder 장애 시 getAccounts 잔고로 복원(무방비보유 방지)
+        // getOrder 장애 시 getAccounts 잔고로 복원해 손절 없는 보유를 막는다
         coEvery { upbitClient.getOrder("p4") } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")
@@ -649,8 +648,8 @@ class PositionManagerExtendedTest {
         assertTrue(state.position)
         assertNull(state.pendingBuyUuid)
         assertEquals(0.0003, state.holdVolume)
-        // 주문 응답이 없으니 수수료를 알 수 없다. 잔고 전제는 *수량 귀속*의 근거일 뿐이라
-        // 추정으로 채우면 포지션 전체 원가 기준이 되어 #133 이 재발한다.
+        // 주문 응답이 없으니 수수료를 알 수 없다. 잔고는 수량 귀속의 근거일 뿐이라
+        // 추정으로 채우면 포지션 전체 원가 기준이 되어 수수료가 부풀려진다.
         assertEquals(FeeBasis.Unrecorded, result!!.fee)
     }
 
@@ -669,8 +668,8 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcile after restart does not double-count when syncPosition already applied the fill`() = runTest {
-        // #20 Critical: durable pendingBuyUuid 복원 + syncPosition 이 거래소 잔고를 이미 반영(position=true, holdVolume=balance).
-        // reconcile 이 completeBuy 로 확정할 때 averaging 하면 holdVolume 이 2배가 된다 — replace 절대세팅으로 방지.
+        // durable pendingBuyUuid 가 복원되고 syncPosition 이 거래소 잔고를 이미 반영한 상태(position=true, holdVolume=balance).
+        // reconcile 확정 때 평균을 내면 holdVolume 이 2배가 되므로 절대값으로 덮어쓴다.
         coEvery { upbitClient.getOrder("r1") } returns Order(uuid = "r1", state = "done", executedVolume = "0.001")
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
@@ -691,7 +690,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `halted ticker blocks new buys but still reconciles and sells`() = runTest {
-        // #19 halt 를 processTicker 초입에서 걸면 매도·reconcile 까지 막혀 포지션이 청산 못 하고 갇힌다.
+        // halt 를 processTicker 초입에서 걸면 매도·reconcile 까지 막혀 포지션이 청산되지 못한다.
         // 차단 대상은 신규 진입뿐이다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
         val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
@@ -747,7 +746,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `peak persist failure marks the state dirty so the next tick retries`() = runTest {
         // 신고점 flush 는 갱신 tick 에만 걸린다. 그 1회가 실패한 뒤 하락장으로 돌아서면 다시
-        // 갱신될 일이 없어, 재시작 시 낮은 옛 peak 이 복원되고 트레일링이 안 걸린다(#54).
+        // 갱신될 일이 없어, 재시작 시 낮은 옛 peak 이 복원되고 트레일링이 안 걸린다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>()
         coEvery { stateService.upsert(any(), any()) } throws RuntimeException("db down")
         val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
@@ -772,8 +771,8 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `peak persist failure does not block new entries`() = runTest {
-        // pendingPersistFailed 와 달리 peak 은 진입 차단 사유가 아니다 — 고점 유실은 청산 정확도
-        // 문제이지 주문 유실 위험이 아니다. 게이트가 잘못 추가되면 buy() 가 막히므로 실제로 사본다.
+        // pendingPersistFailed 와 달리 peak 은 진입 차단 사유가 아니다. 고점 유실은 청산 정확도
+        // 문제이지 주문 유실 위험이 아니다. 게이트가 잘못 붙으면 buy() 가 막히므로 실제로 사 본다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
         val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
         val state = TradingState("KRW-BTC", peakPersistFailed = true)
@@ -822,7 +821,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `a successful generic persist clears the peak dirty flag`() = runTest {
-        // 같은 스냅샷이 저장됐으면 peak 도 durable 이다 — dirty 를 남기면 매 tick 불필요한 재시도가 돈다.
+        // 같은 스냅샷이 저장됐으면 peak 도 durable 이다. dirty 를 남기면 매 tick 불필요한 재시도가 돈다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
         val mgr = PositionManager(upbitClient, TradingProperties(), stateService, 1L)
         val state = TradingState("KRW-BTC", position = true, peakPersistFailed = true)
@@ -855,7 +854,7 @@ class PositionManagerExtendedTest {
         assertNotNull(record.pnlPercent) // 주문 시점 평단으로 손익이 계산돼야 한다
     }
 
-    // 기록 price 는 청산을 결정한 tick 가격이다(TradeRecord 정의) — 확정이 몇 tick·재시작 뒤여도 같다(#235).
+    // 기록 price 는 청산을 결정한 tick 가격이다. 확정이 몇 tick·재시작 뒤여도 같다.
 
     @Test
     fun `a sell confirmed later by reconcile is recorded at the price it was decided at`() = runTest {
@@ -882,7 +881,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `each late-confirmed sell is recorded at its own decision price`() = runTest {
-        // 부분 체결 뒤 남은 수량을 다른 가격에서 다시 팔면, 두 번째 확정의 기록가는 두 번째 판단가다 — 앞 주문 값이 남지 않는다.
+        // 부분 체결 뒤 남은 수량을 다른 가격에 다시 팔면 두 번째 확정의 기록가는 두 번째 판단가다.
         val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
         coEvery { upbitClient.placeOrder(any()) } returnsMany listOf(Order(uuid = "p1"), Order(uuid = "p2"))
         val done = mutableMapOf("p1" to false, "p2" to false)
@@ -911,7 +910,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `a pending sell without a decision price is recorded at the reconcile tick`() = runTest {
-        // 판단가를 남기기 전에 생긴 pending — 지금처럼 확정 tick 가격으로 떨어진다.
+        // 판단가를 남기기 전에 생긴 pending 은 확정 tick 가격으로 기록한다.
         val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getOrder("old") } returns Order(uuid = "old", state = "done", executedVolume = "0.001")
         coEvery { upbitClient.getAccounts() } returns emptyList()
@@ -936,8 +935,8 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `stuck sell reconcile escalates to an error alert exactly once`() = runTest {
-        // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막는다 — 조용히 방치되면
-        // 보유 포지션이 손절도 못 한다. 매수판 halt 와 같은 상한에서 한 번 알린다.
+        // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막아, 방치되면
+        // 보유 포지션이 손절도 못 한다. 매수 halt 와 같은 상한에서 한 번 알린다.
         val mgr = PositionManager(upbitClient, TradingProperties(reconcileHaltThreshold = 3), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -1004,7 +1003,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `a stuck sell alerts exactly at the threshold`() = runTest {
-        // 카운터가 아니라 경과시간으로 판정해야 재시작 횟수와 무관해진다(#55).
+        // 카운터가 아니라 경과시간으로 판정해야 재시작 횟수와 무관해진다.
         val (mgr, state) = stuckSellFixture(elapsedSeconds = 200)
 
         val errors = errorsWhileReconciling(mgr, state)
@@ -1052,7 +1051,7 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
         )
-        // 그 재시작 시나리오는 durable 에 매도 pending 이 남아 있는 상태다 — locked 를 우리 몫으로 볼 근거.
+        // durable 에 매도 pending 이 남아 있으니 locked 를 우리 몫으로 본다.
         val state = TradingState("KRW-BTC", pendingSellUuid = "s-open", pendingSellVolume = 0.001)
 
         manager.syncPosition("KRW-BTC", state)
@@ -1064,7 +1063,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `syncPosition caps locked at our own sell order volume`() = runTest {
-        // 우리 주문은 0.001 만 잠글 수 있다 — 나머지 0.002 는 출금 대기 등 다른 사유다.
+        // 우리 주문은 0.001 만 잠글 수 있으니 나머지 0.002 는 출금 대기 등 다른 사유다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.003", avgBuyPrice = "50000000"),
         )
@@ -1077,7 +1076,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `syncPosition treats unattributable lock as no holding and blocks buying`() = runTest {
-        // 매도 pending 이 없는데 잠긴 잔고가 있다 — 출금 대기·수동 주문이라 우리 포지션이 아니다.
+        // 매도 pending 이 없는데 잠긴 잔고는 출금 대기·수동 주문이라 우리 포지션이 아니다.
         // sell() 은 free 만 주문하므로 보유로 세면 팔 수 없는 유령 포지션이 된다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
@@ -1088,7 +1087,7 @@ class PositionManagerExtendedTest {
 
         assertFalse(state.position)
         assertEquals(0.0, state.holdVolume, 1e-9)
-        assertTrue(state.unsynced) // 귀속 불명 — 신규 매수 차단
+        assertTrue(state.unsynced) // 귀속 불명이라 신규 매수 차단
     }
 
     @Test
@@ -1109,7 +1108,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `syncPosition falls back to free plus locked when our order volume is unknown`() = runTest {
-        // 레거시 durable row — uuid 는 있는데 수량 기록이 없다. 상한을 걸 근거가 없으므로 종전대로
+        // 레거시 durable row 라 uuid 는 있는데 수량 기록이 없다. 상한을 걸 근거가 없으므로 종전대로
         // free+locked 를 쓴다(보유를 잃는 쪽보다 안전).
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.003", avgBuyPrice = "50000000"),
@@ -1125,7 +1124,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `syncPosition caps locked at the whole order volume while the order is still open`() = runTest {
         // pendingSellVolume 은 주문 시점 수량이라 부분체결로 줄지 않는다. 주문이 wait 로 남아 일부만 체결된
-        // 구간에서는 상한이 체결분만큼 느슨하다(#56 Deferred) — 여기 우리 몫은 0.4, 타 사유가 0.2 인데
+        // 구간에서는 상한이 체결분만큼 느슨하다. 여기 우리 몫은 0.4, 타 사유가 0.2 인데
         // 0.6 이 잡힌다. 주문이 terminal 이 되면 applySellFillOutcome 이 체결분을 빼 정확해진다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.6", avgBuyPrice = "50000000"),
@@ -1140,7 +1139,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `syncPosition reports the unattributable lock even when already unsynced from a fetch failure`() = runTest {
         // 직전 tick 이 조회 실패로 unsynced 를 켠 상태. unsynced 를 dedup 키로 쓰면 이 원인이 로그에
-        // 한 번도 안 남는다 — 별도 플래그로 구분한다.
+        // 한 번도 안 남으므로 별도 플래그로 구분한다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
         )
@@ -1181,7 +1180,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `restart reconcile does not inherit entry metadata of a position that was already closed`() = runTest {
-        // 실제 위험 순서: 신규 매수 주문 → 체결 확인 전 재시작 → runLoop 이 syncPosition 을 먼저 돌려
+        // 신규 매수 주문 → 체결 확인 전 재시작 → runLoop 이 syncPosition 을 먼저 돌려
         // position=true 가 서고 → reconcilePendingBuy 가 확정한다. 이때 markBought 의 "연장" 판정만으로는
         // 옛 진입메타(사용자가 거래소에서 직접 청산해 markSold 를 못 탄 잔재)를 못 막는다.
         val stateService = mockk<com.trading.bot.persistence.TradingStateService>(relaxed = true)
@@ -1203,7 +1202,7 @@ class PositionManagerExtendedTest {
 
         mgr.buy("KRW-BTC", state, 50_000_000.0, "volatility_breakout")
 
-        // 주문 시점에 끊겨야 한다 — 이 상태가 durable 로 내려가 재시작 시 복원된다.
+        // 주문 시점에 끊겨야 이 상태가 durable 로 내려가 재시작 시 복원된다.
         assertNull(state.buyDate)
         assertEquals(0.0, state.peakPrice)
         assertNull(state.entryStrategy)
@@ -1239,7 +1238,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `markSold clears the entry-time exit snapshot`() {
-        // 스냅샷은 그 포지션 소유 — 남으면 다음 진입이 이전 포지션의 청산 파라미터를 물려받는다.
+        // 스냅샷은 그 포지션의 것이다. 남으면 다음 진입이 이전 포지션의 청산 파라미터를 물려받는다.
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001)
         state.exitParams = ExitParamsSnapshot(
             takeProfitPct = 2.0,
@@ -1272,7 +1271,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcile halts ticker after repeated getOrder and balance failures`() = runTest {
-        // #19: getOrder·잔고조회가 둘 다 실패해 pending 이 무한 재시도되면 threshold 도달 시 halt.
+        // getOrder·잔고조회가 둘 다 실패해 pending 이 계속 재시도되면 threshold 에서 halt 한다.
         val mgr = PositionManager(
             upbitClient,
             TradingProperties(reconcileHaltThreshold = 3),
@@ -1312,7 +1311,7 @@ class PositionManagerExtendedTest {
         val state = TradingState("KRW-BTC", boughtToday = true, pendingBuyUuid = "x")
         state.resetDaily(java.time.LocalDate.of(2026, 6, 11))
         assertFalse(state.boughtToday)
-        assertEquals("x", state.pendingBuyUuid) // H8: 끄면 재발 → 불변
+        assertEquals("x", state.pendingBuyUuid)
     }
 
     @Test
@@ -1322,7 +1321,7 @@ class PositionManagerExtendedTest {
         assertNull(state.pendingBuyUuid)
     }
 
-    // --- pnl net 기록 (이슈 #27 — 기록 pnlPercent 는 왕복수수료 차감) ---
+    // --- 기록 pnlPercent 는 왕복 수수료를 뺀 값이다 ---
 
     @Test
     fun `sell records net pnl after round-trip fee`() = runTest {
@@ -1345,7 +1344,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `exit gates stay gross while record is net`() = runTest {
-        // 이 PR 의 핵심 불변식: 청산 게이트는 gross(행동 불변), 기록만 net.
+        // 청산 게이트는 gross, 기록만 net 이다.
         val mgr = PositionManager(upbitClient, TradingProperties(takeProfitPct = 2.0), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.1", avgBuyPrice = "100000")
@@ -1354,18 +1353,18 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getOrder("sell-edge") } returns Order(uuid = "sell-edge", state = "done")
 
         val state = TradingState("KRW-BTC")
-        state.markBought(100000.0, 0.1) // 10,205원 매도 — 최소주문 이상
+        state.markBought(100000.0, 0.1) // 10,205원 매도, 최소주문 이상
 
-        assertTrue(mgr.checkTakeProfit(state, 102050.0)) // gross 2.05% ≥ 2.0 — 게이트는 수수료 미차감
+        assertTrue(mgr.checkTakeProfit(state, 102050.0)) // gross 2.05% ≥ 2.0, 게이트는 수수료를 빼지 않는다
         val result = mgr.sell("KRW-BTC", state, 102050.0, SellReason.TAKE_PROFIT)
         assertEquals(1.95, result!!.pnlPercent!!, 1e-9) // 기록은 net
     }
 
-    // --- 매도판 H8: pendingSell reconcile tests ---
+    // --- pendingSell reconcile ---
 
     @Test
     fun `sell keeps pendingSell when fill unconfirmed`() = runTest {
-        // 매도 placeOrder 성공했으나 awaitFill 이 done 미확정(wait) — uuid·사유 보존해 다음 tick reconcile.
+        // 매도 주문은 나갔지만 awaitFill 이 wait 로 끝났다. uuid·사유를 남겨 다음 tick 에 reconcile 한다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000")
         )
@@ -1437,7 +1436,6 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcilePendingSell records executed and keeps remaining on partial fill`() = runTest {
-        // 부분 체결: state=cancel + executedVolume>0, 잔여 실잔고 있음 → 체결분 기록 + 잔여 포지션 유지 + 잔여분 재매도 대상.
         coEvery { upbitClient.getOrder("s-partial") } returns
             Order(uuid = "s-partial", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -1486,7 +1484,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `reconcilePendingSell keeps the remainder still locked by our own cancelled order`() = runTest {
         // 취소된 미체결분이 아직 free 로 안 돌아온 순간. free 만 보면 잔여 포지션을 잃고 markSold 로 오판한다
-        // — 그러면 손절·익절 평가가 꺼진 채 코인만 거래소에 남는다.
+        // 그러면 손절·익절 평가가 꺼진 채 코인만 거래소에 남는다.
         coEvery { upbitClient.getOrder("s-partial") } returns
             Order(uuid = "s-partial", state = "cancel", executedVolume = "0.0006", remainingVolume = "0.0004")
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -1508,7 +1506,7 @@ class PositionManagerExtendedTest {
     @Test
     fun `reconcilePendingSell clears the position when only unattributable lock remains`() = runTest {
         // 전량 체결됐는데 타 사유로 잠긴 잔고가 남은 경우. 잔여 포지션으로 세면 free=0 이라 sell() 이
-        // 영영 주문하지 못하는 유령 포지션이 된다(#122 이전에는 매 tick "Sell deferred" 만 반복했다).
+        // 주문하지 못하는 유령 포지션이 된다.
         coEvery { upbitClient.getOrder("s-done") } returns
             Order(uuid = "s-done", state = "done", executedVolume = "0.001")
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -1555,7 +1553,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcilePendingSell clears pending and keeps position when cancelled unfilled`() = runTest {
-        // 매도 무산(cancel+0) — 코인 그대로. pending 해소, position 유지 → 다음 tick 재매도 대상.
+        // 매도 무산(cancel+0)이면 코인이 그대로라 pending 만 풀고 다음 tick 에 다시 판다.
         coEvery { upbitClient.getOrder("s-cancel") } returns
             Order(uuid = "s-cancel", state = "cancel", executedVolume = "0")
 
@@ -1590,8 +1588,8 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `reconcilePendingSell keeps pending when wait with partial executed`() = runTest {
-        // Upbit 부분체결 진행중(wait+executed>0): 미체결 잔량이 locked 로 묶여 free=0 이어도 terminal 이 아니다.
-        // 여기서 확정하면 아직 열린 주문을 청산 오판 → 잔여 체결분 유실. wait 는 executed 무관하게 pending 유지해야 한다.
+        // Upbit 부분체결 진행 중(wait+executed>0)이면 미체결 잔량이 locked 라 free=0 이어도 terminal 이 아니다.
+        // 여기서 확정하면 열린 주문을 청산으로 오판해 남은 체결분을 잃는다.
         coEvery { upbitClient.getOrder("s-wait-partial") } returns
             Order(uuid = "s-wait-partial", state = "wait", executedVolume = "0.0006", remainingVolume = "0.0004")
         coEvery { upbitClient.getAccounts() } returns listOf(
@@ -1686,7 +1684,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `sell records null pnl when avg buy price unknown`() = runTest {
-        // 외부 입금분(avg_buy_price=0)을 syncPosition 이 복원한 케이스 — 0%−fee 의 가짜 −0.1% 기록 방지.
+        // 외부 입금분(avg_buy_price=0)을 syncPosition 이 복원한 경우. 0%−fee 의 가짜 −0.1% 를 기록하지 않는다.
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.001", avgBuyPrice = "0")
         )
@@ -1701,9 +1699,9 @@ class PositionManagerExtendedTest {
         assertNull(result.pnlAmount) // 0 이면 손익 0원인 거래로 집계돼 평균을 끌어내린다
     }
 
-    // --- 취소 안전성: placeOrder 성공 후 후처리는 NonCancellable 로 원자 완주 ---
-    // reload/stop 이 tick 코루틴을 취소해도, 이미 주문이 나간 뒤의 체결확인·상태반영이 중단되면
-    // 구 states 에만 남은 pending 이 새 엔진에서 유실돼 이중매수·감사유실로 이어진다. 취소돼도 완주해야 한다.
+    // --- 주문이 나간 뒤 후처리는 NonCancellable 로 끝까지 간다 ---
+    // reload/stop 이 tick 을 취소해 체결 확인·상태 반영이 중단되면 pending 이 새 엔진에서 사라져
+    // 이중 매수·감사 유실로 이어진다.
 
     @Test
     fun `buy post-order processing completes despite cancellation`() = runTest {
@@ -1752,9 +1750,8 @@ class PositionManagerExtendedTest {
         assertNull(state.pendingSellUuid)
     }
 
-    // --- 취소 전파: suspend API 를 감싼 broad catch 가 CancellationException 을 삼키면 안 된다 ---
-    // 특히 pre-order placeOrder catch 가 취소를 'Failed to place order' ERROR 로 로깅하면 DiscordErrorLogAppender 를
-    // 통해 매 reload/shutdown 마다 오탐 alert 가 나간다(취소 안전화의 오탐 제거 목표와 정면 충돌).
+    // --- suspend 호출을 감싼 catch 가 CancellationException 을 삼키면 안 된다 ---
+    // placeOrder catch 가 취소를 'Failed to place order' ERROR 로 로깅하면 reload/shutdown 마다 Discord 알림이 잘못 나간다.
 
     @Test
     fun `buy pre-order propagates cancellation instead of logging it as error`() = runTest {
@@ -1763,7 +1760,7 @@ class PositionManagerExtendedTest {
         val state = TradingState("KRW-BTC")
 
         assertThrows<CancellationException> { manager.buy("KRW-BTC", state, 50000000.0, "test") }
-        // 요청이 나갔는지 모른다 — identifier 를 남겨 reconcile 이 확정한다(#227).
+        // 요청이 나갔는지 모르므로 identifier 를 남겨 reconcile 이 확정한다.
         assertNull(state.pendingBuyUuid)
         assertNotNull(state.pendingBuyIdentifier)
     }
@@ -1778,7 +1775,7 @@ class PositionManagerExtendedTest {
 
     // --- 매도 기록의 진입 전략 귀속 ---
     // 매도 4경로 전부 markSold(=entryStrategy 소거) 이전에 buildSellRecord 를 부르므로 값이 살아 있다.
-    // entryStrategy 를 명시적으로 세워야 한다 — null 로 두면 단언이 null == null 로 통과해 버그를 못 잡는다.
+    // entryStrategy 를 명시적으로 세운다. null 이면 단언이 null == null 로 통과한다.
 
     @Test
     fun `sell records the entry strategy on immediate fill`() = runTest {
@@ -1854,7 +1851,7 @@ class PositionManagerExtendedTest {
         assertEquals("combined", state.entryStrategy)
     }
 
-    // --- 매수 수수료의 출처 (#133) ---
+    // --- 매수 수수료의 출처 ---
     // 엔진 매수의 totalAmount 는 "포지션 전체 원가"(거래소평단 × 실잔고)라 수수료 추정 기준으로 쓸 수 없다.
     // 기존 보유분이 있으면 그만큼 부풀려진다. 주문 응답의 paid_fee 가 있으면 그것이 정답이다.
 
@@ -1894,7 +1891,7 @@ class PositionManagerExtendedTest {
 
     @Test
     fun `buy without a usable paid_fee records it as unrecorded rather than estimating`() = runTest {
-        // 추정으로 떨어지면 고치려던 과대계상이 그대로 재발한다 — 모를 때는 모른다고 남긴다.
+        // 추정으로 채우면 과대계상이 된다. 모르면 모른다고 남긴다.
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")),
             listOf(Account(currency = "BTC", balance = "0.02", avgBuyPrice = "52000000")),
@@ -1923,7 +1920,7 @@ class PositionManagerExtendedTest {
         assertEquals(FeeBasis.Unrecorded, result!!.fee)
     }
 
-    // --- 이 주문의 체결 대금 (#146) ---
+    // --- 이 주문의 체결 대금 ---
     // 엔진 매수의 volume/totalAmount 는 포지션 스냅샷이라 "이번 주문 금액"이 아니다. 주문 응답 trades[].funds 의 합이
     // 유일한 실측이고, terminal(done/cancel) 응답에서만 믿는다.
 
@@ -1934,7 +1931,7 @@ class PositionManagerExtendedTest {
     fun `engine buy on top of an existing holding records this order's funds, not the position snapshot`() = runTest {
         // 거래소에 이미 0.02 BTC 가 있는 계좌(외부 입금·복원 전)에 50,000원어치 매수. completeBuy 는 실잔고로
         // volume/totalAmount 를 채우므로 totalAmount 는 전체 원가 스냅샷(≈1,090,000)이지만 orderAmount 는 이번 주문의
-        // 체결 대금 50,000 이어야 한다 — 두 값이 크게 갈리는 것이 이 테스트의 핵심이다.
+        // 체결 대금 50,000 이어야 한다.
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")),
             listOf(Account(currency = "BTC", balance = "0.021", avgBuyPrice = "51900000")),
@@ -2013,9 +2010,9 @@ class PositionManagerExtendedTest {
         assertNull(recovered!!.orderAmount)
     }
 
-    // --- 매도 수수료의 출처 (#148) ---
-    // 매도도 awaitFill/getOrder 응답을 쥐고 있으므로 paid_fee 가 있으면 매수와 같은 실측이다. 없으면 종전 추정 —
-    // 매도의 totalAmount 는 가격×수량 = 이 매도의 대금이라 추정 기준이 맞고, 0(미기록)으로 바꿀 이유가 없다.
+    // --- 매도 수수료의 출처 ---
+    // 매도도 awaitFill/getOrder 응답의 paid_fee 가 있으면 실측을 쓰고, 없으면 추정한다.
+    // 매도의 totalAmount 는 가격×수량, 즉 이 매도의 대금이라 추정 기준으로 맞다.
 
     @Test
     fun `engine sell carries the exchange-charged fee when the fill reports it`() = runTest {
@@ -2064,7 +2061,7 @@ class PositionManagerExtendedTest {
 
         assertEquals(FeeBasis.Measured(15.6), result!!.fee)
         assertEquals(0.0006, result.volume)
-        assertTrue(state.position) // 잔여 0.0004 는 다음 주문(새 uuid)으로 팔린다 — 같은 paid_fee 가 두 번 실리지 않는다
+        assertTrue(state.position) // 잔여 0.0004 는 새 uuid 의 다음 주문으로 팔려 같은 paid_fee 가 두 번 실리지 않는다
     }
 
     @Test

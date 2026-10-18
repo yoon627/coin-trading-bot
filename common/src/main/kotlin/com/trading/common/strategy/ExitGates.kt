@@ -1,15 +1,11 @@
 package com.trading.common.strategy
 
-/** 청산 게이트 판정 — 라이브(PositionManager)와 그림자 관측(ShadowExitObserver)이 같은 조건식을 쓰도록 공용화. */
+/** 라이브 청산과 그림자 관측이 같은 조건식을 쓰도록 모아 둔다. */
 object ExitGates {
 
     /**
-     * 트레일링 스탑 발동 판정.
-     *
-     * - `pnlPct > 0`: 수익 중일 때만 (손실 구간은 손절 담당 — 기존 게이트 유지)
-     * - `peakPnlPct >= trailingArmPct`: 고점 수익률이 arm 임계 도달 후에만. pnl>0 ∧ drop≥trail 이면
-     *   peakPnl > trail/(1−trail/100) 이 강제되므로 arm 은 trailingStopPct 보다 클 때만 실효한다.
-     * - NaN 입력(평단 0 유래 등 비정상)은 IEEE 비교 의미상 모든 조건이 false → 발동 안 함.
+     * 손실 구간은 손절이 맡으므로 수익 중일 때만 발동한다. pnl > 0 이면서 drop >= trail 이면 고점이 이미 trail 보다
+     * 높으므로 arm 은 trailingStopPct 보다 클 때만 효과가 있다. NaN 입력이면 모든 비교가 false 라 발동하지 않는다.
      */
     fun isTrailingStopTriggered(
         pnlPct: Double,
@@ -19,9 +15,6 @@ object ExitGates {
         trailingArmPct: Double,
     ): Boolean = pnlPct > 0.0 && peakPnlPct >= trailingArmPct && dropFromPeakPct >= trailingStopPct
 
-    /**
-     * maxHoldDays 의 유효값 해석 — 0/음수(env 오설정)는 1로 보정해 "매수 당일 즉시 청산 루프"를 방지.
-     * 판정(DailyResetManager)과 구간 검사(ExitParamRanges)가 같은 해석을 전제한다.
-     */
+    /** 0 이하를 1 로 올려 매수 당일 바로 청산되는 반복을 막는다. ExitParamRanges 도 이 해석을 전제한다. */
     fun effectiveMaxHoldDays(maxHoldDays: Int): Int = maxHoldDays.coerceAtLeast(1)
 }

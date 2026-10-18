@@ -29,10 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
-/**
- * Upbit 시세/캔들 수집 (in-process). 구 collector 모듈의 UpbitCollectorClient 를 흡수.
- * ticker 는 WebSocket, 캔들은 REST 폴링으로 가져와 NormalizedTicker/NormalizedCandle 로 정규화한다.
- */
+/** Upbit ticker 는 WebSocket, 캔들은 REST 로 가져와 정규화한다. */
 @Component
 class UpbitMarketFeed(
     private val upbitWebClient: WebClient,
@@ -88,14 +85,13 @@ class UpbitMarketFeed(
                         val delay = (BASE_RECONNECT_DELAY_MS * (1L shl minOf(attempt - 1, 5)))
                             .coerceAtMost(MAX_RECONNECT_DELAY_MS)
                         log.info("Upbit WS reconnecting in {}ms (attempt {})", delay, attempt)
-                        // 재연결 대기를 netty 신호 스레드에서 Thread.sleep 하면 이벤트 루프를 점유한다.
-                        // 별도 daemon 스레드로 분리 (netty 이벤트 루프 스레드 점유 방지).
+                        // netty 스레드에서 sleep 하면 이벤트 루프를 붙잡으므로 별도 스레드에서 기다린다.
                         val thread = Thread {
                             try {
                                 Thread.sleep(delay)
                                 connect()
                             } catch (_: InterruptedException) {
-                                // shutdown
+                                // 종료할 때 대기 중인 재연결을 인터럽트로 취소한다.
                             }
                         }.apply { isDaemon = true }
                         reconnectThread.set(thread)
@@ -104,7 +100,7 @@ class UpbitMarketFeed(
                 }
                 .subscribe()
             disposable.set(subscription)
-            // subscribe 직후 running 재확인 — awaitClose 와 race 시 방금 연 연결을 즉시 정리해 좀비 WS 방지.
+            // 그 사이 flow 가 닫혔으면 방금 연 연결을 바로 닫는다.
             if (!running.get()) subscription.dispose()
         }
 
@@ -112,7 +108,7 @@ class UpbitMarketFeed(
 
         awaitClose {
             running.set(false)
-            reconnectThread.get()?.interrupt() // sleep 중인 지연 재연결 스레드를 깨워 새 연결 생성 차단
+            reconnectThread.get()?.interrupt()
             disposable.get()?.dispose()
             log.info("Upbit ticker flow closed")
         }
@@ -191,11 +187,10 @@ class UpbitMarketFeed(
                 timestamp = Instant.ofEpochMilli(node["timestamp"]?.asLong() ?: System.currentTimeMillis()),
             )
         } catch (e: com.fasterxml.jackson.core.JacksonException) {
-            // 비-ticker/연결 ACK 등 파싱 불가 프레임 — 흔하므로 debug.
+            // 연결 ACK 같은 프레임이 흔히 섞여 들어온다.
             log.debug("Skipped non-parsable ticker frame: {}", e.message)
             null
         } catch (e: Exception) {
-            // 스키마 변경·예상치 못한 구조는 가시화해야 디버깅 가능.
             log.warn("Failed to parse ticker message: {}", e.message)
             null
         }

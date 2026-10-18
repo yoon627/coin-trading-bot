@@ -33,7 +33,6 @@ class PortfolioController(
         val krw = accounts.find { it.currency == "KRW" }
         val krwBalance = krw?.balanceDouble() ?: 0.0
 
-        // Get current prices for all coin holdings
         val coins = accounts.filter { it.currency != "KRW" && it.balanceDouble() > 0 }
         val holdings = mutableListOf<Map<String, Any?>>()
         var totalEval = krwBalance

@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 
 /**
- * 거래소 최소주문(5,000원) 미만이라 팔 수 없는 보유(dust)가 스윙 티커를 멈추지 않게 한다(#234).
+ * 거래소 최소주문(5,000원) 미만이라 팔 수 없는 보유(dust)가 스윙 티커를 멈추지 않게 한다.
  * 판정은 현재가 기준이고, 주문(흡수 매수·매도·해제)은 모두 실잔고로 다시 확인한다.
  */
 class PositionManagerDustTest {
@@ -64,7 +64,7 @@ class PositionManagerDustTest {
 
     private fun btc(balance: String, avg: String = "12000000") = Account(currency = "BTC", balance = balance, avgBuyPrice = avg)
 
-    /** 1,000원어치 — 수동 부분매도 잔량 같은 dust. 옛 진입 메타가 남아 있다. */
+    /** 1,000원어치 dust(수동 부분매도 잔량 등). 옛 진입 메타가 남아 있다. */
     private fun dust() = TradingState(
         "KRW-BTC",
         position = true,
@@ -86,7 +86,7 @@ class PositionManagerDustTest {
     fun `a buy on top of dust is a fresh entry that absorbs the dust`() = runTest {
         coEvery { upbit.getAccounts() } returnsMany listOf(
             listOf(krw(), btc("0.0001")), // 주문 전
-            listOf(krw(), btc("0.0101", avg = "10019802")), // 체결 뒤 — 평단에 dust 원가가 섞인다(수용된 결정)
+            listOf(krw(), btc("0.0101", avg = "10019802")), // 체결 뒤. 평단에 dust 원가가 섞인다
         )
         coEvery { upbit.placeOrder(any()) } returns Order(uuid = "b-1")
         coEvery { upbit.getOrder("b-1") } returns Order(
@@ -138,7 +138,7 @@ class PositionManagerDustTest {
         // 체결은 확인됐는데 계좌가 코인 행을 안 돌려주면, 체결분만으로 replace 하면 dust 가 장부에서 사라진다.
         coEvery { upbit.getAccounts() } returnsMany listOf(
             listOf(krw(), btc("0.0001")), // 주문 전
-            listOf(krw()), // 체결 뒤 — 코인 행 없음
+            listOf(krw()), // 체결 뒤 코인 행 없음
         )
         coEvery { upbit.placeOrder(any()) } returns Order(uuid = "b-nf")
         coEvery { upbit.getOrder("b-nf") } returns Order(uuid = "b-nf", state = "done", executedVolume = "0.01")
@@ -147,13 +147,13 @@ class PositionManagerDustTest {
         manager.buy("KRW-BTC", state, price, "combined")
 
         assertEquals(0.0101, state.holdVolume, 1e-12)
-        // 평단도 가중평균 — 이번 체결가로 덮으면 dust 원가가 빠진다.
+        // 평단도 가중평균이다. 이번 체결가로 덮으면 dust 원가가 빠진다.
         assertEquals((12_000_000.0 * 0.0001 + price * 0.01) / 0.0101, state.avgBuyPrice, 1.0)
     }
 
     @Test
     fun `balance recovery of an absorbing buy counts only the increase over the dust`() = runTest {
-        // 주문 뒤 getOrder 가 죽었다. 계좌의 dust 는 주문 전부터 있던 것 — 증분이 없으니 체결로 보지 않는다.
+        // 주문 뒤 getOrder 가 실패했다. 계좌의 dust 는 주문 전부터 있던 것이라 체결로 보지 않는다.
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0001"))
         coEvery { upbit.placeOrder(any()) } returns Order(uuid = "b-rec")
         coEvery { upbit.getOrder("b-rec") } throws RuntimeException("getOrder down")
@@ -177,7 +177,7 @@ class PositionManagerDustTest {
 
     @Test
     fun `a stale dust reading does not buy on top of a sellable holding`() = runTest {
-        // 기록상 dust 지만 그 사이 앱에서 더 사서 실제로는 10만원어치다 — 그 위에 사면 이중 포지션이다.
+        // 기록상 dust 지만 그 사이 앱에서 더 사서 실제로는 10만원어치다. 여기서 사면 이중 포지션이 된다.
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.01", avg = "9500000"))
         val state = dust()
 
@@ -220,7 +220,7 @@ class PositionManagerDustTest {
 
     @Test
     fun `a dust sell corrects a stale holding size so the engine can see the dust`() = runTest {
-        // 동기화 뒤 앱에서 대부분을 팔아 기록(0.01)과 실제(0.0001)가 다르다 — 가드가 실측으로 고쳐야 엔진이 진입을 연다.
+        // 동기화 뒤 앱에서 대부분을 팔아 기록(0.01)과 실제(0.0001)가 다르다. 가드가 실잔고로 고쳐야 진입이 열린다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.0001"))
         val state = dust().apply { holdVolume = 0.01 }
 
@@ -231,7 +231,7 @@ class PositionManagerDustTest {
 
     @Test
     fun `no absorbing buy while a sell from the same tick is still unconfirmed`() = runTest {
-        // 기록상 dust 였지만 실제론 팔 수 있어 매도가 나갔고 결과가 불명으로 남았다 — 그 위에 사면 매도 확정이 새 코인과 섞인다.
+        // 기록상 dust 였지만 실제론 팔 수 있어 매도가 나갔고 결과가 불명이다. 여기서 사면 매도 확정에 새 코인이 섞인다.
         coEvery { upbit.getAccounts() } returns listOf(krw())
         val state = dust().apply { pendingSellUuid = "s-unknown"; pendingSellVolume = 0.01 }
 
@@ -245,7 +245,7 @@ class PositionManagerDustTest {
 
     @Test
     fun `dust with coins locked by another order is not released`() = runTest {
-        // 사용자 지정가가 풀리면 코인이 돌아온다 — 목록 밖이라 내리면 다시 편입할 길이 없다.
+        // 사용자 지정가가 풀리면 코인이 돌아온다. 목록 밖 티커라 내려 버리면 다시 편입되지 않는다.
         coEvery { upbit.getAccounts() } returns listOf(Account(currency = "BTC", balance = "0.0001", locked = "0.05", avgBuyPrice = "12000000"))
         val state = dust()
 
@@ -257,7 +257,7 @@ class PositionManagerDustTest {
 
     @Test
     fun `an exchange minimum-order rejection of a swing sell is a warning, not an error`() = runTest {
-        // tick 가격과 거래소 판정 가격이 달라 가드를 통과한 경우 — 거래소 판정이 기준이다.
+        // tick 가격과 거래소 판정 가격이 달라 가드를 통과해도 거래소 판정을 따른다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.0005"))
         coEvery { upbit.placeOrder(any()) } throws UpbitApiException(400, "under_min_total_ask", null, "")
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 12_000_000.0, holdVolume = 0.0005)
@@ -296,7 +296,7 @@ class PositionManagerDustTest {
 
     @Test
     fun `a swing buy too small to survive its stop-loss is not placed`() = runTest {
-        // 기본 손절 5% — 5,200원으로 사면 손절 시점 가치가 4,940원이라 거래소가 매도를 거부한다.
+        // 기본 손절 5% 에서 5,200원으로 사면 손절 시점 가치가 4,940원이라 거래소가 매도를 거부한다.
         coEvery { upbit.getAccounts() } returns listOf(krw("52000"))
         assertNull(manager.buy("KRW-BTC", TradingState("KRW-BTC"), price, "combined"))
         coVerify(exactly = 0) { upbit.placeOrder(any()) }

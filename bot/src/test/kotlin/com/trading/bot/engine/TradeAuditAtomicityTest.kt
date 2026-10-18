@@ -34,11 +34,8 @@ import org.junit.jupiter.api.assertThrows
 import org.slf4j.LoggerFactory
 
 /**
- * #52: 체결 확정 시 pending 해소(durable)와 감사 기록이 원자적인지 검증한다.
- *
- * 핵심 불변식 — **감사 커밋이 실패하면 메모리 상태 전이도 적용되지 않아야 한다.** 그래야 pending 이 살아남아
- * 다음 tick reconcile 이 재시도한다. 전이만 먼저 적용되면 DB 를 롤백해도 메모리에는 pending 이 없어
- * 아무도 재시도하지 않고 기록이 영구 유실된다(실제 현금흐름은 발생했는데 거래·손익 기록이 없는 상태).
+ * 체결 확정 시 pending 해소(durable)와 감사 기록은 원자적이어야 한다.
+ * 감사 커밋이 실패하면 메모리 전이도 적용하지 않아야 pending 이 남아 다음 tick reconcile 이 재시도한다.
  */
 class TradeAuditAtomicityTest {
 
@@ -46,7 +43,7 @@ class TradeAuditAtomicityTest {
     private lateinit var stateService: TradingStateService
     private val properties = TradingProperties()
 
-    /** commitFill 에 넘어온 "전이가 반영된 사본" 을 잡아 둔다 — 트랜잭션에 무엇이 실렸는지 확인용. */
+    /** commitFill 에 넘어온, 전이가 반영된 사본. */
     private val stagedStates = mutableListOf<TradingState>()
     private val committedRecords = mutableListOf<TradeRecord>()
 
@@ -59,7 +56,7 @@ class TradeAuditAtomicityTest {
         stateService = mockk(relaxed = true)
         stagedStates.clear()
         committedRecords.clear()
-        // persistState 가 트랜잭션에 싣는 "전이 반영 사본" 을 잡는다.
+        // persistState 가 트랜잭션에 싣는 사본을 잡는다.
         coEvery { stateService.upsert(any(), capture(stagedStates)) } returns Unit
         logger.addAppender(logs)
     }
@@ -71,7 +68,7 @@ class TradeAuditAtomicityTest {
 
     private fun warns() = logs.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
 
-    /** 커밋이 성공하는 배선 — persistState 를 실행해 staged 사본을 캡처한다. */
+    /** 커밋 성공. persistState 를 실행해 사본을 잡는다. */
     private fun managerWithCommitFill(
         commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean,
         notifyTrade: suspend (record: TradeRecord) -> Unit = {},
@@ -89,7 +86,7 @@ class TradeAuditAtomicityTest {
         },
     )
 
-    /** 커밋이 실패하는 배선 — 감사 기록 저장이 transient 실패한 상황. */
+    /** 감사 기록 저장이 일시적으로 실패한다. */
     private fun failingManager() = PositionManager(
         upbitClient, properties, stateService, USER_ID,
         commitFill = { _, _ -> throw IllegalStateException("audit store unavailable") },
@@ -135,7 +132,7 @@ class TradeAuditAtomicityTest {
 
     @Test
     fun `이미 기록된 체결(멱등 skip)은 메모리 전이만 적용하고 알림을 다시 보내지 않는다`() = runTest {
-        // 재시작 후 reconcile 이 같은 주문을 다시 확정하면 commitFill 이 false 를 돌려준다(#20) — 알림이 두 번 나가면 안 된다.
+        // 재시작 후 같은 주문을 다시 확정하면 commitFill 이 false 를 돌려준다. 알림이 두 번 나가면 안 된다.
         stubFilledBuy()
         val state = buyPendingState()
         var notified = 0
@@ -182,10 +179,9 @@ class TradeAuditAtomicityTest {
         assertNotNull(record)
         assertEquals(USER_ID, record!!.userId, "감사 기록에 userId 가 없으면 사용자별 조회·PnL 집계에서 누락된다")
         assertEquals(BUY_UUID, record.exchangeOrderId, "멱등 dedup 키가 실려야 재시도 시 중복 insert 를 막는다")
-        // 메모리 전이
         assertTrue(state.position)
         assertNull(state.pendingBuyUuid)
-        // 트랜잭션에 실린 사본도 pending 이 해소된 상태여야 원자성이 성립한다
+        // 트랜잭션에 실린 사본도 pending 이 해소돼 있어야 한다
         assertEquals(1, stagedStates.size)
         assertNull(stagedStates.single().pendingBuyUuid)
         assertTrue(stagedStates.single().position)
@@ -270,15 +266,15 @@ class TradeAuditAtomicityTest {
         assertEquals(USER_ID, record!!.userId)
         assertFalse(state.position)
         assertNull(state.pendingSellUuid)
-        // 주문 전 identifier 선기록 → uuid 기록 → 원자 커밋(#227). 앞의 둘은 pending 저장이고 마지막만 전이가 반영된 사본이다.
+        // identifier 선기록, uuid 기록, 원자 커밋 순이다. 앞의 둘은 pending 저장이고 마지막만 전이가 반영된 사본이다.
         assertEquals(3, stagedStates.size, "주문 경로의 pending 저장 2회와 원자 커밋의 상태 저장을 구분한다")
         assertNotSame(state, stagedStates.last(), "원자 커밋은 전이를 적용한 사본을 싣는다")
         assertFalse(stagedStates.last().position, "트랜잭션에 실린 사본도 청산이 반영돼야 한다")
     }
 
-    // --- reconcile: 주문 결과를 받은 뒤의 실패는 조회 실패가 아니다 (#235) ---
+    // --- reconcile: 주문 결과를 받은 뒤의 실패는 조회 실패가 아니다 ---
 
-    /** 첫 커밋만 실패하고 이후는 성공하는 배선 — 한 번의 커밋 실패 뒤 같은 tick 에 무엇이 기록되는지 본다. */
+    /** 첫 커밋만 실패하고 이후는 성공한다. */
     private fun firstCommitFailsManager(): PositionManager {
         var calls = 0
         return managerWithCommitFill(
@@ -301,7 +297,7 @@ class TradeAuditAtomicityTest {
         pendingSellVolume = 0.012, // 체결량(0.01)과 달라야 요청량으로 쓰인 추정 기록을 구분한다
     )
 
-    /** 전량 체결된 매도 — 실측 수수료·체결 내역이 있다. */
+    /** 전량 체결된 매도. 실측 수수료·체결 내역이 있다. */
     private fun doneSell(uuid: String = SELL_UUID) = Order(
         uuid = uuid,
         state = "done",

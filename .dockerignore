@@ -20,7 +20,7 @@ build/
 .env
 .env.*
 
-# Project meta — not used inside images
+# Project meta
 .github/
 docs/
 deploy/

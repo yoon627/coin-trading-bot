@@ -18,17 +18,12 @@ import org.junit.jupiter.api.Test
 import org.springframework.web.reactive.function.client.WebClient
 
 /**
- * 청산 게이트는 **진입 시점 스냅샷**을 따른다 — 보유 중 전역 설정이 바뀌어도 그 포지션의 규칙은 그대로다.
- *
- * 왜 필요한가: 2026-09-06 에 트레일링을 승격했을 때 **열려 있던 포지션도 즉시 새 규칙으로 판정**됐다.
- * 진입은 옛 규칙, 청산은 새 규칙이라 성과 귀속이 깨진다 — 파라미터를 자주 바꾸는 개선 루프에서는 구조적 문제다.
- * 스냅샷 저장·복원은 이미 있었고(`TradingState.exitParams`), **소비만 없었다**(#177).
- *
- * 스냅샷이 없으면(이 변경 이전에 열린 포지션·복원 실패) **전역값으로 폴백**한다 — 동작 보존이 기본이다.
+ * 청산 판정은 진입 시점의 스냅샷을 따른다. 보유 중 전역 설정이 바뀌어도 그 포지션의 규칙은 그대로다.
+ * 스냅샷이 없는 포지션은 전역값으로 판정한다.
  */
 class ExitParamsSnapshotConsumptionTest {
 
-    /** 전역은 느슨한 값. 스냅샷이 소비되면 이 값들은 쓰이지 않아야 한다. */
+    /** 스냅샷 값과 구분되도록 전역은 느슨하게 둔다. */
     private val globalConfig = TradingProperties(
         takeProfitPct = 10.0, maxLossPct = 10.0, trailingStopPct = 5.0, trailingArmPct = 8.0, maxHoldDays = 5,
     )
@@ -39,7 +34,6 @@ class ExitParamsSnapshotConsumptionTest {
     )
     private val manager = PositionManager(dummyClient, globalConfig, mockk(relaxed = true), 1L)
 
-    /** 진입 시점은 타이트한 값. */
     private val tightSnapshot = ExitParamsSnapshot(
         takeProfitPct = 2.0, maxLossPct = 3.0, trailingStopPct = 1.5, trailingArmPct = 0.0, maxHoldDays = 1,
     )
@@ -72,14 +66,14 @@ class ExitParamsSnapshotConsumptionTest {
     @Test
     fun `falls back to the global config when no snapshot was taken`() {
         val state = heldWithSnapshot(null)
-        // 스냅샷이 없으면 전역(익절 10%)을 따른다 — 이 변경 이전에 열린 포지션의 동작 보존.
+        // 스냅샷이 없으면 전역(익절 10%)을 따른다.
         assertFalse(manager.checkTakeProfit(state, 103.0)) { "스냅샷이 없으면 전역을 따라야 한다" }
         assertTrue(manager.checkTakeProfit(state, 111.0))
     }
 
     @Test
     fun `a snapshot taken from the global config carries each field in place`() {
-        // 새 진입의 스냅샷과 스냅샷 없는 포지션의 폴백이 모두 이 매핑을 탄다 — 필드가 뒤바뀌면 두 경로가 함께 틀린다.
+        // 새 진입의 스냅샷과 스냅샷 없는 포지션의 폴백이 모두 이 매핑을 쓴다.
         val global = TradingProperties(takeProfitPct = 1.0, maxLossPct = 2.0, trailingStopPct = 3.0, trailingArmPct = 4.0, maxHoldDays = 5)
 
         assertEquals(

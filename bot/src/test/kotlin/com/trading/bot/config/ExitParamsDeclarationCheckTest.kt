@@ -24,11 +24,7 @@ import org.springframework.core.annotation.OrderUtils
 import org.springframework.core.env.Environment
 import org.springframework.mock.env.MockEnvironment
 
-/**
- * 청산 파라미터의 미선언·구간 밖 값을 **드러내되 막지는 않는다**는 계약을 고정한다 (#179, #230).
- *
- * 막지 않는 이유는 [ExitParamsDeclarationCheck] KDoc 참조 — 차단은 배포 preflight 가 맡는다.
- */
+/** 청산 파라미터의 미선언·구간 밖 값은 드러내되 막지 않는다. 차단은 배포 preflight 가 맡는다. */
 class ExitParamsDeclarationCheckTest {
 
     private fun envWith(keys: Collection<String>) = MockEnvironment().apply {
@@ -58,7 +54,7 @@ class ExitParamsDeclarationCheckTest {
 
         val errors = errorsWhileReporting(ExitParamsDeclarationCheck(TradingProperties(), declared, outOfRange))
         assertThat(errors.single()).contains("trading.shadow-exit.trailing-stop-pct").contains("관측")
-        // 꺼진 관측의 값은 쓰이지 않는다 — 켜는 배포는 preflight 가 막는다.
+        // 꺼진 관측의 값은 쓰이지 않고, 켜는 배포는 preflight 가 막는다.
         assertThat(errorsWhileReporting(ExitParamsDeclarationCheck(TradingProperties(), declared, outOfRange.copy(enabled = false))))
             .isEmpty()
     }
@@ -111,7 +107,7 @@ class ExitParamsDeclarationCheckTest {
         )
         val errors = errorsWhileReporting(check)
         assertThat(errors).hasSize(1)
-        // 이 값으로 이미 연 포지션은 진입 때 찍은 스냅샷으로 청산된다 — 설정만 고쳐서는 되돌아오지 않는다는 것까지 알린다.
+        // 이미 연 포지션은 진입 때 스냅샷으로 청산되므로 설정만 고쳐서는 되돌아오지 않는다는 것까지 알린다.
         assertThat(errors.single()).contains("trading.max-loss-pct=-5.0", "(0, 100)", "진입 시점")
     }
 
@@ -130,7 +126,7 @@ class ExitParamsDeclarationCheckTest {
 
     @Test
     fun `보고 중 예외가 나도 던지지 않고 ERROR 로 남긴다`() {
-        // 기동 보고는 복원 앞의 ready 리스너이고 수동 시작에서도 불린다 — 던지면 기동·시작이 실패한다.
+        // 기동 보고는 복원 앞의 ready 리스너이고 수동 시작에서도 불려, 던지면 기동·시작이 실패한다.
         val broken = mockk<Environment> { every { containsProperty(any()) } throws IllegalStateException("source down") }
         val errors = errorsWhileReporting(ExitParamsDeclarationCheck(TradingProperties(), broken))
         assertThat(errors).hasSize(1)

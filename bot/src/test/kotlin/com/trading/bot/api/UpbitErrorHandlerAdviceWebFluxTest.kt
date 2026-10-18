@@ -8,13 +8,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RestController
 
-/**
- * Verifies the advice actually fires inside a real WebFlux dispatcher
- * (not just a direct method call), since `@ExceptionHandler` methods that
- * throw — rather than return — depend on framework propagation. This test
- * exists specifically to refute or confirm a code-review concern about
- * that pattern in WebFlux.
- */
+/** 값을 돌려주지 않고 던지는 `@ExceptionHandler` 는 프레임워크 전파에 기대므로 실제 WebFlux 디스패처에서 확인한다. */
 class UpbitErrorHandlerAdviceWebFluxTest {
 
     private val client: WebTestClient = WebTestClient

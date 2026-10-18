@@ -11,7 +11,7 @@ interface UserRepository : R2dbcRepository<UserEntity, Long> {
     fun findByUsername(username: String): Mono<UserEntity>
     fun findByAdminTrue(): Flux<UserEntity>
 
-    // 설정 저장은 자기 컬럼만 바꾼다(#284) — 행 전체를 save 하면 동시에 저장한 다른 설정이 읽어 둔 옛 값으로 돌아간다.
+    // 행 전체를 save 하면 동시에 저장한 다른 설정이 옛 값으로 덮이므로 자기 컬럼만 바꾼다.
     @Modifying
     @Query("UPDATE users SET upbit_access_key = :accessKey, upbit_secret_key = :secretKey WHERE id = :id")
     fun updateUpbitKeys(id: Long, accessKey: String?, secretKey: String?): Mono<Int>

@@ -10,11 +10,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Test
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 
-/**
- * `minCandles` 계약이 실제 동작과 맞는지 고정한다.
- *
- * 전략 목록을 **Spring 컨텍스트에서 열거**하는 이유: 하드코딩 목록이면 새 전략이 검사 대상에서 빠진다.
- */
+/** `minCandles` 선언이 실제 동작과 맞는지 본다. 새 전략이 빠지지 않게 전략 목록은 Spring 컨텍스트에서 가져온다. */
 class StrategyMinCandlesTest {
 
     private val config = TradingProperties()
@@ -24,7 +20,7 @@ class StrategyMinCandlesTest {
             ctx.getBeansOfType(TradingStrategy::class.java).values.toList()
         }
 
-    /** 어떤 지표에도 걸리지 않는 평탄한 캔들 — 봉 수만으로 판정을 가르기 위한 것. */
+    /** 어떤 지표에도 걸리지 않는 평탄한 캔들. 봉 수만으로 판정을 가른다. */
     private fun flat(count: Int) = List(count) {
         Candle(
             market = "KRW-BTC",
@@ -57,11 +53,8 @@ class StrategyMinCandlesTest {
     }
 
     /**
-     * 선언값 자체를 고정한다.
-     *
-     * "minCandles-1 에서 false" 만으로는 **선언이 실제보다 작은 경우를 못 잡는다** — 41봉을 요구하는
-     * 전략은 20봉에서도 false 라 21로 잘못 선언해도 통과한다(실측 확인). 기대값을 명시해야 잘못된
-     * 선언이 드러나고, 새 전략은 이 표에 없어서 실패한다 — 계약을 정하라는 신호다.
+     * "minCandles-1 에서 false" 만으로는 선언이 실제보다 작은 경우를 못 잡아 기대값을 표로 둔다.
+     * 새 전략은 이 표에 없어 실패한다.
      */
     @Test
     fun `declared minimums match the agreed contract`() {

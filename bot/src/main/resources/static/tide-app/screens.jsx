@@ -1,5 +1,3 @@
-// Tide — Live screens connected to Spring Boot API
-
 function Shell({ active, setActive, user, onLogout, title, subtitle, actions, children }) {
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-soft)' }}>
@@ -27,7 +25,6 @@ function ApiKeyWarning({ go }) {
   );
 }
 
-// ── DASHBOARD ─────────────────────────────────────────────
 function Dashboard({ user, setActive }) {
   const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 5000);
@@ -123,21 +120,20 @@ function Dashboard({ user, setActive }) {
   );
 }
 
-// ── BOT / STRATEGY ────────────────────────────────────────
 function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
-  // 입력칸은 서버 기본 목록으로 채운다 — 고정 기본값을 두면 그대로 눌렀을 때 목록이 그 값 하나로 줄어 저장된다(#226).
+  // 고정 기본값을 두면 그대로 시작했을 때 목록이 그 값 하나로 줄어 저장되므로 서버 기본 목록으로 채운다.
   const [tickers, setTickers] = React.useState('');
   const [touched, setTouched] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
-  // 마지막으로 채운 기본값 — 폴링이 한 번 실패해 status 가 비어도 "고치지 않았다"는 판정이 흔들리지 않게 따로 둔다.
+  // 폴링이 실패해 status 가 비어도 수정 여부 판정이 흔들리지 않게 마지막 기본값을 따로 둔다.
   const prefilled = React.useRef('');
   const defaultTickers = (status.data?.default_tickers || []).join(', ');
   const tickerList = (text) => [...new Set(text.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))];
   const sameTickers = (a, b) => [...a].sort().join(',') === [...b].sort().join(',');
 
-  // 사용자가 한 번이라도 고쳤으면 폴링이 입력을 되돌리지 않는다(빈칸으로 비운 것도 의도다).
+  // 사용자가 고친 뒤에는 빈칸이라도 폴링이 덮어쓰지 않는다.
   React.useEffect(() => {
     if (!touched && defaultTickers) {
       prefilled.current = defaultTickers;
@@ -148,8 +144,7 @@ function BotPage({ user, setActive }) {
   const start = async () => {
     setBusy(true);
     try {
-      // 기본 목록 그대로(순서·대소문자 무관)거나 비었으면 tickers 를 보내지 않는다 — 서버가 같은 설정 목록을 쓰고,
-      // 이미 도는 봇에는 409 대신 already_running 이 된다.
+      // 기본 목록과 같거나 비었으면 tickers 를 빼서, 이미 도는 봇에 409 대신 already_running 을 받는다.
       const list = tickerList(tickers);
       const req = {};
       if (list.length && !sameTickers(list, tickerList(prefilled.current))) req.tickers = list;
@@ -208,8 +203,7 @@ function BotPage({ user, setActive }) {
                 {[
                   ['실행', status.data?.running ? '✓ Yes' : '— No'],
                   ['전략', status.data?.strategy || '—'],
-                  // 진입 대상(사용자 목록) · 청산 대기(목록에서 빠졌지만 보유·미체결 주문이
-                  // 남아 청산까지만 관리)를 나눠 보인다.
+                  // 청산 대기는 목록에서 빠졌지만 보유나 미체결 주문이 남아 청산까지만 관리하는 종목이다.
                   ['거래쌍', (status.data?.entry_tickers || []).join(', ') || '—'],
                   ['청산 대기', (status.data?.exit_only_tickers || []).join(', ')],
                 ].filter(([k, v]) => v).map(([k, v]) => (
@@ -227,8 +221,7 @@ function BotPage({ user, setActive }) {
   );
 }
 
-// ── ORDERS / TRADES HISTORY ───────────────────────────────
-// 보유기간(초) → 사람이 읽는 문자열. null 은 미청산이거나 매수 기록이 없어 계산 불가한 경우.
+// null 은 미청산이거나 매수 기록이 없어 보유기간을 계산할 수 없는 경우다.
 function fmtHolding(sec) {
   if (sec == null) return '—';
   const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
@@ -248,14 +241,12 @@ function OrdersPage({ user, setActive }) {
   const [tab, setTab] = React.useState('roundtrips');
   const trades = useAPI(() => TideAPI.trades().catch(() => null), [], 10000);
   const rt = useAPI(() => TideAPI.roundTrips().catch(() => null), [], 10000);
-  // /api/trades returns { total, limit, offset, records } — pull the array out
-  // of the envelope, otherwise list.length is undefined and trades render as empty.
   const list = trades.data?.records || [];
   const rtList = rt.data?.round_trips || [];
 
   const isRT = tab === 'roundtrips';
   const src = isRT ? rt : trades;
-  // API 의 total 은 전체 라운드트립 수, rtList 는 limit 으로 잘린 목록 — 둘을 섞으면 항상 '총 100건' 으로 보인다.
+  // rtList 는 limit 으로 잘린 목록이라 건수는 API 의 total 을 쓴다.
   const count = isRT ? (rt.data?.total ?? rtList.length) : list.length;
 
   const tabBtn = (key, label) => (
@@ -277,7 +268,7 @@ function OrdersPage({ user, setActive }) {
       </div>
       {rtList.map((r, i) => {
         const tone = r.pnl_percent == null ? 'var(--ink-500)' : (r.pnl_percent > 0 ? 'var(--up)' : 'var(--down)');
-        // 실현 손익(net) 우선, 없으면 옛 기록의 gross 근사(≈). 색은 표시하는 금액 자체의 부호를 따른다.
+        // net 이 없는 옛 기록은 gross 로 근사한다. 색은 표시하는 금액의 부호를 따른다.
         const isNet = r.pnl_amount_net != null;
         const amount = isNet ? r.pnl_amount_net : r.pnl_amount_gross;
         const won = amount == null ? null : Math.round(amount);
@@ -289,7 +280,7 @@ function OrdersPage({ user, setActive }) {
               {r.open && <span style={{ display: 'block', fontSize: 10.5, color: 'var(--up)', fontWeight: 600 }}>
                 {r.partially_closed ? '일부 매도 · 보유 중' : '보유 중'}
               </span>}
-              {/* 남은 수량은 다음 매수 기록(그 시점 전체 보유량)에 포함돼 그 행의 매수 수량으로 잡힌다 */}
+              {/* 남은 수량은 다음 매수 기록의 수량에 포함된다 */}
               {r.carried_volume != null && <span style={{ display: 'block', fontSize: 10.5, color: 'var(--ink-500)', fontWeight: 600 }}>
                 잔량 다음 매수로 이월
               </span>}
@@ -301,12 +292,11 @@ function OrdersPage({ user, setActive }) {
                 </span>
                 <span className="num" style={{ fontWeight: 600 }}>{fmtKRW(r.entry_price)}</span>
                 {r.buy_count > 1 && <span style={{ fontSize: 10.5, color: 'var(--ink-500)' }}> · {r.buy_count}회 분할</span>}
-                {/* 매수 기록이 불완전해(앞이 잘렸거나 초과 매도) 평단·손익을 그대로 믿을 수 없는 경우 */}
+                {/* 앞 기록이 잘렸거나 초과 매도라 평단과 손익을 믿을 수 없는 경우 */}
                 {r.partial && <span style={{ fontSize: 10.5, color: 'var(--down)' }}> · 기록 불완전</span>}
               </>}
             </span>
             <span>
-              {/* 잔량이 남아 open 이어도 이미 실현된 매도가 있으면 보여준다 */}
               {r.sell_count === 0 ? (
                 <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>—</span>
               ) : <>
@@ -368,8 +358,7 @@ function OrdersPage({ user, setActive }) {
               <span className="num" style={{ textAlign: 'right' }}>{fmtKRW(o.price)}</span>
               <span className="num" style={{ textAlign: 'right' }}>{fmtNum(o.volume, 6)}</span>
               {(() => {
-                // order_amount = 이 주문의 실체결 대금. 없으면(V26 이전 행·주문 응답 없는 경로·수동) total_amount 인데,
-                // 그 값의 의미가 경로마다 달라(엔진 매수=원가 스냅샷, 매도=평가액, 수동=요청액) 흐리게 + 설명을 붙인다. `||` 는 0 을 삼키므로 `??`.
+                // order_amount 가 없으면 total_amount 를 쓰는데, 그 값은 경로마다 뜻이 달라 흐리게 표시한다.
                 const orderAmount = o.orderAmount ?? o.order_amount;
                 const known = orderAmount !== null && orderAmount !== undefined;
                 return known
@@ -385,7 +374,6 @@ function OrdersPage({ user, setActive }) {
   );
 }
 
-// ── WALLET ────────────────────────────────────────────────
 function WalletPage({ user, setActive }) {
   const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const p = portfolio.data;
@@ -423,7 +411,6 @@ function WalletPage({ user, setActive }) {
   );
 }
 
-// ── SETTINGS (API keys + Discord webhook) ────────────
 function SettingsPage({ user, setActive, refreshUser }) {
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
@@ -472,8 +459,7 @@ function SettingsPage({ user, setActive, refreshUser }) {
         </div>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Secret Key</div>
-          {/* 비밀번호 관리자가 이 칸을 로그인 비밀번호로 다루지 않게 한다 — Chromium 은 one-time-code 칸을 비밀번호 후보에서 빼
-              자동 채움·생성·저장 제안이 붙지 않는다. off 는 password 칸에서 무시되고, new-password 는 생성 제안 대상이 된다. */}
+          {/* 비밀번호 관리자가 로그인 비밀번호로 채우지 않게 one-time-code 를 쓴다. password 칸에서 off 는 무시된다. */}
           <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="••••••••••••••••" autoComplete="one-time-code"/>
         </div>
 

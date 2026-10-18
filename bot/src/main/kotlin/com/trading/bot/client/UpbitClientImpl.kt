@@ -71,8 +71,7 @@ class UpbitClientImpl(
         val queryString = params.entries.joinToString("&") {
             "${URLEncoder.encode(it.key, StandardCharsets.UTF_8)}=${URLEncoder.encode(it.value, StandardCharsets.UTF_8)}"
         }
-        // 주문 생성은 비멱등 — 429 등에서 재시도하면 중복 주문이 체결될 수 있어 재시도 금지.
-        // 실패는 그대로 전파한다. 접수 여부는 호출부가 provesOrderNotPlaced 와 identifier 조회로 판정한다.
+        // 주문 생성은 멱등이 아니라 재시도하면 중복 주문이 날 수 있다. 접수 여부는 호출부가 identifier 로 확인한다.
         return upbitWebClient.post()
             .uri("/v1/orders")
             .header("Authorization", authProvider!!.authorizationHeader(queryString))
@@ -125,7 +124,7 @@ class UpbitClientImpl(
         }.retryOnRateLimit().awaitSingle()
     }
 
-    /** @param expected 호출자가 정상 결과로 다루는 오류 — ERROR 로그가 Discord 알림으로 나가므로 그런 응답은 INFO 로 남긴다. */
+    // ERROR 는 Discord 로 나가므로 호출자가 정상으로 다루는 오류(expected)는 INFO 로 남긴다.
     private fun handleError(
         response: ClientResponse,
         expected: (UpbitApiException) -> Boolean = { false },
@@ -158,9 +157,7 @@ class UpbitClientImpl(
             Retry.backoff(2, retryBackoffBase)
                 .filter { it is UpbitApiException && it.statusCode == 429 }
                 .doBeforeRetry { log.warn("Retrying Upbit API call (rate limit): attempt {}", it.totalRetries() + 1) }
-                // Reactor's default wraps the last failure in a retry-exhausted
-                // exception; rethrow the original UpbitApiException so the
-                // controller advice can map it to a 429 response instead of a 500.
+                // 기본값은 retry-exhausted 예외로 감싸 500 이 되므로 원래 예외를 던져 429 로 매핑되게 한다.
                 .onRetryExhaustedThrow { _, signal -> signal.failure() }
         )
     }

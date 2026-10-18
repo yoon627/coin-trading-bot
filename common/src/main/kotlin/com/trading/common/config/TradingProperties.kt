@@ -10,31 +10,24 @@ data class TradingProperties(
     val kValue: Double = 0.5,
     val takeProfitPct: Double = 5.0,
     val maxLossPct: Double = 5.0,
-    // ⚠️ 운영은 2026-09-06 부터 **1.5**(arm 0)로 돈다 — env 오버라이드가 소유한다
-    // (`TRADING_TRAILING_STOP_PCT`/`_ARM_PCT`, wiki `trading-engine-loop`). 코드 기본값과 달라서
-    // `ExitParamsDeclarationCheck` 가 기동 때 선언 누락을 알린다. 기본 생성자를 쓰는 테스트가 이 값을 전제하므로
-    // 기본값 이전은 그 기대를 함께 바꾸는 별도 작업이다.
+    // 운영값은 env 로 덮어쓴다. 기본 생성자를 쓰는 테스트가 이 값을 전제한다.
     val trailingStopPct: Double = 2.0,
-    // 트레일링 arm 임계(%): 고점 수익률이 이 값에 도달한 뒤에만 트레일링 평가. 0 이면 수익 중 즉시.
-    // takeProfitPct 가 이 값·trailingStopPct 보다 커야 트레일링이 실효한다 — 그렇지 않으면 익절이
-    // 항상 먼저 걸려 트레일링이 죽는다(TradingEngine 이 부팅 시 경고). 기본값 TP5/trail2/arm3 은
-    // 그 조건을 만족시키려고 잡은 값이다.
+    // 고점 수익률이 이 값(%)에 닿은 뒤에만 트레일링을 평가한다. takeProfitPct 가 이 값과 trailingStopPct 보다
+    // 커야 트레일링이 작동한다. 아니면 익절이 항상 먼저 걸린다.
     val trailingArmPct: Double = 3.0,
-    // 보유 상한(거래일, KST 09:00 경계): 매수 후 N 거래일 경과 시 강제 청산. 1=현행 일일리셋.
+    // 매수 후 이 거래일 수(KST 09:00 경계)가 지나면 강제 청산한다.
     val maxHoldDays: Int = 1,
-    // 왕복(매수+매도) 수수료 비율 — Upbit 0.05%×2. 기록용 pnlPercent 차감에만 쓰며 청산 게이트는 gross.
+    // 기록용 pnlPercent 에서만 뺀다. 청산 판정은 수수료 전 수익률로 한다.
     val roundTripFeeRate: Double = 0.001,
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
-    // #19: reconcilePendingBuy 의 getOrder·잔고조회가 연속으로 이 횟수만큼 실패하면 해당 ticker 를 halt.
-    // interval-seconds(기본 10s) 기준 20회 ≈ 200초 이상 지속 장애 시 무한 재시도를 멈춘다.
+    // reconcilePendingBuy 의 주문·잔고 조회가 연속으로 이 횟수만큼 실패하면 그 ticker 를 halt 한다.
     val reconcileHaltThreshold: Int = 20,
 ) {
     init {
-        // 0 이하면 첫 실패에서 곧바로 halt 되어 모든 ticker 의 매수가 멈춘다 — 기동 시 걸러낸다.
+        // 0 이하면 첫 실패에서 halt 돼 모든 ticker 의 매수가 멈춘다.
         require(reconcileHaltThreshold >= 1) { "trading.reconcile-halt-threshold must be >= 1, got $reconcileHaltThreshold" }
-        // 0 이하면 tick 루프가 폭주하고, 막힌 매도 알림 임계(threshold × interval)도 0초가 되어
-        // 첫 reconcile 에서 즉시 발화한다(#55).
+        // 0 이하면 tick 루프가 폭주하고 막힌 매도 알림도 첫 reconcile 에서 바로 나간다.
         require(intervalSeconds >= 1) { "trading.interval-seconds must be >= 1, got $intervalSeconds" }
     }
 

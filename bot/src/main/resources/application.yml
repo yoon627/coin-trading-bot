@@ -1,7 +1,7 @@
 spring:
   application:
     name: coin-trading-bot
-  # SIGTERM 시 진행 중이던 웹 요청·트레이딩 tick 이 끝나도록 대기(강제 종료 방지). server.shutdown=graceful 과 짝.
+  # SIGTERM 때 진행 중인 요청과 트레이딩 tick 이 끝날 때까지 기다린다. server.shutdown=graceful 과 함께 쓴다.
   lifecycle:
     timeout-per-shutdown-phase: 30s
   jackson:
@@ -31,16 +31,14 @@ management:
 upbit:
   base-url: https://api.upbit.com
 
-# trading.* 기본값은 TradingProperties 가 유일한 정의처다(#75). 여기서 다시 적으면 두 값이 갈린다.
-# TRADING_TAKE_PROFIT_PCT 같은 환경변수는 relaxed binding 으로 직접 바인딩되므로 통로도 필요 없다.
+# trading.* 기본값은 TradingProperties 에만 둔다. 환경변수는 relaxed binding 으로 바로 들어온다.
 
 app:
   jwt-secret: ${JWT_SECRET:}
   jwt-expiration-ms: 86400000
   encryption-secret: ${APP_ENCRYPTION_SECRET:}
 
-# watchlist.*·marketdata.watchdog.* 는 여기 두지 않는다 — 기본값은 AppConfig.kt 의 설정 클래스가 유일한 정의처이고
-# 운영 env(WATCHLIST_TICKERS·MARKETDATA_WATCHDOG_*)는 relaxed binding 으로 바로 바인딩된다(#232, trading.* 와 같다).
+# watchlist.*·marketdata.watchdog.* 기본값도 같은 이유로 AppConfig.kt 의 설정 클래스에만 둔다.
 
 discord:
   webhook-url: ${DISCORD_WEBHOOK_URL:}

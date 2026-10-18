@@ -36,7 +36,7 @@ function App() {
       const u = await TideAPI.me();
       setUser(u);
     } catch (e) {
-      // 401 already redirects in api.js
+      // 401 은 api.js 가 로그인 화면으로 보낸다.
     } finally {
       setAuthChecked(true);
     }
@@ -60,9 +60,7 @@ function App() {
   }
 }
 
-// Babel-standalone compiles type="text/babel" scripts asynchronously, so this
-// inline block typically runs AFTER the window 'load' event has already fired.
-// Mount directly instead of waiting for an event that won't be re-emitted.
+// Babel 이 이 스크립트를 비동기로 컴파일해 load 이벤트 뒤에 실행되므로 이벤트를 기다리지 않고 바로 마운트한다.
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>

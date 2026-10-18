@@ -13,16 +13,14 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.springframework.boot.context.properties.ConfigurationProperties
 
-/**
- * 청산·주문 파라미터의 의미상 구간 (#230) — 운영값이 아니라 판정식이 뜻을 잃는 경계다. 근거는 [ExitParamRanges] KDoc.
- */
+/** 청산·주문 파라미터의 의미상 구간. 운영값이 아니라 판정식이 뜻을 잃는 경계다. */
 class ExitParamRangesTest {
 
     private val entries = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW).associateBy { it.key }
 
     @ParameterizedTest(name = "{0}={1} → 구간 안 {2}")
     @CsvSource(
-        // 부호 오기 — 손절 -5 는 `pnl <= 5` 가 돼 매수 직후 손절한다.
+        // 부호 오기: 손절 -5 는 `pnl <= 5` 가 돼 매수 직후 손절한다.
         "trading.max-loss-pct, -5, false",
         "trading.max-loss-pct, 0, false",
         "trading.max-loss-pct, 0.01, true",
@@ -32,7 +30,7 @@ class ExitParamRangesTest {
         "trading.take-profit-pct, 0, false",
         "trading.take-profit-pct, 0.01, true",
         "trading.take-profit-pct, 100, true",
-        // 상한 100 은 판정식 근거가 없다(#288) — 완화하면 preflight 사본과 함께 이 행을 바꾼다.
+        // 상한 100 은 판정식 근거가 없다. 완화하면 preflight 사본과 함께 이 행을 바꾼다.
         "trading.take-profit-pct, 100.01, false",
         "trading.trailing-stop-pct, 0, false",
         "trading.trailing-stop-pct, 1.5, true",
@@ -51,13 +49,13 @@ class ExitParamRangesTest {
         "trading.round-trip-fee-rate, 0, true",
         "trading.round-trip-fee-rate, 0.009, true",
         "trading.round-trip-fee-rate, 0.01, false",
-        // 0.1% 를 퍼센트 단위로 적은 오기 — 비율로는 10% 다.
+        // 0.1% 를 퍼센트 단위로 적은 오기. 비율로는 10% 다.
         "trading.round-trip-fee-rate, 0.1, false",
         "trading.shadow-exit.trailing-stop-pct, 0, false",
         "trading.shadow-exit.trailing-stop-pct, 1.5, true",
         "trading.shadow-exit.trailing-stop-pct, 100, false",
         "trading.shadow-exit.trailing-arm-pct, -1, false",
-        // 라이브 arm 의 상한은 판정식 근거가 없어(#288) 그림자에는 두지 않았다.
+        // 라이브 arm 의 상한은 판정식 근거가 없어 그림자에는 두지 않았다.
         "trading.shadow-exit.trailing-arm-pct, 1000, true",
     )
     fun `구간은 판정식이 뜻을 잃는 경계에서 갈린다`(key: String, value: Double, inside: Boolean) {
@@ -112,7 +110,7 @@ class ExitParamRangesTest {
 
     @Test
     fun `청산 스냅샷의 파라미터는 모두 구간을 가지고 선언 필수 키다`() {
-        // 새 청산 파라미터를 스냅샷에 더하고 구간이나 선언 검사를 빠뜨리면 여기서 깨진다 — 빠진 쪽은 오기·누락을 조용히 통과시킨다.
+        // 새 청산 파라미터를 스냅샷에 더하고 구간이나 선언 검사를 빠뜨리면 여기서 깨진다.
         val snapshotParams = ExitParamsSnapshot::class.primaryConstructor!!.parameters.map { it.name }
         val entries = ExitParamRanges.TRADING.filter { it.property.name in snapshotParams }
         assertThat(entries.map { it.property.name }).containsExactlyInAnyOrderElementsOf(snapshotParams)
@@ -121,7 +119,7 @@ class ExitParamRangesTest {
 
     @Test
     fun `그림자 설정은 구간 밖이어도 만들어지고 같은 표로 위반을 돌려준다`() {
-        // 관측 전용이라 기동을 막지 않는다 — 관측만 끄고 알린다(#271).
+        // 관측 전용이라 기동은 막지 않고 관측만 끄고 알린다.
         assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = 0.0)).single())
             .contains("trading.shadow-exit.trailing-stop-pct")
         assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingArmPct = -1.0)).single())
@@ -131,7 +129,7 @@ class ExitParamRangesTest {
     }
 
     companion object {
-        /** 청산 5개는 운영 실효값(2026-09-30 기동 로그). 비율·수수료는 코드 기본값 — 운영값은 구간 안인 것만 확인했다. */
+        /** 청산 5개는 운영 실효값이고 비율·수수료는 코드 기본값이다. */
         val PRODUCTION = TradingProperties(
             takeProfitPct = 5.0, maxLossPct = 5.0, trailingStopPct = 1.5, trailingArmPct = 0.0, maxHoldDays = 1,
         )

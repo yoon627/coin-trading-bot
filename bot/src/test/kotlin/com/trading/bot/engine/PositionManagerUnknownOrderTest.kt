@@ -42,7 +42,7 @@ import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 
 /**
- * 주문 전송 결과가 불명확한 경우(#227). 응답을 못 받은 주문을 "미전송"으로 보면 매수는 다음 tick 에 한 번 더 나가고,
+ * 주문 전송 결과가 불명확한 경우. 응답을 못 받은 주문을 미전송으로 보면 매수는 다음 tick 에 한 번 더 나가고,
  * 매도는 청산 기록 없이 사라진다. identifier 를 주문 전에 durable 로 남기고, 결과를 identifier 조회로 확정한다.
  */
 class PositionManagerUnknownOrderTest {
@@ -58,7 +58,7 @@ class PositionManagerUnknownOrderTest {
     private val clock = MutableClock(Instant.parse("2026-09-28T00:00:00Z"))
     private val manager = PositionManager(upbit, TradingProperties(maxInvestAmount = 100_000.0), stateService, 1L, clock = clock)
 
-    /** upsert 가 호출된 시점의 스냅샷 — 인자는 계속 바뀌는 같은 객체라 호출 순간을 복사해 둔다. */
+    /** 인자는 계속 바뀌는 같은 객체라 upsert 호출 시점에 복사해 둔다. */
     private val saved = mutableListOf<TradingState>()
     private val sent = mutableListOf<OrderRequest>()
 
@@ -78,7 +78,7 @@ class PositionManagerUnknownOrderTest {
 
     private fun errors() = logs.list.filter { it.level == Level.ERROR }.map { it.formattedMessage }
 
-    /** 잔고 흔적 알림만 — 경과시간 알림 등 다른 ERROR 에도 identifier 가 찍힌다. */
+    /** 잔고 흔적 알림만 센다. 경과시간 알림 등 다른 ERROR 에도 identifier 가 찍힌다. */
     private fun traceAlerts(identifier: String) = errors().count { identifier in it && "자동 처리하지 않습니다" in it }
 
     private fun krw(balance: String = "1000000") = Account(currency = "KRW", balance = balance)
@@ -202,7 +202,7 @@ class PositionManagerUnknownOrderTest {
         val identifier = state.pendingBuyIdentifier!!
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
 
-        // 조회 실패가 끼면 처음부터 다시 센다 — 첫 404 로부터 80초가 지났어도 끊김 없는 404 는 1회뿐이다.
+        // 조회 실패가 끼면 처음부터 다시 센다. 첫 404 로부터 80초가 지났어도 끊김 없는 404 는 1회뿐이다.
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         advance(70)
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("order lookup down")
@@ -221,7 +221,7 @@ class PositionManagerUnknownOrderTest {
         coEvery { upbit.getAccounts() } returns listOf(krw())
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertEquals(identifier, state.pendingBuyIdentifier)
-        // 간헐 장애는 404 사이에서도 halt 카운터에 쌓인다 — 되돌리면 해제도 halt 도 없이 매매가 멈춘다.
+        // 간헐 장애는 404 사이에서도 halt 카운터에 쌓인다. 되돌리면 해제도 halt 도 없이 매매가 멈춘다.
         assertEquals(2, state.reconcileFailureCount)
 
         advance(70)
@@ -252,7 +252,7 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `an order answered without a uuid is kept pending by identifier`() = runTest {
-        // 역직렬화된 빈 응답은 uuid 가 "" 다 — 그걸 채택하면 체결 확인이 null 이 되어 주문이 무산으로 풀린다.
+        // 역직렬화된 빈 응답은 uuid 가 "" 다. 그걸 쓰면 체결 확인이 null 이 되어 주문이 무산으로 풀린다.
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.001"))
         placeOrderAnswers { Order() }
         val buying = TradingState("KRW-BTC")
@@ -443,7 +443,7 @@ class PositionManagerUnknownOrderTest {
         advance(40)
         manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
         assertFalse(state.hasPendingSell())
-        assertTrue(state.position) // 코인은 그대로 — 다음 tick 에 다시 판다
+        assertTrue(state.position) // 코인은 그대로라 다음 tick 에 다시 판다
         assertNull(saved.last().pendingSellIdentifier)
     }
 
@@ -466,7 +466,7 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `a sell is still sent when its identifier cannot be recorded first`() = runTest {
-        // 기록 장애가 손절을 막으면 안 된다 — 메모리 identifier 가 같은 프로세스의 이중 매도는 막는다.
+        // 기록 장애가 손절을 막으면 안 된다. 같은 프로세스 안의 이중 매도는 메모리 identifier 가 막는다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
         coEvery { stateService.upsert(any(), any()) } throws RuntimeException("db down")
         placeOrderAnswers { throw RuntimeException("connection reset") }
@@ -479,8 +479,7 @@ class PositionManagerUnknownOrderTest {
         assertNotNull(state.pendingSellIdentifier)
     }
 
-    // --- 확정 규칙의 관측 가능한 계약 (#235) ---
-    // 규칙을 PositionManager 밖으로 옮겨도 아래가 그대로여야 한다. 기존 테스트가 우연히 가리지 못하던 것만 고정한다.
+    // --- 확정 규칙의 관측 가능한 계약 ---
 
     /** 응답을 못 받아 identifier 만 남은 매수. */
     private suspend fun unknownBuy(): Pair<TradingState, String> {
@@ -493,7 +492,7 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `an unknown sell never counts toward the halt`() = runTest {
-        // 매도는 경과시간 알림이 사람을 부른다 — halt 는 신규 매수만 막는 플래그라 매도 판정은 세지 않는다.
+        // 매도는 경과시간 알림으로 사람을 부른다. halt 는 신규 매수만 막는 플래그라 매도 판정은 세지 않는다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
         placeOrderAnswers { throw RuntimeException("connection reset") }
         val state = held()
@@ -518,7 +517,7 @@ class PositionManagerUnknownOrderTest {
 
         assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
 
-        assertEquals("u-wait", state.pendingBuyUuid) // 아직 체결 전 — 이어받은 uuid 로 다음 tick 에 확정한다
+        assertEquals("u-wait", state.pendingBuyUuid) // 아직 체결 전. 이어받은 uuid 로 다음 tick 에 확정한다
         assertEquals(0, state.reconcileFailureCount) // 주문 상태를 봤으니 조회 장애 카운트는 끊긴다
     }
 
@@ -535,8 +534,8 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `a released sell resyncs the position before dropping the order, as it does today`() = runTest {
-        // 재시작 뒤처럼 position=false 로 복원된 행. 현행 순서(동기화 → pending 해제)를 고정한다. 실제로는 요청량 ≤ 주문 전 보유라
-        // 순서가 결과를 바꾸지 않는다 — 순서를 드러내려고 요청량(0.001)이 주문 전 보유(0.0005)보다 큰, 운영에서 생기지 않는 행을 쓴다.
+        // 재시작 뒤처럼 position=false 로 복원된 행. 동기화 후 pending 해제 순서를 드러내려고, 운영에서는 생기지 않는
+        // 요청량(0.001) > 주문 전 보유(0.0005) 행을 쓴다.
         val state = TradingState("KRW-BTC").apply {
             beginSellOrder("ctb-restored", SellReason.STOP_LOSS, since = clock.instant(), volume = 0.001, triggerPrice = 52_000_000.0, priorVolume = 0.0005)
         }
@@ -586,7 +585,7 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `an unseen balance counts toward the halt even after a trace was seen`() = runTest {
-        // 흔적을 봤어도 이번에 잔고를 못 봤으면 주문 상태를 볼 수단이 없는 것이다 — 조회 장애로 센다.
+        // 흔적을 봤어도 이번에 잔고를 못 봤으면 주문 상태를 확인할 수단이 없으니 조회 장애로 센다.
         val (state, identifier) = unknownBuy()
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.002")) // 주문 전엔 없던 코인
@@ -600,7 +599,7 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `a trace keeps an unknown buy held through a lookup failure and a vanished balance`() = runTest {
-        // 흔적을 한 번 봤으면 조회가 한 번 실패해 연속 횟수가 끊겨도 흔적 기록은 남는다 — 그 뒤 흔적이 사라져도 풀지 않는다.
+        // 흔적을 한 번 봤으면 조회 실패로 연속 횟수가 끊겨도 흔적 기록은 남는다. 그 뒤 흔적이 사라져도 풀지 않는다.
         val (state, identifier) = unknownBuy()
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.002"))

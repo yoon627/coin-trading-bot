@@ -19,10 +19,7 @@ import org.springframework.test.web.reactive.server.WebTestClient
 import org.springframework.web.server.WebFilter
 import reactor.core.publisher.Mono
 
-/**
- * 런타임 교체 실패·봇 제어 상태 저장 실패가 **실제 WebFlux 파이프라인에서** 503 + 안내 문구로 나오는지 검증한다.
- * 단위 테스트로는 상태코드를 보증할 수 없다 — 예외가 프레임워크를 거쳐야 응답이 정해진다.
- */
+/** 런타임 교체 실패·봇 제어 상태 저장 실패는 예외가 프레임워크를 거쳐야 응답이 정해지므로 실제 WebFlux 파이프라인으로 503 을 본다. */
 class ReloadFailureResponseWebFluxTest {
 
     private val userTradingManager: UserTradingManager = mockk(relaxed = true)
@@ -32,7 +29,6 @@ class ReloadFailureResponseWebFluxTest {
 
     private fun user() = UserEntity(id = 1L, username = "u", password = "p")
 
-    /** ReactiveSecurityContextHolder 에 principal(userId)을 넣어 currentUserId() 가 동작하게 한다. */
     private fun authFilter(): WebFilter = WebFilter { exchange, chain ->
         chain.filter(exchange).contextWrite(
             ReactiveSecurityContextHolder.withAuthentication(
@@ -61,9 +57,7 @@ class ReloadFailureResponseWebFluxTest {
             .bodyValue(mapOf("accessKey" to "A".repeat(32), "secretKey" to "B".repeat(32)))
             .exchange()
             .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
-        // 이 reason 이 응답 body 의 message 로 노출되는 것은 SafeErrorAttributesTest
-        // (`ResponseStatusException reason is exposed as message`)가 보장한다.
-        // 여기서는 예외가 WebFlux 파이프라인을 거쳐 503 이 되는지만 확인한다.
+        // reason 이 body 의 message 로 나가는지는 SafeErrorAttributesTest 가 본다.
     }
 
     @Test
@@ -102,7 +96,7 @@ class ReloadFailureResponseWebFluxTest {
 
     @Test
     fun `복구 실패는 정지 상태를 알리는 다른 문구를 쓴다`() {
-        // 두 상황은 사용자가 할 조치가 정반대다 — 문구를 공유하면 정지된 봇을 방치하게 된다.
+        // 두 상황은 사용자가 할 조치가 정반대라 문구를 공유하면 정지된 봇을 방치하게 된다.
         val restored = com.trading.bot.engine.reloadFailureMessage(
             RuntimeReloadFailedException(1L, RuntimeException("x"), engineRestored = true),
         )

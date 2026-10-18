@@ -1,7 +1,4 @@
-// Tide — API client + auth helpers
-// Talks to the Spring Boot backend at the same origin.
-// JWT is delivered as an httpOnly cookie by /api/auth/login,
-// so we don't need to attach Authorization headers manually.
+// JWT 는 /api/auth/login 이 httpOnly 쿠키로 내려주므로 Authorization 헤더를 붙이지 않는다.
 
 const TideAPI = {
   async _fetch(path, opts = {}) {
@@ -10,10 +7,7 @@ const TideAPI = {
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts,
     });
-    // Treat 401 as session expiry only for non-auth requests. /api/auth/*
-    // returning 401 means the credentials are wrong, not that we have a
-    // stale session — fall through so the !res.ok branch can surface the
-    // backend's reason (e.g. "Invalid credentials") to the login form.
+    // /api/auth/* 의 401 은 세션 만료가 아니라 인증 실패라 아래에서 서버 메시지를 그대로 올린다.
     if (res.status === 401 && !path.startsWith('/api/auth/')) {
       if (!location.pathname.endsWith('login.html')) {
         location.href = '/login.html';
@@ -30,10 +24,8 @@ const TideAPI = {
     return ct.includes('json') ? res.json() : res.text();
   },
 
-  // Auth
   login: (username, password) => TideAPI._fetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-  // Backend uses Jackson SNAKE_CASE strategy, so optional API key fields must be
-  // sent as snake_case or they're silently dropped from AuthRequest.
+  // 서버가 SNAKE_CASE 로 역직렬화하므로 camelCase 로 보내면 키가 조용히 버려진다.
   register: (username, password, upbitAccessKey, upbitSecretKey) =>
     TideAPI._fetch('/api/auth/register', { method: 'POST', body: JSON.stringify({
       username, password,
@@ -43,44 +35,34 @@ const TideAPI = {
   logout: () => TideAPI._fetch('/api/auth/logout', { method: 'POST' }),
   me: () => TideAPI._fetch('/api/user/me'),
 
-  // Bot
   botStatus: () => TideAPI._fetch('/api/bot/status'),
   botStart: (req = {}) => TideAPI._fetch('/api/bot/start', { method: 'POST', body: JSON.stringify(req) }),
   botStop: () => TideAPI._fetch('/api/bot/stop', { method: 'POST' }),
-  // 화면 버튼은 없다 — 막힌 pending(#246)을 정지된 봇에서 콘솔로 지운다. side 는 'buy' | 'sell'.
+  // 화면 버튼 없이 콘솔에서 쓴다. 정지된 봇의 막힌 pending 을 지운다. side 는 'buy' | 'sell'.
   clearPending: (ticker, side) => TideAPI._fetch('/api/bot/pending/clear', { method: 'POST', body: JSON.stringify({ ticker, side }) }),
 
-  // Trading data
   portfolio: () => TideAPI._fetch('/api/portfolio'),
   account: () => TideAPI._fetch('/api/account'),
   trades: () => TideAPI._fetch('/api/trades'),
-  // 매수→매도 짝. 응답은 { total, limit, truncated, round_trips } 이고 각 항목 필드는 SNAKE_CASE.
+  // 응답은 { total, limit, truncated, round_trips } 이다.
   roundTrips: () => TideAPI._fetch('/api/trades/roundtrips'),
 
-  // Strategy
-
-  // Settings
-  // Same SNAKE_CASE concern as register — UpbitKeysRequest.accessKey on the
-  // wire is access_key.
   saveKeys: (accessKey, secretKey) =>
     TideAPI._fetch('/api/user/keys', { method: 'POST', body: JSON.stringify({
       access_key: accessKey,
       secret_key: secretKey,
     }) }),
 
-  // Notifications. The server keeps the stored webhook when the field is omitted
-  // (snake_case wire format matches Jackson SNAKE_CASE strategy).
+  // 필드를 빼면 서버가 저장된 웹훅을 유지한다.
   updateSettings: (patch) =>
     TideAPI._fetch('/api/user/settings', { method: 'POST', body: JSON.stringify(patch) }),
 
 };
 
-// Format helpers
 const fmtKRW = v => '₩' + Math.round(v || 0).toLocaleString();
 const fmtPct = v => ((v || 0) >= 0 ? '+' : '') + (v || 0).toFixed(2) + '%';
 const fmtNum = (v, d = 4) => (v || 0).toLocaleString('en-US', { maximumFractionDigits: d });
 
-// Hook to fetch + auto-refresh
 function useAPI(fn, deps = [], intervalMs = null) {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);

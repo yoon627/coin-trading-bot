@@ -1,6 +1,3 @@
-// Tide — Shared UI primitives for the live app
-// Logo, Icon, Button, Card, Badge, Sidebar, TopBar, charts.
-
 function TideLogo({ size = 22, withText = true, color = 'var(--tide-primary)' }) {
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>

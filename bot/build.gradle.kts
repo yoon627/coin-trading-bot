@@ -8,25 +8,22 @@ plugins {
 dependencies {
     implementation(project(":common"))
 
-    // Spring Boot
     implementation("org.springframework.boot:spring-boot-starter-webflux")
     implementation("org.springframework.boot:spring-boot-starter-data-r2dbc")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.security:spring-security-crypto")
 
-    // Kotlin
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("org.jetbrains.kotlin:kotlin-reflect")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor")
 
-    // JWT for Upbit API auth
+    // Upbit API 인증용 JWT
     implementation("io.jsonwebtoken:jjwt-api:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
-    // Database
     runtimeOnly("io.r2dbc:r2dbc-h2")
     runtimeOnly("com.h2database:h2")
     runtimeOnly("org.postgresql:r2dbc-postgresql")
@@ -34,7 +31,6 @@ dependencies {
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
 
-    // Test
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.projectreactor:reactor-test")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test")
@@ -45,12 +41,10 @@ dependencies {
 }
 
 tasks.test {
-    // 알림 메시지가 금액을 기본 로케일로 찍고(`DiscordNotifier` 의 "%,.0f원") 테스트가 그 문자열을 단언한다 — 그룹 구분자가
-    // `,` 가 아닌 로케일에서는 깨진다. en·ko 에서는 고정 없이도 통과해 드러나지 않으므로 테스트 JVM 로케일을 고정한다.
+    // 알림 금액을 기본 로케일로 포맷하고 테스트가 "," 구분자를 단언하므로 로케일을 고정한다.
     systemProperty("user.language", "en")
     systemProperty("user.country", "US")
-    // 배포 스크립트·compose 를 읽는 테스트가 있다(DeployEnvPassthroughTest·ExitParamsPreflightScriptTest) —
-    // 입력으로 선언하지 않으면 그 파일만 고쳤을 때 테스트가 UP-TO-DATE 로 건너뛰어진다.
+    // 배포 스크립트를 읽는 테스트가 있어, 입력으로 선언하지 않으면 스크립트만 바꿨을 때 테스트가 UP-TO-DATE 로 건너뛰어진다.
     inputs.files(
         rootProject.file("deploy/vultr/deploy.sh"),
         rootProject.file("deploy/vultr/docker-compose.prod.yml"),

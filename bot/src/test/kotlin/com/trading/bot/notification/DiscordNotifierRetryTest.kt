@@ -23,7 +23,7 @@ import java.net.URI
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 
-/** 실제 WebClient 로 보낸다 — 재시도는 구독을 다시 해 요청을 새로 보내는 동작이라 mock 체인으로는 볼 수 없다. */
+/** 재시도는 재구독으로 요청을 새로 보내는 동작이라 mock 이 아닌 실제 WebClient 로 본다. */
 class DiscordNotifierRetryTest {
 
     private lateinit var server: MockWebServer
@@ -33,7 +33,7 @@ class DiscordNotifierRetryTest {
     fun setup() {
         server = MockWebServer()
         server.start()
-        // 검증기는 Discord HTTPS 주소만 통과시킨다 — 로컬 서버로 보내려고 검증 결과만 바꾼다.
+        // 검증기는 Discord HTTPS 주소만 통과시키므로 로컬 서버로 보내려고 검증 결과만 바꾼다.
         val validators = mockk<RequestValidators>()
         every { validators.normalizeDiscordWebhookUrl(any()) } returns server.url("/api/webhooks/1/token").toString()
         notifier = DiscordNotifier(

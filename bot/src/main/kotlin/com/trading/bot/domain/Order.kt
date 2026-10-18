@@ -18,28 +18,17 @@ data class Order(
     @JsonProperty("trades_count")
     val tradesCount: Int = 0,
     /**
-     * 거래소가 실제로 청구한 수수료(원). Upbit 개별 주문 조회가 `reserved_fee`(예약)·`remaining_fee`(잔여)와
-     * 함께 준다 — 부분 체결 후 `cancel` 로 끝나도 체결분에 대해 청구된 값이다.
-     *
-     * 주문 **접수 직후** 응답에는 아직 체결이 안 잡혀 신뢰할 수 없다. `getOrder` 로 체결 후 조회한
-     * 응답에서만 실측으로 쓸 것(#133).
+     * 거래소가 실제 청구한 수수료(원). 주문 접수 직후 응답에는 체결이 반영되지 않아
+     * 체결 후 `getOrder` 로 조회한 응답에서만 믿을 수 있다.
      */
     @JsonProperty("paid_fee")
     val paidFee: String? = null,
-    /**
-     * 체결 내역. Upbit **개별 주문 조회**(`GET /v1/order`)만 준다 — 주문 접수 직후 응답에는 없다.
-     * 최상위에 체결금액 합계 필드가 없으므로(공식 문서 확인, 2026-09-05) 실체결 단가는 여기서 만든다.
-     */
+    /** 체결 내역. Upbit 개별 주문 조회에만 있고 체결금액 합계 필드가 없어 실체결 단가는 여기서 계산한다. */
     val trades: List<OrderTrade> = emptyList(),
 ) {
     /**
-     * 실제 체결 단가(VWAP) — `Σfunds / Σvolume`. 얻을 수 없으면 **null 이고 추정하지 않는다**.
-     *
-     * 왜 필요한가: 이 봇은 시장가로 팔고 거래 기록에는 **판단 시점 tick 가격**을 쓴다. 그 둘의 차이가
-     * 실행 슬리피지이고, 판단 가격만 보는 모델로는 얻을 수 없어 실체결로만 잰다.
-     *
-     * `funds` 를 쓰는 이유: `price × volume` 으로 재계산하면 부분 체결이 여러 건일 때 반올림이 누적된다.
-     * [feeBasis] 와 같은 규율 — 유한한 양수일 때만 값이고, 아니면 null 로 떨어뜨려 소비자가 "모른다"를 보게 한다.
+     * 실제 체결 단가(`Σfunds / Σvolume`). 얻을 수 없으면 추정하지 않고 null 이다.
+     * `price × volume` 으로 다시 계산하면 부분 체결이 여러 건일 때 반올림이 누적된다.
      */
     fun filledVwap(): Double? {
         val (funds, volume) = filledTotals() ?: return null
@@ -47,12 +36,8 @@ data class Order(
     }
 
     /**
-     * 이 주문이 실제로 체결한 대금 — `Σ trades[].funds`. Upbit 정의상 `funds` 는 체결가 × 체결량이라
-     * **수수료 미포함**이다(수수료는 [paidFee] 별도). 엔진 매수 기록의 `totalAmount` 가 포지션 전체 원가라
-     * "이번 주문 금액"을 알 수 없던 문제(#146)의 유일한 실측 입력이다.
-     *
-     * [filledVwap] 과 같은 규율 — 얻을 수 없으면 null 이고 추정하지 않는다. funds 만 필요해도 volume 검증을
-     * 그대로 상속한다(fail-closed): 반쪽만 통과한 체결 내역을 금액으로 믿지 않는다.
+     * 이 주문이 실제로 체결한 대금(`Σ trades[].funds`, 수수료 미포함). 얻을 수 없으면 null 이다.
+     * funds 만 필요해도 volume 검증까지 통과한 체결 내역만 믿는다.
      */
     fun filledFunds(): Double? {
         val funds = filledTotals()?.first ?: return null
@@ -77,22 +62,12 @@ data class Order(
     /** 거래소가 더 바꾸지 않는 최종 상태. wait/watch 는 체결이 진행 중이라 수량·금액·수수료가 늘 수 있다. */
     fun isTerminal(): Boolean = state == "done" || state == "cancel"
 
-    /**
-     * 매도 기록의 수수료 출처 — `paid_fee` 가 있으면 실측, 없으면 **추정**. 매도의 `totalAmount` 는 이 체결의
-     * 대금이라 추정이 정당하다(매수와 달리 스냅샷 과대계상이 없다).
-     */
+    /** `paid_fee` 가 없으면 추정한다. 매도의 `totalAmount` 는 그 체결의 대금이라 추정해도 된다. */
     fun sellFeeBasis(): FeeBasis = feeBasis().takeIf { it is FeeBasis.Measured } ?: FeeBasis.Estimate
 
     /**
-     * 이 주문 응답에서 얻을 수 있는 수수료 출처.
-     *
-     * 수수료로 쓸 수 있는 **유한한 0 이상의 수**일 때만 [FeeBasis.Measured] 다. 그 외는 전부
-     * [FeeBasis.Unrecorded] — **추정으로 떨어뜨리지 않는다.** 엔진 매수의 `totalAmount` 는 포지션
-     * 전체 원가라, 추정하면 고치려던 과대계상이 그대로 재발한다(#133).
-     *
-     * `isFinite()` 가 필요한 이유: `toDoubleOrNull()` 은 `"NaN"`·`"Infinity"` 를 **정상 파싱한다**(실측 확인).
-     * 그 값이 `double precision` 컬럼에 들어가면 이후 `SUM(fee)` 이 영구히 `NaN` 이 된다 — 0 이 섞이는 것과
-     * 달리 되돌릴 수 없다.
+     * 유한한 0 이상의 값일 때만 실측이고 나머지는 [FeeBasis.Unrecorded] 다. 엔진 매수의 `totalAmount` 는 포지션 전체 원가라 추정하면 부풀려진다.
+     * `toDoubleOrNull()` 은 "NaN"·"Infinity" 도 파싱하므로 걸러내야 `SUM(fee)` 가 NaN 이 되지 않는다.
      */
     fun feeBasis(): FeeBasis =
         paidFee?.toDoubleOrNull()
@@ -118,7 +93,7 @@ data class OrderRequest(
     val ordType: String,
     val volume: String? = null,
     val price: String? = null,
-    /** 클라이언트 주문 식별자 — 응답을 못 받은 주문을 나중에 찾는 유일한 수단이다([com.trading.bot.client.newOrderIdentifier]). */
+    /** 클라이언트 주문 식별자. 응답을 못 받은 주문을 나중에 찾는 유일한 수단이다. */
     val identifier: String? = null,
 ) {
     fun toQueryString(): String {

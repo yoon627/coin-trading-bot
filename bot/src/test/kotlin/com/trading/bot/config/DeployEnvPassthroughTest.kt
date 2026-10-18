@@ -11,19 +11,10 @@ import org.springframework.core.type.filter.AnnotationTypeFilter
 import org.yaml.snakeyaml.Yaml
 
 /**
- * 앱이 읽는 설정 중 배포가 이름만 넘기는 것([DeployPassthrough.PASSED])과 **배포 전달 화이트리스트 둘**이 같은 키 집합인가.
- *
- * 전달 경로에는 화이트리스트가 **둘** 있고 **둘 다** 통과해야 값이 앱에 닿는다:
- *   1. `deploy/vultr/deploy.sh` 의 `APP_OVERRIDE_KEYS` — 서버 `.env` 에 그 줄을 쓸지
- *   2. `deploy/vultr/docker-compose.prod.yml` 의 `services.app.environment` — 그 값을 컨테이너에 넘길지
- *
- * - 설정이 한쪽에서라도 빠지면 `.env` 에 적어도 앱까지 도달하지 않고 **조용히 기본값으로 돈다** — 켰다고 믿는데
- *   안 켜진 상태가 가장 나쁘다. 실사고 이력: PR #74 / issue #75 → 2026-09-05 그림자 관측에서 재발 →
- *   같은 날 compose 만 고치고 `deploy.sh` 를 빠뜨려 **세 번째** 재발. 워치독 kill-switch 도 같은 이유로 운영에 닿지 않았다(#232).
- * - 반대로 설정을 지웠는데 키가 목록에 남으면 `.env` 의 그 값은 아무 효과 없이 전달돼, 아직 조정할 수 있다고 믿게 만든다.
- * - compose 의 전달 키에 값을 붙이면(`=${...:-기본값}`) `.env` 에 키가 없을 때 앱 기본값 대신 그 값이 들어간다(#75).
- *
- * 그래서 "문서에 적어두기" 대신 테스트로 가둔다. 설정을 더하거나 지우면 이 테스트가 먼저 깨진다.
+ * 배포가 이름만 넘기는 설정([DeployPassthrough.PASSED])과 배포 화이트리스트 둘이 같은 키 집합인지 본다.
+ * 값은 `deploy/vultr/deploy.sh` 의 `APP_OVERRIDE_KEYS` 와 `deploy/vultr/docker-compose.prod.yml` 의
+ * `services.app.environment` 를 모두 통과해야 앱에 닿고, 한쪽이라도 빠지면 조용히 기본값으로 돈다.
+ * compose 의 전달 키에 값을 붙이면(`=${...:-기본값}`) `.env` 에 키가 없을 때 앱 기본값 대신 그 값이 들어간다.
  */
 class DeployEnvPassthroughTest {
 
@@ -79,7 +70,7 @@ class DeployEnvPassthroughTest {
 
     private fun expectedKeys(): Set<String> = DeployPassthrough.PASSED.flatMap(DeployPassthrough::envNames).toSet()
 
-    /** 앱이 실제로 스캔하는 패키지에서 찾는다 — 패키지를 여기 적으면 새 패키지의 설정이 검사를 빠져나간다. */
+    /** 앱이 실제로 스캔하는 패키지에서 찾는다. 패키지를 여기 적으면 새 패키지의 설정이 검사를 빠져나간다. */
     private fun scannedPropertiesClasses(): Set<String> {
         val packages = CoinTradingBotApplication::class.java.getAnnotation(ConfigurationPropertiesScan::class.java)
             ?.basePackages?.toList()
@@ -91,8 +82,8 @@ class DeployEnvPassthroughTest {
     }
 
     /**
-     * `APP_OVERRIDE_KEYS=( … )` 의 키. 줄마다 `#` 뒤를 먼저 지운다 — 배열 안 설명 주석의 키는 목록이 아니고,
-     * 주석 처리한 키는 빠진 키다. 주석 속 `)` 에서 배열이 끝난 것으로 읽지 않는 것도 이 순서 덕이다.
+     * `APP_OVERRIDE_KEYS=( … )` 의 키. 줄마다 `#` 뒤를 먼저 지워 주석 속 키를 목록에서 빼고,
+     * 주석 속 `)` 를 배열 끝으로 읽지 않는다.
      */
     private fun deployShKeys(): Set<String> {
         val lines = repoFile(DEPLOY_SH).readLines()
@@ -103,11 +94,11 @@ class DeployEnvPassthroughTest {
         val end = code.indexOfFirst { ')' in it }
         assertTrue(end >= 0) { "$DEPLOY_SH 의 APP_OVERRIDE_KEYS 배열이 닫히지 않는다" }
         val body = code.take(end + 1).joinToString("\n").substringBefore(')')
-        // 접두어로 거르지 않는다 — 전달 대상 밖의 키(DISCORD_* 등)를 배열에 넣어도 역방향 단언이 잡게.
+        // 접두어로 거르지 않아야 전달 대상 밖의 키(DISCORD_* 등)를 배열에 넣었을 때 역방향 단언이 잡는다.
         return ANY_ENV_NAME.findAll(body).map { it.value }.toSet().also { assertParsed(DEPLOY_SH, it) }
     }
 
-    /** `services.app.environment` 중 전달 대상 접두어를 가진 항목 원문 — `NAME` 또는 `NAME=값`. */
+    /** `services.app.environment` 중 전달 대상 접두어를 가진 항목 원문(`NAME` 또는 `NAME=값`). */
     private fun composeEntries(): List<String> {
         val compose: Map<*, *> = Yaml().load(repoFile(COMPOSE).readText())
         val app = (compose["services"] as? Map<*, *>)?.get("app") as? Map<*, *>
@@ -120,7 +111,7 @@ class DeployEnvPassthroughTest {
 
     private fun composeKeys(): Set<String> = composeEntries().map { it.substringBefore('=') }.toSet()
 
-    /** 파싱이 통째로 실패하면 역방향·이름만 단언이 "남은 게 없다"로 조용히 통과한다 — 하한을 둬서 그 상태를 실패로 만든다. */
+    /** 파싱이 통째로 실패하면 역방향 단언이 조용히 통과하므로 하한을 둔다. */
     private fun assertParsed(file: String, keys: Set<String>) {
         assertTrue(keys.size > MIN_PARSED) {
             "$file 파싱 실패로 보인다 — ${keys.size}개(설정이 정말 ${MIN_PARSED}개 이하로 줄었다면 MIN_PARSED 를 낮출 것)"

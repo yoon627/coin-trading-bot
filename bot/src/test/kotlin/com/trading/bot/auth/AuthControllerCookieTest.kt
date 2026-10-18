@@ -13,11 +13,8 @@ import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.test.web.reactive.server.WebTestClient
 
 /**
- * Verifies that prod profile always emits Secure cookies, independent of the
- * observed request scheme — guarding against the regression codex flagged
- * where a misconfigured reverse proxy (no X-Forwarded-Proto) would let the
- * JWT be issued over plain HTTP. Drives `shouldMarkSecure` through the real
- * /api/auth/logout endpoint so the cookie attributes are checked end-to-end.
+ * prod 프로필은 요청 scheme 과 무관하게 Secure 쿠키를 낸다. 프록시가 X-Forwarded-Proto 를 빠뜨려도
+ * JWT 가 평문 HTTP 로 나가면 안 되므로 실제 logout 엔드포인트로 쿠키 속성을 본다.
  */
 class AuthControllerCookieTest {
 

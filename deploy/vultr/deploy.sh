@@ -3,26 +3,15 @@ set -euo pipefail
 
 export MSYS_NO_PATHCONV=1
 
-# ============================================================
-# Coin Trading Bot - Vultr 배포 스크립트
-#
-# Vultr 서울(icn) vc2-1c-2gb (1 vCPU x86_64, 2GB, 55GB SSD) + Docker Compose — $10/월.
-# 구성: caddy + app + PostgreSQL.
-#
-# AWS(4GB, $39.29/월 실측) 대비 -75%. 2GB 로 낮춘 근거는 운영 59일차 EC2 실측이다
-# (app 420MiB / postgres 380MiB / redis 3.4MiB / caddy 14MiB = 818MiB, load average 0.00).
+# Vultr 인스턴스 생성과 caddy + app + postgres 배포.
 #
 # 사용법:
-#   ./deploy/vultr/deploy.sh setup    # 1회: SSH 키 + 방화벽 + 인스턴스 생성
+#   ./deploy/vultr/deploy.sh setup    # SSH 키 + 방화벽 + 인스턴스 생성. 다시 실행하면 만든 리소스는 건너뛴다
 #   ./deploy/vultr/deploy.sh deploy   # GHCR 이미지 pull + compose 기동
-#   ./deploy/vultr/deploy.sh ssh|status|logs|stop|start
-#   ./deploy/vultr/deploy.sh destroy  # 삭제 (과금 중단)
-#
-# setup 은 단계별 재진입 가능하다 — 중간 실패 후 같은 명령을 다시 실행하면 이미 만들어진
-# 리소스는 건너뛰고 남은 단계부터 이어서 진행한다.
-# ============================================================
+#   ./deploy/vultr/deploy.sh ssh|status|logs|mem|stop|start
+#   ./deploy/vultr/deploy.sh destroy
 
-# 이 스크립트가 만드는 파일(.env 갱신·.state·임시 env)은 전부 시크릿을 담는다.
+# .env·.state·임시 env 는 모두 시크릿을 담는다.
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -69,9 +58,8 @@ load_state() { if [[ -f "$STATE_FILE" ]]; then source "$STATE_FILE"; fi; }
 load_state
 log() { echo -e "\n=== $1 ==="; }
 
-# ── Vultr REST 호출 ──
-# 응답 본문은 전역 API_BODY 로 돌려준다(bash 3.2 호환 — 로컬 nameref 안 씀).
-# 2xx 가 아니면 즉시 실패시킨다. API 오류를 조용히 넘기면 리소스가 반쯤 만들어진 채 진행된다.
+# 응답 본문은 전역 API_BODY 에 둔다(bash 3.2 에 nameref 가 없다).
+# 2xx 가 아니면 실패시킨다. 넘기면 리소스가 반쯤 만들어진 채 진행된다.
 API_BODY=""
 api() {
     local method="$1" path="$2" body="${3:-}" out code
@@ -105,9 +93,7 @@ require_vultr() {
     echo "  Vultr 계정 확인: $email"
 }
 
-# ⚠️ APP_ENCRYPTION_SECRET 은 생성하지 않고 실패시킨다 — 백업에서 복원한 DB 에는 이 키로
-# 암호화된 Upbit 키가 들어있어, 새 키를 만들면 앱은 정상 기동하면서 거래소 키만 조용히
-# 복호화 불능이 된다(가장 위험한 실패 모드).
+# 새 키를 만들면 앱은 정상 기동하면서 DB 에 저장된 Upbit 키만 복호화할 수 없게 되므로 생성하지 않는다.
 require_encryption_secret() {
     if [[ -z "${APP_ENCRYPTION_SECRET:-}" ]]; then
         echo "ERROR: APP_ENCRYPTION_SECRET 이 비어 있습니다 — 자동 생성하지 않습니다."
@@ -117,8 +103,7 @@ require_encryption_secret() {
     fi
 }
 
-# 이미 있는 인스턴스에는 secret 을 만들지 않는다(#231) — 새 DB_PASSWORD 는 기존 postgres 볼륨의 비밀번호와 달라 앱이
-# 기동하지 못하고, 자동 롤백도 같은 서버 .env 를 쓴다. 새 JWT_SECRET 은 모든 세션을 끊는다.
+# 이미 있는 인스턴스에서 새 DB_PASSWORD 는 기존 볼륨과 맞지 않아 앱과 롤백이 모두 뜨지 못한다.
 require_app_secrets() {
     require_encryption_secret
     local key
@@ -134,7 +119,7 @@ require_app_secrets() {
     done
 }
 
-# 인스턴스를 새로 만들기 직전에만 부른다 — DB 볼륨이 아직 없어 어떤 값이든 맞는다. 비어 있는 값만 만들어 .env 에 적는다.
+# DB 볼륨이 없는 새 인스턴스를 만들기 직전에만 부른다.
 generate_missing_secrets() {
     local appended=""
     if [[ -z "${DB_PASSWORD:-}" ]]; then
@@ -173,9 +158,7 @@ EOF
     chmod 600 "$1"
 }
 
-# 이 키들의 기본값은 설정 클래스(TradingProperties·WatchlistProperties·MarketDataWatchdogProperties 등)가 유일한
-# 정의처다(#75). 여기서 폴백을 주면 앱 기본값을 덮어써 두 값이 갈린다 — .env 에 실제로 설정된 키만 넘기고, 없으면
-# 줄 자체를 쓰지 않는다. 빈 문자열을 넘기는 것도 안 된다: Spring 이 "정의됨"으로 보고 숫자 바인딩에서 기동에 실패한다.
+# .env 에 값이 있는 키만 넘긴다. 폴백을 주면 앱 기본값과 갈리고, 빈 문자열은 Spring 숫자 바인딩이 실패한다.
 APP_OVERRIDE_KEYS=(
     TRADING_TICKERS TRADING_INVEST_RATIO TRADING_MAX_INVEST_AMOUNT
     TRADING_AUTO_START TRADING_TAKE_PROFIT_PCT TRADING_MAX_LOSS_PCT TRADING_TRAILING_STOP_PCT
@@ -187,11 +170,8 @@ APP_OVERRIDE_KEYS=(
     MARKETDATA_WATCHDOG_ENABLED MARKETDATA_WATCHDOG_STALE_MS MARKETDATA_WATCHDOG_INTERVAL_MS
     MARKETDATA_WATCHDOG_INITIAL_DELAY_MS MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
 )
-# ⚠️ 이 목록은 `docker-compose.prod.yml` 의 `environment:` 목록과 **쌍으로 유지**한다.
-# 한쪽에만 있으면 값이 서버 .env 까지 가고도 컨테이너에 안 들어가거나(그 반대) 조용히 기본값으로 돈다.
-# `DeployEnvPassthroughTest` 가 두 목록을 **모두** 앱 설정과 양방향으로 대조한다 — 설정을 더하거나 지우면 그 테스트가 깨진다.
-# 변수에 담아야 [[ =~ ]] 가 공백을 패턴의 일부로 읽는다(따옴표로 감싸면 리터럴이 된다).
-# `-` 는 범위로 해석되지 않도록 클래스 끝에 둔다. 개행은 ^…$ 가 걸러낸다.
+# docker-compose.prod.yml 의 app environment 목록과 같게 유지한다(DeployEnvPassthroughTest 가 대조한다).
+# 패턴을 따옴표로 감싸면 리터럴이 되므로 변수에 담는다.
 OVERRIDE_VALUE_PATTERN='^[A-Za-z0-9._, -]+$'
 
 append_app_overrides() {
@@ -199,9 +179,7 @@ append_app_overrides() {
     for key in "${APP_OVERRIDE_KEYS[@]}"; do
         value="${!key:-}"
         [[ -z "$value" ]] && continue
-        # dotenv 는 quoting 규칙이 제각각이라 값을 그대로 쓴다 — 개행은 파일을 깨고 #·$·따옴표는
-        # compose 보간을 바꾼다. 이 키들은 숫자·boolean·티커 CSV 뿐이므로 그 형태만 허용한다.
-        # 공백은 허용한다: tickerList() 가 "KRW-BTC, KRW-ETH" 를 trim 해 받는다.
+        # 값을 그대로 쓰므로 개행·#·$·따옴표가 들어가면 compose 보간이 바뀐다. 숫자·boolean·티커 목록만 받는다.
         if [[ ! "$value" =~ $OVERRIDE_VALUE_PATTERN ]]; then
             echo "ERROR: $key 값에 허용되지 않은 문자가 있습니다(허용: 영숫자 . _ , - 공백)." >&2
             exit 1
@@ -209,12 +187,11 @@ append_app_overrides() {
         printf '%s=%s\n' "$key" "$value" >> "$1"
         written+=("$key")
     done
-    # 키 이름만 남긴다(배포 로그는 공개 CI 로그다) — secret 에 남은 키가 효력을 갖는지 이 줄로 본다.
+    # 배포 로그가 공개되므로 키 이름만 찍는다.
     if (( ${#written[@]} > 0 )); then log "서버 .env override 키: ${written[*]}"; else log "서버 .env override 키: 없음(앱 기본값)"; fi
     return 0
 }
 
-# ── SSH 키 ──
 ensure_ssh_key() {
     if [[ ! -f "$KEY_PEM" && -f "$KEY_PUB" ]]; then
         echo "ERROR: 공개키($KEY_PUB)만 있고 개인키가 없습니다 — 접속 불가 상태입니다."
@@ -236,7 +213,6 @@ ensure_ssh_key() {
 
     [[ -n "${SSHKEY_ID:-}" ]] && { echo "  Vultr 등록 키 재사용: $SSHKEY_ID"; return; }
 
-    # 같은 이름이 이미 등록돼 있으면 재사용한다(재실행 시 중복 등록 방지).
     api GET "/ssh-keys?per_page=500"
     local existing
     existing="$(printf '%s' "$API_BODY" | jq -r --arg n "$KEY_NAME" '.ssh_keys[]? | select(.name==$n) | .id' | head -1)"
@@ -253,9 +229,7 @@ ensure_ssh_key() {
     save_state SSHKEY_ID "$SSHKEY_ID"
 }
 
-# ── 방화벽 ──
-# Vultr 클라우드 방화벽은 리소스에 붙는 형태라 AWS security group 과 의미가 같다.
-# 규칙 없이 그룹만 붙이면 **모든 인바운드가 차단**되므로 필요한 포트를 반드시 넣는다.
+# 규칙 없이 그룹만 붙이면 모든 인바운드가 막힌다.
 setup_firewall() {
     if [[ -z "${FIREWALL_ID:-}" ]]; then
         log "방화벽 그룹 생성"
@@ -265,7 +239,6 @@ setup_firewall() {
         save_state FIREWALL_ID "$FIREWALL_ID"
     fi
 
-    # SSH 허용 대역: 미지정이면 현재 공인 IP/32 로 자동 제한.
     local ssh_cidr="${SSH_ALLOW_CIDR:-}"
     if [[ -z "$ssh_cidr" ]]; then
         local myip; myip="$(curl -s --max-time 10 https://checkip.amazonaws.com || true)"
@@ -278,8 +251,7 @@ setup_firewall() {
     local app_subnet="${app_cidr%%/*}" app_size="${app_cidr##*/}"
     log "방화벽 규칙: SSH=$ssh_cidr / 443=$app_cidr / 80=0.0.0.0/0(ACME)"
 
-    # 이 스크립트가 관리하는 규칙(notes 가 ctb- 로 시작)만 지우고 다시 넣어 멱등성을 보장한다.
-    # "규칙이 하나라도 있으면 통과" 로 판정하면 SSH 대역이 바뀌었을 때 옛 규칙이 남아 위험하다.
+    # notes 가 ctb- 로 시작하는 규칙만 지우고 다시 넣는다. ctb-ssh-github-actions 는 남긴다.
     api GET "/firewalls/${FIREWALL_ID}/rules?per_page=500"
     local old_ids rid stale=0
     local actions_rule_count actions_rule_invalid
@@ -298,8 +270,7 @@ setup_firewall() {
     fi
     old_ids="$(printf '%s' "$API_BODY" | jq -r '.firewall_rules[]? | select((.notes // "") | startswith("ctb-") and . != "ctb-ssh-github-actions") | .id')"
     for rid in $old_ids; do
-        # 삭제 실패를 삼키면 옛 규칙(예: 이전 집 IP 로 열린 SSH)이 남은 채 새 규칙이 더해져
-        # 접근 범위가 의도보다 넓어진다 — 조용히 넘기지 않고 경고한다.
+        # 삭제에 실패하면 옛 SSH 대역이 열린 채 남는다.
         if ! api DELETE "/firewalls/${FIREWALL_ID}/rules/${rid}" >/dev/null; then
             echo "  WARN: 기존 규칙 $rid 삭제 실패 — 콘솔에서 직접 확인하세요." >&2
             stale=1
@@ -358,10 +329,10 @@ install_aws_cli() {
     esac
 }
 
-# DB 백업이 S3 호환 스토리지로 업로드할 때 쓴다. 설치 실패를 숨기지 않는다.
+# backup.sh 가 쓴다.
 install_aws_cli
 
-# Docker 공식 저장소 (Ubuntu 는 기본 repo 의 docker.io 대신 docker-ce 를 쓴다 — compose plugin 포함)
+# compose plugin 이 필요해 Ubuntu 기본 docker.io 대신 docker-ce 를 쓴다.
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 chmod a+r /etc/apt/keyrings/docker.gpg
@@ -373,7 +344,7 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
 systemctl enable --now docker
 
-# Vultr 클라우드 방화벽이 앞단에서 막지만, 이미지에 ufw 가 켜져 있는 경우를 대비해 함께 연다.
+# 이미지에 ufw 가 켜져 있으면 클라우드 방화벽과 별개로 막히므로 함께 연다.
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
     ufw allow 22/tcp
     ufw allow 80/tcp
@@ -382,7 +353,7 @@ fi
 
 mkdir -p /opt/app
 
-# 마커는 의존성이 실제로 준비된 뒤에만 남긴다 — 마커가 곧 "배포해도 좋다" 는 신호다.
+# deploy 는 이 마커를 보고 진행하므로 의존성이 준비된 뒤에만 남긴다.
 command -v docker >/dev/null || { echo "FATAL: docker 설치 실패"; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "FATAL: docker compose plugin 없음"; exit 1; }
 touch /opt/app/.userdata-done
@@ -392,7 +363,7 @@ UDEOF
 launch_instance() {
     if [[ -n "${INSTANCE_ID:-}" ]]; then echo "  기존 인스턴스 사용: $INSTANCE_ID"; return; fi
 
-    # 응답 유실 등으로 이미 만들어졌을 수 있으니 label 로 먼저 확인한다(중복 생성·중복 과금 방지).
+    # 응답이 유실돼 이미 만들어졌을 수 있으니 label 로 먼저 찾는다.
     api GET "/instances?per_page=500"
     local existing
     existing="$(printf '%s' "$API_BODY" | jq -r --arg l "$APP_NAME" '.instances[]? | select(.label==$l) | .id' | head -1)"
@@ -401,8 +372,7 @@ launch_instance() {
         INSTANCE_ID="$existing"; save_state INSTANCE_ID "$INSTANCE_ID"; return
     fi
 
-    # 여기서부터는 새로 만든다 — DB 볼륨이 아직 없으니 비어 있는 secret 을 만들어도 된다. 생성 요청 전에 적어 두면
-    # 요청이 끊겨 다시 실행할 때(위 label 재사용 경로) 이미 채워져 있다.
+    # 생성 요청 전에 .env 에 적어 두어야 요청이 끊겨 다시 실행할 때 같은 값을 쓴다.
     generate_missing_secrets
 
     local ud; ud="$(mktemp)"; write_userdata "$ud"
@@ -450,8 +420,7 @@ do_setup() {
     require_encryption_secret
     ensure_ssh_key
     setup_firewall
-    launch_instance # 새로 만들 때만 비어 있는 secret 을 만든다
-    # .state·같은 label 로 다시 쓰는 인스턴스에는 이미 DB 볼륨이 있을 수 있다 — 거기에는 만들지 않는다.
+    launch_instance
     require_app_secrets
     wait_for_active
 
@@ -461,8 +430,7 @@ do_setup() {
     echo "  cloud-init(Docker·AWS CLI 설치) 완료까지 2~4분 대기 후: ./deploy/vultr/deploy.sh deploy"
 }
 
-# 기본은 최초 접속을 자동 수용하고 이후 호스트키 변경을 거부한다. CI는
-# SSH_KNOWN_HOSTS로 검증된 호스트키 파일을 지정해 최초 접속도 고정한다.
+# CI 는 SSH_KNOWN_HOSTS 로 호스트 키를 고정한다. 수동 실행은 처음 보는 키를 받아 두고 이후 변경을 거부한다.
 ssh_inst() {
     ssh "${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM" \
         "${SSH_USER}@${PUBLIC_IP}" "$@"
@@ -502,8 +470,7 @@ preflight_domain() {
     fi
 }
 
-# ── deploy ──
-# 대상 SHA 고정 · migration 게이트 · 자동 롤백 · 헬스체크.
+# migration 이 끼면 자동 롤백하지 않는다. 옛 앱이 새 스키마 위에서 뜰 수 있다.
 do_deploy() {
     load_state
     [[ -z "${PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
@@ -539,8 +506,7 @@ do_deploy() {
     local tmp_env; tmp_env="$(mktemp)"
     trap "rm -f '$tmp_env'" EXIT
     render_server_env "$tmp_env"
-    # 청산·주문 파라미터·시세 워치독의 값과 자동매매 배포의 선언을 업로드 전에 검사한다(#179, #230, #232) —
-    # 잘못된 .env 가 서버에 닿으면 롤백도 그걸 되돌리지 않는다. 실행 비트에 기대지 않도록 bash 로 부른다.
+    # 잘못된 .env 는 롤백으로 되돌려지지 않으므로 업로드 전에 검사한다.
     bash "$SCRIPT_DIR/preflight_exit_params.sh" "$tmp_env"
     ssh_inst 'mkdir -p /opt/app'
     local scp_opts=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM")
@@ -551,7 +517,7 @@ do_deploy() {
     rm -f "$tmp_env"; trap - EXIT
     ssh_inst 'chmod +x /opt/app/backup.sh && chmod 600 /opt/app/.env'
 
-    # GHCR 토큰은 argv 에 남기지 않는다(같은 호스트의 다른 사용자가 ps 로 읽을 수 있다).
+    # argv 에 두면 ps 로 보이므로 stdin 으로 넘긴다.
     if [[ -n "${GHCR_TOKEN:-}" ]]; then
         log "GHCR 로그인 (토큰은 stdin 으로만 전달)"
         printf '%s' "$GHCR_TOKEN" | ssh_inst "docker login ghcr.io -u '${GHCR_USERNAME:-}' --password-stdin" >/dev/null
@@ -564,8 +530,7 @@ set -e
 cd /opt/app
 : "${TARGET_SHA:?TARGET_SHA 필요}"
 
-# `</dev/null` 필수: 이 스크립트는 ssh 가 `bash -s` 의 stdin(파이프)로 흘려보낸다. exec -T 는 TTY 만
-# 끄고 stdin 은 attach 하므로, </dev/null 이 없으면 exec 가 남은 스크립트를 drain 해 실패 경로가 사라진다.
+# 이 스크립트는 bash -s 의 stdin 으로 들어온다. exec -T 가 stdin 을 붙잡아 남은 스크립트를 먹지 않게 끊는다.
 health_ok() {
     for _ in $(seq 1 36); do
         if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health </dev/null > /dev/null 2>&1; then
@@ -655,21 +620,18 @@ REMOTE
     esac
 }
 
-# ── utils ──
 do_ssh()    { load_state; ssh "${SSH_HOST_KEY_OPTIONS[@]}" -i "$KEY_PEM" "${SSH_USER}@${PUBLIC_IP}"; }
 do_status() { load_state; echo "공인 IP: ${PUBLIC_IP:-none}"; [[ -n "${PUBLIC_IP:-}" ]] && ssh_inst 'cd /opt/app && docker compose ps' 2>/dev/null || echo "(unreachable)"; }
 do_logs()   { load_state; ssh_inst 'cd /opt/app && docker compose logs --tail=120 app'; }
 do_stop()   { load_state; ssh_inst 'cd /opt/app && docker compose down && echo 중지'; }
 do_start()  { load_state; ssh_inst 'cd /opt/app && docker compose up -d && echo 시작'; }
 
-# 2GB 로 낮췄으므로 실사용량 확인이 중요하다. 제한 대비 여유를 눈으로 보게 한다.
 do_mem() {
     load_state
     [[ -z "${PUBLIC_IP:-}" ]] && { echo "ERROR: setup 먼저 실행"; exit 1; }
     ssh_inst 'free -m; echo; docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}"'
 }
 
-# ── destroy ──
 do_destroy() {
     require_vultr
     load_state
@@ -680,7 +642,7 @@ do_destroy() {
     echo "    Vultr 인스턴스 삭제는 디스크까지 즉시 소멸시킵니다 — 백업을 먼저 확보하세요."
     read -rp "'yes' 입력: " confirm; [[ "$confirm" != "yes" ]] && { echo "취소"; exit 0; }
 
-    # 삭제 전 최종 백업 (설정돼 있을 때만). 실패하면 중단한다 — 데이터 영구 소멸을 막는다.
+    # 인스턴스를 지우면 디스크도 사라지므로 최종 백업이 실패하면 멈춘다.
     if [[ -n "${PUBLIC_IP:-}" && -n "${BACKUP_S3_BUCKET:-}" ]]; then
         log "최종 DB 백업"
         if ! ssh_inst "cd /opt/app && ./backup.sh"; then
@@ -700,11 +662,10 @@ do_destroy() {
         api DELETE "/instances/${INSTANCE_ID}" && echo "  삭제: instance" || { echo "  실패: instance" >&2; failed=1; }
     fi
     if [[ -n "${FIREWALL_ID:-}" ]]; then
-        # 인스턴스가 참조 중이면 거부될 수 있어 인스턴스 삭제 뒤에 지운다.
+        # 인스턴스가 참조 중이면 삭제가 거부된다.
         sleep 5
         api DELETE "/firewalls/${FIREWALL_ID}" && echo "  삭제: firewall" || { echo "  실패: firewall" >&2; failed=1; }
     fi
-    # SSH 키는 다른 인스턴스에서 재사용할 수 있으므로 남긴다(계정 자산, 과금 없음).
     [[ -n "${SSHKEY_ID:-}" ]] && echo "  보존: SSH 키($SSHKEY_ID) — 필요 없으면 콘솔에서 삭제"
 
     if [[ $failed -ne 0 ]]; then

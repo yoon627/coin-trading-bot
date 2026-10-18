@@ -26,8 +26,7 @@ class MarketDataStoreTest {
             openTime = Instant.ofEpochSecond(epochSeconds),
         )
 
-    // 핵심 회귀: CandleAggregator 가 같은 D1 period(openTime)를 매 분봉 갱신·재전송해도(반복 addCandle)
-    // 버퍼에는 openTime 당 1개만, 최신 값으로 유지돼야 한다.
+    // CandleAggregator 는 같은 D1 봉을 분봉마다 다시 보내므로 openTime 당 최신 값 하나만 남아야 한다.
     @Test
     fun `addCandle upserts by openTime keeping single latest candle`() {
         repeat(30) { i -> store.addCandle(candle(epochSeconds = 1_700_000_000L, close = 100.0 + i)) }
@@ -47,12 +46,12 @@ class MarketDataStoreTest {
         assertEquals(3, store.getCandles(Exchange.UPBIT, market, CandleInterval.D1, 10).size)
     }
 
-    // getCandles 계약: 최신 openTime 이 [0]. 삽입 순서가 뒤섞여도 openTime 기준 desc.
+    // 삽입 순서와 무관하게 최신 openTime 이 [0] 이다.
     @Test
     fun `getCandles returns newest openTime first regardless of insertion order`() {
-        store.addCandle(candle(1_700_086_400L, 101.0)) // middle
-        store.addCandle(candle(1_700_173_200L, 102.0)) // newest
-        store.addCandle(candle(1_700_000_000L, 100.0)) // oldest
+        store.addCandle(candle(1_700_086_400L, 101.0))
+        store.addCandle(candle(1_700_173_200L, 102.0))
+        store.addCandle(candle(1_700_000_000L, 100.0))
 
         val result = store.getCandles(Exchange.UPBIT, market, CandleInterval.D1, 10)
 
@@ -68,7 +67,7 @@ class MarketDataStoreTest {
         assertEquals(listOf(104.0, 103.0), result.map { it.closePrice })
     }
 
-    // MAX_CANDLE_BUFFER_SIZE = 200. distinct openTime 201개 → 가장 오래된 1개 evict.
+    // 버퍼 상한은 200 개다.
     @Test
     fun `addCandle evicts oldest beyond capacity`() {
         (0 until 201).forEach { store.addCandle(candle(1_700_000_000L + it * 86_400L, it.toDouble())) }

@@ -10,16 +10,13 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * 운영 전략 `combined` 의 매수 조건 — 돌파가 초과 · MA5 > MA20 · RSI(14) 30~70 을 모두 만족할 때만 산다.
- * 매수 거절 입력은 각각 한 조건만 어기도록 만들었다(값은 주석에 손으로 계산해 두었다).
- */
+/** `combined` 는 돌파가 초과·MA5 > MA20·RSI(14) 30~70 을 모두 만족할 때만 산다. 거절 입력은 각각 한 조건만 어긴다. */
 class CombinedStrategyTest {
 
     private val strategy = CombinedStrategy()
     private val config = TradingProperties(kValue = 0.5)
 
-    /** 오래된 것부터 준 종가로 일봉을 만든다 — 시가 = 전일 종가, 고저 = 시가·종가 ±1. 반환은 최신순(index 0 = 오늘). */
+    /** 오래된 것부터 준 종가로 일봉을 만든다. 시가는 전일 종가, 고저는 시가·종가 ±1 이고 반환은 최신순이다. */
     private fun daily(vararg closes: Double): List<Candle> =
         closes.mapIndexed { i, close ->
             val open = if (i == 0) close else closes[i - 1]
@@ -75,13 +72,13 @@ class CombinedStrategyTest {
 
     @Test
     fun `does not buy with fewer than 21 daily candles`() = runTest {
-        // 가장 오래된 봉 하나만 뺀 20봉 — 나머지 세 조건은 그대로 만족한다(RSI ≈ 57)
+        // 가장 오래된 봉 하나만 뺀 20봉. 나머지 세 조건은 그대로 만족한다(RSI ≈ 57)
         assertFalse(strategy.shouldBuy(uptrend.dropLast(1), 115.0, config))
     }
 
     @Test
     fun `decides the same on the normalized store path`() = runTest {
-        // 엔진은 store 캔들이 충분하면 shouldBuyNormalized 를 부른다 — toLegacyCandle 의 시가·고저 매핑이 돌파가에 들어간다.
+        // store 캔들이 충분하면 엔진은 shouldBuyNormalized 를 부르고, toLegacyCandle 의 시가·고저 매핑이 돌파가에 들어간다.
         val normalized = uptrend.map {
             NormalizedCandle(
                 exchange = Exchange.UPBIT,

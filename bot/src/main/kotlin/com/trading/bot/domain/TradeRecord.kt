@@ -2,44 +2,22 @@ package com.trading.bot.domain
 
 import java.time.LocalDateTime
 
-/**
- * 이 체결의 수수료를 sink 가 어떻게 다뤄야 하는지.
- *
- * 값 하나(`Double?`)로 "추정하라 / 이 값을 써라 / 모른다"를 표현하면 sentinel 이 주석에만 남아
- * 오독을 부른다. 특히 "모른다"를 `0.0` 으로 쓰면 실제 수수료 0 과 구분되지 않는다.
- */
+/** 체결 수수료를 sink 가 어떻게 다룰지. "모른다"를 0.0 으로 쓰면 실제 수수료 0 과 구분되지 않아 타입으로 나눈다. */
 sealed interface FeeBasis {
-    /**
-     * sink 가 `totalAmount` 에 요율을 곱해 추정한다.
-     * **`totalAmount` 가 실제 체결 대금인 경로에서만** 쓸 것 — 아니면 그만큼 부풀려진다(#133).
-     */
+    /** sink 가 `totalAmount` 에 요율을 곱해 추정한다. `totalAmount` 가 실제 체결 대금인 경로에서만 쓴다. */
     data object Estimate : FeeBasis
 
-    /** 거래소가 청구한 실제 수수료(Upbit 주문 응답의 `paid_fee`). */
+    /** 거래소가 청구한 실제 수수료(`paid_fee`). */
     data class Measured(val amount: Double) : FeeBasis
 
-    /**
-     * basis 를 알 수 없다 — 추정하면 틀린 값이 되므로 `0`(미기록)으로 남긴다.
-     * `0 = 미기록` 은 V21 이 세운 규약이다("fee 는 소급하지 않는다. 이전 행은 0(미기록)으로 남는다").
-     */
+    /** 수수료를 알 수 없다. 추정하지 않고 0(미기록)으로 남긴다. */
     data object Unrecorded : FeeBasis
 }
 
 /**
- * 체결 이벤트 — `trade_records`·`trade_executions` 두 감사 테이블과 Discord 알림이 함께 쓴다.
- * 테이블 컬럼 집합의 미러가 아니라 "체결 사실"을 담는다.
- *
- * 파생값은 sink 가 유도하는 것이 기본이다. **손익 두 필드는 예외**다: 매도 시점의 평단은 청산과
- * 함께 사라져서 sink 가 되짚을 수 없다. 원가를 대신 실으면 일관되겠지만 `pnlPercent` 를 엔진에서
- * 단언하는 기존 테스트를 흔들어야 해서 그대로 뒀다.
- *
- * [fee] 도 예외다. 2026-08-22 에는 "`fee` 는 `totalAmount` 만 있으면 나온다"는 이유로 여기 두지 않고
- * `saveAudit` 이 계산하게 했는데, **엔진 매수 경로에서 그 전제가 거짓이다** — `totalAmount` 가 그 주문의
- * 체결 대금이 아니라 포지션 전체 원가라 수수료가 부풀려졌다(#133). 체결 후 주문 응답에서 `paid_fee`
- * 실측값을 얻을 수 있으므로, 그 결정의 적용 범위를 수정해 실측을 여기 싣는다.
- *
- * `strategy`·`pnlPercent`·`pnlAmount`·`fee` 에 기본값을 두지 않는다 — 인자를 빠뜨려도 컴파일이 통과하는
- * 바람에 매도 경로가 전략을 통째로 유실했던 전례가 있다. 생성부가 매번 의도를 밝히게 한다.
+ * 체결 이벤트. `trade_records`·`trade_executions` 와 Discord 알림이 함께 쓴다.
+ * 매도 시점 평단은 청산과 함께 사라지고 엔진 매수의 `totalAmount` 는 포지션 전체 원가라, 손익과 수수료는 sink 가 유도하지 않고 여기 싣는다.
+ * 손익·전략·수수료·주문 대금은 생성부가 빠뜨리지 않도록 기본값을 두지 않는다.
  */
 data class TradeRecord(
     val ticker: String,
@@ -48,33 +26,20 @@ data class TradeRecord(
     val volume: Double,
     val totalAmount: Double,
     val pnlPercent: Double?,
-    // 실현 손익(원). pnlPercent 와 같은 net 기준. 진입(BUY)은 손익이 없으므로 null.
+    // 실현 손익(원). pnlPercent 와 같은 net 기준이고 BUY 는 null 이다.
     val pnlAmount: Double?,
     val strategy: String?,
-    /** 이 체결의 수수료를 sink 가 어떻게 다룰지. 경로마다 다르므로 기본값을 두지 않는다. */
     val fee: FeeBasis,
     /**
-     * **이 주문**이 실제로 체결한 대금(KRW, 수수료 미포함) — 주문 응답의 `Σ trades[].funds`([Order.filledFunds]).
-     *
-     * [totalAmount] 와 다르다: 엔진 매수의 [totalAmount] 는 포지션 **전체 원가 스냅샷**(거래소 평단 × 실잔고,
-     * #20 재시작 정합 때문)이고, 매도의 [totalAmount] 는 판단 tick 가격 × 수량 **평가액**이다. 둘 다 "이번
-     * 주문에 오간 돈"이 아니라서 집계·알림이 그것을 읽으면 부풀려진다(#146). 이 필드가 그 답이다.
-     *
-     * terminal(done/cancel) 주문 응답에서만 값이고, 그 외(응답 없는 잔고복원·`wait` 확정·과거 수동 매수)는 null —
-     * 추정하지 않는다. 기본값을 두지 않는 이유는 [fee] 와 같다: 배선을 빠뜨려도 컴파일이 통과하면 집계에서
-     * 조용히 빠져 이슈가 고쳐진 척 닫힌다.
+     * 이 주문이 실제로 체결한 대금(수수료 미포함). [totalAmount] 는 엔진 매수에선 포지션 전체 원가, 매도에선 판단가 × 수량이라
+     * 이번 주문 금액이 아니다. terminal 주문 응답에서만 값이 있다.
      */
     val orderAmount: Double?,
     val reason: String? = null,
-    // 거래소 주문 uuid — 재시작 후 reconcile 중복 기록을 막는 멱등 dedup 키(#20). null 이면 dedup 대상 아님.
+    // 재시작 후 reconcile 이 같은 체결을 두 번 기록하지 않게 하는 키다.
     val exchangeOrderId: String? = null,
     val userId: Long = 0,
-    /**
-     * 거래소가 실제로 체결한 단가(VWAP). [price] 는 **판단 시점 tick 가격**이므로 둘의 차이가 실행 슬리피지다.
-     *
-     * 얻을 수 있을 때만 값이고 아니면 null — 추정하지 않는다([Order.filledVwap]). 장부·손익은 지금도
-     * [price] 로 계산한다(이 필드는 연구용 관측 입력이며 회계 의미를 바꾸지 않는다).
-     */
+    /** 실제 체결 단가. [price] 는 판단 시점 tick 가격이라 둘의 차이가 슬리피지다. 장부·손익은 [price] 로 계산한다. */
     val executedVwap: Double? = null,
     val createdAt: LocalDateTime = LocalDateTime.now(),
 )

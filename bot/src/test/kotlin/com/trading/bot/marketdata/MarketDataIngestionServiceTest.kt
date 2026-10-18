@@ -63,7 +63,7 @@ class MarketDataIngestionServiceTest {
         verify { aggregator.onMinuteCandle(candle) }
     }
 
-    // 부팅 백필: store D1 버퍼를 과거 일봉으로 채운다(매수/청산 warm-up REST 폴백 방지).
+    // 부팅 때 store D1 버퍼를 과거 일봉으로 채워 warm-up 중 REST 폴백을 피한다.
     @Test
     fun `seedDailyCandles loads D1 candles into store`() = runBlocking {
         coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(candle, candle)
@@ -73,8 +73,8 @@ class MarketDataIngestionServiceTest {
         verify(exactly = 2) { store.addCandle(candle) }
     }
 
-    // #209: seed 의 오늘(UTC) 봉은 이후 M1 이 이어서 집계할 period 라 집계기에 prime 한다 — 안 하면 첫 M1 이 seed 를 대체한다.
-    // 응답 순서에 기대지 않고 openTime == 오늘 자정으로 고른다(mock 은 일부러 오래된 봉을 앞에 둔다).
+    // seed 의 오늘(UTC) 봉은 M1 이 이어서 집계할 period 라 prime 해야 첫 M1 이 seed 를 대체하지 않는다.
+    // 응답 순서가 아니라 openTime 으로 고르는지 보려고 mock 은 오래된 봉을 앞에 둔다.
     @Test
     fun `seedDailyCandles primes the aggregator with today's seeded candle only`() = runBlocking {
         val today = Instant.now().truncatedTo(ChronoUnit.DAYS)
@@ -99,8 +99,8 @@ class MarketDataIngestionServiceTest {
         verify(exactly = 0) { aggregator.prime(any(), any()) }
     }
 
-    // 첫 라운드 꼬리(count>1)가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 store 의 seed 를 덮는다 —
-    // 바닥은 prime(오늘 행이 있을 때만) 이 아니라 seed 시점에 항상, fetch 가 실패해도 건다.
+    // 첫 라운드 꼬리가 어제 분봉을 실어 오면 상태 없는 어제 period 가 부분봉으로 store 의 seed 를 덮는다.
+    // 그래서 바닥은 prime 이 아니라 seed 시점에 항상 걸고, fetch 가 실패해도 건다.
     @Test
     fun `seedDailyCandles raises the aggregation floor even without today's row and even when the fetch fails`() = runBlocking {
         val yesterday = candle.copy(openTime = Instant.now().truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
@@ -125,9 +125,8 @@ class MarketDataIngestionServiceTest {
         verify { store.addCandle(eth) }
     }
 
-    // ── rate limit (Upbit candles 그룹 = 초당 10회 / 분당 600회, 실측) ──
-    // 마켓을 지연 없이 연속 호출하면 초당 상한을 넘겨 429 가 쏟아진다(운영에서 10분에 30건 관측).
-    // virtual time 으로 "요청 사이에 실제로 간격이 있는지"를 본다 — 벽시계로 재면 느리고 flaky 하다.
+    // Upbit candles 그룹은 초당 10회 제한이라 마켓을 지연 없이 연속 호출하면 429 가 난다.
+    // 요청 간격은 virtual time 으로 본다. 벽시계로 재면 느리고 flaky 하다.
 
     @Test
     fun `collectCandlesRound spaces requests across markets`() = runTest {
@@ -176,7 +175,7 @@ class MarketDataIngestionServiceTest {
         verify { store.addCandle(candle) }
     }
 
-    // Upbit 은 최신순으로 돌려주지만 집계기는 "더 새 분봉이 오면 이전 분봉을 확정" 하므로 오름차순으로 넣어야 한다 —
+    // Upbit 은 최신순으로 돌려주지만 집계기는 더 새 분봉이 오면 이전 분봉을 확정하므로 오름차순으로 넣어야 한다.
     // 내림차순이면 부분 봉이 확정되고 완결본은 오래된 봉으로 무시된다.
     @Test
     fun `collectCandlesRound ingests polled M1 candles oldest first and asks for the fetch count on both paths`() = runTest {
@@ -198,13 +197,13 @@ class MarketDataIngestionServiceTest {
         coVerify(exactly = 2) { feed.getCandles("BTC/KRW", CandleInterval.M1, MarketDataIngestionService.M1_FETCH_COUNT) }
     }
 
-    // 상수 단정 — 1 로 되돌리면 진행 중 분봉만 와서 각 분의 완결본을 영영 못 받는다(실측: 일봉 volume 이 Upbit 의 중앙값 66%). 동작 테스트가 아니라 회귀 표지.
+    // 1 이면 진행 중 분봉만 와서 각 분의 완결본을 받지 못한다.
     @Test
     fun `M1 fetch count exceeds one so completed minutes arrive in the tail`() {
         assertTrue(MarketDataIngestionService.M1_FETCH_COUNT > 1)
     }
 
-    // 429 가 아닌 오류는 재시도하지 않는다 — 원인이 사라지지 않으므로 낭비다.
+    // 429 가 아닌 오류는 원인이 사라지지 않으므로 재시도하지 않는다.
     @Test
     fun `collectCandlesRound does not retry non-rate-limit errors`() = runTest {
         coEvery { feed.getCandles("BTC/KRW", CandleInterval.M1, any()) } throws RuntimeException("connection reset")

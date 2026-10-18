@@ -14,7 +14,7 @@ class StrategyConfigTest {
 
     @Test
     fun `registers only the production strategy`() {
-        // 매니저가 TradingStrategy 하나를 주입받는다 — 둘째 bean 은 @Primary·이름 일치로 조용히 주입될 수 있어 기동 실패에 기대지 않고 목록을 고정한다.
+        // 둘째 전략 bean 은 @Primary·이름 일치로 기동 실패 없이 주입될 수 있어 목록으로 확인한다.
         assertEquals(listOf("combined"), registeredStrategyNames())
     }
 }

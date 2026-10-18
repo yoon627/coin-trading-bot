@@ -12,12 +12,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.web.reactive.function.client.WebClient
 
-/**
- * Verifies UpbitClientImpl's rate-limit retry through MockWebServer: a 429 is
- * retried and can recover, retry exhaustion surfaces the original
- * UpbitApiException (not a wrapped one), and placeOrder is never retried. A tiny
- * retryBackoffBase keeps retry timing off the wall clock.
- */
+/** 429 는 재시도하고, 재시도가 소진되면 원래 UpbitApiException 을 던지며, placeOrder 는 재시도하지 않는다. */
 class UpbitClientRetryTest {
 
     private lateinit var mockServer: MockWebServer
@@ -57,7 +52,7 @@ class UpbitClientRetryTest {
 
         assertEquals(1, accounts.size)
         assertEquals("KRW", accounts[0].currency)
-        assertEquals(3, mockServer.requestCount) // 1 initial + 2 retries
+        assertEquals(3, mockServer.requestCount) // 첫 요청 + 재시도 2회
     }
 
     @Test
@@ -67,14 +62,13 @@ class UpbitClientRetryTest {
         val ex = assertThrows<UpbitApiException> { client.getAccounts() }
 
         assertEquals(429, ex.statusCode)
-        assertEquals(3, mockServer.requestCount) // exhausted after 1 initial + 2 retries
+        assertEquals(3, mockServer.requestCount)
     }
 
     @Test
     fun `placeOrder does not retry on 429`() = runTest {
-        // Order creation is non-idempotent: a retry could double-fill. Enqueue
-        // extra 429s so that a regression re-adding retry fails on the request
-        // count below instead of hanging on an empty MockWebServer queue.
+        // 주문 생성은 멱등이 아니라 재시도하면 이중 체결될 수 있다. 429 를 넉넉히 넣어
+        // 재시도가 생기면 빈 큐에서 멈추지 않고 아래 요청 수에서 실패하게 한다.
         repeat(3) { mockServer.enqueue(rateLimited()) }
 
         val ex = assertThrows<UpbitApiException> {

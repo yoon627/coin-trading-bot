@@ -10,11 +10,9 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import org.springframework.core.env.SystemEnvironmentPropertySource
 
 /**
- * `application.yml` 이 `trading.*` 키를 정의하지 않아도 `TRADING_*` 환경변수가 바인딩되는지 검증한다.
- * 기본값 정의처를 `TradingProperties` 한 곳으로 줄이는 설계(#75)가 이 동작에 의존한다.
- *
- * 환경변수는 `withPropertyValues` 로 흉내낼 수 없다 — relaxed binding 의 대문자·언더스코어 매핑은
- * `SystemEnvironmentPropertySource` 일 때만 적용된다.
+ * 기본값은 `TradingProperties` 에만 있으므로 `application.yml` 에 `trading.*` 키가 없어도 `TRADING_*` 가 바인딩돼야 한다.
+ * relaxed binding 의 대문자·언더스코어 매핑은 `SystemEnvironmentPropertySource` 에만 적용돼 `withPropertyValues` 로는
+ * 흉내낼 수 없다.
  */
 class TradingPropertiesBindingTest {
 
@@ -53,17 +51,13 @@ class TradingPropertiesBindingTest {
             }
     }
 
-    /**
-     * 배포 계층이 빈 문자열을 주입하면 기동이 깨진다 — 그래서 "줄을 아예 쓰지 않는" 설계를 택했다.
-     * 이 테스트는 그 위험이 실재함을 고정한다.
-     */
+    /** 배포 계층이 빈 문자열을 넣으면 기동이 깨지므로 배포는 값 없는 줄을 아예 쓰지 않는다. */
     @Test
     fun `빈 문자열 주입은 바인딩 실패다`() {
         withEnv("TRADING_TAKE_PROFIT_PCT" to "")
             .run { ctx ->
-                // 실패했다는 것만으로는 부족하다 — 다른 원인의 컨텍스트 실패와 구분한다.
-                // 체인: ConfigurationPropertiesBindException → BindException → IllegalArgumentException
-                // (primitive double 에 null 대입). 그래서 root 가 아니라 체인 전체로 확인한다.
+                // 다른 원인의 기동 실패와 구분한다. 원인은 ConfigurationPropertiesBindException → BindException
+                // → IllegalArgumentException 으로 이어져 root 가 아니라 체인 전체로 확인한다.
                 assertThat(ctx).getFailure().hasCauseInstanceOf(BindException::class.java)
                 assertThat(ctx).getFailure()
                     .hasStackTraceContaining("Failed to bind properties under 'trading.take-profit-pct'")
@@ -126,7 +120,7 @@ class TradingPropertiesBindingTest {
     fun `기본값 조합은 트레일링 dead 경고 조건에 걸리지 않는다`() {
         runner.run { ctx ->
             val p = ctx.getBean(TradingProperties::class.java)
-            // TradingEngine.warnIfExitConfigInert() 의 두 조건
+            // TradingEngine.warnIfExitConfigInert() 의 경고 조건
             assertThat(p.takeProfitPct).isGreaterThan(p.trailingStopPct)
             assertThat(p.takeProfitPct).isGreaterThan(p.trailingArmPct)
             assertThat(p.trailingArmPct).isGreaterThan(p.trailingStopPct)

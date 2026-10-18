@@ -43,20 +43,19 @@ class DailyResetManagerTest {
         )
 
         manager.checkAndReset(states)
-        // Set it back to true
         states["KRW-BTC"]!!.boughtToday = true
 
         val secondResult = manager.checkAndReset(states)
         assertFalse(secondResult)
-        assertTrue(states["KRW-BTC"]!!.boughtToday) // not reset again
+        assertTrue(states["KRW-BTC"]!!.boughtToday)
     }
 
-    // --- 재시작 정합 (#20 durable boughtToday) ---
+    // --- 재시작 뒤 boughtToday ---
 
     @Test
     fun `checkAndReset keeps boughtToday for state bought on the current trading date`() {
-        // 재시작 = 새 DailyResetManager(lastResetDate 없음) → 첫 tick 이 리셋을 호출한다.
-        // durable 로 복원된 "오늘 이미 매수함" 이 이때 지워지면 당일 재매수가 뚫린다.
+        // 재시작 직후엔 lastResetDate 가 없어 첫 tick 이 리셋을 호출한다.
+        // 이때 복원된 boughtToday 를 지우면 당일 재매수가 열린다.
         val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
         val states = mapOf(
             "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11)),
@@ -69,7 +68,7 @@ class DailyResetManagerTest {
 
     @Test
     fun `checkAndReset clears boughtToday for state bought on a previous trading date`() {
-        // 9AM 경계를 넘겨 정지했다 재시작한 경우 — 어제의 boughtToday 는 반드시 해제돼야 당일 매수가 열린다.
+        // 09:00 경계를 넘겨 재시작하면 어제의 boughtToday 는 해제돼야 당일 매수가 열린다.
         val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
         val states = mapOf(
             "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 10)),
@@ -128,7 +127,7 @@ class DailyResetManagerTest {
         assertFalse(manager.shouldSellForDailyReset(state))
     }
 
-    // --- maxHoldDays / Clock 주입 (#27 보유지평 일반화) ---
+    // --- maxHoldDays ---
 
     @Test
     fun `getTradingDate uses previous day just before 9am`() {
@@ -153,7 +152,7 @@ class DailyResetManagerTest {
 
     @Test
     fun `shouldSellForDailyReset coerces maxHoldDays 0 to 1`() {
-        // env 오설정(0/음수)이 매수 당일 즉시 청산 루프가 되지 않도록 — 1과 동일 동작.
+        // 0 이하로 잘못 설정해도 매수 당일 청산이 반복되지 않게 1 과 같이 동작한다.
         val m = DailyResetManager(TradingProperties(maxHoldDays = 0), fixedClock("2026-06-11T10:00:00"))
         val boughtToday = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 6, 11))
         assertFalse(m.shouldSellForDailyReset(boughtToday))
@@ -161,7 +160,7 @@ class DailyResetManagerTest {
         assertTrue(m.shouldSellForDailyReset(boughtYesterday))
     }
 
-    // --- 보유상한 초과 감지 (#131) ---
+    // --- 보유상한 초과 ---
 
     private fun warningsWhileDeciding(block: () -> Unit): List<String> {
         val logger = org.slf4j.LoggerFactory.getLogger(DailyResetManager::class.java) as ch.qos.logback.classic.Logger
@@ -178,7 +177,7 @@ class DailyResetManagerTest {
 
     @Test
     fun `shouldSellForDailyReset warns once per position from the first overrun day`() {
-        // 2026-07 실측(#131): maxHoldDays=1 인데 3~4거래일 뒤 청산. 초과 첫날(경과 2일)부터 잡혀야 한다.
+        // maxHoldDays=1 이면 초과 첫날(경과 2일)부터 잡혀야 한다.
         val m = DailyResetManager(TradingProperties(maxHoldDays = 1), fixedClock("2026-07-21T10:00:00"), userId = 4)
         val overrun = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 7, 19))
 
@@ -223,7 +222,7 @@ class DailyResetManagerTest {
 
     @Test
     fun `shouldSellForDailyReset returns false when buyDate is ahead of trading date`() {
-        // 00:00~09:00 매수분: buyDate(달력일)=오늘 > tradingDate=어제 — 음수 경과는 미청산.
+        // 00:00~09:00 매수분은 buyDate(달력일)가 tradingDate 보다 늦다. 경과가 음수면 청산하지 않는다.
         val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T08:30:00"))
         val state = TradingState("KRW-BTC", position = true, buyDate = LocalDate.of(2026, 6, 11))
         assertFalse(m.shouldSellForDailyReset(state))

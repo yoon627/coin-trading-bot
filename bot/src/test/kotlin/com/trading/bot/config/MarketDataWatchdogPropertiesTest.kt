@@ -14,12 +14,12 @@ class MarketDataWatchdogPropertiesTest {
 
     @Test
     fun `isStale is false within threshold`() {
-        assertFalse(props.isStale(now = 100_000, lastReceivedAt = 50_000)) // 50s < 60s
+        assertFalse(props.isStale(now = 100_000, lastReceivedAt = 50_000))
     }
 
     @Test
     fun `isStale is true beyond threshold`() {
-        assertTrue(props.isStale(now = 100_000, lastReceivedAt = 30_000)) // 70s > 60s
+        assertTrue(props.isStale(now = 100_000, lastReceivedAt = 30_000))
     }
 
     @Test

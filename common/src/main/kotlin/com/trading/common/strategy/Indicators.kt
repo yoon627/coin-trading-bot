@@ -16,8 +16,7 @@ object Indicators {
     fun calculateRsi(candles: List<Ohlc>, period: Int = 14): Double {
         if (candles.size < period + 1) return 50.0
 
-        // 전체 구간 사용 — take(period+1) 로 자르면 gains.size==period 라 아래 Wilder 루프가
-        // 항상 비어 SMA-RSI 로만 계산되던 버그. 전체를 써야 Wilder smoothing 이 실제 적용된다.
+        // period+1 개로 자르면 아래 Wilder smoothing 루프가 돌지 않으므로 전체 구간을 쓴다.
         val closes = candles.map { it.close }.reversed()
         val gains = mutableListOf<Double>()
         val losses = mutableListOf<Double>()
@@ -31,7 +30,6 @@ object Indicators {
         var avgGain = gains.take(period).average()
         var avgLoss = losses.take(period).average()
 
-        // Wilder's smoothing for remaining data
         for (i in period until gains.size) {
             avgGain = (avgGain * (period - 1) + gains[i]) / period
             avgLoss = (avgLoss * (period - 1) + losses[i]) / period
