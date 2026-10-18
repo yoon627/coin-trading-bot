@@ -18,7 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 
-/** 분당 상한에 걸린 알림의 요약 예약·전송. 예약은 캡처해 손으로 실행한다 — 실시간 지연을 기다리면 "정확히 1회"를 증명할 수 없다. */
+/** 예약은 캡처해 손으로 실행한다. 실제 지연을 기다려서는 요약이 정확히 한 번 나가는지 확인할 수 없다. */
 class DiscordErrorLogAppenderTest {
 
     private val notifier = mockk<DiscordNotifier>(relaxed = true)
@@ -72,7 +72,7 @@ class DiscordErrorLogAppenderTest {
         appender.handle(error("a"))
         appender.handle(error("b"))
         scheduled.single().first.run()
-        appender.handle(error("c")) // 같은 창 — 다시 보류된다
+        appender.handle(error("c")) // 같은 창이라 다시 보류된다
         assertEquals(2, scheduled.size)
 
         scheduled.last().first.run()

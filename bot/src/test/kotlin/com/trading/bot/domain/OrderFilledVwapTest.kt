@@ -10,13 +10,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * 실체결 단가(VWAP) 파싱 — **실행 슬리피지를 재는 유일한 입력**이다.
- *
- * 이 봇은 시장가로 팔고 거래 기록에는 판단 시점 tick 가격을 쓴다. 그 둘의 차이가 실행 슬리피지이고,
- * 판단 가격만 보는 모델로는 얻을 수 없다.
- *
- * Upbit 개별 주문 조회는 최상위 체결금액 합계를 주지 않고 `trades` 배열만 준다(공식 문서 확인 2026-09-05).
- * 그래서 `Σfunds / Σvolume` 으로 만들며, **얻을 수 없으면 추정하지 않고 null** 이다([Order.feeBasis] 와 같은 규율).
+ * 실체결 단가(VWAP)는 판단 시점 가격과의 차이, 곧 실행 슬리피지를 재는 입력이다. Upbit 개별 주문 조회는
+ * 체결금액 합계 없이 `trades` 배열만 주므로 `Σfunds / Σvolume` 으로 만들고, 얻을 수 없으면 추정하지 않고 null 이다.
  */
 class OrderFilledVwapTest {
 
@@ -38,7 +33,7 @@ class OrderFilledVwapTest {
 
         assertEquals(2, order.trades.size)
         val vwap = order.filledVwap()!!
-        // (100,000 + 198,000) / 0.003 = 99,333,333.33… — 단순평균 99,500,000 과 다르다.
+        // (100,000 + 198,000) / 0.003 = 99,333,333.33… 로 단순평균 99,500,000 과 다르다.
         assertTrue(abs(vwap - 298_000.0 / 0.003) < 1e-6) { "VWAP=$vwap" }
     }
 
@@ -52,7 +47,7 @@ class OrderFilledVwapTest {
 
     @Test
     fun `refuses non-finite or non-positive values instead of poisoning the metric`() {
-        // toDoubleOrNull 은 "NaN"·"Infinity" 를 정상 파싱한다 — 그대로 두면 평균이 영구히 NaN 이 된다.
+        // toDoubleOrNull 은 "NaN"·"Infinity" 도 파싱해 그대로 두면 평균이 영구히 NaN 이 된다.
         for (bad in listOf("NaN", "Infinity", "-100")) {
             val order: Order = mapper.readValue(
                 """{"uuid":"u1","market":"KRW-BTC","trades":[
@@ -67,7 +62,7 @@ class OrderFilledVwapTest {
         assertNull(zeroVolume.filledVwap())
     }
 
-    // --- filledFunds — 이 주문의 체결 대금 (#146) ---
+    // filledFunds: 이 주문의 체결 대금
 
     @Test
     fun `filledFunds sums the funds of every fill and shares the vwap discipline`() {

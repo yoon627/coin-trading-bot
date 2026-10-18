@@ -16,8 +16,8 @@ import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 
 /**
- * 키 저장과 웹훅 저장이 자기 컬럼만 바꾸는지 실제 Postgres 로 본다(#284) — 행 전체를 다시 쓰면 동시에 저장한 다른 쪽 변경이
- * 옛 값으로 돌아간다. 컬럼명 오타는 DB 에서만 드러난다. 접속·skip·CI 강제 규약은 [TradingStateRoundTripTest] 와 같다.
+ * 키 저장과 웹훅 저장이 자기 컬럼만 바꾸는지 실제 Postgres 로 본다. 행 전체를 다시 쓰면 동시에 저장한 다른 쪽 변경이
+ * 옛 값으로 돌아간다. 접속·skip 규약은 [TradingStateRoundTripTest] 와 같다.
  */
 @DataR2dbcTest
 class UserSettingsUpdateRoundTripTest {

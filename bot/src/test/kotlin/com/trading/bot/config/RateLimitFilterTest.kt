@@ -16,7 +16,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicInteger
 
-// 시계를 고정해 한 분 안에서 센다 — 벽시계를 쓰면 요청 사이에 분이 바뀌어 카운터가 비고 회귀를 놓친다.
+// 벽시계를 쓰면 요청 사이에 분이 바뀌어 카운터가 빌 수 있어 시계를 고정한다.
 class RateLimitFilterTest {
 
     private class MutableClock(var now: Instant = Instant.parse("2026-09-30T00:00:10Z")) : Clock() {
@@ -73,8 +73,7 @@ class RateLimitFilterTest {
         assertEquals("30", rejected.header("X-RateLimit-Limit"))
     }
 
-    // 인증과 일반 API 가 카운터 하나를 나눠 쓰면, 같은 IP 의 폴링이 1분에 30회를 넘을 때(한 화면은 약 20/min 이라 탭 2개·NAT
-    // 공유에서) 같은 분의 로그아웃·재로그인이 자기 한도를 하나도 안 썼는데 429 가 된다.
+    // 카운터를 나눠 쓰면 같은 IP 의 폴링이 한도를 채운 분에 로그아웃·재로그인까지 429 가 된다.
     @Test
     fun `일반 API 를 다 써도 같은 IP 의 인증 한도는 남는다`() {
         repeat(61) { send() }
@@ -82,7 +81,7 @@ class RateLimitFilterTest {
         assertEquals(1, send("/api/auth/login", HttpMethod.POST).chainCalls)
     }
 
-    // Caddy 가 X-Forwarded-For 를 자신이 본 peer IP 로 덮어써 넘긴다(deploy/vultr/Caddyfile). 체인이면 첫 항목이 클라이언트다.
+    // Caddy 가 X-Forwarded-For 를 자신이 본 peer IP 로 덮어쓴다. 체인이면 첫 항목이 클라이언트다.
     @Test
     fun `클라이언트는 X-Forwarded-For 의 첫 값으로 가른다`() {
         repeat(60) { send(xff = "203.0.113.5") }
@@ -104,7 +103,7 @@ class RateLimitFilterTest {
         assertTrue(send(xff = null).limited, "주소를 모르면 anonymous 한 버킷")
     }
 
-    // 이 헤더를 설정하는 서버 구성요소는 없다 — 클라이언트가 보낸 값을 키로 쓰면 값만 바꿔 버킷을 무한히 새로 받는다.
+    // 이 헤더를 설정하는 서버 구성요소가 없어, 클라이언트가 보낸 값을 키로 쓰면 값만 바꿔 버킷을 계속 새로 받는다.
     @Test
     fun `클라이언트가 보낸 X-User-Id 는 버킷을 가르지 않는다`() {
         repeat(60) { send(userId = "user-$it") }
@@ -133,8 +132,7 @@ class RateLimitFilterTest {
         assertTrue(send().limited)
     }
 
-    // 벽시계는 단조 증가가 아니다(NTP step 등). 창이 미래 분에 멈추면 시계가 따라잡을 때까지 같은 IP 가 429 로 잠긴다.
-    // 직전 분까지만 늦은 요청으로 보므로, 두 분 이전으로 가는 가장 작은 역행에서 새 창이 열려야 한다.
+    // 벽시계는 거꾸로 갈 수 있다. 창이 미래 분에 멈추면 같은 IP 가 계속 429 로 잠기므로 두 분 이상 역행하면 새 창을 연다.
     @Test
     fun `벽시계가 두 분 이상 이전 분으로 가면 창을 새로 시작해 잠그지 않는다`() {
         repeat(61) { send() }

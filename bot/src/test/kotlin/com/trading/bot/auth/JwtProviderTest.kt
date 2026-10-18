@@ -70,7 +70,7 @@ class JwtProviderTest {
         val keyBytes = MessageDigest.getInstance("SHA-256")
             .digest("test-secret-key-for-jwt".toByteArray(StandardCharsets.UTF_8))
         every { secretProvider.jwtKeyBytes() } returns keyBytes
-        every { secretProvider.jwtExpirationMs() } returns -1000L // already expired
+        every { secretProvider.jwtExpirationMs() } returns -1000L
         val expiredProvider = JwtProvider(secretProvider)
 
         val token = expiredProvider.generateToken(1L, "testuser")

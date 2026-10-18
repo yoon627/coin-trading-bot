@@ -24,7 +24,6 @@ class TradeHistoryControllerTest {
     private fun <T : Any> authed(block: suspend () -> T): T =
         mono { block() }.contextWrite(authContext).block()!!
 
-    /** BUY/SELL 을 번갈아 만들어 짝이 맞는 레코드 목록을 만든다. */
     private fun records(count: Int): List<TradeRecordEntity> = (0 until count).map { i ->
         TradeRecordEntity(
             id = i.toLong(),
@@ -41,7 +40,7 @@ class TradeHistoryControllerTest {
     @Test
     fun `조회 결과가 상한과 정확히 같으면 잘린 것이 아니다`() {
         val max = TradeHistoryController.MAX_SOURCE_RECORDS
-        // 상한+1 을 요청했는데 상한만큼만 돌아왔다 = 더 이상 없다
+        // 상한+1 을 요청해 상한만큼만 오면 다음 페이지가 없다.
         coEvery { repository.findRecentAscending(userId, max + 1) } returns records(max)
 
         val result = authed { controller.getRoundTrips(100) }

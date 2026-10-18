@@ -30,8 +30,7 @@ class UpbitErrorHandlerAdviceTest {
 
     @Test
     fun `other 401 is mapped to 400 not 401 to avoid frontend auto-logout`() {
-        // FE api.js redirects to /login.html on any 401 — Upbit auth failures
-        // must not look like our own session expiry.
+        // 프론트는 401 이면 로그인 화면으로 보내므로 Upbit 인증 실패가 세션 만료처럼 보이면 안 된다.
         val response = advice.handle(
             UpbitApiException(401, "invalid_access_key", "invalid access key", "{}")
         )

@@ -79,7 +79,7 @@ class SafeErrorAttributesTest {
             ErrorAttributeOptions.defaults().including(ErrorAttributeOptions.Include.MESSAGE)
         )
 
-        // Even when MESSAGE is included by config, our override removes it for non-RSE
+        // 설정이 MESSAGE 를 포함해도 RSE 가 아니면 지운다.
         assertFalse(result.containsKey("message"))
         assertTrue(result.containsKey("status"))
     }
@@ -95,8 +95,7 @@ class SafeErrorAttributesTest {
             ErrorAttributeOptions.defaults().including(ErrorAttributeOptions.Include.EXCEPTION)
         )
 
-        // DefaultErrorAttributes would normally include "exception" with the FQCN
-        // when this option is on; the allowlist override must drop it.
+        // 이 옵션이 켜지면 DefaultErrorAttributes 는 exception 에 FQCN 을 넣는다.
         assertFalse(result.containsKey("exception")) {
             "exception class name leaked: ${result["exception"]}"
         }
@@ -117,8 +116,7 @@ class SafeErrorAttributesTest {
                 .including(ErrorAttributeOptions.Include.BINDING_ERRORS)
         )
 
-        // message is added because it's an RSE; everything else outside the
-        // allowlist must be absent regardless of which Include options are on.
+        // RSE 라 message 는 들어가고, 나머지 allowlist 밖 키는 Include 옵션과 무관하게 없어야 한다.
         val allowed = setOf("timestamp", "path", "status", "error", "requestId", "message")
         val unexpected = result.keys - allowed
         assertTrue(unexpected.isEmpty()) { "unexpected keys leaked: $unexpected" }

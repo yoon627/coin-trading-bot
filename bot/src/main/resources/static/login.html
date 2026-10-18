@@ -47,10 +47,7 @@ function Auth() {
       if (mode === 'login') {
         await TideAPI.login(username, password);
       } else {
-        // /api/auth/register sets the auth cookie and returns AuthResponse,
-        // so we're already logged in. A second login() here would fail
-        // (e.g. rate limit, transient error) and make a successful
-        // registration look like a failure to the user.
+        // 가입 응답이 인증 쿠키를 설정하므로 login() 을 다시 부르지 않는다. 다시 부르다 실패하면 성공한 가입이 실패로 보인다.
         await TideAPI.register(username, password, accessKey || undefined, secretKey || undefined);
       }
       location.href = '/app.html';
@@ -91,7 +88,7 @@ function Auth() {
               <input className="tide-input mono" value={accessKey} onChange={e => setAccessKey(e.target.value)} placeholder="Access Key (선택)" autoComplete="off"/>
             </div>
             <div style={{ marginBottom: 20 }}>
-              {/* 설정 화면 Secret Key 와 같은 이유(screens.jsx). new-password 를 쓰면 위 비밀번호 칸의 "확인" 칸으로 해석된다. */}
+              {/* 비밀번호 관리자가 계정 비밀번호를 채우지 않게 one-time-code 를 쓴다. new-password 면 위 칸의 확인 칸으로 읽힌다. */}
               <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="Secret Key (선택)" autoComplete="one-time-code"/>
             </div>
           </>}

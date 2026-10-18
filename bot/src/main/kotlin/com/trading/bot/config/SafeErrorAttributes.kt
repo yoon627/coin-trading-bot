@@ -7,16 +7,8 @@ import org.springframework.web.reactive.function.server.ServerRequest
 import org.springframework.web.server.ResponseStatusException
 
 /**
- * Selective error attribute exposure: only ResponseStatusException reasons —
- * which are explicitly authored by our controllers — surface to clients.
- * Anything else (DB failures, upstream errors, deserialization, framework
- * exceptions, stack traces, binding error details, fully-qualified exception
- * class names) is suppressed so that production responses can't leak internal
- * information regardless of how server.error.include-* is configured upstream.
- *
- * Uses an allowlist rather than a denylist so any future field DefaultError-
- * Attributes (or its subclasses) might add — e.g. another diagnostic key on
- * a Spring upgrade — is excluded by default until explicitly vetted.
+ * 컨트롤러가 직접 쓴 ResponseStatusException 사유만 클라이언트에 노출하고 나머지 내부 정보는 숨긴다.
+ * Spring 업그레이드로 새 진단 키가 생겨도 새지 않도록 허용 목록으로 거른다.
  */
 @Component
 class SafeErrorAttributes : DefaultErrorAttributes() {
@@ -39,9 +31,6 @@ class SafeErrorAttributes : DefaultErrorAttributes() {
     }
 
     private companion object {
-        // Vetted as safe to expose to clients: timestamp + path are observable
-        // anyway, status + error are the HTTP semantics, requestId is a
-        // correlation ID with no internal content.
         val SAFE_KEYS = setOf("timestamp", "path", "status", "error", "requestId")
     }
 }

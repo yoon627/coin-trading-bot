@@ -23,7 +23,7 @@ class RequestValidators {
         if (password.length < MIN_PASSWORD_LENGTH) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at least $MIN_PASSWORD_LENGTH characters")
         }
-        // bcrypt 입력 한계는 문자가 아니라 UTF-8 바이트다 — 한글은 한 글자에 3바이트라 72자 이하도 넘을 수 있다.
+        // bcrypt 입력 한계는 UTF-8 바이트 기준이다. 한글은 글자당 3바이트라 72자 이하도 넘을 수 있다.
         if (password.toByteArray(Charsets.UTF_8).size > MAX_PASSWORD_BYTES) {
             throw ResponseStatusException(
                 HttpStatus.BAD_REQUEST,
@@ -37,8 +37,7 @@ class RequestValidators {
         if (normalized.isBlank()) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "$fieldName is required")
         }
-        // 최소 32자 — Upbit secret 으로 HS256 서명 시 256비트(32바이트) 이상이 필요.
-        // 짧은 키는 등록 시 400 으로 막아 거래 시점의 WeakKeyException(500)을 예방.
+        // HS256 서명에는 32바이트 이상의 secret 이 필요하다. 등록 때 막아야 주문 시점에 WeakKeyException 이 나지 않는다.
         if (normalized.length !in 32..128 || !API_KEY_REGEX.matches(normalized)) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid $fieldName format")
         }

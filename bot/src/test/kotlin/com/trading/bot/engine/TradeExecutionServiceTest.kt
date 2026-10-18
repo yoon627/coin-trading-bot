@@ -37,11 +37,9 @@ class TradeExecutionServiceTest {
         tradeExecutionRepository = mockk(relaxed = true)
         discordNotifier = mockk(relaxed = true)
         client = mockk()
-        // saveAudit 이 awaitSingle 하는 두 호출 — 명시 stub 이 없으면 relaxed mockk 의 Mono 가 emit 하지 않아
-        // 무한 대기 → UncompletedCoroutinesError.
+        // stub 이 없으면 relaxed mockk 의 Mono 가 emit 하지 않아 saveAudit 의 awaitSingle 이 끝나지 않는다.
         every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
-        // 트랜잭션 래핑은 통과(pass-through)시켜 내부 mono 가 그대로 실행되게 함.
         transactionalOperator = mockk()
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
         service = TradeExecutionService(
@@ -52,7 +50,7 @@ class TradeExecutionServiceTest {
 
     @Test
     fun `commitFill skips an order already recorded but still commits the state`() = runTest {
-        // #20: 재시작 후 같은 주문 uuid 로 reconcile 이 다시 기록을 시도하면 저장을 건너뛰고 false — 호출자는 알림을 보내지 않는다.
+        // 재시작 후 같은 주문 uuid 를 다시 기록하려 하면 저장을 건너뛰고 false 를 돌려 호출자가 알림을 보내지 않는다.
         // pending 해소는 그래도 커밋돼야 다음 tick 이 같은 주문을 또 붙잡지 않는다.
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "dup-1") } returns Mono.just(true)
         val statePersisted = AtomicBoolean(false)
@@ -120,8 +118,8 @@ class TradeExecutionServiceTest {
     }
 
     // --- 감사 기록의 수수료 ---
-    // 공식은 saveAudit 한 곳에 모으되, **어떤 기준을 쓸지는 경로가 정한다**(#133). totalAmount 가 그 체결의
-    // 대금이 아닌 경로(엔진 매수 = 포지션 전체 원가)가 있어서, 무조건 유도하면 수수료가 부풀려진다.
+    // 수수료 공식은 saveAudit 한 곳에 있지만 어떤 기준을 쓸지는 경로가 정한다. totalAmount 가 그 체결의
+    // 대금이 아닌 경로(엔진 매수는 포지션 전체 원가)에서 유도하면 수수료가 부풀려진다.
 
     @Test
     fun `saveAudit derives the fee for buy rows too`() = runTest {
@@ -146,7 +144,7 @@ class TradeExecutionServiceTest {
 
     @Test
     fun `saveAudit stores the measured fee verbatim instead of deriving it`() = runTest {
-        // totalAmount(1,040,000)로 유도하면 520원이 된다. 실측이 있으면 그 값이 이긴다 — 이게 #133 의 요지다.
+        // totalAmount(1,040,000)로 유도하면 520원이 된다. 실측이 있으면 실측을 쓴다.
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fee-measured") } returns Mono.just(false)
         val entity = slot<TradeExecutionEntity>()
         every { tradeExecutionRepository.save(capture(entity)) } returns
@@ -167,8 +165,8 @@ class TradeExecutionServiceTest {
 
     @Test
     fun `saveAudit leaves the fee unrecorded rather than deriving a wrong one`() = runTest {
-        // basis 를 모르는 경로(주문 응답 없음). 0 = 미기록은 V21 이 세운 규약이다.
-        // 여기서 추정으로 떨어지면 부풀려진 값이 맞는 값과 구분되지 않는다.
+        // basis 를 모르는 경로(주문 응답 없음). 0 은 미기록을 뜻한다.
+        // 추정으로 채우면 부풀려진 값이 맞는 값과 구분되지 않는다.
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fee-unknown") } returns Mono.just(false)
         val entity = slot<TradeExecutionEntity>()
         every { tradeExecutionRepository.save(capture(entity)) } returns

@@ -47,10 +47,8 @@ class SecurityConfig(
 
     private fun corsConfig(): org.springframework.web.cors.reactive.CorsConfigurationSource {
         val config = org.springframework.web.cors.CorsConfiguration()
-        // allowCredentials=true일 때 wildcard("*")는 보안 취약점 — 명시적 도메인만 허용.
-        // SPA 는 same-origin 상대경로로 호출하지만 fetch 는 POST 에 Origin 헤더를 붙이므로,
-        // Caddy 가 종단하는 실제 서비스 도메인을 넣지 않으면 CORS 가 403 으로 막는다.
-        // APP_DOMAIN(예: 141-164-1-2.sslip.io — deploy.sh 가 공인 IP 로 만든다) 이 있으면 https origin 추가, dev(미설정)면 localhost 만.
+        // allowCredentials 와 wildcard 는 함께 쓸 수 없어 도메인을 명시한다.
+        // same-origin 이어도 fetch 가 POST 에 Origin 을 붙이므로 서비스 도메인을 넣지 않으면 403 이 난다.
         val origins = mutableListOf("http://localhost:3000", "http://localhost:8080")
         if (appDomain.isNotBlank()) origins += "https://$appDomain"
         config.allowedOrigins = origins

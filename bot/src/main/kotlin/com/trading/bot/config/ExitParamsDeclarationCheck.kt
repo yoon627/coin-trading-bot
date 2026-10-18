@@ -12,17 +12,9 @@ import org.springframework.core.env.Environment
 import org.springframework.stereotype.Component
 
 /**
- * 청산·주문 파라미터가 **선언되지 않았거나 의미상 구간 밖인 채** 거래하는 상태를 드러낸다 (#179, #230).
- *
- * - 선언: 운영 청산값은 `TRADING_*` env 가 소유하고 [TradingProperties] 의 코드 기본값과 다를 수 있다
- *   (2026-09-06~ 트레일링 1.5/0 vs 코드 2.0/3.0 — wiki `trading-engine-loop`).
- *   배포 시크릿에서 한 줄이 빠지면 봇이 **조용히** 다른 청산 규칙으로 거래한다.
- * - 구간: 부호·단위 오기(손절 -5 → 매수 직후 손절)는 [ExitParamRanges] 가 거른다.
- *
- * **기동이나 거래를 막지 않는다.** 막으면 보유 포지션의 손절·트레일링·보유상한이 전부 평가되지 않는
- * 공백이 생기는데, 그 손해가 파라미터 오류보다 크다. 실제 차단은 배포 앞단(`deploy/vultr/preflight_exit_params.sh`)이
- * 맡는다 — 잘못된 `.env` 가 서버에 닿기 전에 배포를 멈춘다. 여기는 그 그물을 빠져나온 경우(수동 `.env` 편집 등)를
- * 위한 **탐지**다. 켜진 그림자 관측의 설정이 구간 밖이면 관측이 꺼졌다는 것도 여기서 알린다.
+ * 청산 파라미터가 env 에 선언되지 않아 코드 기본값으로 떨어졌거나 의미상 구간 밖이면 ERROR 로 알린다.
+ * 기동·거래는 막지 않는다. 막으면 보유 포지션의 손절·트레일링이 평가되지 않아 그쪽 손해가 더 크고,
+ * 실제 차단은 배포 단계의 preflight_exit_params.sh 가 맡는다.
  */
 @Component
 class ExitParamsDeclarationCheck(
@@ -31,23 +23,17 @@ class ExitParamsDeclarationCheck(
     private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
 ) {
 
-    /** 환경에 선언되지 않아 코드 기본값으로 떨어진 청산 키. 비어 있으면 정상이다. */
     val undeclaredKeys: List<String> by lazy {
         REQUIRED_KEYS.filterNot { environment.containsProperty(it) }
     }
 
-    // Discord appender(HIGHEST) 가 붙은 뒤라야 ERROR 가 Discord 에 닿고, 복원(LOWEST) 앞이라야 거래 재개 전에 알린다.
-    // @PostConstruct 는 appender attach 전이라 쓰지 않는다 — 자동 복원 운영에서 기동 ERROR 가 Discord 에 가지 않는다.
+    // Discord appender 가 붙은 뒤, 포지션 복원보다 앞서 돌아야 거래 재개 전에 ERROR 가 Discord 로 나간다.
     @EventListener(ApplicationReadyEvent::class)
     @Order(Ordered.HIGHEST_PRECEDENCE + 1)
     fun reportOnStartup() = report("기동")
 
-    /**
-     * 거래를 시작하는 지점에서 부른다. `autoStart` 는 기동 시 복원 여부만 정할 뿐 거래 시작 조건이
-     * 아니라서(`/api/bot/start` 가 그것을 보지 않는다) 기동 시점 보고만으로는 수동 기동을 놓친다.
-     */
+    // 수동 시작은 기동 시점 보고를 거치지 않으므로 거래를 시작하는 곳에서도 부른다.
     fun report(context: String) {
-        // 탐지가 실패해도 기동·수동 시작을 막지 않는다 — ERROR 로 남기고 돌아간다.
         try {
             log.info(
                 "[{}] 청산 파라미터 실효값: 익절 {}% / 손절 {}% / 트레일링 {}%(arm {}%) / 보유상한 {}일 — 명시 {}/{} 키",
@@ -55,7 +41,7 @@ class ExitParamsDeclarationCheck(
                 tradingProperties.trailingStopPct, tradingProperties.trailingArmPct,
                 tradingProperties.maxHoldDays, REQUIRED_KEYS.size - undeclaredKeys.size, REQUIRED_KEYS.size,
             )
-            // ERROR 라야 Discord 로 나간다(DiscordErrorLogAppender). 거래는 계속되므로 알림이 유일한 탐지 수단이다.
+            // 거래는 계속되므로 Discord 로 나가는 ERROR 가 유일한 탐지 수단이다.
             val outOfRange = ExitParamRanges.violations(tradingProperties)
             if (outOfRange.isNotEmpty()) {
                 log.error(
@@ -86,11 +72,7 @@ class ExitParamsDeclarationCheck(
     companion object {
         private val log = LoggerFactory.getLogger(ExitParamsDeclarationCheck::class.java)
 
-        /**
-         * 청산 판정을 직접 바꾸는 프로퍼티. 이름은 [TradingProperties] 생성자에서 **파생**한다 —
-         * 문자열로 적으면 rename 시 옛 키가 계속 선언돼 있어 검사가 조용히 무력해진다
-         * (`DeployEnvPassthroughTest` 가 같은 이유로 리플렉션을 쓴다).
-         */
+        // 키를 문자열로 적으면 프로퍼티 rename 때 옛 키가 남아 검사가 조용히 무력해져 프로퍼티에서 파생한다.
         private val REQUIRED_PROPERTIES = listOf(
             TradingProperties::takeProfitPct,
             TradingProperties::maxLossPct,

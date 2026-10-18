@@ -26,8 +26,7 @@ class WebClientConfig(private val upbitProperties: UpbitProperties) {
             .build()
     }
 
-    // 인증 불필요한 public 엔드포인트(시세/캔들)용 공용 클라이언트.
-    // 주문/잔고 등 인증 필요 호출은 UserTradingManager 가 사용자 키로 별도 생성한다.
+    // 인증 없는 시세·캔들 조회용이다. 주문·잔고는 사용자 키로 따로 만든 클라이언트를 쓴다.
     @Bean
     fun publicUpbitClient(): UpbitClient = UpbitClientImpl(upbitWebClient(), authProvider = null)
 

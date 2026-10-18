@@ -12,19 +12,11 @@ import kotlinx.coroutines.reactive.awaitFirstOrNull
 import org.slf4j.LoggerFactory
 
 /**
- * 후보 청산 파라미터를 **라이브와 나란히** 평가해 기록만 한다 — 주문도, 상태 전이도 하지 않는다.
+ * 후보 트레일링 파라미터를 라이브 포지션과 나란히 평가해 기록만 한다. 주문도 상태 전이도 하지 않는다.
+ * 진입이 라이브와 같으므로 같은 포지션에서 두 청산을 짝지어 비교할 수 있다.
  *
- * 왜 이 형태인가: 변형 A 는 **청산 게이트만** 바꾸므로 진입이 라이브와 동일하다. 따라서 같은 포지션에서
- * 두 청산을 짝지어 볼 수 있고, [[strategy-evolution-expectations]] 가 폐기한 "별도 티커 실돈 파일럿" 의
- * 결함(다른 마켓에 배정하면 성과가 마켓 효과가 된다)이 구조적으로 발생하지 않는다.
- *
- * 무엇을 재는가: **모델 과대추정폭** 하나다. 모델은 트레일링 체결가를 `peak × (1 − trail/100)` 이라는
- * 임계선으로 잡는데, 실제로 그 게이트를 발동시키는 tick 가격은 그 이하다. 그 차이가 청산 모델의
- * 잔여 오차이며, 승격 전에 실물로 확인해야 하는 유일한 양이다.
- * **수익 우위 판정용이 아니다** — 그건 현재 거래 빈도로 약 4.7년이 걸린다.
- *
- * 안전: [ExitGates.isTrailingStopTriggered] 는 순수 함수이고 peak 갱신은 라이브가 이미 한다(설정 무관).
- * 이 클래스는 라이브 판정 **뒤에** 불리며 모든 예외를 삼킨다 — 관측이 매매를 막으면 안 된다.
+ * 재는 것은 모델 체결가(`peak × (1 − trail/100)`)와 실제로 게이트를 발동시킨 tick 가격의 차이다.
+ * 관측이 매매를 막으면 안 되므로 라이브 판정 뒤에 불리고 모든 예외를 삼킨다.
  */
 class ShadowExitObserver(
     private val repository: ShadowExitObservationRepository,
@@ -35,17 +27,12 @@ class ShadowExitObserver(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    /** 포지션당 첫 발동만 기록한다 — 이후는 두 팔이 갈라져 짝지은 비교가 아니다. */
+    /** 포지션당 첫 발동만 기록한다. 그 뒤로는 두 청산 경로가 갈라져 짝지은 비교가 되지 않는다. */
     private data class Fired(val entryPrice: Double, val peakPrice: Double, val tickPrice: Double, val at: Instant)
 
     private val fired = ConcurrentHashMap<String, Fired>()
 
-    /**
-     * 라이브 tick 마다 호출. 후보 파라미터의 트레일링이 처음 발동하는 시점을 잡는다.
-     *
-     * [state] 를 **읽기만** 한다 — `updatePeakPrice` 는 라이브 경로가 이미 부른 뒤이므로 여기서 또 부르면
-     * 같은 tick 을 두 번 반영하지는 않지만(멱등) 소유권이 흐려진다.
-     */
+    /** [state] 는 읽기만 한다. peak 갱신은 라이브 경로가 맡는다. */
     fun onTick(ticker: String, state: TradingState, currentPrice: Double) {
         try {
             if (!state.position || state.avgBuyPrice <= 0 || state.peakPrice <= 0) return
@@ -71,13 +58,8 @@ class ShadowExitObserver(
     }
 
     /**
-     * 라이브가 실제로 청산했을 때 호출. 그 포지션에서 후보가 발동한 적이 있으면 관측 1건을 남기고,
-     * 없으면 아무것도 남기지 않는다(두 팔이 같은 청산을 낸 경우라 정보가 0이다).
-     *
-     * @param executedVwap 거래소 실체결 단가. [exitPrice](판단 시점 tick)와의 차이가 **실행 슬리피지**다.
-     *   얻지 못하면 null 로 남긴다 — 추정하면 마찰을 과소평가한다.
-     * @param exitAt 청산을 결정한 시각. reconcile 로 늦게 확정된 청산은 판단 시각을 넘긴다(확정은 몇 시간 늦을 수 있다).
-     *   없으면 지금 — 즉시 체결 경로는 판단 뒤 체결 확인 창만큼만 늦다.
+     * 후보가 발동한 적 없는 포지션은 라이브와 같은 청산이라 기록하지 않는다.
+     * [executedVwap] 은 얻지 못하면 추정하지 않고 null 로 둔다. reconcile 로 늦게 확정된 청산은 [exitAt] 에 판단 시각을 넘긴다.
      */
     suspend fun onLiveExit(ticker: String, exitPrice: Double, reason: String?, executedVwap: Double? = null, exitAt: Instant? = null) {
         val f = fired.remove(ticker) ?: return
@@ -106,11 +88,10 @@ class ShadowExitObserver(
         }
     }
 
-    /** 포지션이 관측 없이 사라진 경우(재동기화·수동 청산) 상태를 흘리지 않는다. */
+    /** 재동기화·수동 청산처럼 라이브 청산 없이 포지션이 사라질 때 부른다. */
     fun forget(ticker: String) {
         fired.remove(ticker)
     }
 
-    /** 모델이 체결됐다고 보는 가격 — 트레일링 임계선. */
     private fun modeledPrice(peak: Double) = peak * (1 - trailingStopPct / 100.0)
 }

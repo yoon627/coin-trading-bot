@@ -30,26 +30,26 @@ class ExitGatesTest {
 
     @Test
     fun `drop exactly at trail fires - inclusive boundary`() {
-        // >= 경계 핀 — > 로 바뀌는 mutation 을 잡는다.
+        // 경계값은 발동한다(>=).
         assertTrue(ExitGates.isTrailingStopTriggered(0.5, 2.6, 2.0, 2.0, 0.0))
     }
 
     @Test
     fun `peak below arm blocks firing`() {
-        // arm(5) > trail(2): 현행(arm=0)이면 발동이었을 입력 — arm 게이트가 막는다.
+        // arm=0 이면 발동했을 입력을 arm 게이트가 막는다.
         assertFalse(ExitGates.isTrailingStopTriggered(0.7, 3.0, 2.2, 2.0, 5.0))
     }
 
     @Test
     fun `peak at or above arm allows firing`() {
         assertTrue(ExitGates.isTrailingStopTriggered(3.6, 6.0, 2.3, 2.0, 5.0))
-        // 경계: peakPnl == arm 정확히 도달도 arm 충족(>=)
+        // peakPnl == arm 이면 arm 을 충족한다.
         assertTrue(ExitGates.isTrailingStopTriggered(2.8, 5.0, 2.1, 2.0, 5.0))
     }
 
     @Test
     fun `nan inputs never fire`() {
-        // avgBuyPrice=0 유래 비정상 입력 — IEEE NaN 비교는 false 이므로 발동하지 않아야 한다.
+        // avgBuyPrice=0 에서 나온 NaN 은 비교가 모두 false 라 발동하지 않는다.
         assertFalse(ExitGates.isTrailingStopTriggered(Double.NaN, 6.0, 2.3, 2.0, 0.0))
         assertFalse(ExitGates.isTrailingStopTriggered(1.0, Double.NaN, 2.3, 2.0, 5.0))
         assertFalse(ExitGates.isTrailingStopTriggered(1.0, 6.0, Double.NaN, 2.0, 0.0))
@@ -57,7 +57,6 @@ class ExitGatesTest {
 
     @Test
     fun `effectiveMaxHoldDays coerces non-positive to one`() {
-        // DailyResetManager 가 쓰는 해석 — env 오설정 방어.
         assertEquals(1, ExitGates.effectiveMaxHoldDays(0))
         assertEquals(1, ExitGates.effectiveMaxHoldDays(-5))
         assertEquals(1, ExitGates.effectiveMaxHoldDays(1))

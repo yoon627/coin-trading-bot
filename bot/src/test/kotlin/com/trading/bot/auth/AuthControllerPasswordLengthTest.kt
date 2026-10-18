@@ -29,7 +29,7 @@ class AuthControllerPasswordLengthTest {
         userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(),
     )
 
-    // 25자지만 75바이트 — 문자 수 상한(72)은 통과하고 bcrypt 한계는 넘는다.
+    // 25자지만 75바이트라 문자 수 상한(72)은 통과하고 bcrypt 한계는 넘는다.
     private val overLimit = "가".repeat(25)
 
     private fun request() = MockServerHttpRequest.post("http://localhost/api/auth").build()
@@ -65,7 +65,7 @@ class AuthControllerPasswordLengthTest {
 
     @Test
     fun `an account registered before the byte cap still logs in with its over-limit password`() = runTest {
-        // 옛 검증기는 문자 수만 봐서 75바이트 비밀번호를 받았고, bcrypt 는 앞 72바이트로 해시했다.
+        // bcrypt 는 앞 72바이트만 쓰므로 24자(72바이트)의 해시가 75바이트 입력과 맞는다.
         val stored = UserEntity(id = 1L, username = "owner", password = passwordEncoder.encode("가".repeat(24)))
         every { userRepository.findByUsername("owner") } returns Mono.just(stored)
         every { jwtProvider.generateToken(1L, "owner") } returns "jwt"

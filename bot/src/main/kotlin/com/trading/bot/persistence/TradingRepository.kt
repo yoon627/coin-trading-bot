@@ -14,7 +14,7 @@ interface TradeExecutionRepository : ReactiveCrudRepository<TradeExecutionEntity
     @Query("SELECT COUNT(*) FROM trade_executions WHERE user_id = :userId")
     fun countByUserId(userId: Long): Mono<Long>
 
-    // #20 멱등: 재시작 후 같은 주문 uuid 를 다시 reconcile 해도 이중 기록되지 않게 존재 여부 확인.
+    // 재시작 후 같은 주문을 다시 대사해도 이중 기록되지 않게 한다.
     @Query("SELECT COUNT(*) > 0 FROM trade_executions WHERE user_id = :userId AND exchange_order_id = :orderId")
     fun existsByUserIdAndExchangeOrderId(userId: Long, orderId: String): Mono<Boolean>
 }

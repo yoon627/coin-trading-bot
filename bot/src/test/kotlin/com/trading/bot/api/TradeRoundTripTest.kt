@@ -57,7 +57,7 @@ class TradeRoundTripTest {
         assertEquals("combined", rt.strategy)
         assertFalse(rt.open)
         assertFalse(rt.partial)
-        // 240 - 200 = 40 (수수료 미차감 gross)
+        // 수수료를 빼지 않은 금액
         assertEquals(40.0, rt.pnlAmountGross)
         // 10:00 → 14:30 = 4시간 30분
         assertEquals(16200L, rt.holdingSeconds)
@@ -133,10 +133,10 @@ class TradeRoundTripTest {
         assertNull(rt.entryAt)
         assertNull(rt.entryPrice)
         assertEquals(0, rt.buyCount)
-        // 매수 금액을 모르므로 손익 금액은 계산하지 않는다 (0 으로 채우면 가짜 손익이 된다)
+        // 매수 금액을 모르므로 손익 금액은 계산하지 않는다. 0 으로 채우면 가짜 손익이 된다.
         assertNull(rt.pnlAmountGross)
         assertNull(rt.holdingSeconds)
-        // DB 에 남아있는 수익률은 그대로 노출
+        // DB 에 남은 수익률은 그대로 보여준다
         assertEquals(5.0, rt.pnlPercent)
     }
 
@@ -180,7 +180,7 @@ class TradeRoundTripTest {
     }
 
     /**
-     * 한 포지션이 여러 SELL 로 나뉠 수 있다(부분 체결 뒤 매도·과거 수동 매도·과거 적립 단계 매도).
+     * 한 포지션이 여러 SELL 로 나뉠 수 있다.
      * SELL 하나를 곧 포지션 종료로 보면 첫 매도가 전체 매수액과 비교돼 손익이 틀리고 나머지는 고아가 된다.
      */
     @Test
@@ -209,10 +209,7 @@ class TradeRoundTripTest {
         assertEquals("TAKE_PROFIT", rt.reason)
     }
 
-    /**
-     * 잔량이 남았다고 매도 정보까지 비우면 **이미 실현된 매도가 화면에서 통째로 사라진다** —
-     * "10개 사서 4개 팔고 6개 보유 중"이 "10개 사서 보유 중"으로만 보인다.
-     */
+    /** 잔량이 남았다고 매도 정보까지 비우면 이미 실현된 매도가 화면에서 사라진다. */
     @Test
     fun `부분 매도 후 잔량이 남아도 실현된 매도는 노출한다`() {
         val rts = assembleRoundTrips(
@@ -223,7 +220,7 @@ class TradeRoundTripTest {
         )
 
         val rt = rts.single()
-        // 잔량이 남았으므로 여전히 보유 중(open)이고, 그와 별개로 일부는 실현됐다
+        // 잔량이 남아 보유 중(open)이지만 일부는 실현됐다
         assertTrue(rt.open)
         assertTrue(rt.partiallyClosed)
         assertEquals(1, rt.sellCount)
@@ -245,7 +242,7 @@ class TradeRoundTripTest {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 100.0, "2026-08-01T10:00", strategy = "combined"),
-                // 0.5% 초과 — 비율 톨러런스를 뒀다면 정상 매도로 새어나간다
+                // 0.5% 초과. 비율 여유를 두면 정상 매도로 새어나간다
                 rec("KRW-BTC", "SELL", 120.0, 100.5, "2026-08-01T12:00", pnlPercent = 19.9, reason = "MANUAL"),
             )
         )
@@ -256,8 +253,8 @@ class TradeRoundTripTest {
     }
 
     /**
-     * 수동 매수도 마찬가지다. 그 수량은 추정치라(#105) 정상 매매인데 초과로 잡힐 수 있지만,
-     * 초과분의 원가를 모르는 것은 같으므로 손익을 비운다 — 틀린 손익을 보여주는 것보다 낫다.
+     * 수동 매수 수량은 추정치라 정상 매매인데 초과로 잡힐 수 있지만,
+     * 초과분의 원가를 모르는 것은 같으므로 손익을 비운다.
      */
     @Test
     fun `추정 매수라도 기록보다 많이 팔렸으면 손익을 비운다`() {
@@ -322,8 +319,8 @@ class TradeRoundTripTest {
         assertEquals(30.0, rts.first().pnlAmountGross)
     }
 
-    // --- 실현 손익(net)은 매도 행의 pnl_amount 합이다 (#115) ---
-    // 부분합은 전체 손익을 보장하지 못하므로(누락 SELL 이 손실이면 과대) 모든 SELL 에 값이 있을 때만 더한다.
+    // 실현 손익(net)은 매도 행의 pnl_amount 합이다. 누락된 SELL 이 손실이면 부분합이 과대가 되므로
+    // 모든 SELL 에 값이 있을 때만 더한다.
 
     @Test
     fun `모든 매도에 실현 손익이 있으면 합산한 net 을 낸다`() {
@@ -400,8 +397,8 @@ class TradeRoundTripTest {
     }
 
     /**
-     * 프론트(`screens.jsx` OrdersPage)가 읽는 키와 실제 와이어 포맷이 어긋나면 화면이 조용히 빈다.
-     * 앱은 Jackson SNAKE_CASE 전략(`application.yml`)을 쓰므로 그 변환 결과를 계약으로 고정한다.
+     * 프론트가 읽는 키와 실제 와이어 포맷이 어긋나면 화면이 조용히 빈다.
+     * 앱은 Jackson SNAKE_CASE 전략을 쓰므로 그 변환 결과를 확인한다.
      */
     @Test
     fun `DTO 는 프론트가 읽는 snake_case 키로 직렬화된다`() {
@@ -427,14 +424,12 @@ class TradeRoundTripTest {
         }
     }
 
-    // --- 엔진 매수 기록은 증분이 아니라 누적 스냅샷이다 ---
-    // PositionManager.completeBuy 는 거래소 전체 잔고·평단을 그대로 적는다(#20 — syncPosition 복원분과
-    // 이중계상되지 않게). 그래서 한 포지션의 엔진 BUY 행을 합산하면 수량이 부풀고 잔량이 0 이 되지 않는다.
-    // 반면 과거 수동 매수 행(2026-09-16 제거 전 executeBuy)은 그 주문의 증분을 적었으므로 합산이 맞다.
+    // 엔진 매수 기록은 증분이 아니라 누적 스냅샷이다. PositionManager.completeBuy 가 거래소 전체 잔고·평단을 적으므로
+    // 엔진 BUY 행을 합산하면 수량이 부풀고 잔량이 0 이 되지 않는다. 수동 매수 행은 그 주문의 증분이라 합산이 맞다.
 
     @Test
     fun `수동 매수 위에 엔진이 매수하면 엔진 기록이 포지션 전체를 담는다`() {
-        // 운영 실측(KRW-BTC 2026-06): manual 0.00009832 → engine 0.00022853 → 전량 매도 0.00022853.
+        // manual 0.00009832 → engine 0.00022853 → 전량 매도 0.00022853.
         // 합산하면 0.00032685 가 되어 전량 매도인데도 잔량이 남은 것처럼 보인다.
         val rts = assembleRoundTrips(
             listOf(
@@ -448,8 +443,8 @@ class TradeRoundTripTest {
         assertFalse(rt.open, "전량 매도했으므로 청산된 라운드트립이어야 한다")
         assertEquals(0.00022853, rt.buyVolume, 1e-12)
         assertEquals(94677000.0 * 0.00022853, rt.buyAmount, 1e-6)
-        // 런타임 entryStrategy 와 같은 값이어야 한다 — 수동 매수는 TradingState 를 세우지 않으므로
-        // 이 포지션의 진입 전략은 엔진이 적은 rsi_bounce 다. 'manual' 로 잡으면 SELL 기록과 갈린다.
+        // 수동 매수는 TradingState 를 세우지 않으므로 진입 전략은 엔진이 적은 rsi_bounce 다.
+        // 'manual' 로 잡으면 SELL 기록과 갈린다.
         assertEquals("rsi_bounce", rt.strategy)
     }
 
@@ -498,7 +493,7 @@ class TradeRoundTripTest {
 
     @Test
     fun `부분 매도 뒤의 새 매수는 별개 라운드트립이다`() {
-        // 잔량이 남은 채 새 매수가 들어오면 현재 구현은 전부 한 그룹으로 합쳐 보유기간·손익을 왜곡한다.
+        // 잔량이 남은 채 들어온 매수까지 한 그룹으로 합치면 보유기간·손익이 왜곡된다.
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-ETH", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "manual"),
@@ -511,11 +506,11 @@ class TradeRoundTripTest {
         assertEquals(2, rts.size, "매도가 시작된 뒤의 매수는 새 포지션으로 끊어야 한다")
     }
 
-    // ── #147: 잔량이 남은 채 들어온 엔진 매수 스냅샷 ─────────────────────────────────
+    // 잔량이 남은 채 들어온 엔진 매수 스냅샷
 
     @Test
     fun `잔량이 남은 채 엔진 매수가 들어오면 이전 그룹은 잔량을 넘기고 닫혀 보유량이 한 번만 잡힌다`() {
-        // 엔진 매수의 수량은 그 시점 거래소 전체 보유량이다 — 8 = 이전 그룹 잔량 6 + 새로 산 2.
+        // 엔진 매수 수량은 그 시점 거래소 전체 보유량이다. 8 = 이전 그룹 잔량 6 + 새로 산 2.
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-ETH", "BUY", 100.0, 10.0, "2026-08-01T10:00", strategy = "combined"),
@@ -539,7 +534,7 @@ class TradeRoundTripTest {
 
     @Test
     fun `전량 청산된 그룹이나 잔량보다 적게 담긴 엔진 매수에는 이월을 붙이지 않는다`() {
-        // 앞: 청산 뒤 재진입 — 넘길 잔량이 없다. 뒤: 잔량 6 이 거래소 밖에서 처분돼 스냅샷이 새로 산 2 만 담았다.
+        // 앞은 청산 뒤 재진입이라 넘길 잔량이 없고, 뒤는 잔량 6 이 거래소 밖에서 처분돼 스냅샷이 새로 산 2 만 담았다.
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
@@ -588,8 +583,7 @@ class TradeRoundTripTest {
         assertNull(rts[0].carriedVolume)
     }
 
-    // ── #132: 엔진 스냅샷 이후의 수동 매수 ────────────────────────────────────────
-    // wiki `trade-record-volume-semantics` 의 규칙: 보유량 = 마지막 엔진 스냅샷 + 그 이후의 수동 증분들.
+    // 엔진 스냅샷 이후의 수동 매수: 보유량 = 마지막 엔진 스냅샷 + 그 이후의 수동 증분
 
     @Test
     fun `엔진 매수 뒤에 온 수동 매수는 스냅샷에 더해진다`() {
@@ -605,8 +599,7 @@ class TradeRoundTripTest {
         assertEquals(1.5, rts[0].buyVolume, 1e-9, "엔진 스냅샷 1.0 에 이후 수동 증분 0.5 를 더해야 한다")
         assertFalse(rts[0].open, "1.5 를 전량 매도했으므로 청산이다")
         assertFalse(rts[0].partial, "수량이 맞으므로 oversold 가 아니다")
-        // 금액도 같은 규칙으로 더한다 — 스냅샷 amount(평단×총보유량 100.0) + 증분 amount(주문금액 55.0).
-        // 스냅샷만 쓰면 80.0 이 나오는데 그래도 non-null 이라, 값을 고정하지 않으면 회귀를 못 잡는다.
+        // 금액도 같은 규칙이다. 스냅샷 amount(평단×총보유량 100.0) + 증분 amount(주문금액 55.0).
         assertEquals(155.0, rts[0].buyAmount, 1e-9)
         assertEquals(155.0 / 1.5, rts[0].entryPrice!!, 1e-9)
         assertEquals(25.0, rts[0].pnlAmountGross!!, 1e-9, "매도 180.0 − 매수원가 155.0")
@@ -646,7 +639,7 @@ class TradeRoundTripTest {
 
     @Test
     fun `두 엔진 스냅샷 사이의 수동 매수도 더하지 않는다`() {
-        // 뒤 스냅샷이 그 수동분을 이미 포함한다. 마지막 스냅샷 '이후' 만 더하는 규칙의 경계 케이스.
+        // 뒤 스냅샷이 그 수동분을 이미 포함한다. 마지막 스냅샷 이후만 더한다.
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
@@ -674,9 +667,8 @@ class TradeRoundTripTest {
         assertEquals(1.5, rts[0].buyVolume, 1e-9, "MANUAL 도 수동 증분으로 봐야 한다")
     }
 
-    // ── #132: 추정치가 섞인 그룹의 청산 판정 (상대 tolerance) ──────────────────────
-    // 수동 매수 수량은 `주문금액 / 조회시점가격` 추정이라 실측 매도와 정확히 상쇄되지 않는다.
-    // 오차 방향은 정해져 있지 않다(체결↔틱조회 사이 가격 변동이 수수료율을 넘나든다).
+    // 추정치가 섞인 그룹의 청산 판정. 수동 매수 수량은 `주문금액 / 조회시점가격` 추정이라
+    // 실측 매도와 정확히 상쇄되지 않고 오차 방향도 정해져 있지 않다.
 
     @Test
     fun `수동 매수 수량이 과대 추정돼도 전량 매도면 청산으로 본다`() {
@@ -722,13 +714,12 @@ class TradeRoundTripTest {
         assertTrue(rts[0].open, "0.001 은 실측 잔량이다 — 상대 tolerance 를 적용했다면 청산으로 삼켰을 값이다")
     }
 
-    // ── 허용 오차의 기준과 폭을 고정한다 ──────────────────────────────────────────
-    // 이 테스트들이 없으면 ESTIMATE_TOLERANCE_RATIO 를 넓은 밴드 안 아무 값으로 바꿔도 통과한다.
+    // 허용 오차의 기준과 폭
 
     @Test
     fun `허용 오차는 포지션 전체가 아니라 추정 증분에만 비례한다`() {
         // 엔진 1.0 + 수동 0.002 에서 엔진분만 매도. 전체(1.002)에 비례시키면 허용치가 증분보다 커져
-        // 남은 수동 매수분이 통째로 삼켜진다 — 이 수정이 고치려던 #132 증상이 그대로 되살아난다.
+        // 남은 수동 매수분이 통째로 삼켜진다.
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
@@ -771,7 +762,7 @@ class TradeRoundTripTest {
 
     @Test
     fun `수량 0 인데 금액만 있는 수동 행은 평단을 오염시키지 않는다`() {
-        // 과거 `executeBuy`(2026-09-16 제거)는 시세 조회가 빈 응답이면 volume=0 · totalAmount=주문 전액으로 남겼다.
+        // 시세 조회가 빈 응답이던 수동 매수 기록은 volume=0 · totalAmount=주문 전액으로 남아 있다.
         // 금액만 더하면 entryPrice 가 부풀려져 이익 거래가 손실로 보인다.
         val rts = assembleRoundTrips(
             listOf(

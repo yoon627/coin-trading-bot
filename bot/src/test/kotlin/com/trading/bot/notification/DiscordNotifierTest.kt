@@ -77,7 +77,6 @@ class DiscordNotifierTest {
         }) }
     }
 
-    // --- 금액 필드의 의미 (#146) ---
     // 엔진 매수의 totalAmount 는 포지션 전체 원가라 "금액"으로 보여주면 추가매수가 총보유 원가로 읽힌다.
 
     private fun amountField(record: TradeRecord): Pair<String, String> {
@@ -208,7 +207,7 @@ class DiscordNotifierTest {
         verify { requestBodySpec.bodyValue(capture(payloadSlot)) }
         val embed = (payloadSlot.captured["embeds"] as List<*>).first() as Map<*, *>
         val firstField = (embed["fields"] as List<*>).first() as Map<*, *>
-        assertEquals("Logger", firstField["name"]) // error embed 식별 (거래 embed 엔 없는 필드)
+        assertEquals("Logger", firstField["name"]) // 거래 embed 에는 없는 필드
     }
 
     @Test
@@ -264,7 +263,7 @@ class DiscordNotifierTest {
         }
     }
 
-    // WebClientResponseException 메시지는 "<status> <reason> from POST <URI>" — URI 끝이 webhook token 이다.
+    // WebClientResponseException 메시지는 "<status> <reason> from POST <URI>" 형식이고 URI 끝이 webhook token 이다.
     private fun failureLogs(url: String): List<ILoggingEvent> {
         val request = mockk<HttpRequest>()
         every { request.method } returns HttpMethod.POST

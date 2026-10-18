@@ -124,7 +124,7 @@ class UserTradingManagerTest {
         coVerify(exactly = 1) { mockEngine.start(any(), any()) } // 재시도에서 실제로 기동돼야 한다
     }
 
-    // 옛 엔진을 멈추기 전의 실패 — 저장은 됐고 엔진은 이전 설정으로 계속 돈다. 저장 실패(500)로 읽히지 않게 알린다(#283).
+    // 옛 엔진을 멈추기 전의 실패. 저장은 됐고 엔진은 이전 설정으로 계속 돈다. 저장 실패(500)로 읽히지 않게 알린다.
     @Test
     fun `a reload that cannot read the user before stopping reports the old settings are still trading`() = runTest {
         runningEngineToReload()
@@ -149,7 +149,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a reload of a stopped engine that cannot read the user leaves it for the next start`() = runTest {
-        // 도는 엔진이 없으니 반영할 곳도 없다 — 다음 시작이 저장된 설정을 읽는다.
+        // 도는 엔진이 없으니 반영할 곳이 없고, 다음 시작이 저장된 설정을 읽는다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { userRepository.findById(1L) } returns Mono.error(RuntimeException("db down"))
@@ -170,15 +170,15 @@ class UserTradingManagerTest {
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
 
-        // 되살리기는 하되 호출자에게 알린다 — 조용히 성공을 반환하면 옛 자격증명으로 계속
-        // 거래하는 것을 사용자가 알 수 없다(#51).
+        // 되살리기는 하되 호출자에게 알린다. 조용히 성공을 반환하면 옛 자격증명으로 계속
+        // 거래하는 것을 사용자가 알 수 없다.
         assertThrows(RuntimeReloadFailedException::class.java) {
             runBlocking { manager.reloadUserRuntime(1L) }
         }
 
         assertSame(mockEngine, engines()[1L], "로드 실패 시 교체 엔진이 등록되면 안 된다")
         verify(exactly = 0) { manager.createEngine(any()) }
-        // 옛 엔진 재기동 — 직전 사용자 목록·메모리 상태 그대로여야 목록 밖 잔류 포지션이 복귀 뒤에도 관리된다(#226).
+        // 옛 엔진은 직전 사용자 목록·메모리 상태 그대로 재기동해야 목록 밖 잔류 포지션이 계속 관리된다.
         // 빈 상태로 start 하면 그 포지션이 빠진다.
         verify(exactly = 1) { mockEngine.resume() }
         coVerify(exactly = 0) { mockEngine.start(any(), any()) }
@@ -187,7 +187,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `reload rethrows only after the old engine is back up`() = runTest {
-        // 순서가 뒤바뀌면 stop 된 엔진만 남아 PR #50 이 막으려던 결함이 되살아난다.
+        // 순서가 뒤바뀌면 stop 된 엔진만 남아 손절이 멈춘다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
@@ -222,7 +222,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore failure is reported as engine stopped`() = runTest {
-        // 되살리기마저 실패하면 엔진이 정지된 채 남는다 — "이전 설정으로 거래 중" 과 정반대라
+        // 되살리기마저 실패하면 엔진이 정지된 채 남는다. "이전 설정으로 거래 중" 과 정반대라
         // 호출자가 다른 문구를 쓸 수 있게 구분돼야 한다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
@@ -239,9 +239,9 @@ class UserTradingManagerTest {
 
         assertFalse(thrown.engineRestored, "복귀 실패면 restored=false 여야 한다")
         assertSame(restoreFailure, thrown.cause)
-        // 원래 실패 원인도 잃지 않는다 — 진단에 둘 다 필요하다.
+        // 진단에 둘 다 필요하니 원래 실패 원인도 남긴다.
         assertSame(loadFailure, thrown.cause!!.suppressed.single())
-        // 복귀하지 못한 엔진은 그 매도를 알린 자리에서 버린다 — 남겨 두면 알림을 보고 맞춘 DB 를 다음 시작이 메모리 값으로 되쓴다.
+        // 복귀하지 못한 엔진은 그 매도를 알린 뒤 버린다. 남겨 두면 알림을 보고 맞춘 DB 를 다음 시작이 메모리 값으로 되쓴다.
         assertNull(engines()[1L], "복귀 실패 시 정지된 옛 엔진은 맵에서 제거돼야 한다")
     }
 
@@ -263,7 +263,7 @@ class UserTradingManagerTest {
 
         verify(exactly = 1) { mockEngine.resume() } // 복구는 수행
         assertSame(mockEngine, engines()[1L], "취소 시 엔진이 교체되면 안 된다")
-        // 되살린 엔진은 이전 설정으로 돈다 — 끊긴 요청에는 503 이 가지 않으므로 한 번 알린다.
+        // 되살린 엔진은 이전 설정으로 돈다. 끊긴 요청에는 503 이 가지 않으므로 한 번 알린다.
         assertEquals(1, errors.count { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 한 번 알려야 한다: $errors")
     }
 
@@ -275,8 +275,7 @@ class UserTradingManagerTest {
 
         manager.restoreAllRunningBots()
 
-        // lock 획득 후 engines 재확인으로 skip — 새 엔진 생성도, 기존 엔진 재기동(start)도 없다.
-        // (구 computeIfAbsent 는 createEngine 만 skip 하고 실행 중 엔진에 start 를 다시 걸어 유령 엔진을 만들었다.)
+        // lock 을 잡은 뒤 engines 를 다시 확인해 건너뛴다. 새 엔진 생성도, 기존 엔진 재기동(start)도 없다.
         verify(exactly = 0) { manager.createEngine(any()) }
         verify(exactly = 0) { mockEngine.start(any()) }
     }
@@ -327,15 +326,15 @@ class UserTradingManagerTest {
 
         manager.stop() // SmartLifecycle.stop
 
-        // 모든 엔진을 stop(cancelAndJoin) — 진행 중 tick 완주 후 종료.
+        // 모든 엔진을 stop(cancelAndJoin)해 진행 중 tick 을 마친 뒤 끝낸다.
         coVerify { engine1.stop() }
         coVerify { engine2.stop() }
     }
 
     @Test
     fun `restore does not start engines once shutting down`() = runTest {
-        // SmartLifecycle.stop 이 shuttingDown 을 세우면 이후 restore 는 신규 엔진을 기동하지 않는다
-        // (backoff 중 SIGTERM → shutdown 후 엔진 기동으로 아무도 stop 안 하는 유령 엔진 방지, M5).
+        // SmartLifecycle.stop 이 shuttingDown 을 세우면 이후 restore 는 신규 엔진을 기동하지 않는다.
+        // backoff 중 SIGTERM 이 오면 아무도 멈추지 않는 엔진이 생기기 때문이다.
         every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
 
@@ -347,7 +346,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `startBot is rejected while shutting down`() = runTest {
-        // restore 뿐 아니라 API 경로(startBot)도 종료 중이면 신규 엔진을 기동하지 않는다(M5 일관, 재검토 발견).
+        // restore 뿐 아니라 API 경로(startBot)도 종료 중이면 신규 엔진을 기동하지 않는다.
         manager.stop() // shuttingDown = true
 
         val result = manager.startBot(1L, listOf("KRW-BTC"))
@@ -358,7 +357,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore logs error when all DB queries fail`() = runTest {
-        // 모든 attempt 에서 bot state 조회가 실패하면 복원 0건 — pendingUserIds 는 비어 있어도 alert 해야 한다(M2).
+        // 모든 시도에서 bot state 조회가 실패하면 복원 0건이다. pendingUserIds 가 비어 있어도 알려야 한다.
         every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.error(RuntimeException("db down"))
 
         val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
@@ -377,14 +376,14 @@ class UserTradingManagerTest {
         }
     }
 
-    // 종료는 shuttingDown 을 세운 뒤 복원을 취소한다. 마지막(5번째) 시도는 뒤에 backoff 가 없다 — 그 도중의 취소를 삼키면 곧장
+    // 종료는 shuttingDown 을 세운 뒤 복원을 취소한다. 마지막(5번째) 시도는 뒤에 backoff 가 없어, 그 도중의 취소를 삼키면 곧장
     // '봇 미복원' 판정으로 간다. 앞 시도에서는 backoff 의 delay 가 취소를 다시 던져 드러나지 않는다.
     private fun markShuttingDown() =
         UserTradingManager::class.java.getDeclaredField("shuttingDown").apply { isAccessible = true }.setBoolean(manager, true)
 
     private suspend fun TestScope.cancelRestoreDuringLastAttempt() {
         val restore = launch { manager.restoreAllRunningBots() }
-        advanceTimeBy(15_500) // 시도 시각 0·1·3·7·15초 — 5번째 시도 도중
+        advanceTimeBy(15_500) // 시도 시각 0·1·3·7·15초, 5번째 시도 도중
         markShuttingDown()
         restore.cancelAndJoin()
     }
@@ -419,7 +418,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore ended by a cancellation outside shutdown is reported`() = runTest {
-        // 종료가 아닌 취소는 남은 재시도 없이 복원을 끝낸다 — 알리지 않으면 봇이 복원되지 않은 것을 아무도 모른다.
+        // 종료가 아닌 취소는 남은 재시도 없이 복원을 끝낸다. 알리지 않으면 봇이 복원되지 않은 것을 아무도 모른다.
         every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.never()
 
         val errors = errorsDuring {
@@ -516,7 +515,7 @@ class UserTradingManagerTest {
     @Test
     fun `startBot persists the requested tickers, not the engine's derived active set`() = runTest {
         // 잔류 티커가 합쳐진 활성 집합을 bot_state.tickers 에 되쓰면 그날의 목록이 사용자 의도로 굳어
-        // 되돌릴 수 없다 — 저장은 사용자가 준 목록만.
+        // 되돌릴 수 없다. 저장은 사용자가 준 목록만 한다.
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         val saved = slot<BotStateEntity>()
@@ -526,11 +525,11 @@ class UserTradingManagerTest {
         manager.startBot(1L, listOf("KRW-ETH"))
 
         assertEquals("KRW-ETH", saved.captured.tickers)
-        // 전략 칸은 이 코드가 읽지 않아도 계속 쓴다 — 옛 이미지로 롤백하면 복원이 이 값으로 전략을 고른다.
+        // 전략 칸은 이 코드가 읽지 않아도 계속 쓴다. 옛 이미지로 롤백하면 복원이 이 값으로 전략을 고른다.
         assertEquals("combined", saved.captured.strategy)
     }
 
-    // 맨 앞 확인 뒤에 종료가 시작돼도 저장한 running=true 는 둔다 — 재시작 복원이 이 시작을 잇는다(#263 과 같은 틈).
+    // 맨 앞 확인 뒤에 종료가 시작돼도 저장한 running=true 는 둔다. 재시작 복원이 이 시작을 잇는다.
     @Test
     fun `startBot does not launch the loop when shutdown starts while the start is being saved`() = runTest {
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
@@ -547,7 +546,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a shutdown that starts while startBot is starting the engine finds it stopped`() = runTest {
-        // 종료가 엔진을 맵에서 본 뒤 기동하면 아무도 멈추지 않는다 — 기동 뒤 다시 보고 직접 멈춘다.
+        // 종료가 맵을 본 뒤 기동한 엔진은 아무도 멈추지 않으므로, 기동 뒤 다시 보고 직접 멈춘다.
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         val saved = mutableListOf<BotStateEntity>()
@@ -562,7 +561,7 @@ class UserTradingManagerTest {
         assertEquals(listOf(true), saved.map { it.running }, "저장한 시작을 되돌리지 않는다")
     }
 
-    // --- 사용자 목록과 파생 활성 집합의 분리 (#226) ---
+    // --- 사용자 목록과 파생 활성 집합의 분리 ---
     // 재기동·실행 중 start 는 엔진의 사용자 목록을 기준으로 한다. 파생 집합(잔류 포함)을 사용자 의도로 넘기면
     // 목록에서 뺀 티커가 신규 진입 대상으로 승격된다.
 
@@ -570,7 +569,7 @@ class UserTradingManagerTest {
     fun `reload starts the replacement with the user list as is, never the config list or the derived active set`() = runTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        // 빈 사용자 목록으로 도는 엔진(잔류만 관리) — 빈 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다.
+        // 빈 사용자 목록으로 도는 엔진(잔류만 관리). 빈 목록을 설정 목록으로 바꾸면 신규 진입 대상이 조용히 생긴다.
         every { mockEngine.getUserTickers() } returns emptyList()
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         val loaded = mapOf("KRW-XRP" to TradingState("KRW-XRP"))
@@ -601,7 +600,7 @@ class UserTradingManagerTest {
     fun `startBot on a running engine with the same list in another order or case reports already_running`() = runTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
-        // bot_state 에서 온 목록은 trim 만 돼 있다 — 요청(대문자·distinct)과 순서·대소문자만 달라도 같은 목록이다.
+        // bot_state 의 목록은 trim 만 돼 있어, 요청(대문자·distinct)과 순서·대소문자만 달라도 같은 목록이다.
         every { mockEngine.getUserTickers() } returns listOf("krw-btc", "KRW-ETH")
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
         val saved = slot<BotStateEntity>()
@@ -635,7 +634,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `status reports the injected strategy with or without an engine`() {
-        // 전략은 주입된 하나뿐이다 — 정지로 엔진이 사라진 뒤 상태가 다른 이름을 보이면 화면과 실제 매매 전략이 어긋난다.
+        // 전략은 주입된 하나뿐이다. 정지로 엔진이 사라진 뒤 상태가 다른 이름을 보이면 화면과 실제 매매 전략이 어긋난다.
         assertEquals("combined", manager.getStatus(1L)["strategy"])
 
         engines()[1L] = mockEngine
@@ -646,7 +645,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `getStatus shows no ticker groups for an engine that is registered but not running`() {
-        // 기동 전에 실패한 restore·wasRunning=false reload 는 맵에 엔진을 남긴다 — 그 옛 목록을 실행 중처럼 보이면 안 된다.
+        // 기동 전에 실패한 restore·wasRunning=false reload 는 맵에 엔진을 남긴다. 그 옛 목록을 실행 중처럼 보이면 안 된다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.getUserTickers() } returns listOf("KRW-SOL")
@@ -672,7 +671,7 @@ class UserTradingManagerTest {
         assertEquals("KRW-SOL", saved.captured.tickers)
     }
 
-    // --- 봇 제어의 상태 저장 실패 (#228) ---
+    // --- 봇 제어의 상태 저장 실패 ---
     // 저장이 실패했는데 성공으로 답하면 운영자가 멈춘 봇이 다음 재시작 때 실자금으로 다시 돈다(또는 돌던 봇이 복원되지 않는다).
 
     private fun unpersistedStops(): MutableSet<Long> {
@@ -700,7 +699,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `stop without an engine clears a running flag left in the database`() = runTest {
-        // 복원이 실패해 엔진 없이 DB 만 running=true 인 경우 — not_running 만 답하면 다음 재시작 때 복원된다.
+        // 복원이 실패해 엔진 없이 DB 만 running=true 인 경우. not_running 만 답하면 다음 재시작 때 복원된다.
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
         val saved = slot<BotStateEntity>()
         every { botStateRepository.save(capture(saved)) } answers { Mono.just(firstArg()) }
@@ -713,7 +712,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `stop writes nothing when the database already says stopped`() = runTest {
-        // 저장이 커밋된 뒤 응답만 유실돼 다시 부른 경우도 여기로 온다 — 멱등이어야 한다.
+        // 저장이 커밋된 뒤 응답만 유실돼 다시 부른 경우도 여기로 오므로 멱등이어야 한다.
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns
             Mono.just(runningState(1L).copy(running = false))
 
@@ -788,7 +787,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a start whose row already matches leaves the unsaved-stop set so shutdown does not undo it`() = runTest {
-        // 정지 저장이 실패한 뒤 같은 전략·목록으로 다시 시작하면 행이 이미 같아 쓰기가 생략된다 — 그래도 집합에서 빠져야
+        // 정지 저장이 실패한 뒤 같은 전략·목록으로 다시 시작하면 행이 이미 같아 쓰기가 생략된다. 그래도 집합에서 빠져야
         // 종료 저장이 running=false 로 덮어 다음 재시작 때 봇이 복원되지 않는 일이 없다.
         unpersistedStops().add(1L)
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
@@ -874,7 +873,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `the final stop save does not overwrite a start that finished while it waited for the lock`() = runTest {
-        // 종료 저장은 집합을 스냅샷한 뒤 사용자 lock 을 기다린다 — 그 사이 시작이 저장을 마치면 도는 봇의 행을 내리면 안 된다.
+        // 종료 저장은 집합을 스냅샷한 뒤 사용자 lock 을 기다린다. 그 사이 시작이 저장을 마쳤으면 도는 봇의 행을 내리면 안 된다.
         unpersistedStops().add(1L)
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
@@ -909,8 +908,8 @@ class UserTradingManagerTest {
         assertEquals(RUNNING_UNPERSISTED_MESSAGE, thrown.message)
     }
 
-    // --- 멈춘 엔진의 미기록 매도 pending (#244) ---
-    // 매도는 선기록이 실패해도 보내고, 재기록은 다음 tick 몫이다. 엔진(그 states)을 버리기 전에 한 번 더 남기지 않으면 그 주문은
+    // --- 멈춘 엔진의 미기록 매도 pending ---
+    // 매도는 선기록이 실패해도 보내고, 재기록은 다음 tick 몫이다. 엔진을 버리기 전에 한 번 더 남기지 않으면 그 주문은
     // 메모리와 함께 사라져, 체결돼도 거래 기록이 남지 않는다.
 
     private fun unrecordedSell() =
@@ -943,8 +942,8 @@ class UserTradingManagerTest {
     }
 
     /**
-     * 저장된 키를 복호화한 사용자로만 나오는 새 엔진 — 맵에 남은 정지 엔진(`mockEngine`)과 구별한다. [saved] 는 `findById` 가 돌려주는
-     * 바로 그 인스턴스여야 한다 — `createdAt` 기본값이 now() 라 `user(1L)` 을 다시 만들면 같은 사용자가 아니다.
+     * 저장된 키를 복호화한 사용자로만 만들어지는 새 엔진. [saved] 는 `findById` 가 돌려주는 바로 그 인스턴스여야 한다.
+     * `createdAt` 기본값이 now() 라 `user(1L)` 을 다시 만들면 같은 사용자가 아니다.
      */
     private fun newEngineFromSavedKeys(saved: UserEntity): TradingEngine {
         val decrypted = saved.copy(upbitAccessKey = "decrypted-ak", upbitSecretKey = "decrypted-sk")
@@ -974,7 +973,7 @@ class UserTradingManagerTest {
             runBlocking { manager.reloadUserRuntime(1L) }
         }
 
-        // 옛 엔진은 그 매도를 메모리에 들고 다음 tick 에 다시 기록한다 — 새 엔진은 DB 에 없는 그 주문을 모른다.
+        // 옛 엔진은 그 매도를 메모리에 들고 다음 tick 에 다시 기록하지만, 새 엔진은 DB 에 없는 그 주문을 모른다.
         assertTrue(thrown.engineRestored)
         assertTrue(thrown.cause?.message.orEmpty().contains("KRW-BTC"), "원인에 남기지 못한 티커가 없다: ${thrown.cause?.message}")
         verify(exactly = 1) { mockEngine.resume() }
@@ -1012,7 +1011,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a reload cancelled while the old engine is stopping waits for the stop and brings the old engine back`() = runTest {
-        // stop 의 join 중 취소가 복귀 경로 밖으로 새면 정지된 엔진만 남아 손절이 멈춘다(#262). join 전에 복귀하면 옛 루프의 꼬리와
+        // stop 의 join 중 취소가 복귀 경로 밖으로 새면 정지된 엔진만 남아 손절이 멈춘다. join 전에 복귀하면 옛 루프의 꼬리와
         // 새 루프가 겹치므로, stop 을 끝까지 기다린 뒤에 복귀해야 한다.
         runningEngineToReload()
         val stopFinished = AtomicBoolean(false)
@@ -1029,13 +1028,13 @@ class UserTradingManagerTest {
         assertEquals(listOf(true), stopSettledAtResume, "stop 을 마친 뒤 한 번 복귀해야 한다")
         verify(exactly = 0) { manager.createEngine(any()) }
         assertSame(mockEngine, engines()[1L])
-        // 응답을 못 받은 사용자는 새 키·웹훅이 반영된 줄 안다 — 이전 설정으로 돌 수 있음을 한 번 알린다.
+        // 응답을 못 받은 사용자는 새 키·웹훅이 반영된 줄 알므로 이전 설정으로 돌 수 있음을 한 번 알린다.
         assertEquals(1, errors.count { it.contains("이전 설정") && it.contains("반영되지 않았") }, "미반영을 한 번 알려야 한다: $errors")
     }
 
     @Test
     fun `a reload cancelled while stopping the old engine during shutdown leaves it to the shutdown`() = runTest {
-        // 종료가 이 엔진을 멈추고 기록한다 — 멈춘 뒤 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
+        // 종료가 이 엔진을 멈추고 기록한다. 멈춘 뒤 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
         runningEngineToReload()
         coEvery { mockEngine.stop() } coAnswers { delay(1_000) }
 
@@ -1049,7 +1048,7 @@ class UserTradingManagerTest {
         assertSame(mockEngine, engines()[1L], "종료의 정지 대상에 남아 있어야 한다")
     }
 
-    // 정지 뒤 기록·로드 중에 종료가 시작되면 종료가 이미 이 엔진을 멈추고 기록했을 수 있다 — 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다(#263).
+    // 정지 뒤 기록·로드 중에 종료가 시작되면 종료가 이미 이 엔진을 멈추고 기록했을 수 있다. 되살리거나 교체하면 아무도 멈추지 않는 엔진이 남는다.
     @Test
     fun `a reload cancelled while loading state during shutdown does not bring the old engine back`() = runTest {
         runningEngineToReload()
@@ -1065,7 +1064,7 @@ class UserTradingManagerTest {
         verify(exactly = 0) { mockEngine.resume() }
         verify(exactly = 0) { manager.createEngine(any()) }
         assertSame(mockEngine, engines()[1L], "종료의 정지 대상에 남아 있어야 한다")
-        // 재시작 복원이 저장된 새 설정을 읽는다 — "다시 저장" 안내는 과잉이다.
+        // 재시작 복원이 저장된 새 설정을 읽으므로 "다시 저장" 안내는 필요 없다.
         assertEquals(0, errors.count { it.contains("반영되지 않았") }, "$errors")
     }
 
@@ -1074,7 +1073,7 @@ class UserTradingManagerTest {
         runningEngineToReload()
         coEvery { tradingStateService.loadStates(1L) } coAnswers { markShuttingDown(); throw RuntimeException("pool closed") }
 
-        // 정상 반환한다 — 이전 엔진으로 돌아간 것이 아니라 RuntimeReloadFailedException 의 어느 문구도 맞지 않는다.
+        // 정상 반환한다. 이전 엔진으로 돌아간 것이 아니라 RuntimeReloadFailedException 의 어느 문구도 맞지 않는다.
         manager.reloadUserRuntime(1L)
 
         verify(exactly = 0) { mockEngine.resume() }
@@ -1094,7 +1093,7 @@ class UserTradingManagerTest {
         assertSame(mockEngine, engines()[1L])
     }
 
-    // 확인 직후, 되살리거나 교체하는 도중에 종료가 시작되면 종료의 스냅샷·정지가 그보다 먼저일 수 있다 — reload 가 직접 다시 멈춘다.
+    // 되살리거나 교체하는 도중에 종료가 시작되면 종료의 스냅샷·정지가 먼저일 수 있어 reload 가 직접 다시 멈춘다.
     @Test
     fun `a shutdown that starts while the old engine is brought back finds it stopped again`() = runTest {
         runningEngineToReload()
@@ -1135,7 +1134,7 @@ class UserTradingManagerTest {
         lateinit var result: Map<String, Any>
         val errors = errorsDuring { result = manager.stopBot(1L) }
 
-        // 정지·표시가 기록 결과에 달리면 안 된다(#228) — 먼저 확정하고 기록한다.
+        // 정지·표시는 기록 결과와 무관하게 먼저 확정하고, 그다음 기록한다.
         assertEquals(listOf(true), settledAtRecording, "기록 전에 엔진 제거·정지 표시가 끝나 있어야 한다")
         assertEquals("stopped", result["status"])
         assertFalse(saved.captured.running)
@@ -1153,7 +1152,7 @@ class UserTradingManagerTest {
         advanceTimeBy(500)
         request.cancelAndJoin()
 
-        // 엔진은 이미 맵에서 빠졌다 — 여기서 끊기면 그 매도는 메모리와 함께 사라진다.
+        // 엔진은 이미 맵에서 빠져, 여기서 끊기면 그 매도는 메모리와 함께 사라진다.
         assertTrue(recorded.get())
     }
 
@@ -1174,7 +1173,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a stuck recording does not keep a stop holding the user lock`() = runTest {
-        // 정지의 기록은 요청 취소를 받지 않는다 — 상한이 없으면 걸린 DB 호출이 이 사용자의 lock 을 무기한 쥔다(#228).
+        // 정지의 기록은 요청 취소를 받지 않으므로, 상한이 없으면 걸린 DB 호출이 이 사용자의 lock 을 무기한 쥔다.
         engines()[1L] = mockEngine
         val saved = stoppableRow()
         coEvery { mockEngine.flushUnpersisted() } coAnswers { delay(60_000) }
@@ -1188,7 +1187,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `start records a stopped engine's pending before a new engine replaces it`() = runTest {
-        // 맵에 남은 정지 엔진(reload 취소 뒤 복귀 실패 등)은 저장 전 설정으로 만들어졌을 수 있어 새 엔진으로 바꾼다 — 그 states 를
+        // 맵에 남은 정지 엔진(reload 취소 뒤 복귀 실패 등)은 저장 전 설정으로 만들어졌을 수 있어 새 엔진으로 바꾼다. 그 states 를
         // 버리기 전에 기록해야 한다. 새 엔진을 먼저 등록하면 옛 엔진의 매도가 기록도 알림도 없이 사라진다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
@@ -1213,8 +1212,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore records a stopped engine's pending before a new engine replaces it`() = runTest {
-        // 복원도 맵에 남은 정지 엔진을 새 엔진으로 바꾼다 — 회차와 무관하다(복원이 이 사용자에 닿기 전에 사용자가 시작한 엔진이, 취소된
-        // reload 뒤 옛 엔진으로 돌아오지 못해 정지된 채 남은 경우 등).
+        // 복원도 맵에 남은 정지 엔진을 새 엔진으로 바꾼다. 취소된 reload 뒤 옛 엔진으로 돌아오지 못해 정지된 채 남은 경우 등이다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
@@ -1238,7 +1236,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore reports a stopped engine's unrecorded sell only on the attempt that read the database state`() = runTest {
-        // 로드가 실패한 시도는 아무것도 버리지 않았다 — 엔진은 맵에 남아 다음 시도가 다시 기록한다. 그때 알리면 재시도마다 오경보다.
+        // 로드가 실패한 시도는 아무것도 버리지 않아 엔진이 맵에 남고 다음 시도가 다시 기록한다. 그때 알리면 재시도마다 오경보다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
@@ -1278,7 +1276,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `reload that can neither hand over nor bring back the old engine reports the sell it drops`() = runTest {
-        // 복귀까지 실패하면 옛 엔진을 맵에서 뺀다 — 그 매도를 들고 있던 유일한 사본이 사라지므로 사람이 맞추도록 알린다.
+        // 복귀까지 실패하면 옛 엔진을 맵에서 뺀다. 그 매도의 유일한 사본이 사라지므로 사람이 맞추도록 알린다.
         runningEngineToReload()
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
         every { mockEngine.resume() } throws RuntimeException("engine start failed")
@@ -1289,7 +1287,7 @@ class UserTradingManagerTest {
         }
 
         assertNull(engines()[1L])
-        // 선기록이 성공한 매도는 다음 기동이 스스로 확정한다 — 확인 없이 수동으로 맞추면 이중 계상된다.
+        // 선기록이 성공한 매도는 다음 기동이 스스로 확정하므로, 확인 없이 수동으로 맞추면 이중 계상된다.
         assertTrue(
             errors.any { it.contains("ctb-sell-1") && it.contains("먼저 확인") && it.contains("Upbit 주문 내역") },
             "버리는 매도를 조치 문구와 함께 알려야 한다: $errors",
@@ -1308,7 +1306,7 @@ class UserTradingManagerTest {
 
         coVerify(exactly = 1) { mockEngine.flushUnpersisted() }
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
-        // 알림은 교체를 막지 않는다 — 이 엔진은 돌고 있지 않아 새 설정의 엔진으로 바꾸는 것뿐이다.
+        // 알림은 교체를 막지 않는다. 이 엔진은 돌고 있지 않아 새 설정의 엔진으로 바꿀 뿐이다.
         verify(exactly = 1) { manager.createEngine(any()) }
     }
 
@@ -1327,9 +1325,9 @@ class UserTradingManagerTest {
         assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
     }
 
-    // --- 취소된 reload 뒤의 시작·복원 (#264) ---
+    // --- 취소된 reload 뒤의 시작·복원 ---
     // 키·웹훅 저장은 새 설정을 DB 에 먼저 쓰고 reload 를 부른다. 끊긴 reload 가 정지된 옛 엔진을 맵에 남겨도 다음 시작·복원은
-    // 그것을 재사용하지 않는다 — 옛 엔진은 저장 전 자격증명·웹훅으로 만들어졌다. 새 엔진에 쓸 사용자 값(복호화 포함)은 옛 엔진을
+    // 그것을 재사용하지 않는다. 옛 엔진은 저장 전 자격증명·웹훅으로 만들어졌다. 새 엔진에 쓸 사용자 값(복호화 포함)은 옛 엔진을
     // 기록하고 바꾸기 전에 준비한다.
 
     @Test
@@ -1347,7 +1345,7 @@ class UserTradingManagerTest {
             assertThrows(CancellationException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
         }
         assertSame(mockEngine, engines()[1L], "복귀하지 못한 정지 엔진은 맵에 남는다")
-        // 봇은 멈췄다 — "이전 설정으로 돈다"는 정반대 안내다.
+        // 봇은 멈췄으니 "이전 설정으로 돈다"는 안내는 틀리다.
         assertTrue(errors.none { it.contains("반영되지 않았") }, "정지 엔진인데 이전 설정으로 돈다고 알렸다: $errors")
         assertEquals(1, errors.count { it.contains("복귀 실패") && it.contains("정지 상태") }, "복귀 실패를 알려야 한다: $errors")
         stoppableRow()
@@ -1372,7 +1370,7 @@ class UserTradingManagerTest {
             assertThrows(CancellationException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
         }
         assertSame(mockEngine, engines()[1L], "기록 중 끊긴 정지 엔진은 맵에 남는다")
-        // 정지 엔진은 다음 시작이 저장된 설정으로 바꾼다 — 미반영 알림은 도는 엔진에만 낸다.
+        // 정지 엔진은 다음 시작이 저장된 설정으로 바꾸므로, 미반영 알림은 도는 엔진에만 낸다.
         assertTrue(errors.none { it.contains("반영되지 않았") }, "정지 엔진인데 미반영을 알렸다: $errors")
         stoppableRow()
         val newEngine = newEngineFromSavedKeys(saved)
@@ -1386,7 +1384,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `restore that cannot decrypt the saved keys keeps the stopped engine without reporting a dropped sell`() = runTest {
-        // 복호화가 기록·알림 뒤에 있으면 버리지 않은 매도를 복원 시도마다 알린다 — 엔진은 맵에 남아 다음 시도가 다시 기록한다.
+        // 복호화가 기록·알림 뒤에 있으면 버리지 않은 매도를 복원 시도마다 알린다. 엔진은 맵에 남아 다음 시도가 다시 기록한다.
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false
         every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
@@ -1402,7 +1400,7 @@ class UserTradingManagerTest {
         verify(exactly = 0) { manager.createEngine(any()) }
     }
 
-    // 옛 엔진을 멈추기 전(lock 대기·사용자 조회 중)에 끊긴 reload 는 도는 엔진을 이전 설정으로 남긴다 — 끊긴 요청에는 503 이 가지
+    // 옛 엔진을 멈추기 전(lock 대기·사용자 조회 중)에 끊긴 reload 는 도는 엔진을 이전 설정으로 남긴다. 끊긴 요청에는 503 이 가지
     // 않으므로 알린다. 취소는 삼키지 않는다.
 
     @Test
@@ -1447,7 +1445,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a reload cancelled while a start holds the user lock warns before that start runs its engine`() = runTest {
-        // lock 을 쥔 시작이 저장 전에 사용자를 읽었으면, 끊긴 reload 뒤에 이전 설정으로 엔진을 기동한다 — lock 을 기다리다 끊기면
+        // lock 을 쥔 시작이 저장 전에 사용자를 읽었으면 끊긴 reload 뒤에 이전 설정으로 엔진을 기동한다. lock 을 기다리다 끊기면
         // 그때 도는 엔진이 없어도 알린다.
         every { userRepository.findById(1L) } returns Mono.just(user(1L))
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
@@ -1470,7 +1468,7 @@ class UserTradingManagerTest {
         verify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), any()) }
     }
 
-    // --- 막힌 pending 의 수동 해제 (#246) — 정지된 봇에서만 ---
+    // --- 막힌 pending 의 수동 해제, 정지된 봇에서만 ---
 
     private val SELL_SINCE = java.time.Instant.parse("2026-10-08T00:00:00Z")
 
@@ -1541,7 +1539,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `clearing is refused while the saved state still says running, as during a restore`() = runTest {
-        // 엔진이 없어도 복원 재시도·자동 시작 대기면 곧 기동된다 — 운영자가 거래소를 확인하기 전에 해제된 행으로 돈다.
+        // 엔진이 없어도 복원 재시도·자동 시작 대기면 곧 기동되어, 운영자가 거래소를 확인하기 전에 해제된 행으로 돈다.
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
 
         val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
@@ -1591,7 +1589,7 @@ class UserTradingManagerTest {
 
     @Test
     fun `a stopped engine whose sell cannot be recorded is kept and nothing is cleared`() = runTest {
-        // 버리면 메모리에만 있는 매도 주문의 유일한 기록이 사라진다 — 남겨 두면 다음 시도·시작이 다시 기록한다.
+        // 버리면 메모리에만 있는 매도 주문의 유일한 기록이 사라진다. 남겨 두면 다음 시도·시작이 다시 기록한다.
         stoppedRow()
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns false

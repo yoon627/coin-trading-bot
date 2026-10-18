@@ -18,7 +18,7 @@ class DailyCandleCacheTest {
     private val client = mockk<UpbitClient>()
     private val start = Instant.parse("2026-09-03T00:00:00Z")
 
-    /** 한 인스턴스 안에서 시각을 움직여야 TTL 이 실제로 검증된다 — 인스턴스를 둘 만들면 캐시가 비어 무엇이든 통과한다. */
+    /** 같은 인스턴스에서 시각만 옮긴다. 인스턴스를 새로 만들면 캐시가 비어 TTL 이 검증되지 않는다. */
     private class MutableClock(var nowMs: Long) : Clock() {
         override fun millis(): Long = nowMs
         override fun instant(): Instant = Instant.ofEpochMilli(nowMs)

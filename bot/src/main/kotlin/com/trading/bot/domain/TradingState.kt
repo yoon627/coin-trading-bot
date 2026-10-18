@@ -10,80 +10,65 @@ data class TradingState(
     var position: Boolean = false,
     var avgBuyPrice: Double = 0.0,
     /**
-     * 봇이 자기 포지션으로 통제하는 수량. 거래소 free 잔고에 **우리 매도 주문이 잠그고 있을 수 있는 만큼**만
-     * 더한다 — Upbit 의 locked 는 출금 대기·수동 주문까지 섞인 값이라 그대로 쓰면 팔 수 없는 수량을 보유로
-     * 세게 된다. 거래소 잔고에서 채우는 경로는 모두 engine 의 `heldVolume`(BalanceInterpretation.kt) 하나를 쓴다.
+     * 봇이 통제하는 수량. Upbit locked 에는 출금 대기·수동 주문도 섞여 있어 free 잔고에 우리 매도 주문이 잠근 만큼만 더한다.
+     * 거래소 잔고에서 채울 때는 engine 의 `heldVolume` 만 쓴다.
      */
     var holdVolume: Double = 0.0,
     var peakPrice: Double = 0.0,
     var buyDate: LocalDate? = null,
     var boughtToday: Boolean = false,
-    // boughtToday 가 가리키는 거래일. 재시작 후 그 플래그가 오늘 것인지 어제 것인지 구분하는 유일한 근거다
-    // (프로세스 수명 플래그로는 구분 불가 — 같은 거래일 재시작이면 재매수가 뚫리고, 경계를 넘겼으면 매수가 막힌다).
+    // boughtToday 가 가리키는 거래일. 재시작 후 그 플래그가 오늘 것인지 가리는 근거다.
     var boughtDate: LocalDate? = null,
     var lastTradeTime: LocalDateTime? = null,
     var entryStrategy: String? = null,
-    // H8: placeOrder 성공 후 후처리(awaitFill/getAccounts) 실패 시 주문 uuid 를 보존해 다음 tick reconcile.
+    // 주문은 나갔지만 체결 확인이 끝나지 않은 매수. 다음 tick 에 reconcile 한다.
     var pendingBuyUuid: String? = null,
     var pendingBuyStrategy: String? = null,
-    // 매도판 H8: 매도 placeOrder 성공 후 체결확인 실패/미확정 시 uuid·사유 보존 → 다음 tick reconcilePendingSell.
-    // 잃으면 뒤늦게 체결된 청산이 기록에서 사라지거나(감사 유실) 재평가로 이중 매도된다.
+    // 체결 확인이 끝나지 않은 매도. 잃으면 늦게 체결된 청산이 기록에서 빠지거나 이중 매도된다.
     var pendingSellUuid: String? = null,
     var pendingSellReason: SellReason? = null,
-    // 매도 주문 시점의 수량·평단. 재시작 후엔 syncPosition 이 잔고 0 을 반영해 holdVolume/avgBuyPrice 가
-    // 이미 비어 있으므로, 이 값 없이 잔고만 보고 청산을 확정하면 수량 0·손익 없음의 유령 SELL 이 기록된다.
+    // 매도 주문 시점의 수량·평단. 재시작 후 syncPosition 이 잔고 0 을 반영하면 이 값 없이는 수량 0 인 유령 SELL 이 기록된다.
     var pendingSellVolume: Double? = null,
     var pendingSellAvgPrice: Double? = null,
-    // 보유 여부가 불확실해 신규 매수를 막아야 하면 true. 두 경우다 — (1) syncPosition 의 잔고 조회 실패
-    // (재시작 직후 429 빈발), (2) 조회는 됐지만 우리 주문으로 설명되지 않는 locked 잔고가 있어 그 코인이
-    // 우리 포지션인지 알 수 없는 경우. 어느 쪽이든 그 위에 진입하면 이중 포지션이다.
-    // processTicker 가 다음 tick 재시도하고, 해소되면 매수가 풀린다.
+    // 보유 여부가 불확실해 신규 매수를 막는다. 잔고 조회가 실패했거나 우리 주문으로 설명되지 않는 locked 잔고가 있을 때다.
+    // 그 위에 진입하면 이중 포지션이 된다.
     var unsynced: Boolean = false,
-    // #19: reconcilePendingBuy 의 getOrder·잔고조회가 연속 실패해 pending 이 무한 재시도되면 halt.
-    // 신규 매수만 막는다(buy() 가드) — 매도·reconcile·잔고 동기화까지 막으면 포지션이 청산 못 하고 갇힌다.
+    // pending reconcile 이 계속 실패하면 켠다. 신규 매수만 막는다. 매도·reconcile 까지 막으면 포지션을 청산할 수 없다.
     var halted: Boolean = false,
     var haltReason: String? = null,
     var reconcileFailureCount: Int = 0,
-    // 매도 pending 이 시작된 시각. 미해소가 얼마나 오래 끌었는지는 재시작 횟수와 무관해야 하므로
-    // 카운터가 아니라 시각을 durable 로 남긴다(#55). pending 이 없으면 null.
+    // 재시작 횟수와 무관하게 미해소 기간을 재려고 카운터가 아니라 시각으로 남긴다.
     var pendingSellSince: Instant? = null,
-    // 위 임계를 넘겨 이미 알린 pending 인지. durable 이라 재시작해도 중복 발화하지 않는다.
+    // 영속이라 재시작해도 같은 pending 을 다시 알리지 않는다.
     var pendingSellAlerted: Boolean = false,
-    // 진입 시점 청산 파라미터 스냅샷 — 청산 게이트·보유상한이 engine 의 exitParamsOrGlobal 로 읽는다(없으면 전역).
+    // 진입 시점 청산 파라미터. 없으면 전역 설정을 쓴다.
     var exitParams: ExitParamsSnapshot? = null,
-    // durable pending 기록이 실패하면 true — 크래시 시 pending 유실 위험이 있으므로 신규 진입을 막는다(비영속, unsynced 동형).
+    // pending 영속 기록이 실패했다(비영속). 크래시 시 pending 을 잃을 수 있어 신규 진입을 막는다.
     var pendingPersistFailed: Boolean = false,
-    // 귀속 불명 locked 로 이미 경고했는지. unsynced 는 조회 실패로도 켜지므로 그걸 dedup 키로 쓰면
-    // "조회 실패 → 다음 tick 성공했으나 귀속 불명" 순서에서 원인이 로그에 한 번도 안 남는다(비영속).
+    // 귀속 불명 locked 경고를 이미 남겼는지(비영속). unsynced 는 조회 실패로도 켜져 dedup 키로 쓸 수 없다.
     var unattributableLockWarned: Boolean = false,
-    // wait 중 부분체결 관측 로그의 직전 값(executed/remaining) — 값이 바뀔 때만 찍는다(비영속, #120).
+    // wait 중 부분체결 로그의 직전 값(비영속). 값이 바뀔 때만 찍는다.
     var partialSellFillLogged: String? = null,
     var partialBuyFillLogged: String? = null,
-    // 신고점 flush 가 실패하면 true — 갱신 tick 에만 flush 하므로 그대로 두면 재시도 기회가
-    // 사라진다(하락 전환 시 다시 갱신될 일이 없다). 다음 tick 에서, 멈춘 엔진이면 그 states 를 버리거나 덮기 전의
-    // flush 에서 재기록한다(비영속).
-    // 매수는 막지 않는다 — 고점 유실은 청산 정확도 문제이지 주문 유실 위험이 아니다(#54).
+    // 신고점 flush 실패(비영속). 고점 갱신 tick 에만 flush 하므로 다음 tick 에 다시 기록한다.
+    // 고점 유실은 주문 위험이 아니라 매수는 막지 않는다.
     var peakPersistFailed: Boolean = false,
-    // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 "주문 전부터 있던 코인"을 체결로 오판하지 않게 한다.
+    // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 주문 전부터 있던 코인을 체결로 오판하지 않게 한다.
     var pendingBuyPriorVolume: Double? = null,
-    // 매도를 결정한 tick 가격 — 매도 기록의 price·pnl 기준이다(#235).
+    // 매도를 결정한 tick 가격. 매도 기록의 price·pnl 기준이다.
     var pendingSellTriggerPrice: Double? = null,
-    // 매도 주문 직전 free 보유량 — 응답을 못 받은 매도의 흔적 판정 기준이다(#227).
+    // 매도 주문 직전 free 보유량. 응답을 못 받은 매도의 체결 흔적 판정 기준이다.
     var pendingSellPriorVolume: Double? = null,
-    // 스윙 보유가 최소주문 미만 dust 라고 이미 알렸는지(비영속). 포지션이 바뀔 때만 풀린다 — 가격이 경계를 오갈 때마다
-    // 다시 알리지 않는다(#234).
+    // dust 보유를 이미 알렸는지(비영속). 포지션이 바뀔 때만 풀린다.
     var dustWarned: Boolean = false,
-    // 주문 전에 durable 로 남기는 클라이언트 identifier. 응답(uuid)을 받기 전에 끊긴 주문을 거래소에서 찾는 유일한
-    // 근거다(#227). uuid 를 알게 되면 비운다 — pending 주문은 uuid 또는 identifier 중 하나로만 식별된다(둘 다 있으면 uuid 가 우선).
+    // 주문 전에 영속으로 남기는 클라이언트 identifier. 응답 전에 끊긴 주문을 거래소에서 찾는 근거이고 uuid 를 알면 비운다.
     var pendingBuyIdentifier: String? = null,
     var pendingSellIdentifier: String? = null,
 ) {
-    /** 미해소 매수 주문이 있다 — 결과를 아직 모르는 주문(identifier 만 있음)도 포함한다. */
     fun hasPendingBuy(): Boolean = pendingBuyUuid != null || pendingBuyIdentifier != null
 
     fun hasPendingSell(): Boolean = pendingSellUuid != null || pendingSellIdentifier != null
 
-    /** 미해소 주문을 가리키는 값(로그·알림용) — uuid 를 알면 uuid, 아니면 identifier. */
     fun pendingBuyRef(): String? = pendingBuyUuid ?: pendingBuyIdentifier
 
     fun pendingSellRef(): String? = pendingSellUuid ?: pendingSellIdentifier
@@ -96,7 +81,7 @@ data class TradingState(
         pendingBuyPriorVolume = priorVolume
     }
 
-    /** 거래소가 붙인 주문 번호를 알게 됐다 — 이후 확정은 uuid 로 한다. */
+    /** 거래소 uuid 를 알게 되면 이후 확정은 uuid 로 한다. */
     fun adoptBuyOrder(uuid: String) {
         pendingBuyUuid = uuid
         pendingBuyIdentifier = null
@@ -143,7 +128,7 @@ data class TradingState(
         return ((peakPrice - currentPrice) / peakPrice) * 100.0
     }
 
-    /** @return 신고점 갱신 여부 — durable flush 를 갱신 시점에만 걸기 위한 신호(매 tick upsert 는 write 증폭). */
+    /** 신고점이면 true. 매 tick 이 아니라 갱신 때만 영속 기록하는 데 쓴다. */
     fun updatePeakPrice(currentPrice: Double): Boolean {
         if (currentPrice <= peakPrice) return false
         peakPrice = currentPrice
@@ -151,24 +136,19 @@ data class TradingState(
     }
 
     fun resetDaily(tradingDate: LocalDate) {
-        // H8: pendingBuyUuid 는 건드리지 않는다(끄면 미해소 주문이 다음날 재매수로 이어져 H8 재발).
+        // pending 매수는 지우지 않는다. 지우면 미해소 주문 위에 다음 날 다시 매수한다.
         if (boughtDate != tradingDate) boughtToday = false
     }
 
     /**
-     * @param replace reconcile 확정(재시작 복원)에서 거래소 실잔고를 절대값으로 반영할 때 true. syncPosition 이
-     * 이미 position 을 채운 상태에서 추가매수 averaging 으로 이중계상되는 것을 막는다(#20). buyDate·entryStrategy 는
-     * durable 복원값이 있으면 유지(재시작으로 진입일/진입전략이 뒤덮이지 않게).
+     * [replace] 는 거래소 실잔고를 그대로 반영할 때 쓴다. syncPosition 이 이미 채운 포지션에 평균을 내 이중계상되지 않게 한다.
      */
     fun markBought(price: Double, volume: Double, strategy: String? = null, replace: Boolean = false, now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
-        // 이미 포지션이 있으면 = 기존 포지션의 연장(추가매수 또는 재시작 reconcile 확정) → 진입 메타 보존.
-        // 없으면 = 신규 진입 → durable 에 남아 있던 옛 값(수동 청산 등으로 markSold 를 못 탄 잔재)을 물려받으면
-        // 진입 즉시 보유일 초과·과거 고점 기준 트레일링으로 청산돼 왕복 비용만 잃는다.
+        // 기존 포지션의 연장이면 진입 메타를 유지한다. 신규 진입이 남아 있던 옛 값을 물려받으면
+        // 곧바로 보유일 초과나 옛 고점 기준 트레일링으로 청산된다.
         val resuming = position
         if (position && !replace) {
-            // 추가 매수: 평균 단가 계산. entryStrategy 는 최초 진입 전략 유지(덮어쓰지 않음).
-            // 여기서 더하는 volume 은 거래소 관측값이 아니라 주문 의도 수량이라 holdVolume 의 정의(거래소
-            // 잔고 기반) 밖이다. 프로덕션 경로는 completeBuy 가 항상 replace=true 라 도달하지 않는다.
+            // 운영 경로는 completeBuy 가 항상 replace=true 라 여기 오지 않는다.
             val totalCost = avgBuyPrice * holdVolume + price * volume
             val totalVolume = holdVolume + volume
             avgBuyPrice = totalCost / totalVolume
@@ -179,15 +159,14 @@ data class TradingState(
             holdVolume = volume
             buyDate = if (resuming) buyDate ?: TradingDay.of(now) else TradingDay.of(now)
             entryStrategy = if (resuming) entryStrategy ?: strategy else strategy
-            if (!resuming) exitParams = null // 신규 진입 — 진입 시점 스냅샷은 호출부가 다시 찍는다
+            if (!resuming) exitParams = null // 진입 시점 스냅샷은 호출부가 다시 찍는다
         }
-        // 당일 1회 진입 게이트가 동작하도록 매수 시점에 반드시 set. resetDaily()에서만 해제됨.
+        // 당일 1회 진입 게이트. resetDaily 에서만 푼다.
         boughtToday = true
         boughtDate = TradingDay.of(now)
-        // 신규 진입이면 고점은 진입가에서 다시 시작 — 옛 고점을 물려받으면 첫 tick 부터 트레일링이 발동한다.
+        // 신규 진입이 옛 고점을 물려받으면 첫 tick 부터 트레일링이 걸린다.
         peakPrice = if (resuming) max(peakPrice, price) else price
         lastTradeTime = now
-        // H8: 체결 확정 = pending 주문 해소.
         clearPendingBuy()
         dustWarned = false
     }
@@ -198,27 +177,22 @@ data class TradingState(
     }
 
     /**
-     * 거래소 보유가 0 으로 관측됐지만 귀속 불명 락이 풀리면 코인이 돌아올 수 있을 때(#122). 진입 메타(buyDate·peakPrice·
-     * entryStrategy·exitParams)는 남긴다 — 재편입(`syncPosition`)은 position·평단·수량만 복원하므로 여기서
-     * 지우면 되돌아온 포지션이 보유상한·트레일링·진입 전략 기준을 영영 잃는다. 코인이 정말 사라졌다면 잔재는 무해하다:
-     * 다음 신규 진입의 [markBought] 가 `resuming=false` 로 전부 덮어쓴다.
+     * 보유가 0 으로 보이지만 귀속 불명 락이 풀리면 코인이 돌아올 수 있을 때 쓴다.
+     * syncPosition 은 수량·평단만 복원하므로 진입 메타는 남긴다. 다음 신규 진입이 어차피 덮어쓴다.
      */
     fun releaseHoldings(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
         position = false
         avgBuyPrice = 0.0
         holdVolume = 0.0
         lastTradeTime = now
-        // H8: 청산 시 잔여 pending 도 정리(정상흐름상 이미 null, 방어).
         clearPendingBuy()
         dustWarned = false
-        // 매도 확정 = 매도 pending 해소.
         clearPendingSell()
     }
 
     /**
-     * 신규 진입 시작 시점에 옛 포지션의 진입 메타를 끊는다. 봇 정지 중 거래소에서 직접 청산되면 markSold 를
-     * 못 타 durable 에 옛 값이 남는데, 체결 확인 전에 재시작하면 syncPosition 이 position=true 를 먼저 세워
-     * markBought 의 "연장" 판정이 그 잔재를 신규 포지션에 물려준다 — 주문 시점에 지워야 그 경로까지 닫힌다.
+     * 신규 진입 주문 시점에 옛 진입 메타를 지운다. 거래소에서 직접 청산된 포지션의 잔재가
+     * 재시작 후 markBought 의 연장 판정을 타고 새 포지션에 이어지지 않게 한다.
      */
     fun clearEntryMeta() {
         buyDate = null
@@ -239,13 +213,12 @@ data class TradingState(
         pendingSellPriorVolume = null
     }
 
-    /** 화면·해제 응답이 쓰는 pending 표현 — 거래소 uuid 를 알면 uuid, 응답을 못 받은 주문이면 identifier. */
     fun pendingRef(side: TradeSide): PendingRef? = when (side) {
         TradeSide.BUY -> pendingBuyUuid?.let { PendingRef("uuid", it) } ?: pendingBuyIdentifier?.let { PendingRef("identifier", it) }
         TradeSide.SELL -> pendingSellUuid?.let { PendingRef("uuid", it) } ?: pendingSellIdentifier?.let { PendingRef("identifier", it) }
     }
 
-    /** [releasePending] 이 지우는 필드 전부(키는 `trading_states` 컬럼명) — 해제를 사람이 되돌리거나 거래 기록을 맞출 유일한 근거라 그대로 남긴다. */
+    /** [releasePending] 이 지우는 필드(키는 `trading_states` 컬럼명). 해제를 되돌리거나 거래 기록을 맞출 근거로 남긴다. */
     fun pendingFields(side: TradeSide): Map<String, Any?> = when (side) {
         TradeSide.BUY -> linkedMapOf(
             "pending_buy_uuid" to pendingBuyUuid,
@@ -267,11 +240,8 @@ data class TradingState(
     }
 
     /**
-     * 사람이 거래소를 확인하고 막힌 pending 을 지운다(#246). 매수는 체결이 남겼을 진입 흔적(전략·매수일·당일 진입)을 남긴다 —
-     * 주문 전에 진입 메타를 지워 두므로 pending 만 지우면 흔적이 없어, 목록 밖 티커는 다음 시작이 싣지 않고(들어온 코인 방치)
-     * 실려도 보유상한이 걸리지 않는다. 보유 여부는 다음 시작의 잔고 동기화가 정한다. 매도도 보유 중인데 매수일이 없으면(체결 기록 없이
-     * 잔고 동기화로만 잡힌 포지션) 오늘로 남긴다 — 흔적이 pending 매도뿐이었다면 지운 뒤 목록 밖에서 실리지 않는다. 청산 파라미터
-     * 스냅샷·고점은 만들지 않는다(현재 설정, 다음 시작의 첫 가격부터). 지운 pending 의 조회 실패 카운터도 비운다.
+     * 거래소를 확인한 사람이 막힌 pending 을 지운다. 매수는 체결이 남겼을 진입 흔적(전략·매수일·당일 진입)을 대신 남겨야
+     * 들어온 코인이 다음 시작에 실리고 보유상한이 걸린다. 매도는 보유 중인데 매수일이 없으면 오늘로 채운다.
      */
     fun releasePending(side: TradeSide, today: LocalDate) {
         when (side) {
@@ -290,7 +260,6 @@ data class TradingState(
         reconcileFailureCount = 0
     }
 
-    /** #19: 수동 해제 — halt 플래그·사유·실패 카운터를 초기화해 다음 tick 부터 reconcile/매매를 재개한다. */
     fun clearHalt() {
         halted = false
         haltReason = null

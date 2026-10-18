@@ -22,10 +22,9 @@ import org.springframework.scheduling.config.ScheduledTaskHolder
 import org.yaml.snakeyaml.Yaml
 
 /**
- * watchlist·워치독 설정의 기본값 정의처는 설정 클래스 하나다(#232) — `application.yml` 이 키를 정의하지 않아도
- * 운영 env(`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*`)가 바인딩되고, 워치독 주기도 그 값으로 등록된다.
- * 환경변수는 `withPropertyValues` 로 흉내낼 수 없다 — Boot 는 이름이 `-systemEnvironment` 로 끝나는
- * `SystemEnvironmentPropertySource` 에만 운영과 같은 env 매퍼를 쓴다.
+ * watchlist·워치독 기본값은 설정 클래스에만 있어 `application.yml` 에 키가 없어도 운영 env 가 바인딩돼야 한다.
+ * Boot 는 이름이 `-systemEnvironment` 로 끝나는 `SystemEnvironmentPropertySource` 에만 env 매퍼를 써서
+ * `withPropertyValues` 로는 흉내낼 수 없다.
  */
 class MarketDataPropertiesBindingTest {
 

@@ -7,16 +7,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 
 /**
- * Translates UpbitApiException into an explicit ResponseEntity. Returning the
- * response (rather than throwing ResponseStatusException) is required under
- * WebFlux: a throw inside `@ExceptionHandler` does not re-enter the framework's
- * global error pipeline, so the original exception bubbles up as a generic 500.
- *
- * Critically, raw 401 from Upbit is remapped to 400 because the SPA's api.js
- * auto-redirects on 401 to /login.html (treating it as our own session expiry),
- * which would silently log the user out on any Upbit auth glitch.
- *
- * Body shape mirrors SafeErrorAttributes so the SPA can read `message` uniformly.
+ * WebFlux 에서는 `@ExceptionHandler` 안에서 예외를 던지면 전역 오류 처리로 돌아가지 않고 500 이 되므로 응답을 직접 만든다.
+ * Upbit 의 401 은 400 으로 바꾼다. SPA 는 401 을 세션 만료로 보고 로그인 화면으로 보낸다.
+ * 본문 형식은 SafeErrorAttributes 와 같다.
  */
 @RestControllerAdvice
 class UpbitErrorHandlerAdvice {
@@ -29,7 +22,7 @@ class UpbitErrorHandlerAdvice {
                 "status" to status.value(),
                 "error" to status.reasonPhrase,
                 "message" to reason,
-                // SPA/로그가 권한·잔액·최소주문·IP차단을 HTTP 상태만으로 구분 못 하던 문제 → 원본 errorName 노출.
+                // 상태 코드만으로는 권한·잔액·최소주문·IP 차단을 구분할 수 없다.
                 "error_name" to ex.errorName,
             )
         )
@@ -46,7 +39,7 @@ class UpbitErrorHandlerAdvice {
                 HttpStatus.BAD_REQUEST to "Upbit API 인증에 실패했습니다 (${name ?: "unauthorized"})."
             ex.statusCode == 429 ->
                 HttpStatus.TOO_MANY_REQUESTS to "Upbit API 호출 한도를 초과했습니다. 잠시 후 다시 시도해주세요."
-            // 418: Upbit IP 차단 — generic 400 과 구분되게 별도 매핑.
+            // 418 은 Upbit 의 IP 차단이다.
             ex.statusCode == 418 ->
                 HttpStatus.FORBIDDEN to "Upbit가 요청 IP를 차단했습니다(418). 잠시 후 다시 시도하거나 허용 IP 설정을 확인해주세요."
             ex.statusCode in 400..499 ->

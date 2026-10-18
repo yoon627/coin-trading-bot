@@ -24,18 +24,11 @@ import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 
 /**
- * 실제 Postgres 로 `trading_states` 매핑과 V14 제약을 검증한다(#53).
+ * 실제 Postgres 로 `trading_states` 매핑과 제약을 본다. mock 으로는 컬럼명·타입·제약을 검증할 수 없다.
  *
- * mockk 로 repository 를 대체하면 컬럼명·타입·제약이 하나도 검증되지 않아, 매핑 오류의 첫 발견 지점이
- * 운영 첫 기동이 된다(그 시점엔 봇이 복원 불가).
- *
- * **DB 는 이 테스트가 띄우지 않는다.** `TEST_DB_*` 로 주어진 Postgres 에 접속할 뿐이다 — CI 는
- * `services: postgres` 가, 로컬은 `scripts/run-db-tests.sh` 가 제공한다. Testcontainers 를 쓰지 않는
- * 이유는 docker-java 가 협상하는 API 버전(1.32)이 Docker 29 의 최소 지원(1.40)보다 낮아 로컬에서
- * 컨테이너를 띄우지 못하기 때문이다. 접속 정보만 받으면 Docker 버전과 무관해진다.
- *
- * 접속 정보가 없으면 **skip** 한다(로컬에서 DB 없이 `./gradlew test` 를 돌려도 깨지지 않게).
- * 다만 skip 은 조용한 미검증이 될 수 있으므로 CI 는 `DB_TESTS_REQUIRED=true` 로 skip 을 실패로 바꾼다.
+ * DB 는 띄우지 않고 `TEST_DB_*` 로 주어진 Postgres 에 접속한다. CI 는 `services: postgres`, 로컬은 `scripts/run-db-tests.sh` 를 쓴다.
+ * docker-java 가 협상하는 API 버전(1.32)이 Docker 29 의 최소 지원(1.40)보다 낮아 Testcontainers 는 쓰지 않는다.
+ * 접속 정보가 없으면 skip 하고, CI 는 `DB_TESTS_REQUIRED=true` 로 skip 을 실패로 바꾼다.
  */
 @DataR2dbcTest
 class TradingStateRoundTripTest {
@@ -84,13 +77,10 @@ class TradingStateRoundTripTest {
         }
     }
 
-    /** 외부 DB 에는 기존 데이터가 있을 수 있다 — 픽스처를 유니크하게 만들어 서로·기존 데이터와 섞이지 않게 한다. */
+    /** 외부 DB 에 기존 데이터가 있을 수 있어 픽스처를 실행마다 유니크하게 만든다. */
     private val runId = UUID.randomUUID().toString().take(8)
 
-    /**
-     * 이 테스트는 남의 DB 를 빌려 쓴다 — 만든 것은 스스로 지운다. FK 가 cascade 가 아니므로
-     * 자식(trade_executions·trading_states) → 부모(users) 순서를 지킨다.
-     */
+    /** FK 가 cascade 가 아니라 자식(trade_executions·trading_states) → 부모(users) 순서로 지운다. */
     @AfterEach
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
@@ -109,10 +99,7 @@ class TradingStateRoundTripTest {
             .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
             .one().awaitSingle()
 
-    /**
-     * 타입 경계를 전부 **명시값**으로 채운다 — 전부 null 이면 매핑이 깨져도 통과한다.
-     * JSON(exitParams) · enum(pendingSellReason) · LocalDate · Instant · Double · Boolean.
-     */
+    /** 전부 null 이면 매핑이 깨져도 통과하므로 모든 타입의 필드를 값으로 채운다. */
     private fun fullyPopulated(ticker: String) = TradingState(
         ticker = ticker,
         peakPrice = 71_234.5,
@@ -178,7 +165,7 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
-    /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신으로 흘러야 한다 — 두 번 불러도 행이 하나다. */
+    /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. */
     @Test
     fun `upsert updates in place instead of violating the user ticker unique constraint`() = runTest {
         val userId = insertUser("upsert")
@@ -192,9 +179,8 @@ class TradingStateRoundTripTest {
     }
 
     /**
-     * V14 의 부분 unique index(`WHERE exchange_order_id IS NOT NULL`) 검증.
-     * 재시작 reconcile 이 같은 주문을 두 번 기록하는 것을 DB 가 막아야 하고, 그러면서도
-     * 과거·수동 기록(NULL)은 여러 건 들어갈 수 있어야 한다.
+     * `exchange_order_id IS NOT NULL` 부분 unique index 는 reconcile 이 같은 주문을 두 번 기록하는 것을 막고,
+     * `exchange_order_id` 가 NULL 인 기록은 여러 건 받는다.
      */
     @Test
     fun `partial unique index blocks duplicate order ids but allows many nulls`() = runTest {

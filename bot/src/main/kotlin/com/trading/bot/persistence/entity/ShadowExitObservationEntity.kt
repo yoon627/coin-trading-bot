@@ -5,11 +5,8 @@ import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
 
 /**
- * 그림자 청산 관측 1건 — 포지션 하나에서 후보 파라미터의 트레일링이 **처음 발동한** 시점의 기록.
- *
- * [modeledExitPrice] 는 모델이 체결됐다고 보는 값(트레일링 임계선)이고 [observedTickPrice] 는 실제로 그 게이트를 발동시킨
- * tick 가격이다. 트레일링은 `drop ≥ trail` 에서 발동하므로 `observed ≤ modeled` 이고, 그 차이가
- * **모델 과대추정폭**이다 — 청산 모델의 잔여 오차를 실물로 재는 유일한 양이다.
+ * 포지션 하나에서 후보 파라미터의 트레일링이 처음 발동한 시점의 기록.
+ * [modeledExitPrice] 는 트레일링 임계선, [observedTickPrice] 는 실제로 발동시킨 tick 가격이고 그 차이가 모델의 과대추정폭이다.
  */
 @Table("shadow_exit_observation")
 data class ShadowExitObservationEntity(
@@ -24,10 +21,7 @@ data class ShadowExitObservationEntity(
     val observedTickPrice: Double,
     val firedAt: Instant,
     val liveExitPrice: Double? = null,
-    /**
-     * 라이브가 실제로 체결한 단가(VWAP). [liveExitPrice] 는 **판단 시점 tick 가격**이라 둘의 차이가 실행 슬리피지다.
-     * 얻지 못하면 null 이고 **추정하지 않는다** — 0 을 넣으면 "마찰 없음" 으로 오독된다.
-     */
+    // 실제 체결 단가. 판단 시점 가격인 liveExitPrice 와의 차이가 슬리피지이고, 모르면 추정하지 않고 null 로 둔다.
     val liveExitVwap: Double? = null,
     val liveExitReason: String? = null,
     val liveExitAt: Instant? = null,

@@ -21,7 +21,7 @@ class UpbitMarketFeedParsingTest {
         val t = feed.parseTickerMessage(json)
         assertNotNull(t); t!!
         assertEquals(Exchange.UPBIT, t.exchange)
-        assertEquals("BTC/KRW", t.market) // MarketPair.normalize: Upbit "KRW-BTC" → 내부 "BTC/KRW"
+        assertEquals("BTC/KRW", t.market)
         assertEquals(50000000.0, t.price)
         assertEquals(0.012, t.changeRate24h)
         assertEquals(1234.5, t.volume24h)
@@ -55,6 +55,6 @@ class UpbitMarketFeedParsingTest {
     fun `interprets timestamp as epoch millis`() {
         val json = """{"type":"ticker","code":"KRW-BTC","trade_price":1.0,"timestamp":1609459200000}"""
         val t = feed.parseTickerMessage(json)
-        assertEquals(1609459200000, t!!.timestamp.toEpochMilli()) // 2021-01-01T00:00:00Z
+        assertEquals(1609459200000, t!!.timestamp.toEpochMilli())
     }
 }

@@ -1,6 +1,5 @@
-# `:bot` bootJar 를 만든다(의존 모듈 `common` 포함). settings.gradle.kts 에 모듈을 추가하면
-# 그 build.gradle.kts 를 아래 의존성 캐시용 COPY 줄에도 넣는다.
-# jar 는 플랫폼 무관 — 빌드 단계를 빌더 플랫폼에 고정해 multi-platform 빌드에서 gradle 이 QEMU 로 돌지 않게 한다.
+# 모듈을 추가하면 그 build.gradle.kts 도 아래 의존성 캐시용 COPY 에 넣는다.
+# jar 는 플랫폼과 무관하므로 빌드 단계를 빌더 플랫폼에 고정해 QEMU 에뮬레이션을 피한다.
 FROM --platform=$BUILDPLATFORM gradle:8.12-jdk21 AS build
 WORKDIR /app
 COPY build.gradle.kts settings.gradle.kts ./

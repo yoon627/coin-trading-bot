@@ -14,7 +14,7 @@ class PositionManagerTest {
 
     private val config = TradingProperties(takeProfitPct = 2.0, maxLossPct = 5.0)
 
-    // Dummy client - checkTakeProfit/checkStopLoss don't call API
+    // checkTakeProfit·checkStopLoss 는 API 를 호출하지 않는다.
     private val dummyClient = UpbitClientImpl(
         WebClient.builder().build(),
         UpbitAuthProvider(accessKey = "x", secretKey = "x"),

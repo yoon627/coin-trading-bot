@@ -1,21 +1,8 @@
 #!/usr/bin/env bash
-# 배포 preflight — 렌더된 서버 .env 에서 배포가 넘기는 설정 키 전부를 **업로드 전에** 검사한다 (#179, #230, #232, #271).
-# deploy.sh 가 render_server_env 직후 부른다.
-#
-# 앱이 아니라 여기서 막는 이유: 기동을 실패시키면 보유 포지션의 손절·트레일링이 평가되지 않는 공백이 생기고,
-# 자동 롤백은 이미지만 되돌려 같은 .env 로 다시 기동한다. 여기서 멈추면 잘못된 설정이 서버에 닿지 않는다.
-#   값   선언된 키가 형식·의미상 구간 안인가. 자동매매 여부와 무관하다 — 수동 시작도 이 값으로 거래한다.
-#        청산·주문 파라미터는 구간 표로, 나머지 키는 형식(불리언·1 이상 정수·소수·티커 목록)으로 본다.
-#   선언 자동매매 배포면 청산 5개 키가 모두 선언됐는가. 빠지면 앱이 코드 기본값으로 조용히 거래한다.
-#
-# 아래 표는 사본이다. 구간의 정의처는 common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt,
-# 선언 키의 정의처는 ExitParamsDeclarationCheck.REQUIRED_KEYS 다. 형식 배열은 배포가 넘기는 설정 클래스(테스트의
-# DeployPassthrough.PASSED)에서 표에 없는 키를 타입으로 나눈 것이다 — Boolean·Long/Int·Double·티커 목록 String.
-# ExitParamsPreflightScriptTest 가 표·배열을 대조하고, 넘기는 키가 전부 어느 한 검사에 들어 있는지 단언한다.
-# 형식은 앱(Spring)보다 좁다 — 여기서 받는 값은 앱도 같은 수로 받는다. 값은 찍지 않는다(배포 로그가 공개 CI 로그다).
-# bash 3.2(macOS)에서도 돈다 — ${v,,}·declare -A·mapfile 을 쓰지 않는다.
-#
-# 사용법: preflight_exit_params.sh <렌더된 env 파일>    종료코드 0=통과 1=위반 2=사용법 오류
+# 렌더된 서버 .env 의 설정 값을 업로드 전에 검사한다. 종료코드 0=통과 1=위반 2=사용법 오류.
+# 앱 기동 실패로 막으면 보유 포지션의 손절이 평가되지 않는 공백이 생기고 롤백도 같은 .env 를 쓰므로 여기서 막는다.
+# 구간 표는 ExitParamRanges.kt 의 사본이며 ExitParamsPreflightScriptTest 가 대조한다.
+# 배포 로그가 공개되므로 값은 출력하지 않는다. macOS bash 3.2 에서도 돌아야 한다.
 set -euo pipefail
 export LC_ALL=C
 
@@ -27,7 +14,7 @@ env_file="$1"
 
 log() { echo -e "\n=== $1 ==="; }
 
-# 키 형식 하한 하한포함 상한 상한포함 — 끝이 - 면 그쪽으로 열려 있다.
+# 키 형식 하한 하한포함 상한 상한포함. - 는 그쪽 끝이 열려 있다는 뜻이다.
 RANGE_RULES=(
     "TRADING_TAKE_PROFIT_PCT decimal 0 0 100 1"
     "TRADING_MAX_LOSS_PCT decimal 0 0 100 0"
@@ -39,15 +26,13 @@ RANGE_RULES=(
     "TRADING_SHADOW_EXIT_TRAILING_STOP_PCT decimal 0 0 100 0"
     "TRADING_SHADOW_EXIT_TRAILING_ARM_PCT decimal 0 1 - 0"
 )
-# 앱(Spring)은 TRUE·yes·1·on 도 받지만 여기서는 true/false 만 받는다 — 오기(ture)는 앱 바인딩에 실패해 기동을
-# 막으므로 좁게 본다. 자동매매 스위치는 아래 게이트가 읽는다.
+# Spring 은 yes·on 등도 받지만 여기서는 소문자 true/false 만 받는다.
 BOOLEAN_KEYS=(
     TRADING_AUTO_START
     TRADING_SHADOW_EXIT_ENABLED
     MARKETDATA_WATCHDOG_ENABLED
 )
-# 1 이상 정수. 주기·횟수·임계라 0·음수는 require·스케줄 등록이 기동을 막거나(롤백도 같은 .env), 앱이 받아도
-# 폭주한다(워치독 stale 0 은 매 주기 재연결, backoff 0 은 재구독 tight loop). 단위는 키마다 다르다(초·회·ms).
+# 0 이하는 기동이 실패하거나 워치독 재연결·재구독이 쉬지 않고 돈다.
 POSITIVE_INTEGER_KEYS=(
     TRADING_INTERVAL_SECONDS
     TRADING_RECONCILE_HALT_THRESHOLD
@@ -56,14 +41,13 @@ POSITIVE_INTEGER_KEYS=(
     MARKETDATA_WATCHDOG_INITIAL_DELAY_MS
     MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
 )
-# 구간 없이 형식만 보는 소수 — 오기(abc·1,000)는 앱 바인딩에 실패해 기동을 막는다.
+# 구간 없이 형식만 보는 소수.
 DECIMAL_KEYS=(
     TRADING_MAX_INVEST_AMOUNT
     TRADING_K_VALUE
 )
-# 쉼표로 구분한 대문자 마켓 코드(KRW-BTC, 1글자 자산 KRW-T 포함). 공백 구분·조각 수 오류는 앱이 마켓으로 쓰지 못한다 —
-# watchlist 는 하나만 틀려도 WS 구독 메시지 생성이 깨져 전 마켓 실시간 피드가 끊긴다. trading 은 소문자를 그대로 주문에 쓰므로
-# 소문자를 막는다(watchlist 는 앱이 대문자화하지만 같은 규칙으로 본다). 빈 조각은 앱이 걸러 받는다.
+# 쉼표로 구분한 대문자 마켓 코드. watchlist 는 하나만 틀려도 WS 구독 전체가 끊기고,
+# TRADING_TICKERS 는 소문자를 그대로 주문에 쓴다.
 TICKER_LIST_KEYS=(
     TRADING_TICKERS
     WATCHLIST_TICKERS
@@ -76,18 +60,18 @@ EXIT_PARAM_KEYS=(
     TRADING_MAX_HOLD_DAYS
 )
 
-# 정수부를 9자리로 묶는다 — 넘치면 앱이 Int 바인딩에 실패하거나(보유일) Double 이 무한대가 된다.
+# 정수부가 9자리를 넘으면 Int 바인딩이 실패한다.
 DECIMAL_FORMAT='^-?[0-9]{1,9}([.][0-9]+)?$'
 INTEGER_FORMAT='^-?[0-9]{1,9}$'
 BOOLEAN_FORMAT='^(true|false)$'
 POSITIVE_INTEGER_FORMAT='^[1-9][0-9]{0,8}$'
-# 길이는 보지 않는다 — Upbit 에는 1글자 자산(KRW-T·KRW-W 등)이 있다.
+# Upbit 에는 KRW-T 같은 1글자 자산이 있어 길이는 보지 않는다.
 MARKET_FORMAT='^[A-Z]+-[A-Z0-9]+$'
 
-# 키의 선언 값들 — 같은 키가 여러 줄이어도 모두 검사한다.
+# 같은 키가 여러 줄이면 모두 검사한다.
 values_of() { grep "^$1=" "$env_file" | cut -d= -f2- || true; }
 
-# 형식을 통과한 평범한 소수만 받는다 — awk 구현마다 다른 수 해석(16진·지수·NaN)이 끼어들지 않는다.
+# 형식 검사를 통과한 값만 넘긴다. awk 구현마다 16진·지수 해석이 다르다.
 in_range() {
     awk -v x="$1" -v lo="$2" -v loi="$3" -v hi="$4" -v hii="$5" 'BEGIN {
         x += 0
@@ -97,7 +81,6 @@ in_range() {
     }'
 }
 
-# 쉼표로 나눈 조각마다 앞뒤 공백을 떼고, 빈 조각은 건너뛴다. 조각이 하나도 없으면 실패다.
 ticker_list_ok() {
     local rest="$1," piece count=0
     while [[ -n $rest ]]; do
@@ -157,8 +140,7 @@ for key in "${TICKER_LIST_KEYS[@]}"; do
     done < <(values_of "$key")
 done
 
-# 게이트는 앱과 같게 읽는다: 선언하지 않으면 앱 기본값(false)이다. 형식이 틀린 값은 위에서 이미 위반이고,
-# 켜졌을 수도 있으니 선언까지 본다.
+# 미선언이면 앱 기본값 false 다. 형식이 틀린 값은 켜졌을 수도 있으니 선언 검사까지 한다.
 auto_start="$(values_of TRADING_AUTO_START | tail -n 1)"
 check_declared=false
 if [[ -n $auto_start && $auto_start != false ]]; then check_declared=true; fi
@@ -169,7 +151,7 @@ if $check_declared; then
     else
         missing_reason='자동매매 스위치 형식이 틀려 켜졌을 수 있으므로 선언도 봅니다'
     fi
-    # 빈 값(KEY=)은 선언으로 본다 — 앱도 선언된 키로 보고 바인딩에서 실패하며, 여기서는 위 형식 검사가 잡는다.
+    # 빈 값(KEY=)은 선언으로 보고 위 형식 검사에서 잡는다.
     for key in "${EXIT_PARAM_KEYS[@]}"; do
         grep -q "^$key=" "$env_file" || missing+=("$key")
     done

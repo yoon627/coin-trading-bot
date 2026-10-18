@@ -56,8 +56,7 @@ class TradingEngineTest {
         dailyResetManager = mockk(relaxed = true)
         strategy = mockk()
         marketDataStore = mockk(relaxed = true)
-        // store miss 기본값 — relaxed mock 이 non-null child mock 을 반환해 store-hit 으로 오작동하는 것 방지
-        // (가격 경로는 store→REST 2단).
+        // store miss 기본값. relaxed mock 이 non-null mock 을 돌려 store hit 으로 오작동하는 것을 막는다.
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { strategy.minCandles } returns 21
@@ -103,8 +102,8 @@ class TradingEngineTest {
 
     @Test
     fun `stop joins in-flight tick and does not log spurious cancellation errors`() = runBlocking {
-        // stop 은 취소 후 join — 진행 중이던 tick 의 주문 후처리(NonCancellable)가 끝난 뒤 반환해야 reload 가
-        // 구 루프와 경합하지 않는다. 또한 취소가 오탐 ERROR(Discord 스팸)로 둔갑하면 안 된다(CE rethrow).
+        // stop 은 취소 후 join 한다. 진행 중 tick 의 주문 후처리(NonCancellable)가 끝나야 reload 가 구 루프와 경합하지 않는다.
+        // 취소를 ERROR 로 로깅하지 않는다.
         val postProcessingDone = AtomicBoolean(false)
         val buyEntered = CompletableDeferred<Unit>()
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
@@ -123,7 +122,7 @@ class TradingEngineTest {
             val engine = createEngine()
             engine.start(listOf("KRW-BTC"))
             buyEntered.await() // tick 이 매수 후처리에 진입할 때까지 대기
-            engine.stop()      // cancelAndJoin — 후처리 완주까지 대기해야
+            engine.stop() // cancelAndJoin
             assertTrue(postProcessingDone.get(), "stop 이 진행 중 후처리 완주를 기다리지 않음")
             val errors = appender.list.filter { it.level == Level.ERROR }
             assertTrue(
@@ -140,7 +139,7 @@ class TradingEngineTest {
 
     @Test
     fun `concurrent stop calls are safe and halt the loop`() = runBlocking {
-        // stopMutex 직렬화로 동시 stop(shutdownAll ↔ reload/stopBot)이 데드락·예외 없이 완료되고 loop 가 멈춘다(M4).
+        // 동시 stop(shutdownAll, reload/stopBot)은 stopMutex 로 직렬화돼 데드락·예외 없이 끝나고 루프가 멈춘다.
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
         delay(50)
@@ -153,7 +152,7 @@ class TradingEngineTest {
 
     @Test
     fun `flush after stop rewrites pending the loop could not record and reports the sells still unwritten`() = runBlocking {
-        // 재기록은 다음 tick 몫이라 멈춘 엔진에서는 일어나지 않는다 — 그 뒤 DB 만 읽는 reload·재시작이 그 매도를 모른다(#244).
+        // 재기록은 다음 tick 몫이라 멈춘 엔진에서는 일어나지 않는다. 그러면 DB 만 읽는 reload·재시작이 그 매도를 모른다.
         // 루프가 도는 동안은 DB 가 죽어 있고 stop 뒤에만 살아나게 해, 플래그가 내려갔다면 flush 가 내린 것이다.
         val dbUp = AtomicBoolean(false)
         val rewritten = mutableSetOf<String>()
@@ -170,7 +169,7 @@ class TradingEngineTest {
             mapOf(
                 "KRW-BTC" to TradingState("KRW-BTC", position = true, pendingSellIdentifier = "ctb-btc", pendingPersistFailed = true),
                 "KRW-SOL" to TradingState("KRW-SOL", position = true, pendingSellUuid = "u-sol", pendingPersistFailed = true),
-                // 매수는 선기록이 성공해야 보내므로 DB 에 identifier 가 있다 — 기록 실패로 남아도 새 엔진이 확정한다.
+                // 매수는 선기록이 성공해야 보내므로 DB 에 identifier 가 있어, 기록 실패로 남아도 새 엔진이 확정한다.
                 "KRW-ETH" to TradingState("KRW-ETH", pendingBuyUuid = "u-eth", pendingPersistFailed = true),
             ),
         )
@@ -185,9 +184,9 @@ class TradingEngineTest {
 
     @Test
     fun `flush after stop rewrites every pending before peaks and writes each state at most once`() = runBlocking {
-        // 고점 재기록도 다음 tick 몫이다 — 멈춘 엔진의 states 를 DB 값으로 덮으면 트레일링 기준선이 뒤로 물러난다(#54).
-        // 고점은 pending 을 모두 쓴 뒤에 쓴다: 고점 쓰기가 호출자의 시간 상한을 먹어 매도 기록이 밀리면 안 된다.
-        // 맵 순회 순서는 SOL·BTC·XRP·ETH 다 — 고점만 남은 BTC 가 pending 인 XRP 보다 앞서, state 마다 번갈아 쓰면 순서 단언이 잡는다.
+        // 고점 재기록도 다음 tick 몫이다. 멈춘 엔진의 states 를 DB 값으로 덮으면 트레일링 기준선이 뒤로 물러난다.
+        // 고점은 pending 을 모두 쓴 뒤에 쓴다. 고점 쓰기가 호출자의 시간 상한을 먹어 매도 기록이 밀리면 안 된다.
+        // 맵 순회 순서는 SOL·BTC·XRP·ETH 다. state 마다 번갈아 쓰면 고점만 남은 BTC 가 pending 인 XRP 보다 먼저 써진다.
         val dbUp = AtomicBoolean(false)
         val writes = mutableListOf<String>()
         coEvery { positionManager.retryPendingPersistIfNeeded(any()) } coAnswers {
@@ -238,7 +237,7 @@ class TradingEngineTest {
 
     @Test
     fun `start that fails before the loop is launched does not leave the engine marked running`(): Unit = runBlocking {
-        // 루프 없이 isRunning=true 로 남으면 reload·startBot·상태 API 가 도는 엔진으로 본다(#287).
+        // 루프 없이 isRunning=true 로 남으면 reload·startBot·상태 API 가 도는 엔진으로 본다.
         val engine = createEngine()
         val unreadable = object : AbstractMap<String, TradingState>() {
             override val entries: Set<Map.Entry<String, TradingState>> get() = throw IllegalStateException("broken states")
@@ -254,7 +253,7 @@ class TradingEngineTest {
 
     @Test
     fun `a buy pending released by hand is still loaded outside the user list so its coins get synced`(): Unit = runBlocking {
-        // 목록 밖이라 안 실리면 해제 전에 들어온 코인이 손절 없이 남는다(#246).
+        // 목록 밖이라 안 실리면 해제 전에 들어온 코인이 손절 없이 남는다.
         val engine = createEngine()
         val released = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined").apply {
             releasePending(TradeSide.BUY, LocalDate.of(2026, 10, 8))
@@ -262,7 +261,7 @@ class TradingEngineTest {
 
         engine.start(listOf("KRW-ETH"), mapOf("KRW-BTC" to released))
 
-        // 활성 목록이 아니라 동기화 호출을 본다 — 동기화 뒤 지킬 것이 없으면 루프가 곧바로 목록에서 빼므로 목록 단언은 루프와 경쟁한다.
+        // 활성 목록 대신 동기화 호출을 본다. 지킬 것이 없으면 루프가 곧바로 목록에서 빼므로 목록 단언은 루프와 경쟁한다.
         coVerify(timeout = 5_000) { positionManager.syncPosition("KRW-BTC", released) }
         engine.stop()
     }
@@ -271,7 +270,7 @@ class TradingEngineTest {
     fun `start is idempotent`(): Unit = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
-        engine.start(listOf("KRW-ETH")) // second call should be no-op
+        engine.start(listOf("KRW-ETH")) // 두 번째 호출은 무시된다
         assertTrue(engine.isRunning())
         assertEquals(listOf("KRW-BTC"), engine.getActiveTickers())
         engine.stop()
@@ -338,11 +337,9 @@ class TradingEngineTest {
         assertNull(engine.decideSell(state, 100.0))
     }
 
-    // --- processTicker 오케스트레이션 (H8 게이트 순서·skip/return 불변식) ---
-    // 회귀 게이트가 실제로 물리도록 mock 이 TradingState 를 프로덕션 PositionManager 처럼 변이시킨다
-    // (sell→markSold, reconcile→markBought). 그러지 않으면 문제의 return 을 지워도 downstream 게이트가
-    // 대신 막아 mutation 이 관측되지 않는다(plan-review Major-1). 각 시나리오의 게이트/return 을 제거하면
-    // 실제로 FAIL 함을 수동 mutation 으로 1회 확인함(Progress 기록).
+    // --- processTicker 게이트 순서와 조기 return ---
+    // mock 이 실제 PositionManager 처럼 TradingState 를 바꿔야(sell→markSold, reconcile→markBought) return 을 지웠을 때
+    // 뒤쪽 게이트가 대신 막지 않고 테스트가 실패한다.
 
     private fun tradeRec(side: TradeSide) =
         TradeRecord(
@@ -385,7 +382,7 @@ class TradingEngineTest {
 
     @Test
     fun `processTicker does not persist when the peak is unchanged`() = runTest {
-        // 매 tick upsert 는 write 증폭 — 갱신된 tick 에만 flush 한다.
+        // 매 tick upsert 하면 쓰기가 늘어나므로 갱신된 tick 에만 flush 한다.
         val engine = createEngine()
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001, peakPrice = 53_000_000.0)
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
@@ -399,7 +396,7 @@ class TradingEngineTest {
     @Test
     fun `processTicker retries a failed peak flush even without a new high`() = runTest {
         // 갱신 tick 에만 flush 하므로, 실패를 흘리면 하락 전환 후에는 재기록 기회가 없다.
-        // 그대로 두면 재시작 시 낮은 옛 peak 이 복원돼 트레일링이 안 걸린다(#54).
+        // 그대로 두면 재시작 시 낮은 옛 peak 이 복원돼 트레일링이 안 걸린다.
         val engine = createEngine()
         val state = TradingState(
             "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001,
@@ -416,7 +413,7 @@ class TradingEngineTest {
     @Test
     fun `peak retry runs even while a pending sell blocks the rest of the tick`() = runTest {
         // 미해소 매도가 있으면 tick 이 조기 return 해 flush 지점에 도달하지 못한다. 재시도를
-        // 그 뒤에 두면 미해소가 길어지는 동안 dirty 가 계속 남는다(#54).
+        // 그 뒤에 두면 미해소가 길어지는 동안 dirty 가 계속 남는다.
         val engine = createEngine()
         val state = TradingState(
             "KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.001,
@@ -442,12 +439,11 @@ class TradingEngineTest {
 
         engine.processTicker("KRW-BTC", state, strategy)
 
-        // REST 가격이 buy 로 그대로 전달 — 삭제한 delay(3000) 테스트의 REST 폴백 커버리지 대체.
         coVerify { positionManager.buy("KRW-BTC", state, 51_000_000.0, "test_strategy") }
     }
 
-    // --- 매도 불가 dust (#234) ---
-    // 거래소 최소주문(5,000원) 미만 보유는 팔 수 없다 — 그 티커의 진입을 막지 않는다. 주문 여부는 PositionManager 가 실잔고로 정한다.
+    // --- 매도 불가 dust ---
+    // 최소주문(5,000원) 미만 보유는 팔 수 없지만 진입을 막지 않는다. 주문 여부는 PositionManager 가 실잔고로 정한다.
 
     private fun observedEngine(observer: ShadowExitObserver) = TradingEngine(
         upbitClient = upbitClient,
@@ -479,7 +475,7 @@ class TradingEngineTest {
 
     @Test
     fun `a dust holding still goes through exit evaluation`() = runTest {
-        // 기록상 수량이 낡았을 수 있다 — 청산 평가를 끄면 실제로 팔 수 있는 포지션이 손절을 잃는다.
+        // 기록상 수량이 낡았을 수 있어, 청산 평가를 끄면 실제로 팔 수 있는 포지션이 손절을 잃는다.
         val engine = createEngine()
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 12_000_000.0, holdVolume = 0.0001)
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 10_000_000.0))
@@ -510,11 +506,11 @@ class TradingEngineTest {
     @Test
     fun `processTicker sells then returns without evaluating buy in same tick`() = runTest {
         val engine = createEngine()
-        // boughtToday=false 로 둬 sell 후 return 만을 격리 검증(프로덕션은 boughtToday 게이트로 이중 방어).
+        // boughtToday=false 로 둬 sell 뒤의 return 만 본다. 운영에서는 boughtToday 게이트도 막는다.
         val state = TradingState("KRW-BTC", position = true)
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
-        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 제거 시 buy 도달 보장
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 이 없으면 buy 까지 간다
         every { positionManager.checkStopLoss(any(), any()) } returns true
         coEvery { positionManager.sell("KRW-BTC", state, any(), SellReason.STOP_LOSS) } answers {
             state.markSold()
@@ -560,7 +556,7 @@ class TradingEngineTest {
 
     @Test
     fun `processTicker treats an order known only by identifier as pending`() = runTest {
-        // 응답을 못 받아 uuid 가 없는 주문도 미해소다 — 평가를 돌리면 같은 주문을 한 번 더 낸다(#227).
+        // 응답을 못 받아 uuid 가 없는 주문도 미해소다. 평가를 돌리면 같은 주문을 한 번 더 낸다.
         val engine = createEngine()
         val buying = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-b")
         val selling = TradingState("KRW-BTC", position = true, pendingSellIdentifier = "ctb-s")
@@ -608,12 +604,12 @@ class TradingEngineTest {
     @Test
     fun `processTicker after pending sell reconcile does not buy in same tick`() = runTest {
         val engine = createEngine()
-        // 전날 보유분 청산(position=true, boughtToday=false) — reconciled 후 return 이 없으면
-        // markSold 로 position=false 가 돼 같은 tick 에 신규 매수까지 흘러간다(pendingBuy S3 의 매도판 대칭).
+        // 전날 보유분 청산(position=true, boughtToday=false). reconciled 뒤 return 이 없으면
+        // markSold 로 position=false 가 돼 같은 tick 에 신규 매수까지 간다.
         val state = TradingState("KRW-BTC", position = true, pendingSellUuid = "uuid-sell")
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
-        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 제거 시 buy 도달 보장
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns true // return 이 없으면 buy 까지 간다
         coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
             state.markSold() // position=false, boughtToday 미변경(false 유지)
             tradeRec(TradeSide.SELL)
@@ -625,7 +621,7 @@ class TradingEngineTest {
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
     }
 
-    // reconcile 로 늦게 확정된 청산도 그림자 관측에 보고한다 — 빠지면 #178 표본이 체결 확인 창 안에 끝난 매도만 담는다(#235).
+    // reconcile 로 늦게 확정된 청산도 그림자 관측에 보고한다. 빠지면 표본이 체결 확인 창 안에 끝난 매도만 담는다.
 
     @Test
     fun `a swing exit filled at once is reported to the shadow observer at the tick price`() = runTest {
@@ -663,7 +659,7 @@ class TradingEngineTest {
 
     @Test
     fun `a trailing fired before a late-confirmed exit is saved with the decision price and time`() = runTest {
-        // 발동 기록이 pending 동안 살아 있다가 reconcile 확정에서 저장되는지 — 실제 관측기로 두 tick 을 잇는다.
+        // 발동 기록은 pending 동안 남아 있다가 reconcile 확정에서 저장된다. 실제 관측기로 두 tick 을 잇는다.
         val repo = mockk<ShadowExitObservationRepository>()
         val saved = slot<ShadowExitObservationEntity>()
         every { repo.save(capture(saved)) } returns reactor.core.publisher.Mono.empty()
@@ -681,7 +677,7 @@ class TradingEngineTest {
             state.pendingSellSince = decidedAt
             null
         }
-        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 108.0)) // 고점 대비 −1.8% — 후보 발동
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 108.0)) // 고점 대비 −1.8%, 후보 발동
         engine.processTicker("KRW-BTC", state, strategy)
 
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 95.0))
@@ -700,7 +696,7 @@ class TradingEngineTest {
 
     @Test
     fun `a partial fill confirmed by reconcile is not reported as the exit`() = runTest {
-        // 포지션이 남았다 — 발동 기록을 여기서 쓰면 원 포지션의 청산과 짝이 깨진다. 잔량이 팔리는 확정에서 보고한다.
+        // 포지션이 남았다. 여기서 발동 기록을 쓰면 원 포지션의 청산과 짝이 깨지므로 잔량이 팔리는 확정에서 보고한다.
         val observer = mockk<ShadowExitObserver>(relaxed = true)
         val engine = observedEngine(observer)
         val state = TradingState("KRW-BTC", position = true, holdVolume = 1.0, pendingSellUuid = "uuid-sell")
@@ -729,7 +725,7 @@ class TradingEngineTest {
         coVerify { positionManager.syncPosition("KRW-BTC", state) }
     }
 
-    // openTime 을 하루씩 다르게 — distinctBy{openTime} 후에도 21개 유지([0]=최신).
+    // openTime 을 하루씩 달리해 distinctBy 뒤에도 21개가 남는다([0]=최신).
     private fun distinctDailyNormalized(): List<NormalizedCandle> =
         (listOf(50.0) + (1..20).map { 200.0 - it * 2.0 }).mapIndexed { idx, p ->
             NormalizedCandle(
@@ -738,7 +734,7 @@ class TradingEngineTest {
             )
         }
 
-    // --- loadStoreDailyCandles: 매수 D1 게이트 (distinct + size>=MIN_DAILY_CANDLES, 부족 시 null) — D1 은 CandleAggregator 가 같은 날 반복 ingest ---
+    // --- loadStoreDailyCandles: D1 은 CandleAggregator 가 같은 날 반복 ingest 하므로 distinct 뒤 개수를 본다 ---
 
     @Test
     fun `loadStoreDailyCandles returns store candles when distinct sufficient`() {
@@ -793,7 +789,7 @@ class TradingEngineTest {
 
     @Test
     fun `runSwing skips buy evaluation while store newest D1 is still yesterday's`() = runTest {
-        // 09:00 직후 새 날 첫 1분봉이 오기 전 — store window 는 어제 봉으로 끝나고, 그 신호는 어제 매수를 만든 신호 그대로다.
+        // 09:00 직후 새 날 첫 1분봉이 오기 전. store window 는 어제 봉으로 끝나고, 그 신호는 어제 매수를 만든 신호 그대로다.
         val engine = createEngine(clock = clockAfterBoundary(30))
         every { dailyResetManager.getTradingDate() } returns today
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
@@ -804,7 +800,7 @@ class TradingEngineTest {
 
         coVerify(exactly = 0) { strategy.shouldBuyNormalized(any(), any(), any()) }
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
-        coVerify(exactly = 0) { upbitClient.getDayCandles(any(), any()) } // 경계 직후엔 REST 를 치지 않는다 — 다음 1분봉이 채운다
+        coVerify(exactly = 0) { upbitClient.getDayCandles(any(), any()) } // 경계 직후엔 REST 를 치지 않고 다음 1분봉을 기다린다
     }
 
     @Test
@@ -836,7 +832,7 @@ class TradingEngineTest {
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
 
-    // REST 일봉은 Upbit 형식 그대로 — candle_date_time_utc 가 UTC 자정.
+    // REST 일봉은 Upbit 형식이라 candle_date_time_utc 가 UTC 자정이다.
     private fun dailyLegacy(newest: LocalDate): List<Candle> =
         (0 until 21).map { idx -> Candle(candleDateTimeUtc = "${newest.minusDays(idx.toLong())}T00:00:00", tradePrice = 100.0) }
 
@@ -870,7 +866,7 @@ class TradingEngineTest {
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
 
-    // --- getRealtimePrice: store staleness 가드 (이슈 #27 — 얼어붙은 store 가격으로 매매 판단 방지) ---
+    // --- getRealtimePrice: 멈춘 store 가격으로 판단하지 않는다 ---
 
     private fun storeTicker(price: Double, ageSeconds: Long) = NormalizedTicker(
         exchange = Exchange.UPBIT,
@@ -899,11 +895,11 @@ class TradingEngineTest {
     @Test
     fun `getRealtimePrice staleness boundary around 30s`() {
         val engine = createEngine()
-        // 25s — threshold(30s) 안쪽 (5s 는 느린 CI 대비 테스트 실행 마진)
+        // 25s, threshold(30s) 안쪽. 5s 는 느린 CI 를 위한 여유
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 25)
         assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
 
-        // 32s — threshold 바깥 → null (processTicker 가 REST 로 폴백)
+        // 32s, threshold 바깥이라 null
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 32)
         assertNull(engine.getRealtimePrice("KRW-BTC"))
     }

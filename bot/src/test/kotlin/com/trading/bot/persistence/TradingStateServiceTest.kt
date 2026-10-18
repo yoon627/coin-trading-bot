@@ -53,7 +53,7 @@ class TradingStateServiceTest {
         assertEquals("pending-1", state.pendingBuyUuid)
         assertEquals("volatility_breakout", state.pendingBuyStrategy)
         assertEquals(true, state.halted)
-        assertNull(state.exitParams) // 스냅샷만 버린다 — 이 포지션은 전역 청산값으로 폴백한다
+        assertNull(state.exitParams) // 스냅샷만 버리고 전역 청산값으로 폴백한다
     }
 
     @Test
@@ -89,7 +89,7 @@ class TradingStateServiceTest {
 
     @Test
     fun `order identifiers survive a round trip`() = runTest {
-        // uuid 를 받기 전에 끊긴 주문을 재시작 뒤 찾을 유일한 근거다(#227). 두 방향이 서로 바뀌지 않게 값을 다르게 둔다.
+        // uuid 를 받기 전에 끊긴 주문을 재시작 뒤 찾을 유일한 근거다. 두 방향이 서로 바뀌지 않게 값을 다르게 둔다.
         val domain = com.trading.bot.domain.TradingState(
             ticker = "KRW-BTC",
             pendingBuyIdentifier = "ctb-buy",
@@ -109,8 +109,7 @@ class TradingStateServiceTest {
 
     @Test
     fun `stuck-sell alert fields survive a round trip`() = runTest {
-        // 이 repo 는 매핑 누락으로 컬럼이 통째로 유실된 전례가 있다(market_tickers.volume_24h).
-        // 새 필드는 재시작 후 알림 판정의 근거이므로 왕복을 고정한다(#55).
+        // 재시작 후 알림 판정의 근거라 매핑이 빠지지 않게 왕복을 본다.
         val since = java.time.Instant.parse("2026-08-22T00:00:00Z")
         val domain = com.trading.bot.domain.TradingState(
             ticker = "KRW-BTC",
@@ -140,7 +139,7 @@ class TradingStateServiceTest {
 
     @Test
     fun `a pending sell without a recorded start time restores as null`() = runTest {
-        // V20 이전에 시작된 pending — 판정은 "지금부터" 세도록 PositionManager 가 처리한다.
+        // 시작 시각이 없는 pending 은 PositionManager 가 지금부터 센다.
         rows(TradingStateEntity(userId = 1L, ticker = "KRW-BTC", pendingSellUuid = "old"))
 
         val restored = service.loadStates(1L)["KRW-BTC"]!!

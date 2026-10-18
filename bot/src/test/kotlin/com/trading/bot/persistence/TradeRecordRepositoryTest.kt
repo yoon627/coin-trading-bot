@@ -12,10 +12,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Mono
 
-/**
- * `save` 는 도메인 필드를 손으로 엔티티에 옮긴다. 필드를 빠뜨려도 컴파일이 통과하고 런타임에 조용히
- * NULL 로 저장되므로(실제로 `exchangeOrderId` 가 그렇게 유실되고 있다) 매핑을 직접 단언한다.
- */
+/** `save` 는 필드를 손으로 엔티티에 옮겨 빠뜨려도 컴파일되고 NULL 로 저장되므로 매핑을 직접 단언한다. */
 class TradeRecordRepositoryTest {
 
     private val r2dbc: TradeRecordR2dbcRepository = mockk()
@@ -44,7 +41,7 @@ class TradeRecordRepositoryTest {
         )
 
         assertEquals(3.9, entity.captured.pnlPercent)
-        assertEquals(51_950.0, entity.captured.orderAmount) // #146 — 빠뜨리면 컬럼이 영원히 NULL 이다
+        assertEquals(51_950.0, entity.captured.orderAmount)
         assertEquals(1950.0, entity.captured.pnlAmount)
         assertEquals("knee_reversal", entity.captured.strategy)
     }

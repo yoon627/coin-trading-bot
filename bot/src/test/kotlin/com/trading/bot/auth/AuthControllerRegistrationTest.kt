@@ -24,7 +24,7 @@ import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Mono
 import reactor.core.publisher.Sinks
 
-/** 가입은 계정이 하나도 없는 서버에서 첫 계정을 만들 때만 받는다 — 한 명만 쓰는 봇이 인터넷에 열려 있다. */
+/** 인터넷에 열린 1인용 봇이라 가입은 계정이 하나도 없을 때만 받는다. */
 class AuthControllerRegistrationTest {
 
     private val userRepository = mockk<UserRepository>()
@@ -84,7 +84,7 @@ class AuthControllerRegistrationTest {
 
     @Test
     fun `two simultaneous registrations on an empty server create only one account`() = runTest {
-        // 확인(count)과 저장이 끊기면 두 요청이 모두 0 을 보고 계정이 둘 생긴다. 저장을 게이트에서 멈춰 두 요청이 겹치게 한다.
+        // count 확인과 저장 사이에 두 요청이 겹치면 계정이 둘 생길 수 있어, 저장을 게이트에서 멈춰 겹치게 만든다.
         var saved = 0
         every { userRepository.count() } answers { Mono.just(saved.toLong()) }
         val gate = Sinks.one<Unit>()

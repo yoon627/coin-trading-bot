@@ -14,8 +14,8 @@ class AwaitFillTest {
 
     @Test
     fun `an order that stays open is polled FILL_POLL_ATTEMPTS times and its last response returned`() = runTest {
-        // wait 는 terminal 이 아니다 — executed>0 이어도 잔여 체결분이 더 올 수 있어 확정하지 않고 끝까지 본다.
-        // 체결량이 조회마다 늘어난다 — 엔진은 반환값의 executedVolume 을 쓰므로 첫 응답이 아니라 마지막 응답이어야 한다.
+        // wait 는 executed>0 이어도 잔여 체결분이 더 올 수 있어 확정하지 않는다.
+        // 엔진은 반환값의 executedVolume 을 쓰므로 마지막 응답이 돌아와야 한다.
         coEvery { client.getOrder("o-wait") } returnsMany (1..FILL_POLL_ATTEMPTS).map {
             Order(uuid = "o-wait", state = "wait", executedVolume = "0.$it")
         }

@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-// 테스트용 호출 — fingerprint 를 요약으로 쓴다(운영 호출부 appender 는 마스킹한 줄을 넘긴다).
+// 테스트에서는 fingerprint 를 요약으로 쓴다. 운영의 appender 는 마스킹한 줄을 넘긴다.
 private fun ErrorAlertRateLimiter.decide(fingerprint: String, nowMs: Long, logger: String = "") =
     decide(fingerprint, nowMs, logger) { fingerprint }
 
@@ -30,9 +30,9 @@ class ErrorAlertRateLimiterTest {
     @Test
     fun `쿨다운 경과 후 허용 + 그동안 억제건수 요약`() {
         val rl = ErrorAlertRateLimiter(dedupCooldownMs = 300_000)
-        rl.decide("fp1", 0L)        // allow
-        rl.decide("fp1", 100_000L)  // suppress 1
-        rl.decide("fp1", 200_000L)  // suppress 2
+        rl.decide("fp1", 0L)        // 허용
+        rl.decide("fp1", 100_000L)  // 억제 1
+        rl.decide("fp1", 200_000L)  // 억제 2
         val d = rl.decide("fp1", 400_000L) // 쿨다운 경과 → allow
         assertTrue(d.allow)
         assertEquals(2, d.suppressedSince)
@@ -59,8 +59,8 @@ class ErrorAlertRateLimiterTest {
         val rl = ErrorAlertRateLimiter(globalPerMinute = 2)
         rl.decide("a", 0L)
         rl.decide("b", 0L)
-        assertFalse(rl.decide("c", 30_000L).allow) // 1분 내 — 요약으로 보류된다
-        assertTrue(rl.decide("d", 61_000L).allow)  // 1분 경과 — 새 알림은 다시 개별로
+        assertFalse(rl.decide("c", 30_000L).allow) // 1분 내라 요약으로 보류된다
+        assertTrue(rl.decide("d", 61_000L).allow)  // 1분이 지나면 새 알림은 다시 개별로 간다
     }
 
     @Test
@@ -70,7 +70,7 @@ class ErrorAlertRateLimiterTest {
         val first = rl.decide("b", 1L, "com.x.Engine") { "b 요약" }
         assertFalse(first.allow)
         assertTrue(first.scheduleDigest)
-        assertFalse(rl.decide("c", 2L, "com.x.Engine") { "c 요약" }.scheduleDigest) // 같은 창 — 이미 예약됐다
+        assertFalse(rl.decide("c", 2L, "com.x.Engine") { "c 요약" }.scheduleDigest) // 같은 창이라 이미 예약됐다
 
         val digest = rl.drainHeld(3L)!!
         assertEquals(listOf("b 요약", "c 요약"), digest.alerts.map { it.summary })
@@ -87,7 +87,7 @@ class ErrorAlertRateLimiterTest {
         val rl = ErrorAlertRateLimiter(globalPerMinute = 1)
         rl.decide("a", 0L)
         rl.decide("b", 1L)
-        assertFalse(rl.decide("b", 61_000L).allow) // 요약에 실릴 알림이다 — 개별로 보내면 두 번 나간다
+        assertFalse(rl.decide("b", 61_000L).allow) // 요약에 실릴 알림이라 개별로 보내면 두 번 나간다
         assertEquals(2, rl.drainHeld(62_000L)!!.alerts.single().occurrences)
     }
 
@@ -97,14 +97,14 @@ class ErrorAlertRateLimiterTest {
         rl.decide("x", 0L)       // 허용
         rl.decide("x", 100_000L) // 쿨다운 억제 1
         rl.decide("x", 200_000L) // 쿨다운 억제 2
-        rl.decide("y", 400_000L) // 허용 — 창을 채운다
+        rl.decide("y", 400_000L) // 허용, 창을 채운다
         rl.decide("x", 400_001L) // 쿨다운 밖·상한 초과 → 보류(앞의 억제 2 + 이번 1)
         assertEquals(3, rl.drainHeld(400_002L)!!.alerts.single().occurrences)
 
         assertFalse(rl.decide("x", 500_000L).allow) // 요약 시각부터 쿨다운
         val later = rl.decide("x", 700_003L)
         assertTrue(later.allow)
-        assertEquals(1, later.suppressedSince) // 요약 뒤 억제 1회만 — 요약에 실린 2회는 다시 세지 않는다
+        assertEquals(1, later.suppressedSince) // 요약에 실린 2회는 다시 세지 않는다
     }
 
     @Test
@@ -120,7 +120,7 @@ class ErrorAlertRateLimiterTest {
         val rl = ErrorAlertRateLimiter(dedupCooldownMs = 300_000, globalPerMinute = 1, maxHeld = 1)
         rl.decide("c", 0L, "com.x.Upbit")        // 허용
         rl.decide("c", 100_000L, "com.x.Upbit")  // 쿨다운 억제 1
-        rl.decide("a", 400_000L)                 // 허용 — 창을 채운다
+        rl.decide("a", 400_000L)                 // 허용, 창을 채운다
         rl.decide("b", 400_001L, "com.x.Engine") // 보류(상한 1)
         rl.decide("c", 400_002L, "com.x.Upbit")  // 보류 상한 초과 → overflow(앞의 억제 1 + 이번 1)
         val digest = rl.drainHeld(400_003L)!!
@@ -136,7 +136,7 @@ class ErrorAlertRateLimiterTest {
     fun `요약으로 나간 fingerprint 는 삽입순 맨 뒤로 가 곧바로 밀려나지 않는다`() {
         val rl = ErrorAlertRateLimiter(dedupCooldownMs = 300_000, globalPerMinute = 1, maxEntries = 2)
         rl.decide("x", 0L)       // [x]
-        rl.decide("y", 400_000L) // [x, y] — 창을 채운다
+        rl.decide("y", 400_000L) // [x, y], 창을 채운다
         rl.decide("x", 400_001L) // 쿨다운 밖·상한 초과 → 보류
         rl.drainHeld(400_002L)   // x 를 맨 뒤로 → [y, x]
         rl.decide("z", 470_000L) // 가장 오래된 y 가 밀려난다 → [x, z]
@@ -150,7 +150,7 @@ class ErrorAlertRateLimiterTest {
         rl.decide("y", 1L)       // [x, y]
         rl.decide("x", 400_000L) // 쿨다운 밖 → 허용, x 를 맨 뒤로 → [y, x]
         rl.decide("z", 400_001L) // 가장 오래된 y 가 밀려난다 → [x, z]
-        assertFalse(rl.decide("x", 400_002L).allow) // x 는 방금 허용됐다 — 쿨다운 중
+        assertFalse(rl.decide("x", 400_002L).allow) // x 는 방금 허용돼 쿨다운 중이다
     }
 
     @Test
@@ -158,7 +158,7 @@ class ErrorAlertRateLimiterTest {
         val rl = ErrorAlertRateLimiter(maxEntries = 2, dedupCooldownMs = 300_000)
         rl.decide("a", 0L)
         rl.decide("b", 1L)
-        rl.decide("c", 2L) // size 초과 → 가장 오래된 a evict (FIFO)
-        assertTrue(rl.decide("a", 3L).allow) // a 기록 없으니 즉시 allow
+        rl.decide("c", 2L) // size 초과로 가장 오래된 a 가 빠진다
+        assertTrue(rl.decide("a", 3L).allow) // a 기록이 없어 바로 허용
     }
 }

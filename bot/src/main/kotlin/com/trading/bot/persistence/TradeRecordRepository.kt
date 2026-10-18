@@ -19,7 +19,7 @@ interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> 
 class TradeRecordRepository(
     private val r2dbcRepository: TradeRecordR2dbcRepository,
 ) {
-    // 여기 없는 필드(fee·executedVwap·exchangeOrderId)는 trade_executions / shadow 관측으로 간다 — 의도된 투영.
+    // 수수료·체결 VWAP·주문 ID 는 trade_executions 에 따로 남는다.
     suspend fun save(record: TradeRecord): TradeRecordEntity {
         val entity = TradeRecordEntity(
             ticker = record.ticker,
@@ -47,9 +47,8 @@ class TradeRecordRepository(
     }
 
     /**
-     * 라운드트립 조립용 — 최근 [max] 건을 **시간 오름차순**으로 돌려준다.
-     * 그룹 경계가 BUY/SELL 순서에 의존하므로 createdAt 동률을 대비해 id 를 2차 정렬키로 쓴다.
-     * 상한을 넘으면 오래된 쪽이 잘려 가장 오래된 라운드트립의 매수 기록이 빌 수 있다(partial).
+     * 최근 [max] 건을 시간 오름차순으로 돌려준다. BUY/SELL 순서가 중요해 createdAt 이 같으면 id 로 정렬한다.
+     * 잘린 앞쪽 때문에 가장 오래된 라운드트립은 매수 기록이 빠질 수 있다.
      */
     suspend fun findRecentAscending(userId: Long, max: Int): List<TradeRecordEntity> {
         return r2dbcRepository.findByUserId(

@@ -6,9 +6,8 @@ import java.time.LocalDate
 import java.time.Instant
 
 /**
- * per-(userId, ticker) 거래 상태의 durable 스냅샷. position/avgBuyPrice/holdVolume 은 저장하지 않고
- * 재시작 시 syncPosition 이 거래소 잔고에서 복원한다(#20 설계). exit_params_json 은 진입 시점 청산 파라미터 스냅샷.
- * V23 의 rungs_filled·last_action_price·flat_peak·pending_buy_trigger_price(지운 적립 프로파일의 장부)는 V29 에서 컬럼째 지웠다.
+ * (userId, ticker) 별 거래 상태. 보유 수량과 평균 단가는 저장하지 않고 재시작 때 거래소 잔고에서 맞춘다.
+ * exitParamsJson 은 진입 시점의 청산 파라미터다.
  */
 @Table("trading_states")
 data class TradingStateEntity(

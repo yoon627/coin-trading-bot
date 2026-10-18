@@ -62,9 +62,7 @@ class UpbitClientTest {
 
     @Test
     fun `getOrder parses the charged fee from the real response shape`() = runTest {
-        // 이 매핑이 깨지면(어노테이션 오타·삭제·Upbit 필드명 변경) paidFee 가 늘 null 이 되어
-        // 모든 엔진 매수가 Unrecorded → fee 0 으로 조용히 떨어진다. 경고도 없고 fee 를 읽는 곳도
-        // 없어 아무도 눈치채지 못한다. 그래서 실제 응답 형태로 파싱까지 고정한다(#133).
+        // 이 매핑이 깨지면 paidFee 가 늘 null 이 돼 매수 수수료가 경고 없이 0 으로 남으므로 실제 응답 형태로 파싱한다.
         mockServer.enqueue(
             MockResponse()
                 .setBody(
@@ -100,8 +98,7 @@ class UpbitClientTest {
 
     @Test
     fun `feeBasis rejects values that would poison the fee column`() {
-        // toDoubleOrNull 은 "NaN"·"Infinity" 를 정상 파싱한다(실측). 그 값이 double precision 컬럼에
-        // 들어가면 이후 SUM(fee) 이 영구히 NaN 이 된다 — 0 이 섞이는 것과 달리 되돌릴 수 없다.
+        // toDoubleOrNull 은 "NaN"·"Infinity" 도 파싱한다. 이 값이 컬럼에 들어가면 SUM(fee) 이 영구히 NaN 이 된다.
         listOf("NaN", "Infinity", "-Infinity", "-1.5", "not-a-number", "").forEach { raw ->
             assertEquals(
                 FeeBasis.Unrecorded,
@@ -115,7 +112,7 @@ class UpbitClientTest {
 
     @Test
     fun `placeOrder sends the identifier in the body and signs it into the query hash`() = runTest {
-        // 해시에서 빠지면 거래소가 서명 불일치로 거절하고, 본문에서 빠지면 불명 주문을 identifier 로 찾을 수 없다(#227).
+        // 해시에서 빠지면 거래소가 서명 불일치로 거절하고, 본문에서 빠지면 불명 주문을 identifier 로 찾을 수 없다.
         mockServer.enqueue(MockResponse().setBody("""{"uuid":"o-9"}""").addHeader("Content-Type", "application/json"))
 
         client.placeOrder(OrderRequest(market = "KRW-BTC", side = "bid", ordType = "price", price = "10000", identifier = "ctb-abc"))
@@ -161,7 +158,7 @@ class UpbitClientTest {
         )
         assertNull(client.getOrderByIdentifier("ctb-missing"))
 
-        // 같은 404 라도 다른 이유면 "주문이 없다"의 증거가 아니다 — 미접수 확정으로 흘러가면 안 된다.
+        // 같은 404 라도 다른 이유면 주문이 없다는 증거가 아니므로 미접수로 확정하면 안 된다.
         mockServer.enqueue(
             MockResponse().setResponseCode(404)
                 .setBody("""{"error":{"name":"currency_not_found","message":"x"}}""")
@@ -182,7 +179,7 @@ class UpbitClientTest {
         ).forEach { (status, name) ->
             assertTrue(UpbitApiException(status, name, null, "").provesOrderNotPlaced(), "$status $name")
         }
-        // 접수 여부를 말해 주지 않는 실패 — 불명으로 남겨 identifier 로 확정해야 한다.
+        // 접수 여부를 알 수 없는 실패라 불명으로 남겨 identifier 로 확정해야 한다.
         listOf(
             UpbitApiException(400, "duplicated_identifier", null, ""),
             UpbitApiException(401, "nonce_used", null, ""),

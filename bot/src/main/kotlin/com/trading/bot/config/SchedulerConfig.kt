@@ -23,7 +23,7 @@ class SchedulerConfig(
         scheduler.initialize()
         taskRegistrar.setTaskScheduler(scheduler)
 
-        // @Scheduled placeholder 가 아니라 프로퍼티 빈 값으로 등록해야 주기 기본값이 설정 클래스 한 곳에만 있다.
+        // 주기 기본값을 설정 클래스 한 곳에만 두려고 @Scheduled 대신 프로퍼티 값으로 등록한다.
         taskRegistrar.addFixedDelayTask(
             FixedDelayTask(
                 marketDataIngestionService::checkTickerHealth,
@@ -31,7 +31,7 @@ class SchedulerConfig(
                 Duration.ofMillis(watchdogProperties.initialDelayMs),
             ),
         )
-        // 운영 env 가 실제로 먹었는지는 이 줄로 본다(전달 계층이 여럿이라 목록 테스트만으로는 알 수 없다).
+        // env 가 실제로 적용됐는지 기동 로그로 확인한다.
         log.info(
             "[watchdog] enabled={} staleMs={} intervalMs={} initialDelayMs={} restartBackoffMs={}",
             watchdogProperties.enabled, watchdogProperties.staleMs, watchdogProperties.intervalMs,

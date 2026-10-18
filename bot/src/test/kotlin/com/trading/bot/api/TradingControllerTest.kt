@@ -105,7 +105,7 @@ class TradingControllerTest {
         assertEquals("combined", result["strategy"])
     }
 
-    // --- 봇 제어의 상태 저장 실패는 503 (#228) — 엔드포인트마다 변환하므로 세 곳을 모두 본다 ---
+    // 봇 제어의 상태 저장 실패는 503 이다. 엔드포인트마다 변환하므로 세 곳을 모두 본다.
 
     private val persistFailure = BotControlPersistFailedException("저장 실패 안내", RuntimeException("db down"))
 
@@ -133,7 +133,7 @@ class TradingControllerTest {
         assertServiceUnavailable { controller.clearHalt(ClearHaltRequest("KRW-BTC")) }
     }
 
-    // --- 설정 저장(Discord webhook) ---
+    // 설정 저장(Discord webhook)
 
     private val webhook = "https://discord.com/api/webhooks/1/token"
 
@@ -192,7 +192,7 @@ class TradingControllerTest {
 
     @Test
     fun `a save that outlasts the limit still reloads and reports the result as unconfirmed`() = runTest {
-        // 상한을 넘긴 저장은 커밋됐는지 모른다 — reload 는 DB 를 다시 읽을 뿐이라 그래도 부르고, 저장 실패(500)가 아니라 확인 불가로 알린다.
+        // 상한을 넘긴 저장은 커밋 여부를 모른다. reload 는 DB 를 다시 읽을 뿐이라 그래도 부르고, 500 이 아니라 확인 불가로 알린다.
         every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
         every { userRepo.updateDiscordWebhookUrl(userId, webhook) } returns Mono.never()
         coEvery { manager.reloadUserRuntime(userId) } returns Unit
@@ -208,7 +208,7 @@ class TradingControllerTest {
 
     @Test
     fun `a request cut off while the setting is being saved still finishes the save and reloads`() {
-        // 저장이 커밋된 뒤 끊겨 reload 가 불리지 않으면 DB 와 도는 엔진이 조용히 갈린다(#283). 끝까지 가면 끊긴 reload 가 미반영을 알린다.
+        // 커밋 뒤 요청이 끊겨 reload 가 빠지면 DB 와 실행 중인 엔진이 갈린다.
         every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
         val saving = Sinks.one<Int>()
         every { userRepo.updateDiscordWebhookUrl(userId, webhook) } returns saving.asMono()

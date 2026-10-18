@@ -18,9 +18,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * 폴링 → 집계기 → store 의 D1 경로를 실제 [MarketDataStore]·[CandleAggregator] 로 본다. 엔진은 store 의 D1 로 목표가·RSI·당일 봉을
- * 판정하므로 분봉 집계, 오늘 행이 없는 seed 의 바닥([CandleAggregator.startFrom]), 오늘 seed 의 등록([CandleAggregator.prime]) 중
- * 하나라도 빠지면 매매 판단이 바뀐다. 오늘 행이 있으면 prime 도 바닥을 올리므로 바닥은 오늘 행이 없는 seed 로만 따로 드러난다.
+ * 폴링 → 집계기 → store 의 D1 경로를 실제 [MarketDataStore]·[CandleAggregator] 로 본다. 엔진은 이 D1 로 매매를 판단한다.
+ * 오늘 행이 있으면 prime 도 바닥을 올리므로 [CandleAggregator.startFrom] 의 바닥은 오늘 행이 없는 seed 로 따로 본다.
  */
 class MarketDataIngestionAggregationTest {
 
@@ -32,7 +31,7 @@ class MarketDataIngestionAggregationTest {
 
     @BeforeEach
     fun awayFromUtcMidnight() {
-        // seed 가 Instant.now() 로 오늘을 정한다 — 테스트가 자정을 넘나들면 오늘·어제 판정이 서로 갈린다.
+        // seed 가 Instant.now() 로 오늘을 정하므로 테스트가 자정을 넘나들면 오늘·어제 판정이 갈린다.
         val now = Instant.now()
         val untilMidnight = Duration.between(now, now.truncatedTo(ChronoUnit.DAYS).plus(1, ChronoUnit.DAYS))
         if (untilMidnight < Duration.ofSeconds(5)) Thread.sleep(untilMidnight.toMillis() + 1_000)
@@ -95,7 +94,7 @@ class MarketDataIngestionAggregationTest {
         seed(daily(today, high = 130.0, low = 80.0, close = 120.0, volume = 500.0))
         val current = Instant.now().truncatedTo(ChronoUnit.MINUTES)
 
-        // 실제 라운드처럼 seed 에 이미 든 앞의 분들이 꼬리로 함께 온다 — 다시 더하면 그만큼 부풀고, 시드가 아니라 첫 분봉부터 새로 시작하면 seed 가 사라진다.
+        // 실제 라운드처럼 seed 에 든 분들이 꼬리로 함께 온다. 다시 더하면 부풀고, 첫 분봉부터 새로 시작하면 seed 가 사라진다.
         pollRound(
             minute(current, 120.0, 140.0, 119.0, 135.0, 2.0),
             minute(current.minusSeconds(60), 118.0, 150.0, 70.0, 120.0, 7.0),

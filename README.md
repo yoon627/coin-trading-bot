@@ -1,326 +1,154 @@
 # Coin Trading Bot
 
-Kotlin과 Spring Boot WebFlux로 만든 **Upbit 자동매매 애플리케이션**입니다. 하나의 `bot` 애플리케이션이 시세 수집, 자동매매, REST API와 웹 UI를 제공하고, `common` 모듈이 공용 도메인 모델과 매매 전략(`combined`)을 담당합니다.
+Upbit 현물 자동매매 봇. Kotlin 2.1, Spring Boot 3.4 WebFlux, R2DBC, PostgreSQL 17.
 
-> [!WARNING]
-> 이 프로젝트는 투자 수익을 보장하지 않습니다. 실거래 전 API 키 권한, 주문 금액, 손절 조건을 확인하고 충분히 테스트하세요. Upbit API 키에는 출금 권한을 부여하지 않는 것을 권장합니다.
+투자 수익을 보장하지 않는다. 실거래 전에 주문 금액과 손절 조건을 확인하고, Upbit API 키에는 출금 권한을 주지 않는다.
 
 ## 주요 기능
 
-- Upbit WebSocket ticker와 REST candle을 이용한 in-process 시세 수집
-- 사용자별 Upbit API 키 암호화 저장과 거래 종목 설정
-- 스윙 전략 `combined`(변동성 돌파 + 상승 추세 + RSI 필터) 기반 자동매매(수동 주문은 Upbit 앱·웹에서)
-- 손절, 익절, 트레일링 스탑, 최대 보유 기간 등 리스크 관리
-- 포트폴리오, 거래 이력·라운드트립
-- JWT httpOnly 쿠키 인증과 IP 기반 API rate limiting(앱 메모리 카운터 — 인증 경로 30/분, 로그인한 일반 API 60/분)
-- Discord 거래 알림 및 선택적 서버 오류 알림
-- React 18 기반 SPA(별도 프런트엔드 빌드 단계 없음)
+- Upbit WebSocket ticker와 REST 캔들로 시세 수집
+- 일봉 기반 `combined` 전략으로 자동 매수, 손절·익절·트레일링 스탑·보유 기간 상한으로 청산
+- 사용자별 Upbit API 키 암호화 저장(AES-GCM)
+- 포트폴리오, 거래 이력, 라운드트립 조회
+- JWT httpOnly 쿠키 인증, IP 기준 rate limit(인증 경로 분당 30회, 그 외 API 분당 60회)
+- Discord 거래 알림과 서버 오류 알림
+- 빌드 단계 없는 React 18 SPA(`bot/src/main/resources/static`)
 
-## 빠른 시작
+## 구조
 
-### 요구 사항
+```text
+common/   공용 설정(TradingProperties, ExitParamRanges), 도메인 모델, 전략과 지표
+bot/      Spring Boot 애플리케이션
+  api/          REST 컨트롤러
+  auth/         JWT 인증, Security 설정
+  client/       Upbit REST 클라이언트
+  engine/       매매 엔진, 포지션 관리, 주문 실행
+  marketdata/   시세 수집과 인메모리 저장소
+  stream/       분봉을 상위 봉으로 집계
+  persistence/  R2DBC 엔티티와 repository
+  security/     API 키 암호화
+  notification/ Discord 알림
+  resources/db/migration/  Flyway 마이그레이션
+deploy/vultr/  운영 배포 스크립트와 prod Compose
+```
 
-- Docker 및 Docker Compose
-- JDK 21 권장. Gradle toolchain이 JDK 21을 자동으로 준비할 수 있으므로 `JAVA_HOME` 설정은 필수가 아닙니다.
+## 매수 조건
 
-### 1. PostgreSQL 실행
+일봉 21개 이상에서 세 조건을 모두 만족하면 산다.
 
-기본 개발 프로필은 PostgreSQL을 사용합니다. 루트 Compose(로컬 개발 전용 — 운영은 [Vultr 배포](#vultr-배포-비용-절감--월-10))가 PostgreSQL을 `127.0.0.1:5432` 에만 공개하므로 다음과 같이 실행합니다.
+- 현재가 > 당일 시가 + 전일 레인지 × `TRADING_K_VALUE`
+- MA5 > MA20
+- RSI(14)가 30~70
+
+주문 금액이 손절가까지 내려갔을 때 Upbit 최소 주문(5,000원)보다 작아지면 사지 않는다. 기본 손절 5%에서는 약 5,264원 미만이다.
+
+## 로컬 실행
+
+JDK 21, Docker, Docker Compose 2.24 이상이 필요하다. 루트 `docker-compose.yml`은 로컬 개발용이고 PostgreSQL을 `127.0.0.1:5432`에 연다.
 
 ```bash
 docker compose up -d postgres
-```
-
-루트 Compose 는 `env_file` 의 `required: false` 를 쓰므로 Docker Compose 2.24 이상이 필요합니다. app 까지 띄우면 기본은 GHCR 이미지(`APP_VERSION`, 기본 `latest`)이고, 로컬 소스로 띄우려면 `docker compose up -d --build` 를 씁니다.
-
-### 2. 애플리케이션 실행
-
-`application.yml`의 개발 기본 포트는 `5433`이므로, 위 Compose와 함께 사용할 때는 `DB_PORT=5432`를 지정합니다.
-
-macOS/Linux:
-
-```bash
 DB_PORT=5432 ./gradlew :bot:bootRun
 ```
 
-Windows PowerShell:
+`application.yml`의 기본 DB 포트가 5433이라 `DB_PORT=5432`를 준다. <http://localhost:8080>에서 첫 계정을 만든다. 회원가입은 계정이 하나도 없을 때만 열린다.
 
-```powershell
-$env:DB_PORT = "5432"
-.\gradlew.bat :bot:bootRun
-```
+`JWT_SECRET`과 `APP_ENCRYPTION_SECRET`이 비어 있으면 실행할 때마다 임시 키를 만든다. 재시작 후에도 세션과 저장한 API 키를 쓰려면 환경변수로 고정한다. `bootRun`은 `.env`를 읽지 않고, 루트 compose의 app만 `.env`를 읽는다. `prod` 프로필에서는 둘 다 필수다.
 
-브라우저에서 <http://localhost:8080>에 접속해 첫 계정을 만든 뒤(회원가입은 계정이 하나도 없는 서버에서만 열립니다), 설정 화면에서 사용자별 Upbit API 키를 등록할 수 있습니다. API 키 없이도 UI와 공개 시세 기능 등 주문이 필요하지 않은 기능을 살펴볼 수 있습니다.
-
-> 개발 환경에서 `JWT_SECRET`과 `APP_ENCRYPTION_SECRET`이 비어 있으면 실행 시 임시 키가 생성됩니다. 재시작 후 세션과 저장된 Upbit 키를 유지하려면 두 값을 고정하세요. `prod` 프로필에서는 두 값이 필수입니다.
-
-### 빌드와 테스트
+### 테스트
 
 ```bash
-./gradlew build
 ./gradlew test
-./gradlew :bot:compileKotlin
-./gradlew :bot:test --tests "com.trading.bot.engine.TradingEngineTest"
+./scripts/run-db-tests.sh          # 임시 Postgres 컨테이너로 DB 통합 테스트만
+./scripts/run-db-tests.sh --all    # 같은 컨테이너로 전체 테스트
 ```
 
-Windows에서는 `./gradlew` 대신 `.\gradlew.bat`을 사용합니다.
+DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI는 `DB_TESTS_REQUIRED=true`로 돌리므로 건너뛰면 실패한다.
 
-DB 매핑·제약을 실제 PostgreSQL로 검증하는 통합테스트는 접속 정보가 있을 때만 실행되고, 없으면 건너뜁니다. 임시 컨테이너를 띄워 함께 돌리려면:
+## 설정
 
-```bash
-./scripts/run-db-tests.sh          # DB 통합테스트만
-./scripts/run-db-tests.sh --all    # 전체 테스트
-```
+기본값은 `TradingProperties.kt`, `AppConfig.kt`, `application.yml`에 있다.
 
-CI는 `services: postgres`로 DB를 제공하고 `DB_TESTS_REQUIRED=true`를 켜 두므로, 이 테스트가 조용히 건너뛰어지면 빌드가 실패합니다.
-
-## 아키텍처
-
-```text
-Browser ──HTTPS──> Caddy ──HTTP──> bot :8080 ──R2DBC──> PostgreSQL
-                                      │
-                                      ├──WS/REST───> Upbit
-                                      └──webhook───> Discord
-```
-
-`bot`의 `marketdata` 패키지가 ticker와 candle을 직접 수집합니다. 현재 런타임에는 별도 collector, Kafka, research/ML 서비스나 모니터링 스택이 없습니다.
-
-운영 환경에서는 Vultr 서울 인스턴스 하나의 Docker Compose가 `caddy + app + postgres`를 실행합니다. Caddy만 80/443 포트를 공개하고 `app:8080`, PostgreSQL은 Compose 내부 네트워크에서만 접근할 수 있습니다.
-
-## 기술 스택
-
-| 영역 | 기술 |
-|---|---|
-| Language | Kotlin 2.1, JDK 21 |
-| Framework | Spring Boot 3.4, WebFlux, Kotlin Coroutines |
-| Persistence | Spring Data R2DBC, PostgreSQL 17, Flyway |
-| Auth/Security | Spring Security, JWT, BCrypt, AES-GCM |
-| Frontend | React 18, Babel Standalone, 정적 SPA |
-| Build/Deploy | Gradle Kotlin DSL, Docker Compose, GitHub Actions, GHCR |
-| TLS | Caddy 2, Let's Encrypt |
-
-## 프로젝트 구조
-
-```text
-coin-trading-bot/
-├── common/                       # 공용 모델, 설정, 기술 지표와 전략(`combined`)
-│   └── src/main/kotlin/com/trading/common/
-│       ├── config/               # TradingProperties
-│       ├── domain/               # candle, ticker, order book, market 모델
-│       └── strategy/             # 전략, Indicators, ExitGates
-├── bot/                          # Spring Boot 애플리케이션
-│   └── src/main/
-│       ├── kotlin/com/trading/bot/
-│       │   ├── api/              # REST 컨트롤러와 요청 검증
-│       │   ├── auth/             # JWT 인증과 Security 설정
-│       │   ├── client/           # Upbit REST 클라이언트
-│       │   ├── engine/           # 매매·포지션 엔진
-│       │   ├── marketdata/       # 시세 수집(WS ticker + REST candle)과 인메모리 저장소·스트림
-│       │   ├── notification/     # Discord 거래·오류 알림
-│       │   ├── persistence/      # R2DBC 엔티티와 repository
-│       │   ├── security/         # 사용자 API 키 암호화
-│       │   └── stream/           # candle 집계(분봉 → 상위 봉)
-│       └── resources/
-│           ├── db/migration/     # Flyway V1~V28
-│           └── static/           # login.html, app.html, tide-app/
-├── deploy/vultr/                 # Vultr 서울 생성·배포 스크립트와 prod Compose (2GB 예산)
-└── docker-compose.yml            # 로컬 개발용 app, postgres (127.0.0.1 바인딩, 기본 프로필, .env 를 env_file 로)
-```
-
-## 트레이딩 전략
-
-전략은 `common/src/main/kotlin/com/trading/common/strategy/`에 있습니다.
-
-운영 전략은 `combined` 하나입니다. 일봉 21개 이상에서 세 조건을 모두 만족할 때 삽니다.
-
-| 조건 | 내용 |
-|---|---|
-| 변동성 돌파 | 현재가 > 당일 시가 + 전일 레인지 × `TRADING_K_VALUE`(기본 0.5) |
-| 상승 추세 | MA5 > MA20 |
-| RSI 필터 | RSI(14)가 30~70 |
-
-청산은 아래 리스크 규칙이 맡습니다.
-
-### 기본 리스크 관리
-
-| 항목 | 기본값 | 환경변수 |
-|---|---:|---|
-| 익절 | +5% | `TRADING_TAKE_PROFIT_PCT` |
-| 손절 | -5% | `TRADING_MAX_LOSS_PCT` |
-| 트레일링 폭 | 고점 대비 -2% | `TRADING_TRAILING_STOP_PCT` |
-| 트레일링 활성 수익률 | +3%(고점이 이 수익률에 닿은 뒤 평가) | `TRADING_TRAILING_ARM_PCT` |
-| 최대 보유 기간 | 1 거래일(KST 09:00 경계) | `TRADING_MAX_HOLD_DAYS` |
-| 기록용 왕복 수수료율 | 0.001 | `TRADING_ROUND_TRIP_FEE_RATE` |
-
-기본값의 정의처는 `common/src/main/kotlin/com/trading/common/config/TradingProperties.kt` 하나입니다(#75). `application.yml`·`docker-compose*.yml`·`deploy/*/deploy.sh` 는 기본값을 갖지 않으며, 환경변수를 설정하지 않으면 위 값이 그대로 적용됩니다.
-
-> ⚠️ **자동매매 인스턴스(`TRADING_AUTO_START=true`)는 청산 파라미터를 `.env` 에 명시하세요.**
-> 운영값이 코드 기본값과 다를 수 있어(예: 트레일링), 환경변수 한 줄이 빠지면 봇이 조용히 다른 청산
-> 규칙으로 거래하게 됩니다.
-> 대상 키: `TRADING_TAKE_PROFIT_PCT`·`TRADING_MAX_LOSS_PCT`·`TRADING_TRAILING_STOP_PCT`·`TRADING_TRAILING_ARM_PCT`·`TRADING_MAX_HOLD_DAYS`.
->
-> 값은 **의미상 구간** 안이어야 합니다. 부호·단위 오기를 거르는 구간이고(손절 `-5` 는 매수 직후 손절이 됩니다) 운영값을 강제하지는 않습니다.
-> 숫자는 평범한 소수(지수·공백·쉼표 없이), 불리언은 소문자 `true`/`false` 로 적습니다.
->
-> | 키 | 허용 |
-> |---|---|
-> | `TRADING_TAKE_PROFIT_PCT` | (0, 100] |
-> | `TRADING_MAX_LOSS_PCT` | (0, 100) |
-> | `TRADING_TRAILING_STOP_PCT` | (0, 100) |
-> | `TRADING_TRAILING_ARM_PCT` | [0, 100] |
-> | `TRADING_MAX_HOLD_DAYS` | 1 이상 정수 |
-> | `TRADING_INVEST_RATIO` | (0, 1] |
-> | `TRADING_ROUND_TRIP_FEE_RATE` | [0, 0.01) — 비율(0.001 = 0.1%) |
-> | `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT` / `_ARM_PCT` | (0, 100) / 0 이상 |
->
-> 두 장치가 이를 지킵니다. `deploy/vultr/preflight_exit_params.sh`(`deploy.sh` 가 호출)는 **업로드 전에** 배포를 중단합니다 —
-> 형식·구간은 항상, 선언은 자동매매 배포에서 봅니다. 위 표의 키는 구간으로, 배포가 넘기는 나머지 키는 형식으로 봅니다 — 불리언은 소문자 `true`/`false`,
-> 정수(`TRADING_INTERVAL_SECONDS`·`TRADING_RECONCILE_HALT_THRESHOLD`·워치독 값)는 1 이상, `TRADING_K_VALUE`·`TRADING_MAX_INVEST_AMOUNT` 는 평범한 소수,
-> `TRADING_TICKERS`·`WATCHLIST_TICKERS` 는 쉼표로 구분한 대문자 마켓 코드(`KRW-BTC,KRW-ETH`). 앱은 기동·봇 시작 시 실효값을 로그하고 미선언·구간 밖이면 ERROR 알림을 내되
-> 거래를 멈추지는 않습니다. 그림자 관측 두 키(`TRADING_SHADOW_EXIT_*`)가 구간 밖이면 관측이 켜져 있어도 관측만 끄고 ERROR 로 알립니다 — 거래는 그대로이고, preflight 가 먼저 거릅니다.
-> 구간의 정의처는 `common/src/main/kotlin/com/trading/common/config/ExitParamRanges.kt` 입니다.
-
-매도 기록의 `pnl_percent`는 왕복 수수료율을 차감한 순수익률이며, 청산 조건 판정은 수수료 차감 전 수익률을 사용합니다.
-
-> **익절·트레일링 값의 관계**: 익절(`TAKE_PROFIT`)이 트레일링 폭·활성 수익률보다 **커야** 트레일링이 실효합니다.
-> 예전 기본값은 익절 2% = 트레일링 폭 2%여서 익절이 항상 먼저 걸려 **트레일링이 사실상 동작하지 않았습니다**
-> (앱이 부팅 시 경고를 남깁니다). 지금은 익절 5% / 트레일링 폭 2% / 활성 3%로, 고점이 +3%를 넘긴 뒤
-> 고점 대비 2% 밀리면 트레일링이 청산합니다. 값을 바꿀 때 이 대소 관계를 깨지 않도록 주의하세요.
-
-### 거래 목록을 바꿀 때
-
-목록(`TRADING_TICKERS`, 또는 UI·API 로 준 `bot_state.tickers`)에서 뺀 티커라도 봇이 산 포지션과 미해소 주문은 청산될 때까지 계속 관리합니다 — 손절·트레일링·보유상한은 적용되고 새로 사지는 않습니다. 청산된 뒤에는 다음 09:00 에 활성 목록에서 빠집니다. 관심목록(`WATCHLIST_TICKERS`) 밖 티커는 REST 시세 폴백(D1 캔들은 60초 캐시)을 씁니다.
-
-이미 실행 중인 봇에 다른 목록으로 `POST /api/bot/start` 를 보내면 **409** 로 거절되고 저장된 목록도 바뀌지 않습니다 — 목록을 바꾸려면 정지 후 다시 시작하세요. 목록이 같거나 없으면 `status: "already_running"` 을 돌려줍니다. 전략은 `combined` 하나라 고를 수 없고, 시작 요청에 `strategy` 를 보내도 무시합니다.
-
-시작·정지·halt 해제는 상태 저장(`bot_state`·halt 기록)에 실패하면 성공으로 답하지 않고 **503** 과 무엇이 적용됐는지를 알립니다 — 시작·halt 해제는 아무것도 바꾸지 않고, 정지는 저장이 실패해도 봇을 멈춘 뒤 서버가 정상 종료될 때 저장을 한 번 더 시도합니다(재시작 복원은 저장된 실행 상태를 보므로, 그때도 저장하지 못하거나 그 전에 서버가 비정상 종료되면 봇이 다시 시작될 수 있습니다).
-
-자동으로 풀리지 않는 미해소 주문(응답을 못 받았는데 잔고가 달라진 주문, 오래 막힌 매도)은 그 티커의 매매를 멈춥니다. `GET /api/bot/status` 의 `positions[].pending_buy`·`pending_sell`(`{by: uuid|identifier, ref}`, 매도는 `since` 포함)로 보이고, **봇을 정지한 뒤** `POST /api/bot/pending/clear {"ticker": "KRW-BTC", "side": "buy"|"sell"}` 로 지웁니다(브라우저 콘솔에서 `TideAPI.clearPending('KRW-BTC', 'buy')`). 봇이 돌거나 복원 중이면 409 입니다(정지는 했는데 정지 상태 저장만 실패한 경우는 허용) — `halt/clear` 는 엔진이 없으면 `not_running` 으로 답하는 것과 다릅니다. 메모리에만 남은 매도 기록이 있으면 해제하지 않고 503 이니 잠시 후 다시 시도합니다. 먼저 Upbit 주문 내역을 확인해 미체결이면 취소하고, 체결된 매도를 지우면 SELL 기록이 남지 않으니 응답(`cleared`, 지운 필드 전부 — 키는 `trading_states` 컬럼명)으로 거래 기록을 맞춥니다. 다시 시작하면 기동 시 잔고 동기화가 매수로 들어온 코인을 보유로 편입합니다(보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터). 그 티커가 halt 였다면 시작한 뒤 `halt/clear` 로 풉니다.
-
-`GET /api/bot/status` 는 활성 목록(`tickers`) 외에 `user_tickers`(사용자 목록), `entry_tickers`(신규 진입을 받는 티커 — 사용자 목록), `exit_only_tickers`(목록에서 빠졌지만 청산까지 관리 중인 티커), `default_tickers`(목록 없이 시작할 때 쓰는 `TRADING_TICKERS`)를 함께 돌려줍니다 — `default_tickers` 외에는 봇이 실행 중일 때만 채워집니다. 봇 화면은 입력칸을 `default_tickers` 로 채우고, 그대로 두거나(순서·대소문자 무관) 비우고 시작하면 목록을 보내지 않아 서버 설정 목록을 씁니다. 현재 상태 카드는 거래쌍(`entry_tickers`)·청산 대기를 나눠 보여 줍니다.
-
-## 웹 UI
-
-정적 자산은 `bot/src/main/resources/static/`에 있습니다. `app.html`이 Babel Standalone으로 JSX를 브라우저에서 변환하므로 Node.js 기반 빌드 단계가 없습니다.
-
-- `/login.html`: 로그인(회원가입은 계정이 없는 서버에서 첫 계정을 만들 때만)
-- `/app.html`: dashboard, bot, orders, wallet, settings 화면
-- `/api/*`: httpOnly JWT 쿠키를 사용하는 same-origin API
-- JSON 필드명: 요청과 응답 모두 `snake_case`
-
-## API 개요
-
-인증이 필요한 API는 JWT 쿠키 또는 bearer token을 사용합니다. 아래는 현재 컨트롤러 기준의 주요 엔드포인트입니다.
-
-| 영역 | Method | Path | 인증 |
-|---|---|---|---|
-| 인증 | POST | `/api/auth/register`(계정이 하나도 없을 때만, 있으면 403), `/login`, `/logout` | Public |
-| 사용자 | GET/POST | `/api/user/me`, `/api/user/keys`, `/api/user/settings` | 필요 |
-| 봇 | GET/POST | `/api/bot/status`, `/start`, `/stop`, `/halt/clear`, `/pending/clear` | 필요 |
-| 자산/이력 | GET | `/api/account`, `/api/portfolio`, `/api/trades`, `/api/trades/roundtrips` | 필요 |
-| 상태 확인 | GET | `/actuator/health`, `/actuator/info` | Public |
-
-차트(`/api/chart/*`)·관심 목록(`/api/watchlist`)·실시간 가격(`/api/prices/*`) API 는 2026-10-01 에 지웠습니다 — 화면이 쓰지 않았고, 시세는 DB 에 저장하지 않습니다. 같은 날 봇 설정(`/api/bot/configs`)·전략 변경(`/api/bot/strategy`)·전략 목록(`GET /api/strategies`)도 지웠습니다 — 운영 전략은 `combined` 하나입니다.
-
-## 환경변수
-
-### 운영 필수값
-
-| 변수 | 설명 |
-|---|---|
-| `DB_PASSWORD` | PostgreSQL 비밀번호 |
-| `JWT_SECRET` | JWT 서명 키. 변경하면 기존 세션이 무효화됩니다. |
-| `APP_ENCRYPTION_SECRET` | 사용자 Upbit 키 암호화 마스터 키. 변경하면 기존 암호문을 복호화할 수 없습니다. |
-
-`deploy/vultr/deploy.sh setup`은 인스턴스를 **새로 만들 때만** 비어 있는 `DB_PASSWORD`·`JWT_SECRET`을 생성해 `deploy/vultr/.env`에 적습니다. 기존 인스턴스를 다시 쓰는 `setup`과 `deploy`는 세 값 중 하나라도 비어 있으면 생성하지 않고 실패합니다 — 새 `DB_PASSWORD`는 기존 DB 볼륨의 비밀번호와 달라 앱과 자동 롤백이 함께 기동하지 못하기 때문입니다. `APP_ENCRYPTION_SECRET`은 setup 도 **자동 생성하지 않아** 비어 있으면 실패합니다. 새로 만들면 기존 암호문을 복호화할 수 없으니 운영 중인 값을 그대로 쓰세요(출처는 [`deploy/vultr/README.md`](deploy/vultr/README.md) 1절). `.env`, 특히 `APP_ENCRYPTION_SECRET`은 DB 백업과 다른 곳에 안전하게 보관하세요.
-
-### 주요 선택값
-
-| 변수 | 기본값 | 설명 |
+| 환경변수 | 기본값 | 설명 |
 |---|---|---|
-| `TRADING_TICKERS` | `KRW-BTC` | 쉼표로 구분한 기본 거래 종목 |
-| `TRADING_INVEST_RATIO` | `0.1` | 주문 시 투자 비율. 스윙 매수 금액이 손절 시점에 최소주문(5,000원) 미만이 되는 크기면(기본 손절 5% 에서 약 5,264원 미만) 사지 않는다 |
-| `TRADING_MAX_INVEST_AMOUNT` | `100000` | 최대 투자 금액(KRW) |
-| `TRADING_AUTO_START` | `false` | 애플리케이션 시작 시 봇 자동 시작 |
-| `WATCHLIST_TICKERS` | 주요 KRW 종목 | 시세 수집(WS ticker·분봉 폴링) 대상 종목 — 목록 밖 티커는 REST 시세 폴백 |
-| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WS 무수신(half-open) 자동복구 워치독. 재연결 폭주 등 오작동 시 `false` 로 끄는 kill-switch |
-| `MARKETDATA_WATCHDOG_STALE_MS` · `_INTERVAL_MS` · `_INITIAL_DELAY_MS` · `_RESTART_BACKOFF_MS` | `60000` · `20000` · `30000` · `1000` | 무수신 판정 임계, 점검 주기, 첫 점검 지연, 수집 재시작 대기(ms, 1 이상 정수 — preflight 가 검사) |
-| `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 웹훅. 전송이 429·5xx·연결 실패로 막히면 최대 2번 더 보낸다(429 는 `Retry-After` 를 따르되 30초를 넘으면 포기). 5xx·응답 지연 뒤 재전송은 같은 알림이 두 번 갈 수 있다 |
-| `DISCORD_ERROR_ALERT_ENABLED` | `false` | 서버 ERROR 로그 알림 활성화. 같은 에러는 5분에 1회, 전체는 분당 5건까지 개별로 보내고, 넘친 에러는 상한에 처음 걸린 뒤 60초에 요약 1건으로 묶는다(에러마다 한 줄, 로거별로 번갈아 싣고 다 못 실으면 로거별 건수). 요약으로 넘어간 에러는 끝 줄에 건수로만 실렸어도 그 뒤 5분간 개별로 다시 오지 않는다. 종료 직전에 보류된 알림은 로그 파일에만 남는다. 전송 재시도는 거래 알림과 같다 |
-| `DISCORD_ERROR_WEBHOOK_URL` | 없음 | 오류 알림 전용 웹훅 |
-| `APP_DOMAIN` | 없음 | 운영 CORS 및 Caddy TLS 도메인 |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5433` / `trading` / `trading` / `trading` | prod 프로필의 기본 포트는 5432 |
+| `JWT_SECRET` | 없음 | 바꾸면 기존 세션이 끊긴다 |
+| `APP_ENCRYPTION_SECRET` | 없음 | 바꾸면 저장된 API 키를 복호화할 수 없다 |
+| `TRADING_TICKERS` | `KRW-BTC` | 거래 종목, 쉼표 구분 |
+| `TRADING_AUTO_START` | `false` | 기동 시 봇 자동 시작 |
+| `TRADING_INVEST_RATIO` | `0.1` | 주문당 투자 비율 |
+| `TRADING_MAX_INVEST_AMOUNT` | `100000` | 주문당 최대 금액(KRW) |
+| `TRADING_K_VALUE` | `0.5` | 변동성 돌파 계수 |
+| `TRADING_TAKE_PROFIT_PCT` | `5.0` | 익절(%) |
+| `TRADING_MAX_LOSS_PCT` | `5.0` | 손절(%) |
+| `TRADING_TRAILING_STOP_PCT` | `2.0` | 고점 대비 하락 폭(%) |
+| `TRADING_TRAILING_ARM_PCT` | `3.0` | 트레일링을 켜는 고점 수익률(%) |
+| `TRADING_MAX_HOLD_DAYS` | `1` | 보유 상한(거래일, KST 09:00 경계) |
+| `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
+| `TRADING_INTERVAL_SECONDS` | `10` | 매매 루프 주기 |
+| `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 그 종목의 신규 매수를 멈춘다(매도는 계속) |
+| `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상 |
+| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
+| `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 |
+| `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림 |
+| `APP_DOMAIN` | 없음 | 운영 CORS origin과 Caddy TLS 도메인 |
 
-리스크 관련 변수는 [기본 리스크 관리](#기본-리스크-관리)를 참고하세요. 현재 운영 배포 예시는 [`deploy/vultr/.env.example`](deploy/vultr/.env.example), 애플리케이션 기본값은 [`TradingProperties.kt`](common/src/main/kotlin/com/trading/common/config/TradingProperties.kt)에 있습니다.
+## API
 
-> **배포 시 주의** — 배포 계층(`deploy/vultr/deploy.sh`, `docker-compose*.yml`)은 `TRADING_*`·`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않습니다. `.env` 에 설정한 키만 컨테이너로 전달되고(배포 로그에 `서버 .env override 키:` 로 이름만 찍힌다), 나머지는 앱 기본값이 적용됩니다. GitHub Actions 자동 배포는 `VULTR_DEPLOY_ENV` secret 을 그대로 `.env` 로 쓰므로, **앱 기본값에 위임하려는 키는 그 secret 에서도 지워야 합니다**(운영 고유값인 `TRADING_TICKERS`·`TRADING_INVEST_RATIO`·`TRADING_AUTO_START` 는 유지. `TRADING_STRATEGY` 는 설정이 없어졌고 Vultr 배포는 전달하지 않으니 secret 에서 지워도 됩니다). ⚠️ **단 위 청산 5개 키는 예외로 지우지 마세요** — 자동매매 배포에서 `deploy.sh` preflight 가 이를 요구합니다(#179).
+요청·응답 JSON 필드는 `snake_case`다. `/api/auth/*`와 `/actuator/health`, `/actuator/info` 외에는 인증이 필요하다.
 
-## AWS·OCI 배포 (historical)
+| Method | Path | 설명 |
+|---|---|---|
+| POST | `/api/auth/register`, `/api/auth/login`, `/api/auth/logout` | 첫 계정 생성, 로그인, 로그아웃 |
+| GET | `/api/user/me` | 내 정보 |
+| POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장 |
+| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 |
+| GET | `/api/bot/status` | 봇 상태, 포지션, 미해소 주문 |
+| POST | `/api/bot/halt/clear` | 종목 halt 해제 |
+| POST | `/api/bot/pending/clear` | 미해소 주문 기록 삭제(봇 정지 상태에서만) |
+| GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 |
+| GET | `/api/trades`, `/api/trades/roundtrips` | 거래 이력, 라운드트립 |
 
-AWS EC2 `t4g.medium`은 2026-07-31 Vultr cutover 후 인스턴스·EBS·EIP까지 삭제됐고, Oracle Cloud(Always
-Free) 판은 프로비저닝하지 않았다. 두 판(`deploy/aws`·`deploy/oci`)은 2026-10 에 저장소에서도 지웠다 — 옛
-설정은 `git show 37008a7:deploy/aws/README.md` 처럼 git 이력에서 본다. 운영은 아래 Vultr 판 하나다.
+실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
 
-## Vultr 배포 (비용 절감 — 월 $10)
+### 미해소 주문 정리
 
-AWS 실측 $39.29/월 대비 **-75%**. Vultr 서울(`icn`) `vc2-1c-2gb`(1 vCPU x86_64 / 2GB / 55GB SSD /
-2TB 대역폭)에 같은 스택을 올린다. 공인 IP·디스크·대역폭이 요금에 포함이라 별도 과금이 없다.
+응답을 못 받았는데 잔고가 달라진 주문이나 오래 막힌 매도는 자동으로 풀리지 않고, 그 종목의 매매를 멈춘다. `GET /api/bot/status`의 `positions[].pending_buy`·`pending_sell`로 보인다.
 
-현재 `do-anything.cloud`에서 8종목을 거래하고 `TRADING_INVEST_RATIO=0.15`로 운영한다. 기존
-인스턴스 상태는 [Vultr 상태 페이지](https://status.vultr.com/)의 전역 장애·maintenance를 확인한
-뒤 변경한다. 2026-08-01 현재 `ALRT-F83KAW9` 신규 배포 간헐 실패 경보와 2026-08-04 00:00~01:00
-KST 전역 DB cutover가 공지돼 있어, 해당 시간대에는 새 인스턴스 생성·삭제·리사이즈를 하지 않는다.
+1. Upbit 주문 내역을 확인하고, 미체결이면 Upbit에서 취소한다.
+2. 봇을 정지한 뒤 `POST /api/bot/pending/clear {"ticker": "KRW-BTC", "side": "buy"|"sell"}`로 기록을 지운다. 봇이 돌거나 복원 중이면 409, 메모리에만 남은 매도 기록이 있으면 503이니 잠시 후 다시 시도한다.
+3. 체결된 매도를 지우면 SELL 기록이 남지 않는다. 응답의 `cleared`(지운 필드 전부, 키는 `trading_states` 컬럼명)를 보고 거래 기록을 맞춘다.
+4. 다시 시작하면 기동 시 잔고 동기화가 매수로 들어온 코인을 보유로 편입한다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
+5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다.
 
-2GB로 낮춘 근거는 **운영 59일차 EC2 실측**이다 — app 420MiB / postgres 380MiB / redis 3.4MiB /
-caddy 14MiB = 합계 818MiB, load average 0.00. 컨테이너 제한도 이에 맞춰 조정했다(지금 합계 1440m — redis 를 뺐다. 예전에
-적었던 1472m 는 caddy 를 64m 로 센 값이고, compose 의 caddy 는 처음부터 96m 였다).
+## 리스크 관리
+
+- 익절은 트레일링 폭과 활성 수익률보다 커야 한다. 작으면 익절이 항상 먼저 걸려 트레일링이 동작하지 않는다.
+- 매도 기록의 `pnl_percent`는 수수료를 뺀 값이고, 청산 판정은 수수료 전 수익률로 한다.
+- 청산 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀려 적는 실수를 거르기 위한 것이다.
+- `deploy/vultr/preflight_exit_params.sh`가 배포 전에 형식과 구간을 검사한다. `TRADING_AUTO_START`가 켜져 있으면 청산 키 5개(`TAKE_PROFIT_PCT`, `MAX_LOSS_PCT`, `TRAILING_STOP_PCT`, `TRAILING_ARM_PCT`, `MAX_HOLD_DAYS`)를 `.env`에 명시하지 않은 배포도 막는다.
+- 앱은 기동 시 실효값을 로그로 남기고, 미선언이거나 구간 밖이면 ERROR로 알린다. 보유 포지션의 손절이 멈추지 않도록 거래는 막지 않는다.
+
+## 배포
+
+`.github/workflows/deploy.yml`
+
+- PR: 테스트만 실행
+- main push, main에서의 수동 실행: 테스트 → multi-arch 이미지 빌드 → GHCR push → SSH로 Vultr에 `deploy.sh deploy`. 다른 브랜치에서 수동 실행하면 이미지만 올리고 배포하지 않는다.
+- `**.md`와 `docs/**`만 바뀐 push는 배포하지 않는다. 배포가 곧 엔진 재시작이기 때문이다. 필요하면 main에서 수동 실행한다.
+- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다.
+
+필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
+
+Actions 배포는 `VULTR_DEPLOY_ENV`를 그대로 `deploy/vultr/.env`로 쓰고 서버 `.env`를 다시 만든다. 로컬 `deploy/vultr/.env`만 고치고 수동 배포하면 다음 main push 때 secret 값으로 되돌아가므로 secret도 함께 고친다. 배포 계층은 `TRADING_*`·`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않아, `.env`에 적은 키만 컨테이너로 넘기고 나머지는 앱 기본값을 쓴다. 앱 기본값에 맡길 키는 secret에서도 지운다. 단 청산 키 5개는 자동매매 배포의 preflight가 요구하므로 지우지 않는다. 넘긴 키 이름은 배포 로그의 `서버 .env override 키:` 줄에서 확인한다.
+
+수동 배포와 운영 명령:
 
 ```bash
 install -m 600 deploy/vultr/.env.example deploy/vultr/.env
-# VULTR_API_KEY + APP_ENCRYPTION_SECRET(운영 중인 값 — 자동 생성 안 됨) 입력
-
-./deploy/vultr/deploy.sh setup    # SSH 키 + 방화벽 + 인스턴스
+./deploy/vultr/deploy.sh setup     # SSH 키, 방화벽, 인스턴스 생성
 ./deploy/vultr/deploy.sh deploy
-./deploy/vultr/deploy.sh mem      # 2GB 여유 확인
+./deploy/vultr/deploy.sh status    # logs, mem, ssh, stop, start, destroy
 ```
 
-운영 명령(`status`/`logs`/`mem`/`ssh`/`stop`/`start`/`destroy`)과 배포 동작(대상 SHA 고정, 헬스체크 실패 시
-자동 롤백), 계정 준비(⚠️ **API Access Control에 공인 IP 등록 필수**), 호스트 재구축·백업 복원과 **단일 실행을
-보장하는 이전 절차**, S3 호환 백업 설정은 [`deploy/vultr/README.md`](deploy/vultr/README.md)에 있다.
-
-## CI/CD
-
-`.github/workflows/deploy.yml`의 현재 흐름은 다음과 같습니다.
-
-```text
-Pull request ──> ./gradlew test --parallel
-main push    ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
-main manual  ──> test ──> multi-arch Docker image ──> GHCR ──> SSH ──> Vultr deploy ──> health/rollback
-```
-
-**문서 전용 push 는 배포하지 않는다.** `on.push.paths-ignore` 가 `**.md`·`docs/**`
-만 바뀐 push 에서 워크플로를 건너뛴다 — main push 가 곧 컨테이너 재생성(=트레이딩 엔진 재시작)이라
-문서 커밋으로 봇을 재시작시키지 않기 위해서다. 코드와 문서가 섞인 push 는 정상 배포된다.
-문서만 바꾼 뒤 그래도 배포해야 하면 Actions 에서 `workflow_dispatch` 로 수동 실행한다.
-
-Vultr 자동 배포는 `test`와 GHCR push가 모두 성공한 뒤에만 실행된다. Actions repository secrets에
-`VULTR_DEPLOY_ENV`(운영 배포용 `.env`), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`,
-`VULTR_SSH_USER`를 등록해야 한다. `VULTR_API_KEY`는 기존 인스턴스에 SSH로 배포하는 경로에서는
-사용하지 않는다. job은 성공 확인 SHA를 원격 `/opt/app/.last-good-sha`에 저장해 rollback 기준으로
-사용한다. 최초 실행 때만 현재 app
-컨테이너가 healthy인 경우에 한해 bootstrap한다. 상태 파일이 없고 컨테이너도 healthy가 아니면 배포를
-거부한다. `deploy.sh`의 migration gate와 180초 health check를 그대로 적용한다. PR에서는 배포하지
-않으며, 동시 배포는 하나만 허용한다. queued 실행이 오래된 SHA이면 `origin/main`과 일치하지 않아
-배포하지 않는다.
-
-GitHub-hosted runner 접근을 위해 Vultr cloud firewall에 `ctb-ssh-github-actions` 22/tcp
-`0.0.0.0/0` 규칙이 필요하며, 운영 SSH는 key-only로 hardening되어 있어야 한다. 상세 절차와
-재실행 시 보존·검증 규칙은 [`deploy/vultr/README.md`](deploy/vultr/README.md)를 따른다. 수동
-SSH는 `SSH_ALLOW_CIDR`로 제한하고 Actions 전용 규칙만 동적 runner IP를 위해 공개한다.
-
-자동화가 멈추면 Actions 로그의 실패 단계와 Vultr에서 `./deploy/vultr/deploy.sh status` 결과를 먼저
-확인한다. 수동 복구가 필요하면 운영용 `.env`와 SSH key를 로컬에 준비한 뒤 기존 명령을 직접 실행한다.
-
-## 참고 사항
-
-- 현재 지원 거래소는 Upbit뿐입니다.
-- `collector`, `research`, Kafka, ML/스캘핑 분석, 모니터링 스택(Prometheus·Grafana·Loki), k6 부하 테스트는 현재 저장소에 포함되지 않습니다.
+`APP_ENCRYPTION_SECRET`은 자동 생성하지 않는다. 운영 중인 값을 그대로 쓰고 DB 백업과 따로 보관한다. 인스턴스 재구축, 백업 복원, 방화벽 설정, 호스트 이전(같은 계정으로 봇 두 대가 돌면 주문이 이중으로 나간다)은 [`deploy/vultr/README.md`](deploy/vultr/README.md)를 본다.

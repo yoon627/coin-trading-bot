@@ -11,19 +11,13 @@ import org.springframework.core.env.StandardEnvironment
 import org.springframework.core.env.SystemEnvironmentPropertySource
 
 /**
- * **환경변수 이름이 실제로 바인딩되는지**를 실측한다 — 추측하면 안 되는 지점이다.
- *
- * 이 repo 는 배포 계층이 앱 기본값을 덮는 구조라(`docker-compose.prod.yml` 이 `TRADING_*` 를 이름으로
- * 나열해 전달, #75) **env 이름이 틀리면 조용히 아무 일도 일어나지 않는다**. 켰다고 믿는데 안 켜진 상태가
- * 가장 나쁘다 — 관측이 0건인지 설정이 안 먹은 건지 구분할 수 없다.
- *
- * Spring 의 relaxed binding 은 `_` 를 `.` 로도 `-` 로도 볼 수 있어 `trading.shadow-exit.enabled` 에
- * 어떤 env 이름이 맞는지는 문서만으로 확정할 수 없다. 그래서 **실제 `SystemEnvironmentPropertySource` 로 건다.**
+ * 배포는 `TRADING_*` 를 이름으로 나열해 넘기므로 env 이름이 틀리면 설정이 조용히 먹지 않는다.
+ * relaxed binding 은 `_` 를 `.` 로도 `-` 로도 볼 수 있어 실제 `SystemEnvironmentPropertySource` 로 확인한다.
  */
 class ShadowExitPropertiesBindingTest {
 
     private fun bindFromEnv(vararg pairs: Pair<String, String>): ShadowExitProperties {
-        // 운영과 같은 경로: OS 환경변수 소스. MapPropertySource 로 하면 relaxed 규칙이 달라 검증이 무의미하다.
+        // MapPropertySource 는 relaxed 규칙이 달라 운영과 같은 OS 환경변수 소스를 쓴다.
         val env = StandardEnvironment()
         env.propertySources.addFirst(
             SystemEnvironmentPropertySource(

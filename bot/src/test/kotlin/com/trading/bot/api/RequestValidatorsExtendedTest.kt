@@ -10,8 +10,6 @@ class RequestValidatorsExtendedTest {
 
     private val validators = RequestValidators()
 
-    // --- normalizeUsername ---
-
     @Test
     fun `normalizeUsername accepts valid usernames`() {
         assertEquals("testuser", validators.normalizeUsername("testuser"))
@@ -48,30 +46,28 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeUsername("test.user") }
     }
 
-    // --- validatePassword ---
-
     @Test
     fun `validatePassword accepts passwords within length bounds`() {
-        assertDoesNotThrow { validators.validatePassword("1234567890") } // 10 chars (min)
+        assertDoesNotThrow { validators.validatePassword("1234567890") } // 최소 10자
         assertDoesNotThrow { validators.validatePassword("a very long password with spaces") }
     }
 
     @Test
     fun `validatePassword rejects short passwords`() {
-        assertThrows<ResponseStatusException> { validators.validatePassword("123456789") } // 9 < min 10
+        assertThrows<ResponseStatusException> { validators.validatePassword("123456789") }
         assertThrows<ResponseStatusException> { validators.validatePassword("") }
     }
 
     @Test
     fun `validatePassword rejects overly long passwords`() {
-        assertThrows<ResponseStatusException> { validators.validatePassword("a".repeat(73)) } // > 72 (bcrypt limit)
+        assertThrows<ResponseStatusException> { validators.validatePassword("a".repeat(73)) } // bcrypt 한계 72바이트 초과
     }
 
     @Test
     fun `validatePassword limits the UTF-8 byte length, not the character count`() {
         assertDoesNotThrow { validators.validatePassword("a".repeat(72)) }
-        assertDoesNotThrow { validators.validatePassword("가".repeat(24)) } // 24 chars = 72 bytes
-        assertThrows<ResponseStatusException> { validators.validatePassword("가".repeat(25)) } // 25 chars = 75 bytes
+        assertDoesNotThrow { validators.validatePassword("가".repeat(24)) } // 72바이트
+        assertThrows<ResponseStatusException> { validators.validatePassword("가".repeat(25)) } // 75바이트
     }
 
     @Test
@@ -81,18 +77,16 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeTradeSide("both") }
     }
 
-    // --- normalizeApiKey ---
-
     @Test
     fun `normalizeApiKey accepts valid keys`() {
-        val key = "ABCDEFGHIJKLMNOPqrstuvwxyz0123456789" // 36 chars (>= 32, Upbit 실제 키 길이대)
+        val key = "ABCDEFGHIJKLMNOPqrstuvwxyz0123456789" // Upbit 실제 키 길이대
         assertEquals(key, validators.normalizeApiKey(key, "test"))
     }
 
     @Test
     fun `normalizeApiKey rejects too short keys`() {
         assertThrows<ResponseStatusException> { validators.normalizeApiKey("short", "test") }
-        assertThrows<ResponseStatusException> { validators.normalizeApiKey("ABCDEFGHIJKLMNOPq", "test") } // 17 < 32
+        assertThrows<ResponseStatusException> { validators.normalizeApiKey("ABCDEFGHIJKLMNOPq", "test") }
     }
 
     @Test
@@ -105,8 +99,6 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeApiKey("", "test") }
         assertThrows<ResponseStatusException> { validators.normalizeApiKey("   ", "test") }
     }
-
-    // --- normalizeMarket ---
 
     @Test
     fun `normalizeMarket accepts valid formats`() {
@@ -121,8 +113,6 @@ class RequestValidatorsExtendedTest {
         assertThrows<ResponseStatusException> { validators.normalizeMarket("KRW_BTC") }
         assertThrows<ResponseStatusException> { validators.normalizeMarket("") }
     }
-
-    // --- normalizeMarkets ---
 
     @Test
     fun `normalizeMarkets accepts valid list`() {
@@ -146,8 +136,6 @@ class RequestValidatorsExtendedTest {
         val markets = (1..21).map { "KRW-COIN$it" }
         assertThrows<ResponseStatusException> { validators.normalizeMarkets(markets) }
     }
-
-    // --- normalizeDiscordWebhookUrl ---
 
     @Test
     fun `normalizeDiscordWebhookUrl accepts valid Discord URLs`() {
@@ -188,8 +176,6 @@ class RequestValidatorsExtendedTest {
             validators.normalizeDiscordWebhookUrl("https://discord.com/channels/123")
         }
     }
-
-    // --- sanitizeTradeLimit ---
 
     @Test
     fun `sanitizeTradeLimit clamps values`() {

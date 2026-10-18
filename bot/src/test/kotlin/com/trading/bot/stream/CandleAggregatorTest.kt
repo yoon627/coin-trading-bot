@@ -13,11 +13,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * Aggregation is observed through the MarketDataStore.addCandle sink: every M1
- * ingest emits one aggregated candle per interval, captured here without
- * touching the aggregator's private state.
- */
+/** 집계 결과는 MarketDataStore.addCandle 로 나가는 봉을 캡처해 본다. M1 하나마다 interval 별로 한 봉이 나온다. */
 class CandleAggregatorTest {
 
     private lateinit var store: MarketDataStore
@@ -43,15 +39,15 @@ class CandleAggregatorTest {
 
         val merged = d1.last()
         assertEquals(100.0, merged.openPrice) // 최초 M1 open 보존
-        assertEquals(120.0, merged.highPrice) // max
-        assertEquals(90.0, merged.lowPrice) // min
-        assertEquals(112.0, merged.closePrice) // last
-        assertEquals(6.0, merged.volume) // 합
-        assertEquals(60.0, merged.quoteVolume) // 합
+        assertEquals(120.0, merged.highPrice)
+        assertEquals(90.0, merged.lowPrice)
+        assertEquals(112.0, merged.closePrice)
+        assertEquals(6.0, merged.volume)
+        assertEquals(60.0, merged.quoteVolume)
     }
 
-    // #209 재현: 부팅 seed 의 오늘 D1 을 prime 해 두면 첫 M1 이 그 봉을 이어받아야 한다.
-    // prime 이 없으면 M1 하나로 D1 을 새로 만들어 upsert 하므로 seed 의 시가·고저가 사라지고 재시작 이후 구간만 남는다.
+    // 부팅 seed 의 오늘 D1 을 prime 해 두면 첫 M1 이 그 봉을 이어받아야 한다.
+    // prime 이 없으면 M1 하나로 D1 을 새로 만들어 seed 의 시가·고저가 사라진다.
     @Test
     fun `first M1 of a period merges into the primed seed candle instead of replacing it`() {
         val day = inst("2024-01-01T00:00:00Z")
@@ -75,11 +71,11 @@ class CandleAggregatorTest {
         assertEquals(135.0, second.highPrice, "병합값 위에서 이어서 집계")
         assertEquals(80.0, second.lowPrice)
         assertEquals(55.0, second.volume)
-        // 다른 interval(prime 없음)은 기존대로 M1 로 시작한다.
+        // prime 하지 않은 interval 은 M1 로 시작한다.
         assertEquals(106.0, capturedFor(CandleInterval.H1).first().openPrice)
     }
 
-    // 폴링은 진행 중 분봉을 돌려주고, 다음 라운드(count>1)가 같은 분의 완결본을 다시 보낸다 — 두 번째는 합산이 아니라 대체여야 한다.
+    // 폴링은 진행 중 분봉을 돌려주고 다음 라운드가 같은 분의 완결본을 다시 보내므로, 두 번째는 합산이 아니라 대체다.
     @Test
     fun `re-sent M1 of the same minute replaces its contribution instead of adding`() {
         aggregator.onMinuteCandle(m1("2024-01-01T00:00:00Z", open = 100.0, high = 105.0, low = 99.0, close = 104.0, volume = 1.0, quoteVolume = 10.0))
@@ -100,7 +96,7 @@ class CandleAggregatorTest {
         aggregator.onMinuteCandle(m1("2024-01-01T00:11:00Z", open = 1.0, high = 2.0, low = 1.0, close = 1.5, volume = 1.0))
         aggregator.onMinuteCandle(m1("2024-01-01T00:12:00Z", open = 1.5, high = 9.0, low = 0.5, close = 2.0, volume = 2.0))
         aggregator.onMinuteCandle(m1("2024-01-01T00:13:00Z", open = 2.0, high = 3.0, low = 1.8, close = 2.5, volume = 4.0))
-        // 다음 라운드 꼬리 — 11·12 는 이미 접혔으므로 무시, 13 은 완결본으로 대체, 14 는 새 provisional.
+        // 다음 라운드 꼬리: 11·12 는 이미 접혀 무시하고 13 은 완결본으로 대체하며 14 는 새 provisional 이다.
         aggregator.onMinuteCandle(m1("2024-01-01T00:11:00Z", open = 1.0, high = 2.0, low = 1.0, close = 1.5, volume = 1.0))
         aggregator.onMinuteCandle(m1("2024-01-01T00:12:00Z", open = 1.5, high = 9.0, low = 0.5, close = 2.0, volume = 2.0))
         aggregator.onMinuteCandle(m1("2024-01-01T00:13:00Z", open = 2.0, high = 3.5, low = 1.8, close = 2.6, volume = 5.0))
@@ -131,7 +127,7 @@ class CandleAggregatorTest {
         assertEquals(7.0, m5.getValue(inst("2024-01-02T00:00:00Z")).last().volume)
     }
 
-    // seed 는 prime 시각까지의 완전한 봉이라 그 이전 분의 M1(count>1 꼬리)은 이미 포함돼 있다 — 겹침은 prime 시각의 분 하나로 고정.
+    // seed 는 prime 시각까지의 완전한 봉이라 그 이전 분의 M1 은 이미 들어 있다. 겹치는 것은 prime 시각의 분 하나다.
     @Test
     fun `M1 candles older than the prime minute are ignored so seed overlap stays within one minute`() {
         val day = inst("2024-01-01T00:00:00Z")
@@ -151,8 +147,8 @@ class CandleAggregatorTest {
         assertEquals(106.0, d1.closePrice)
     }
 
-    // 자정 직후 부팅: seed 는 어제·오늘 D1 을 store 에 넣고 오늘만 prime 한다. 첫 라운드 꼬리의 어제 분봉이 상태 없는 어제 period 를
-    // 부분봉으로 새로 만들어 publish 하면 store 의 완전한 어제 D1 이 2분짜리로 덮인다 — 앞부분을 모르는 과거 period 는 publish 하지 않는다.
+    // 자정 직후 부팅: seed 는 어제·오늘 D1 을 넣고 오늘만 prime 한다. 첫 라운드 꼬리의 어제 분봉으로 어제 period 를 새로 만들면
+    // store 의 완전한 어제 D1 이 부분봉으로 덮이므로 앞부분을 모르는 과거 period 는 publish 하지 않는다.
     @Test
     fun `tail candles of a past period without state are ignored instead of overwriting the seeded candle`() {
         val today = inst("2024-01-02T00:00:00Z")
@@ -170,7 +166,7 @@ class CandleAggregatorTest {
         assertEquals(6.0, capturedFor(CandleInterval.D1).last().highPrice)
     }
 
-    // 같은 창인데 오늘 D1 행이 없어 prime 이 스킵된 경우(자정 직후엔 흔하다) — 바닥은 seed 시점에 모든 interval 에 걸린다.
+    // 오늘 D1 행이 없어 prime 을 건너뛰어도 바닥은 seed 시점에 모든 interval 에 걸린다.
     @Test
     fun `startFrom at seed time keeps past periods of every interval from being created by the first round's tail`() {
         aggregator.startFrom(Exchange.UPBIT, MARKET, now = inst("2024-01-02T00:02:30Z"))
@@ -180,7 +176,7 @@ class CandleAggregatorTest {
         aggregator.onMinuteCandle(m1("2024-01-02T00:00:00Z", open = 5.0, high = 6.0, low = 5.0, close = 6.0, volume = 2.0))
         aggregator.onMinuteCandle(m1("2024-01-02T00:02:00Z", open = 6.0, high = 7.0, low = 6.0, close = 7.0, volume = 2.0))
 
-        // W1/MO1 은 2024-01-01(월요일·월초)이 seed 시각의 period 라 제외 — 일 이하 interval 은 어제 period 를 만들지 않는다.
+        // W1/MO1 은 seed 시각(월요일·월초)이 곧 period 시작이라 제외한다. 일 이하 interval 은 어제 period 를 만들지 않는다.
         val subDay = captured.filter { it.interval.minutes <= CandleInterval.D1.minutes }
         assertEquals(emptyList<Instant>(), subDay.map { it.openTime }.filter { it < inst("2024-01-02T00:00:00Z") }, "어제 period 는 publish 하지 않는다")
         val today = capturedFor(CandleInterval.D1).last()
@@ -199,9 +195,8 @@ class CandleAggregatorTest {
 
     @Test
     fun `aligns each interval to its period start`() {
-        // 2024-01-17 = 수요일: interval 별 정렬 경계가 서로 달라(W1 월요일 01-15, MO1 01-01, D1 01-17)
-        // 각 branch 를 독립 게이트한다. D1 정렬이 seed REST D1 openTime(UTC 자정)과 일치해야
-        // MarketDataStore upsert dedup 이 성립 — 과거 D1 오염(f0a0a04) 재발 방지 불변식의 전제.
+        // 수요일이라 interval 별 정렬 경계가 서로 다르다(W1 월요일, MO1 1일, D1 당일).
+        // D1 경계가 seed 의 REST D1 openTime(UTC 자정)과 같아야 store upsert 가 같은 봉으로 합친다.
         aggregator.onMinuteCandle(m1("2024-01-17T15:37:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
 
         assertEquals(inst("2024-01-17T15:35:00Z"), openTimeOf(CandleInterval.M5))
@@ -232,9 +227,9 @@ class CandleAggregatorTest {
     @Test
     fun `evicts D1 periods older than 3 intervals and does not republish a re-fed evicted period`() {
         aggregator.onMinuteCandle(m1("2024-01-01T00:00:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 5.0))
-        // Jan 5 진입 → cutoff=Jan2, Jan1 D1 key 축출.
+        // 5일이 들어오면 cutoff 가 2일이 돼 1일 D1 키가 빠진다.
         aggregator.onMinuteCandle(m1("2024-01-05T00:00:00Z", open = 1.0, high = 1.0, low = 1.0, close = 1.0, volume = 1.0))
-        // Jan1 재유입(무거래 마켓의 긴 꼬리) — 앞부분을 잃은 과거 period 라 부분봉으로 store 를 덮지 않는다(cleanup 없으면 5+7=12 로 publish).
+        // 무거래 마켓의 긴 꼬리로 1일이 다시 와도 앞부분을 잃은 과거 period 라 store 를 덮지 않는다.
         aggregator.onMinuteCandle(m1("2024-01-01T06:00:00Z", open = 9.0, high = 9.0, low = 9.0, close = 9.0, volume = 7.0))
 
         val jan1 = capturedFor(CandleInterval.D1).filter { it.openTime == inst("2024-01-01T00:00:00Z") }

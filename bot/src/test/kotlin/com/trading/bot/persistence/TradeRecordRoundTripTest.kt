@@ -20,9 +20,8 @@ import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 
 /**
- * 실제 Postgres 로 `trade_records.order_amount` 매핑을 검증한다. mock 기반 `TradeRecordRepositoryTest` 는
- * `save()` 가 필드를 실었는지만 보고, 컬럼명 오타나 타입 불일치는 DB 에서만 드러난다.
- * 접속·skip·CI 강제 규약은 [TradingStateRoundTripTest] 와 같다.
+ * 실제 Postgres 로 `trade_records.order_amount` 매핑을 본다. 컬럼명 오타나 타입 불일치는 DB 에서만 드러난다.
+ * 접속·skip 규약은 [TradingStateRoundTripTest] 와 같다.
  */
 @DataR2dbcTest
 class TradeRecordRoundTripTest {
@@ -45,7 +44,7 @@ class TradeRecordRoundTripTest {
 
         private val available = host != null
 
-        // 실행마다 테스트 사용자 이름을 구분하는 접미사 길이 — 다른 실행의 행을 지우지 않게 한다.
+        // 실행마다 테스트 사용자 이름에 붙이는 접미사 길이. 다른 실행의 행을 지우지 않게 한다.
         private const val RUN_ID_LENGTH = 8
 
         @JvmStatic

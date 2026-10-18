@@ -27,8 +27,7 @@ subprojects {
         compilerOptions {
             freeCompilerArgs.set(listOf("-Xjsr305=strict"))
         }
-        // 기본(Gradle 데몬 상속 512m)으로는 bot 테스트 소스 컴파일이 CI 에서 힙 부족으로 죽는다.
-        // gradle.properties 는 gitignore 라 여기서 정한다 — 로컬·CI·Docker 빌드가 같은 값을 쓴다.
+        // 기본 힙으로는 bot 테스트 컴파일이 메모리 부족으로 죽는다. gradle.properties 는 커밋하지 않아 여기서 정한다.
         kotlinDaemonJvmArguments.set(listOf("-Xmx1536m"))
     }
 

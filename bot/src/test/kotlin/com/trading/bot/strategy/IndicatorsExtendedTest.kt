@@ -7,8 +7,6 @@ import org.junit.jupiter.api.Test
 
 class IndicatorsExtendedTest {
 
-    // --- calculateRsi edge cases ---
-
     @Test
     fun `calculateRsi returns 50 for insufficient data`() {
         val candles = (0..5).map { Candle(tradePrice = 100.0) }
@@ -17,7 +15,7 @@ class IndicatorsExtendedTest {
 
     @Test
     fun `calculateRsi returns 100 for all gains`() {
-        // All prices increasing -> RSI close to 100
+        // candles[0] 이 최신이라 시간순으로 계속 오른다.
         val candles = (0..20).map { i -> Candle(tradePrice = 200.0 - i * 5.0) }
         val rsi = Indicators.calculateRsi(candles, 14)
         assertTrue(rsi > 90, "RSI should be high for monotonic increase: $rsi")
@@ -25,7 +23,7 @@ class IndicatorsExtendedTest {
 
     @Test
     fun `calculateRsi returns near 0 for all losses`() {
-        // All prices decreasing -> RSI close to 0
+        // 시간순으로 계속 내린다.
         val candles = (0..20).map { i -> Candle(tradePrice = 100.0 + i * 5.0) }
         val rsi = Indicators.calculateRsi(candles, 14)
         assertTrue(rsi < 10, "RSI should be low for monotonic decrease: $rsi")
@@ -35,12 +33,9 @@ class IndicatorsExtendedTest {
     fun `calculateRsi returns around 50 for flat prices`() {
         val candles = (0..20).map { Candle(tradePrice = 100.0) }
         val rsi = Indicators.calculateRsi(candles, 14)
-        // Flat prices = no gains, no losses -> avgLoss = 0 -> RSI = 100 technically
-        // But if all changes are 0, avgGain and avgLoss both = 0
-        assertTrue(rsi >= 50.0) // division by zero returns 100 in impl
+        // 변화가 없으면 avgLoss 가 0 이라 구현은 100 을 돌려준다.
+        assertTrue(rsi >= 50.0)
     }
-
-    // --- calculateMa edge cases ---
 
     @Test
     fun `calculateMa returns 0 for insufficient data`() {
@@ -66,16 +61,13 @@ class IndicatorsExtendedTest {
             Candle(tradePrice = 100.0),
             Candle(tradePrice = 200.0),
             Candle(tradePrice = 300.0),
-            Candle(tradePrice = 999.0), // not included in MA(3)
+            Candle(tradePrice = 999.0), // MA(3) 밖
         )
         assertEquals(200.0, Indicators.calculateMa(candles, 3))
     }
 
-    // --- isMaUptrend ---
-
     @Test
     fun `isMaUptrend returns true for uptrending prices`() {
-        // More recent candles have higher prices -> short MA > long MA
         val candles = (0..25).map { i -> Candle(tradePrice = 200.0 - i * 3.0) }
         assertTrue(Indicators.isMaUptrend(candles))
     }
@@ -85,8 +77,6 @@ class IndicatorsExtendedTest {
         val candles = (0..25).map { i -> Candle(tradePrice = 100.0 + i * 3.0) }
         assertFalse(Indicators.isMaUptrend(candles))
     }
-
-    // --- calculateTargetPrice ---
 
     @Test
     fun `calculateTargetPrice with no range returns opening price`() {

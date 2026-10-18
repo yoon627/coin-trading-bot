@@ -32,14 +32,14 @@ class AuthController(
     private val userSecretsService: UserSecretsService,
     private val environment: Environment,
 ) {
-    // 계정 수 확인부터 저장까지 한 구간이어야 동시 두 요청이 둘 다 0 을 보지 못한다. 앱 한 인스턴스 기준(운영 compose app 1개).
+    // 동시 요청 둘이 모두 계정 0 개를 보고 가입하지 않도록 확인부터 저장까지 묶는다. 단일 인스턴스 기준이다.
     private val registrationLock = Mutex()
 
-    /** 계정이 하나도 없는 서버에서 첫 계정을 만들 때만 받는다 — 이 봇은 한 명만 쓰고 인터넷에 열려 있다. */
+    /** 한 명만 쓰는 봇이 인터넷에 열려 있으므로 계정이 없을 때 첫 계정만 받는다. */
     @PostMapping("/register")
     suspend fun register(@RequestBody req: AuthRequest, request: ServerHttpRequest, response: ServerHttpResponse): AuthResponse {
         val user = registrationLock.withLock {
-            // 입력 검증보다 먼저 닫는다 — 닫힌 서버가 사용자명 규칙을 알려 주거나 해시 비용을 쓸 이유가 없다.
+            // 닫힌 서버가 입력 규칙을 알려 주거나 해시 비용을 쓰지 않게 검증보다 먼저 막는다.
             if (userRepository.count().awaitSingle() > 0) {
                 throw ResponseStatusException(HttpStatus.FORBIDDEN, "Registration is closed")
             }
@@ -108,16 +108,8 @@ class AuthController(
         )
     }
 
-    // In production we always emit Secure cookies so the JWT is never sent over
-    // plain HTTP, even when the request is observed as scheme=http (e.g. behind
-    // a reverse proxy that drops X-Forwarded-Proto, or a misrouted direct
-    // connection). Local prod-mode HTTP testing is unsupported as a result —
-    // use the dev profile for that. In non-prod profiles we still derive Secure
-    // from the request scheme so HTTP localhost works for development.
-    //
-    // Escape hatch: APP_AUTH_COOKIE_FORCE_INSECURE=true forces non-Secure cookies
-    // even under prod. Use ONLY for short-lived HTTP-only test boxes (e.g. EC2 8080
-    // before TLS is set up) — JWT travels in plaintext while this is on.
+    // prod 에서는 프록시가 X-Forwarded-Proto 를 빠뜨려도 JWT 가 평문으로 나가지 않도록 항상 Secure 로 둔다.
+    // cookie-force-insecure 는 TLS 없는 임시 테스트 서버용이며 켜 두는 동안 JWT 가 평문으로 오간다.
     private fun shouldMarkSecure(request: ServerHttpRequest): Boolean {
         if (environment.getProperty("app.auth.cookie-force-insecure", "false").toBoolean()) return false
         if (environment.acceptsProfiles(Profiles.of("prod"))) return true

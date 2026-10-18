@@ -27,16 +27,12 @@ class TradeExecutionService(
     private val log = LoggerFactory.getLogger(javaClass)
 
     /**
-     * 감사 기록 저장만 수행 — **호출자가 연 트랜잭션에 참여**한다(자체 트랜잭션을 열지 않음).
-     *
-     * 엔진 체결 경로는 `trading_states` pending 해소와 이 저장을 한 트랜잭션으로 묶어야 한다(#52).
-     * 따로 커밋하면 감사 저장이 실패했을 때 재시도 근거(pending)가 이미 사라져 기록이 영구 유실된다.
-     *
-     * @return 실제로 기록했으면 true, 이미 기록된 주문이라 건너뛰었으면 false(멱등).
+     * 거래 기록을 저장한다. 트랜잭션을 직접 열지 않고 호출자의 트랜잭션에 참여한다.
+     * 이미 기록된 주문이면 건너뛰고 false 를 돌려준다.
      */
     internal suspend fun saveAudit(record: TradeRecord): Boolean {
         val userId = record.userId ?: 0
-        // #20 멱등: 재시작 후 같은 주문 uuid 를 다시 reconcile 해도 이중 기록/알림하지 않게 skip.
+        // 재시작 뒤 같은 주문을 다시 reconcile 해도 이중으로 기록·알림하지 않는다.
         val orderId = record.exchangeOrderId
         if (orderId != null &&
             tradeExecutionRepository.existsByUserIdAndExchangeOrderId(userId, orderId).awaitSingle()
@@ -54,16 +50,12 @@ class TradeExecutionService(
                 price = record.price,
                 volume = record.volume,
                 totalAmount = record.totalAmount,
-                // 수수료 출처는 경로가 정한다(#133·#148·#105) — 엔진 매수와 모든 매도는 terminal 응답에 paid_fee 가
-                // 있으면 실측, 매도는 없으면 추정, 매수 잔고복원은 미기록(과거 수동 매수 행은 추정). 한 행만 보고
-                // 실측인지 추정인지 구분할 마커는 없다.
+                // 저장된 행만 보고는 실측 수수료인지 추정치인지 구분할 수 없다.
                 fee = when (val basis = record.fee) {
-                    // 파싱 단계에서 이미 거르지만 여기서 한 번 더 본다 — `Measured` 는 public 생성자라
-                    // 다른 경로가 생기면 검증을 건너뛸 수 있고, NaN 이 컬럼에 들어가면 이후 SUM(fee) 이
-                    // 영구히 NaN 이 된다(되돌릴 수 없다). DB 에 닿는 마지막 지점이 방어할 자리다.
+                    // NaN 이 한 번 들어가면 SUM(fee) 가 계속 NaN 이 되므로 DB 직전에서 다시 거른다.
                     is FeeBasis.Measured -> basis.amount.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
                     FeeBasis.Estimate -> TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
-                    // 0 = 미기록. V21 이 세운 규약이라 이 값을 새로 정의하지 않는다.
+                    // 0 은 미기록을 뜻한다(V21 스키마 규약).
                     FeeBasis.Unrecorded -> 0.0
                 },
                 pnlPercent = record.pnlPercent,
@@ -76,10 +68,7 @@ class TradeExecutionService(
         return true
     }
 
-    /**
-     * 커밋 후 알림. 잔고 조회·Discord 발송은 외부 IO 라 트랜잭션 밖에서 수행한다.
-     * Discord 발송 예외는 호출자에게 전파한다 — PositionManager 가 이미 적용한 메모리 전이를 유지한 채 격리한다.
-     */
+    /** 커밋 뒤 트랜잭션 밖에서 보내는 체결 알림. Discord 발송 예외는 호출자가 처리한다. */
     suspend fun notifyTrade(
         record: TradeRecord,
         client: UpbitClient,
@@ -97,15 +86,9 @@ class TradeExecutionService(
     }
 
     /**
-     * 엔진 체결 경로용 — **상태 전이 저장과 감사 기록을 한 트랜잭션으로 커밋**한다(#52).
-     *
-     * 이 원자화가 없으면 pending 해소가 먼저 커밋돼, 감사 저장이 transient 실패했을 때 재시도 근거가
-     * 사라진 채 기록만 영구 유실된다(현금흐름은 발생했는데 거래·손익 기록이 없다).
-     *
-     * 실패 시 예외를 그대로 올린다 — 호출자는 **메모리 상태 전이를 적용하지 않아야** 다음 tick reconcile 이
-     * 재시도할 수 있다. 반환값은 새 audit 행을 기록했는지이며, 알림은 호출자가 메모리 전이를 적용한 뒤 실행한다.
-     *
-     * @param persistState 트랜잭션 안에서 실행될 상태 저장(전이가 반영된 사본을 upsert)
+     * 상태 저장과 거래 기록을 한 트랜잭션으로 커밋한다.
+     * 따로 커밋하면 기록 저장이 실패했을 때 pending 이 이미 지워져 그 거래 기록을 잃는다.
+     * 실패하면 예외를 그대로 던지고, 호출자는 메모리 상태를 바꾸지 않아야 다음 tick 에 다시 시도된다.
      */
     suspend fun commitFill(
         persistState: suspend () -> Unit,
