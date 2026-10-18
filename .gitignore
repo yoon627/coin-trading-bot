@@ -61,22 +61,6 @@ Thumbs.db
 *.log
 hs_err_pid*
 replay_pid*
-# .claude/ 는 머신 로컬 작업 상태(plans·tasks·로컬 설정)라 추적하지 않는다.
-# .claude/* (디렉토리 자체가 아니라 내용) 로 무시해야 아래 negation 이 동작한다.
-.claude/*
-# 예외: 공유 훅 설정 — 커밋 전 민감 파일 검사(scripts/git-hooks/check-staged-sensitive.sh)를 모든 클론에서 돌린다.
-!.claude/settings.json
 
 ### Worktrees ###
 .worktrees/
-
-### LLM Wiki ###
-# 외부 원문 보관소. 페이지(wiki/pages/)는 추적하되 원문 덤프는 추적하지 않는다.
-# 주의: gitignored 라 worktree 삭제 시 함께 사라진다 — 재취득 가능한 원문만 둘 것 (wiki/WIKI.md §5).
-wiki/raw/
-
-### 로컬 에이전트 도구 상태 ###
-# 머신마다 다른 로컬 설정·캐시라 공유하지 않는다. 프로젝트 지침(AGENTS.md·CLAUDE.md)은
-# 추적 대상이지만, 아래는 도구가 생성하는 로컬 상태다.
-.serena/
-.codex/

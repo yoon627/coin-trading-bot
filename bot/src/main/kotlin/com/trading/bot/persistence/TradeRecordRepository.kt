@@ -4,58 +4,15 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.persistence.entity.TradeRecordEntity
 import kotlinx.coroutines.reactor.awaitSingle
 import org.springframework.data.domain.Sort
-import org.springframework.data.r2dbc.repository.Query
 import org.springframework.data.r2dbc.repository.R2dbcRepository
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
-/**
- * 전략별 성과 집계 행(DB 측 GROUP BY 결과). 전략 미상 거래는 strategy=null 그룹으로 온다.
- *
- * [totalAmount] 는 **실체결 대금(`order_amount`)이 있는 행의 합**이다(2026-09-14, #146). 이전엔 `total_amount`
- * 의 합이었는데 엔진 BUY 행의 그 값은 포지션 원가 스냅샷이라 매수가 거듭될수록 앞선 매수가 되풀이 합산됐다.
- * 미상 행(V26 이전·주문 응답 없는 경로·수동)은 합에서 빠지고 [amountUnknownTrades] 로 센다 — 합계만 보면
- * "축소"로 오독되므로 API 는 둘을 같이 내리고 SPA 전략 성과 카드도 둘을 함께 그린다. 둘 다 BUY/SELL 을 합친 값이다.
- */
-data class StrategyPerformance(
-    val strategy: String? = null,
-    val totalTrades: Long = 0,
-    val sellTrades: Long = 0,
-    val winTrades: Long = 0,
-    val totalPnlPct: Double = 0.0,
-    val totalPnlAmount: Double = 0.0,
-    val totalAmount: Double = 0.0,
-    val amountUnknownTrades: Long = 0,
-)
-
 interface TradeRecordR2dbcRepository : R2dbcRepository<TradeRecordEntity, Long> {
     fun findByTicker(ticker: String, sort: Sort): Flux<TradeRecordEntity>
     fun findByUserId(userId: Long, sort: Sort): Flux<TradeRecordEntity>
     fun countByUserId(userId: Long): Mono<Long>
-
-    // 전략별 성과. 거래건수·거래대금은 BUY+SELL, 승률·손익은 SELL 만 센다(매수는 실현 손익이 없다).
-    // 페이지를 메모리에 올려 groupBy 하면 원화 손익이 조용히 잘리므로 DB 에서 전 구간을 집계한다.
-    // ORDER BY 는 필수 — GROUP BY 는 순서를 보장하지 않는데 SPA 가 상위 N 개만 잘라 그린다.
-    // 정렬 키를 total_pnl_pct 로 두는 것은 SPA 가 그 값을 표시하기 때문이다. 금액으로 정렬하면
-    // 화면에 보이는 숫자와 순위 기준이 어긋나고, 귀속이 비어 pnl_amount 가 0 인 그룹이 손실 전략보다 위로 온다.
-    @Query(
-        """
-        SELECT strategy,
-               COUNT(*) AS total_trades,
-               COUNT(*) FILTER (WHERE side = 'SELL' AND pnl_percent IS NOT NULL) AS sell_trades,
-               COUNT(*) FILTER (WHERE side = 'SELL' AND pnl_percent > 0) AS win_trades,
-               COALESCE(SUM(pnl_percent) FILTER (WHERE side = 'SELL'), 0) AS total_pnl_pct,
-               COALESCE(SUM(pnl_amount)  FILTER (WHERE side = 'SELL'), 0) AS total_pnl_amount,
-               COALESCE(SUM(order_amount), 0) AS total_amount,
-               COUNT(*) FILTER (WHERE order_amount IS NULL) AS amount_unknown_trades
-        FROM trade_records
-        WHERE user_id = :userId
-        GROUP BY strategy
-        ORDER BY total_pnl_pct DESC, total_trades DESC
-        """
-    )
-    fun aggregateByStrategy(userId: Long): Flux<StrategyPerformance>
 }
 
 @Repository
@@ -108,7 +65,4 @@ class TradeRecordRepository(
     suspend fun countByUserId(userId: Long): Long {
         return r2dbcRepository.countByUserId(userId).awaitSingle()
     }
-
-    suspend fun aggregateByStrategy(userId: Long): List<StrategyPerformance> =
-        r2dbcRepository.aggregateByStrategy(userId).collectList().awaitSingle()
 }

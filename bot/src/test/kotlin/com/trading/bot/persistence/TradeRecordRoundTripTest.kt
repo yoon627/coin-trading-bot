@@ -20,13 +20,12 @@ import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 
 /**
- * 실제 Postgres 로 V26 `trade_records.order_amount` 매핑과 `aggregateByStrategy` 의 집계 SQL 을 검증한다(#146).
- *
- * mock 기반 `TradeRecordRepositoryTest` 는 `save()` 가 필드를 실었는지만 본다 — 컬럼명 오타·타입 불일치·
- * `SUM`/`FILTER` 의미는 DB 에서만 드러난다. 접속·skip·CI 강제 규약은 [TradingStateRoundTripTest] 와 같다.
+ * 실제 Postgres 로 `trade_records.order_amount` 매핑을 검증한다. mock 기반 `TradeRecordRepositoryTest` 는
+ * `save()` 가 필드를 실었는지만 보고, 컬럼명 오타나 타입 불일치는 DB 에서만 드러난다.
+ * 접속·skip·CI 강제 규약은 [TradingStateRoundTripTest] 와 같다.
  */
 @DataR2dbcTest
-class TradeRecordAggregateRoundTripTest {
+class TradeRecordRoundTripTest {
 
     @Autowired
     private lateinit var r2dbc: TradeRecordR2dbcRepository
@@ -45,6 +44,9 @@ class TradeRecordAggregateRoundTripTest {
         private val required = System.getenv("DB_TESTS_REQUIRED")?.toBoolean() ?: false
 
         private val available = host != null
+
+        // 실행마다 테스트 사용자 이름을 구분하는 접미사 길이 — 다른 실행의 행을 지우지 않게 한다.
+        private const val RUN_ID_LENGTH = 8
 
         @JvmStatic
         @BeforeAll
@@ -71,7 +73,7 @@ class TradeRecordAggregateRoundTripTest {
         }
     }
 
-    private val runId = UUID.randomUUID().toString().take(8)
+    private val runId = UUID.randomUUID().toString().take(RUN_ID_LENGTH)
 
     @AfterEach
     fun cleanUp() = runTest {
@@ -90,11 +92,11 @@ class TradeRecordAggregateRoundTripTest {
             .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
             .one().awaitSingle()
 
-    private fun record(userId: Long, side: TradeSide, totalAmount: Double, orderAmount: Double?, strategy: String = "combined") =
+    private fun record(userId: Long, side: TradeSide, totalAmount: Double, orderAmount: Double?) =
         TradeRecord(
             ticker = "KRW-BTC", side = side, price = 50_000_000.0, volume = 0.02, totalAmount = totalAmount,
             pnlPercent = if (side == TradeSide.SELL) 1.0 else null, pnlAmount = if (side == TradeSide.SELL) 500.0 else null,
-            strategy = strategy, userId = userId, fee = FeeBasis.Estimate, orderAmount = orderAmount,
+            strategy = "combined", userId = userId, fee = FeeBasis.Estimate, orderAmount = orderAmount,
         )
 
     @Test
@@ -107,28 +109,5 @@ class TradeRecordAggregateRoundTripTest {
         val rows = repository.findByUserId(userId).associateBy { it.id }
         assertThat(rows.getValue(known.id!!).orderAmount).isCloseTo(50_000.0, within(1e-9))
         assertThat(rows.getValue(unknown.id!!).orderAmount).isNull()
-    }
-
-    /**
-     * 집계의 `total_amount` 는 실체결 대금이 있는 행만 더하고, 미상 행은 건수로 따로 센다 — 엔진 BUY 스냅샷을 더하던
-     * 부풀림(#146)이 사라지는 대신 축소로 오독되지 않게 두 값을 같이 낸다.
-     */
-    @Test
-    fun `aggregate sums only measured order amounts and counts the unknown rows`() = runTest {
-        val userId = insertUser("aggregate")
-        repository.save(record(userId, TradeSide.BUY, totalAmount = 1_000_000.0, orderAmount = null)) // V26 이전 스냅샷 행
-        repository.save(record(userId, TradeSide.BUY, totalAmount = 1_050_000.0, orderAmount = 50_000.0))
-        repository.save(record(userId, TradeSide.SELL, totalAmount = 1_100_000.0, orderAmount = 1_098_000.0))
-        repository.save(record(userId, TradeSide.BUY, totalAmount = 30_000.0, orderAmount = null, strategy = "manual"))
-
-        val rows = repository.aggregateByStrategy(userId).associateBy { it.strategy }
-
-        val combined = rows.getValue("combined")
-        assertThat(combined.totalTrades).isEqualTo(3)
-        assertThat(combined.totalAmount).isCloseTo(1_148_000.0, within(1e-6))
-        assertThat(combined.amountUnknownTrades).isEqualTo(1)
-        val manual = rows.getValue("manual")
-        assertThat(manual.totalAmount).isEqualTo(0.0)
-        assertThat(manual.amountUnknownTrades).isEqualTo(1)
     }
 }

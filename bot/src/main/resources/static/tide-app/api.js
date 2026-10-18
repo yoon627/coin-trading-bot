@@ -58,7 +58,6 @@ const TideAPI = {
   roundTrips: () => TideAPI._fetch('/api/trades/roundtrips'),
 
   // Strategy
-  performance: () => TideAPI._fetch('/api/strategies/performance'),
 
   // Settings
   // Same SNAKE_CASE concern as register — UpbitKeysRequest.accessKey on the
