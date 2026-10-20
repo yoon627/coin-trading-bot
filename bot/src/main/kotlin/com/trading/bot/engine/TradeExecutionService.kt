@@ -1,9 +1,9 @@
 package com.trading.bot.engine
 
-import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradePnl
 import com.trading.bot.domain.TradeRecord
+import com.trading.bot.exchange.ExchangeClient
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradeExecutionRepository
@@ -71,7 +71,7 @@ class TradeExecutionService(
     /** 커밋 뒤 트랜잭션 밖에서 보내는 체결 알림. Discord 발송 예외는 호출자가 처리한다. */
     suspend fun notifyTrade(
         record: TradeRecord,
-        client: UpbitClient,
+        client: ExchangeClient,
         username: String?,
         discordWebhookUrl: String?,
     ) {

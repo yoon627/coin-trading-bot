@@ -1,8 +1,12 @@
 package com.trading.bot.engine
 
-import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
+import com.trading.bot.exchange.ExchangeClient
+import com.trading.bot.exchange.MarketRules
+import com.trading.bot.exchange.TradingCalendar
+import com.trading.bot.exchange.UpbitMarketRules
+import com.trading.bot.exchange.UpbitTradingCalendar
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
@@ -32,7 +36,7 @@ import org.slf4j.LoggerFactory
 import kotlin.math.max
 
 class TradingEngine(
-    private val upbitClient: UpbitClient,
+    private val upbitClient: ExchangeClient,
     private val positionManager: PositionManager,
     private val dailyResetManager: DailyResetManager,
     private val strategy: TradingStrategy,
@@ -46,6 +50,8 @@ class TradingEngine(
     private val dailyCandleCache: DailyCandleCache? = null,
     private val shadowExitObserver: ShadowExitObserver? = null,
     private val clock: Clock = Clock.systemUTC(),
+    private val calendar: TradingCalendar = UpbitTradingCalendar,
+    private val rules: MarketRules = UpbitMarketRules,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -287,6 +293,8 @@ class TradingEngine(
 
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
+        // 장외에도 미해소 주문은 확정해야 다음 세션까지 결과가 밀리지 않는다.
+        if (!calendar.isSessionOpen(clock.instant()) && !state.hasPendingOrder()) return
         processTicker(ticker, state, strategy)
     }
 
@@ -334,6 +342,7 @@ class TradingEngine(
                 if (state.hasPendingSell()) return
             }
 
+            if (!calendar.isSessionOpen(clock.instant())) return
             runSwing(ticker, state, strategy, currentPrice)
         } catch (e: CancellationException) {
             throw e
@@ -344,7 +353,7 @@ class TradingEngine(
 
     private suspend fun runSwing(ticker: String, state: TradingState, strategy: TradingStrategy, currentPrice: Double) {
         // 최소 주문 금액 미만 보유(dust)도 청산 평가는 한다. 기록된 수량이 낡았을 수 있어 실제로는 팔 수 있다.
-        val dust = state.isDustAt(currentPrice)
+        val dust = rules.isDust(state, currentPrice)
         if (state.position) {
             val reason = decideSell(state, currentPrice)
             // decideSell 이 peak 을 갱신한 뒤에 관측해야 같은 tick 을 본다.

@@ -142,8 +142,16 @@ data class TradingState(
 
     /**
      * [replace] 는 거래소 실잔고를 그대로 반영할 때 쓴다. syncPosition 이 이미 채운 포지션에 평균을 내 이중계상되지 않게 한다.
+     * [tradingDate] 는 buyDate·boughtDate 에 쓰는 [now] 의 거래일이다.
      */
-    fun markBought(price: Double, volume: Double, strategy: String? = null, replace: Boolean = false, now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
+    fun markBought(
+        price: Double,
+        volume: Double,
+        strategy: String? = null,
+        replace: Boolean = false,
+        now: LocalDateTime = LocalDateTime.now(TradingDay.KST),
+        tradingDate: LocalDate = TradingDay.of(now),
+    ) {
         // 기존 포지션의 연장이면 진입 메타를 유지한다. 신규 진입이 남아 있던 옛 값을 물려받으면
         // 곧바로 보유일 초과나 옛 고점 기준 트레일링으로 청산된다.
         val resuming = position
@@ -157,13 +165,13 @@ data class TradingState(
             position = true
             avgBuyPrice = price
             holdVolume = volume
-            buyDate = if (resuming) buyDate ?: TradingDay.of(now) else TradingDay.of(now)
+            buyDate = if (resuming) buyDate ?: tradingDate else tradingDate
             entryStrategy = if (resuming) entryStrategy ?: strategy else strategy
             if (!resuming) exitParams = null // 진입 시점 스냅샷은 호출부가 다시 찍는다
         }
         // 당일 1회 진입 게이트. resetDaily 에서만 푼다.
         boughtToday = true
-        boughtDate = TradingDay.of(now)
+        boughtDate = tradingDate
         // 신규 진입이 옛 고점을 물려받으면 첫 tick 부터 트레일링이 걸린다.
         peakPrice = if (resuming) max(peakPrice, price) else price
         lastTradeTime = now

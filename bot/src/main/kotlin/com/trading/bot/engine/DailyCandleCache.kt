@@ -1,6 +1,6 @@
 package com.trading.bot.engine
 
-import com.trading.bot.client.UpbitClient
+import com.trading.bot.exchange.ExchangeClient
 import com.trading.common.domain.Candle
 import java.time.Clock
 import java.util.concurrent.ConcurrentHashMap
@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service
  */
 @Service
 class DailyCandleCache(
-    @Qualifier("publicUpbitClient") private val client: UpbitClient,
+    @Qualifier("publicUpbitClient") private val client: ExchangeClient,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private class Entry(val fetchedAtMs: Long, val requested: Int, val candles: List<Candle>)

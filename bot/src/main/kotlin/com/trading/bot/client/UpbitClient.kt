@@ -1,25 +1,15 @@
 package com.trading.bot.client
 
-import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
-import com.trading.bot.domain.OrderRequest
-import com.trading.bot.domain.Ticker
+import com.trading.bot.exchange.ExchangeClient
+import com.trading.bot.exchange.FillPollPolicy
 import com.trading.common.domain.Candle
 import java.util.UUID
 import kotlinx.coroutines.delay
 
-interface UpbitClient {
-    suspend fun getAccounts(): List<Account>
-    suspend fun getDayCandles(market: String, count: Int = 30): List<Candle>
+/** identifier 에 특수문자가 있으면 JWT 서명이 어긋난다. [getOrderByIdentifier] 는 404 order_not_found 일 때만 null 이다. */
+interface UpbitClient : ExchangeClient {
     suspend fun getMinuteCandles(market: String, unit: Int = 1, count: Int = 200): List<Candle>
-    suspend fun getTicker(markets: String): List<Ticker>
-    suspend fun placeOrder(request: OrderRequest): Order
-    suspend fun getOrder(uuid: String): Order
-    /**
-     * 거래소가 identifier 를 모르면(404 order_not_found) null, 그 밖의 오류는 예외다.
-     * 둘을 섞으면 조회 실패를 미접수로 잘못 확정한다. identifier 에 특수문자가 있으면 JWT 서명이 어긋난다.
-     */
-    suspend fun getOrderByIdentifier(identifier: String): Order?
     suspend fun cancelOrder(uuid: String): Order
 }
 
@@ -27,13 +17,13 @@ const val FILL_POLL_ATTEMPTS = 10
 const val FILL_POLL_DELAY_MS = 300L
 
 /** 체결이 끝나면 바로, 아니면 마지막 조회 결과를 돌려준다. 멤버로 두면 strict mock 이 깨져 확장 함수로 둔다. */
-suspend fun UpbitClient.awaitFill(uuid: String): Order? {
+suspend fun ExchangeClient.awaitFill(uuid: String, policy: FillPollPolicy = FillPollPolicy.UPBIT): Order? {
     if (uuid.isBlank()) return null
     var last: Order? = null
-    repeat(FILL_POLL_ATTEMPTS) { attempt ->
+    repeat(policy.attempts) { attempt ->
         last = getOrder(uuid)
         if (last?.isTerminal() == true) return last
-        if (attempt < FILL_POLL_ATTEMPTS - 1) delay(FILL_POLL_DELAY_MS)
+        if (attempt < policy.attempts - 1) delay(policy.delayMs)
     }
     return last
 }
