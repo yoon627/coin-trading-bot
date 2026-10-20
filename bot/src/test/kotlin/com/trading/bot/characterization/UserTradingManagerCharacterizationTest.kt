@@ -31,6 +31,7 @@ import io.mockk.spyk
 import io.mockk.verify
 import java.time.Clock
 import java.time.LocalDateTime
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
@@ -312,9 +313,10 @@ class UserTradingManagerCharacterizationTest {
             coVerify(exactly = 1) {
                 tradeExecutionService.commitFill(any(), match { it.exchangeOrderId == "u-1" && it.side == TradeSide.BUY && it.userId == 1L })
             }
-            val requests = listOf(server.takeRequest(), server.takeRequest())
-            assertEquals(listOf("/v1/order?uuid=u-1", "/v1/accounts"), requests.map { it.path })
-            requests.forEach { assertEquals("decrypted-access", accessKeyClaim(it, secret)) }
+            // 요청이 덜 나가면 무한 대기 대신 실패하도록 기다리는 시간을 제한한다.
+            val requests = List(2) { server.takeRequest(5, TimeUnit.SECONDS) }
+            assertEquals(listOf("/v1/order?uuid=u-1", "/v1/accounts"), requests.map { it?.path })
+            requests.forEach { assertEquals("decrypted-access", accessKeyClaim(it!!, secret)) }
         } finally {
             server.shutdown()
         }
