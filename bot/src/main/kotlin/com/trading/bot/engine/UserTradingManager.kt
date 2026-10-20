@@ -1,11 +1,10 @@
 package com.trading.bot.engine
 
-import com.trading.bot.client.UpbitAuthProvider
 import com.trading.bot.client.UpbitClient
-import com.trading.bot.client.UpbitClientImpl
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
+import com.trading.bot.exchange.ExchangeClient
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
@@ -64,8 +63,12 @@ class UserTradingManager(
     private val shadowExitProperties: ShadowExitProperties = ShadowExitProperties(),
     private val shadowExitObservationRepository: ShadowExitObservationRepository? = null,
     private val exitParamsDeclarationCheck: ExitParamsDeclarationCheck? = null,
+    runtime: ExchangeRuntime? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
+    private val runtime: ExchangeRuntime = runtime ?: upbitRuntime
+    private val exchangeKey: String = this.runtime.exchange.name
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
     // 엔진 등록과 start() 사이에 stop 이 끼지 않도록 사용자별로 start/stop/reload 를 직렬화한다.
     private val userLocks = ConcurrentHashMap<Long, Mutex>()
@@ -82,7 +85,7 @@ class UserTradingManager(
     @EventListener(ApplicationReadyEvent::class)
     @Order(Ordered.LOWEST_PRECEDENCE)
     fun restoreOnStartup() {
-        if (!tradingProperties.autoStart) {
+        if (!runtime.profile.autoStart) {
             log.info("Auto-start disabled. Skipping bot restoration.")
             return
         }
@@ -95,8 +98,7 @@ class UserTradingManager(
 
     override fun isRunning(): Boolean = lifecycleRunning
 
-    // 웹 서버의 graceful shutdown(phase 가 0 보다 크다)이 진행 중 요청을 끝낸 뒤에 엔진을 멈춘다.
-    override fun getPhase(): Int = 0
+    override fun getPhase(): Int = runtime.lifecyclePhase
 
     /**
      * 복원을 취소하고 모든 엔진을 동시에 멈춘 뒤 저장하지 못한 pending·고점을 다시 저장한다.
@@ -105,8 +107,9 @@ class UserTradingManager(
     override fun stop() {
         lifecycleRunning = false
         shuttingDown = true
+        val budgetMs = runtime.stopBudget.toMillis()
         runBlocking {
-            val completed = withTimeoutOrNull(SHUTDOWN_TIMEOUT_MS) {
+            val completed = withTimeoutOrNull(budgetMs) {
                 restoreJob?.cancelAndJoin()
                 // 정지 저장이 걸려도 엔진 정지의 시간 제한을 먹지 않게 동시에 돌린다.
                 val finalStopSaves = async { saveUnpersistedStops() }
@@ -129,7 +132,7 @@ class UserTradingManager(
                 true
             }
             if (completed == null) {
-                log.warn("Graceful shutdown: {}ms 예산 초과 — 일부 엔진 미완 정지(기록된 pending 은 재시작 후 reconcile, 기록하지 못한 매도는 유실될 수 있다)", SHUTDOWN_TIMEOUT_MS)
+                log.warn("Graceful shutdown: {}ms 예산 초과 — 일부 엔진 미완 정지(기록된 pending 은 재시작 후 reconcile, 기록하지 못한 매도는 유실될 수 있다)", budgetMs)
             }
         }
     }
@@ -176,7 +179,7 @@ class UserTradingManager(
         var lastQueryFailed = false
         for (attempt in 1..RESTORE_MAX_ATTEMPTS) {
             val states = try {
-                botStateRepository.findByRunningTrueAndExchange(EXCHANGE).collectList().awaitSingle()
+                botStateRepository.findByRunningTrueAndExchange(exchangeKey).collectList().awaitSingle()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -213,10 +216,10 @@ class UserTradingManager(
         if (engines[userId]?.isRunning() == true) return@withLock true
         if (userId in unpersistedStops) return@withLock true
         try {
-            val state = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
+            val state = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
             if (state == null || !state.running) return@withLock true
             val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock true
-            if (user.upbitAccessKey.isNullOrBlank()) return@withLock true
+            if (!runtime.canRestore(user)) return@withLock true
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
             // 복호화와 상태 로드가 실패할 수 있으므로 엔진 등록보다 먼저 한다. 복호화를 로드 뒤에 두면
             // 복호화 실패 때 정지 엔진을 바꾸지 않았는데도 그 매도를 버린다고 알린다.
@@ -246,7 +249,7 @@ class UserTradingManager(
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: return@withLock mapOf("error" to "User not found")
 
-        if (user.upbitAccessKey.isNullOrBlank() || user.upbitSecretKey.isNullOrBlank()) {
+        if (!runtime.canStart(user)) {
             return@withLock mapOf("error" to "Upbit API keys not configured. Set them via /api/user/keys")
         }
 
@@ -254,7 +257,7 @@ class UserTradingManager(
         val initialStates = loadInitialStates(userId)
         val engine = registerNewEngine(userId, decryptedUser)
 
-        val tickerList = tickers ?: tradingProperties.tickerList()
+        val tickerList = tickers ?: runtime.profile.tickerList()
         exitParamsDeclarationCheck?.report("수동 기동 user=$userId")
         // 기동 뒤에 저장하면 저장이 실패해도 봇이 돌고 재시작 때 복원되지 않으므로 먼저 저장한다.
         try {
@@ -331,7 +334,7 @@ class UserTradingManager(
             "user_tickers" to (live?.getUserTickers() ?: emptyList<String>()),
             "entry_tickers" to (live?.getEntryTickers() ?: emptyList<String>()),
             "exit_only_tickers" to (live?.getExitOnlyTickers() ?: emptyList<String>()),
-            "default_tickers" to tradingProperties.tickerList(),
+            "default_tickers" to runtime.profile.tickerList(),
             "positions" to (engine?.getStates()?.map { (ticker, state) ->
                 mapOf(
                     "ticker" to ticker,
@@ -362,7 +365,7 @@ class UserTradingManager(
         val engine = engines[userId]
         val running = engine?.isRunning() == true || (
             userId !in unpersistedStops &&
-                botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()?.running == true
+                botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()?.running == true
             )
         if (running) {
             return@withLock mapOf("error" to "Stop the bot before clearing a pending order", "code" to CONFLICT_CODE)
@@ -399,13 +402,10 @@ class UserTradingManager(
         mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 
-    fun createUpbitClient(user: UserEntity): UpbitClient {
-        val authProvider = UpbitAuthProvider(
-            accessKey = user.upbitAccessKey ?: "",
-            secretKey = user.upbitSecretKey ?: "",
-        )
-        return UpbitClientImpl(upbitWebClient, authProvider)
-    }
+    /** [runtime] 과 무관하게 Upbit 클라이언트다. 거래소별 조회는 [queryClient] 를 쓴다. */
+    fun createUpbitClient(user: UserEntity): UpbitClient = upbitRuntime.queryClient(user)
+
+    fun queryClient(user: UserEntity): ExchangeClient = runtime.queryClient(user)
 
     /** 키·웹훅 저장 뒤 엔진을 저장된 설정으로 바꾼다. 요청이 끊기면 응답이 가지 않으므로 반영되지 않았을 수 있음을 로그로 알린다. */
     suspend fun reloadUserRuntime(userId: Long) {
@@ -527,31 +527,44 @@ class UserTradingManager(
     }
 
     internal fun createEngine(user: UserEntity): TradingEngine {
-        val client = createUpbitClient(user)
+        // Upbit 엔진 클라이언트는 createUpbitClient 로 만들어야 그 메서드를 stub 한 spy 가 엔진 클라이언트도 바꾼다.
+        val parts = if (runtime === upbitRuntime) upbitRuntime.partsFor(createUpbitClient(user)) else runtime.partsFor(user)
+        val client = parts.client
         // 상태 저장과 거래 기록은 한 트랜잭션으로 커밋하고 알림은 커밋 뒤에만 보낸다.
         val positionManager = PositionManager(
-            client, tradingProperties, tradingStateService, user.id!!,
+            client, parts.profile, tradingStateService, user.id!!,
             commitFill = { persistState, record ->
                 tradeExecutionService.commitFill(persistState, record)
             },
             notifyTrade = { record ->
                 tradeExecutionService.notifyTrade(record, client, user.username, user.discordWebhookUrl)
             },
+            rules = parts.rules,
+            calendar = parts.calendar,
+            orderGate = parts.orderGate,
+            fillPoll = parts.fillPoll,
+            fillAccounting = parts.fillAccounting,
+            errorClassifier = parts.errorClassifier,
+            unknownOrderPolicy = parts.unknownOrderPolicy,
+            displayName = parts.displayName,
         )
-        val dailyResetManager = DailyResetManager(tradingProperties, userId = user.id!!)
+        val dailyResetManager = DailyResetManager(parts.profile, userId = user.id!!, calendar = parts.calendar)
 
         return TradingEngine(
             upbitClient = client,
             positionManager = positionManager,
             dailyResetManager = dailyResetManager,
             strategy = strategy,
-            tradingProperties = tradingProperties,
+            tradingProperties = parts.profile,
             userId = user.id!!,
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
-            marketDataStore = marketDataStore,
-            dailyCandleCache = dailyCandleCache,
+            marketDataStore = parts.marketDataStore,
+            exchange = parts.exchange,
+            dailyCandleCache = parts.dailyCandleCache,
             shadowExitObserver = shadowExitObserver(user.id!!),
+            calendar = parts.calendar,
+            rules = parts.rules,
         )
     }
 
@@ -586,9 +599,9 @@ class UserTradingManager(
 
     /** 기존 행과 같으면 쓰지 않는다. strategy 칸은 읽지 않지만 이전 버전으로 롤백할 때를 위해 계속 쓴다. */
     private suspend fun saveRunningState(userId: Long, tickers: List<String>) {
-        val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull()
+        val existing = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
         val tickersStr = tickers.joinToString(",").ifEmpty {
-            existing?.tickers ?: tradingProperties.tickers
+            existing?.tickers ?: runtime.profile.tickers
         }
         if (existing != null) {
             if (existing.running && existing.strategy == strategy.name && existing.tickers == tickersStr) return
@@ -597,13 +610,13 @@ class UserTradingManager(
             ).awaitSingle()
         } else {
             botStateRepository.save(
-                BotStateEntity(userId = userId, exchange = EXCHANGE, running = true, strategy = strategy.name, tickers = tickersStr)
+                BotStateEntity(userId = userId, exchange = exchangeKey, running = true, strategy = strategy.name, tickers = tickersStr)
             ).awaitSingle()
         }
     }
 
     private suspend fun markStopped(userId: Long) {
-        val existing = botStateRepository.findByUserIdAndExchange(userId, EXCHANGE).awaitSingleOrNull() ?: return
+        val existing = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull() ?: return
         if (!existing.running) return
         botStateRepository.save(existing.copy(running = false, updatedAt = LocalDateTime.now())).awaitSingle()
     }
@@ -678,14 +691,11 @@ class UserTradingManager(
         const val CONFLICT_CODE = "conflict"
 
         private const val RESTORE_MAX_ATTEMPTS = 5
-        private const val SHUTDOWN_TIMEOUT_MS = 25_000L // Spring timeout-per-shutdown-phase(30s) 보다 짧게
         // 저장하지 않은 "Service is shutting down" 과 달리 재시작 때 봇이 다시 뜬다.
         internal const val START_SAVED_SHUTTING_DOWN_MESSAGE =
             "Service is shutting down — the start is saved and the bot resumes after the restart"
         private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L
         private const val STOP_SAVE_TIMEOUT_MS = 10_000L
         private const val FLUSH_TIMEOUT_MS = 5_000L
-
-        private const val EXCHANGE = "UPBIT"
     }
 }
