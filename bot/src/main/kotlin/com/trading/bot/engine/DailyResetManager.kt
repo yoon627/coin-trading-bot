@@ -2,24 +2,26 @@ package com.trading.bot.engine
 
 import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
+import com.trading.bot.exchange.TradingCalendar
+import com.trading.bot.exchange.UpbitTradingCalendar
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
 import org.slf4j.LoggerFactory
 import java.time.Clock
 import java.time.LocalDate
-import java.time.temporal.ChronoUnit
 
 class DailyResetManager(
     private val tradingProperties: TradingProperties,
     private val clock: Clock = Clock.system(TradingDay.KST),
     private val userId: Long? = null,
+    private val calendar: TradingCalendar = UpbitTradingCalendar,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     private var lastResetDate: LocalDate? = null
     private val overrunWarnedBuyDate = mutableMapOf<String, LocalDate>()
 
-    fun getTradingDate(): LocalDate = TradingDay.of(clock)
+    fun getTradingDate(): LocalDate = calendar.tradingDate(clock)
 
     fun checkAndReset(states: Map<String, TradingState>): Boolean {
         val tradingDate = getTradingDate()
@@ -38,7 +40,7 @@ class DailyResetManager(
         val buyDate = state.buyDate ?: return false
         val configured = state.exitParamsOrGlobal(tradingProperties).maxHoldDays
         val holdLimit = ExitGates.effectiveMaxHoldDays(configured)
-        val heldDays = ChronoUnit.DAYS.between(buyDate, getTradingDate())
+        val heldDays = calendar.tradingDaysBetween(buyDate, getTradingDate())
         if (heldDays > holdLimit) warnOverrunOnce(state.ticker, buyDate, heldDays, holdLimit)
         return heldDays >= holdLimit
     }
