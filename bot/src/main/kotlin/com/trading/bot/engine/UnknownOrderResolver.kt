@@ -1,10 +1,12 @@
 package com.trading.bot.engine
 
-import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
+import com.trading.bot.exchange.ExchangeClient
+import com.trading.bot.exchange.OrderLookupException
+import com.trading.bot.exchange.UnknownOrderPolicy
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -23,6 +25,9 @@ internal sealed interface UnknownOrderVerdict {
     /** 아직 판단할 수 없어 pending 을 유지한다. */
     data class Undecided(val reason: Reason) : UnknownOrderVerdict
 
+    /** 자동으로 확정할 수 없다. pending 을 둔 채 사람이 확인해야 한다. */
+    data class NeedsReview(val reason: String) : UnknownOrderVerdict
+
     enum class Reason {
         /** identifier 조회 실패. uuid 없는 응답도 여기에 든다. */
         ORDER_LOOKUP_FAILED,
@@ -35,6 +40,9 @@ internal sealed interface UnknownOrderVerdict {
 
         /** 잔고 변화 없는 404. 확정 조건을 기다린다. */
         AWAITING_CONFIRMATION,
+
+        /** 거래소에 아직 보이지 않는다. 장애가 아니다. */
+        NOT_YET_VISIBLE,
     }
 }
 
@@ -43,16 +51,12 @@ internal sealed interface UnknownOrderVerdict {
  * 못 찾은 이력은 엔진마다 만드는 이 인스턴스의 메모리에만 있어 재시작·reload 하면 처음부터 다시 센다.
  */
 internal class UnknownOrderResolver(
-    private val upbitClient: UpbitClient,
+    private val upbitClient: ExchangeClient,
     private val clock: Clock,
+    private val policy: UnknownOrderPolicy = UnknownOrderPolicy.UPBIT,
+    private val displayName: String = "Upbit",
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    private companion object {
-        // 미접수로 확정하려면 연속으로 이만큼 못 찾고, 처음 못 찾은 뒤 이 시간이 지나야 한다.
-        const val NOT_PLACED_MISSES = 2
-        val NOT_PLACED_AFTER: Duration = Duration.ofSeconds(60)
-    }
 
     /**
      * identifier 로 못 찾은 이력. [traced] 는 잔고 흔적을 한 번이라도 봤다는 뜻이고, 그런 주문은 자동으로 풀지 않는다.
@@ -72,6 +76,10 @@ internal class UnknownOrderResolver(
 
         /** 조회 자체가 실패해 있는지 없는지 모른다. */
         data object Unknown : IdentifierLookup
+
+        data object NotYetVisible : IdentifierLookup
+
+        data class NeedsReview(val reason: String) : IdentifierLookup
     }
 
     /** 조회·잔고 실패는 [UnknownOrderVerdict.Undecided] 로 돌려주고 `CancellationException` 외에는 던지지 않는다. */
@@ -81,7 +89,10 @@ internal class UnknownOrderResolver(
                 identifierMisses.remove(identifier)
                 UnknownOrderVerdict.Found(lookup.order)
             }
-            IdentifierLookup.NotFound -> {
+            // 연속 미발견 규칙은 거래소가 client order id 로 찾아 준다는 전제다. 없는 거래소는 이 규칙으로 미접수를 확정하지 않는다.
+            IdentifierLookup.NotFound -> if (!policy.supportsClientOrderId) {
+                UnknownOrderVerdict.NeedsReview("$displayName 에서 주문 $identifier 를 찾지 못했는데, 이 거래소는 미접수를 확정할 수 없다")
+            } else {
                 val trace = when (side) {
                     TradeSide.BUY -> buyTrace(ticker, state)
                     TradeSide.SELL -> sellTrace(ticker, state)
@@ -92,6 +103,12 @@ internal class UnknownOrderResolver(
                 breakMissStreak(identifier)
                 UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED)
             }
+            // 거래소가 "없다" 대신 "아직 안 보인다" 고 답했으니 연속 미발견이 아니다.
+            IdentifierLookup.NotYetVisible -> {
+                breakMissStreak(identifier)
+                UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.NOT_YET_VISIBLE)
+            }
+            is IdentifierLookup.NeedsReview -> UnknownOrderVerdict.NeedsReview(lookup.reason)
         }
 
     private suspend fun lookupByIdentifier(ticker: String, identifier: String): IdentifierLookup =
@@ -107,6 +124,11 @@ internal class UnknownOrderResolver(
             }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: OrderLookupException.NotYetVisible) {
+            log.info("identifier lookup for {} order {}: not visible yet ({})", ticker, identifier, e.message)
+            IdentifierLookup.NotYetVisible
+        } catch (e: OrderLookupException.NeedsReview) {
+            IdentifierLookup.NeedsReview(e.reason)
         } catch (e: Exception) {
             log.warn("identifier lookup failed for {} order {}: {}", ticker, identifier, e.message)
             IdentifierLookup.Unknown
@@ -157,7 +179,7 @@ internal class UnknownOrderResolver(
         if (trace == true && !prev.traced) {
             log.error(
                 "{} 주문 {}({}) 을 거래소가 찾지 못하는데 잔고가 주문 전과 다릅니다 — 자동 처리하지 않습니다(이 티커의 매매가 멈춥니다). " +
-                    "봇을 정지하고 Upbit 주문 내역을 확인한 뒤(미체결이면 먼저 취소) POST /api/bot/pending/clear 로 해제하고 다시 시작하세요.",
+                    "봇을 정지하고 $displayName 주문 내역을 확인한 뒤(미체결이면 먼저 취소) POST /api/bot/pending/clear 로 해제하고 다시 시작하세요.",
                 label, identifier, ticker,
             )
         }
@@ -171,7 +193,7 @@ internal class UnknownOrderResolver(
         val now = clock.instant()
         val next = prev.copy(misses = prev.misses + 1, firstMissAt = prev.firstMissAt ?: now)
         val waited = Duration.between(next.firstMissAt, now)
-        if (next.misses >= NOT_PLACED_MISSES && waited >= NOT_PLACED_AFTER) {
+        if (next.misses >= policy.notPlacedMisses && waited >= policy.notPlacedAfter) {
             identifierMisses.remove(identifier)
             log.warn(
                 "{} order {} for {} was never placed (not found {} times over {}s, no balance change) — released",
@@ -183,7 +205,7 @@ internal class UnknownOrderResolver(
         return UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.AWAITING_CONFIRMATION)
     }
 
-    /** 조회가 실패하면 연속 횟수를 끊는다. 흔적 기록은 남긴다. */
+    /** 미발견이 아닌 답이 끼면 연속 횟수를 끊는다. 흔적 기록은 남긴다. */
     private fun breakMissStreak(identifier: String) {
         identifierMisses.computeIfPresent(identifier) { _, miss -> IdentifierMiss(traced = miss.traced) }
     }
