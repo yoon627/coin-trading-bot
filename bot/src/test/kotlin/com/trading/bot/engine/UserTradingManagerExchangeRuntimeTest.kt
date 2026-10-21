@@ -152,7 +152,7 @@ class UserTradingManagerExchangeRuntimeTest {
     fun `clearing a pending ignores a running UPBIT row and checks the runtime's row`() = runTest {
         every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(row("UPBIT", running = true))
         every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.just(row("KIS_PAPER", running = false))
-        coEvery { tradingStateService.loadState(1L, "KRX-005930") } returns null
+        coEvery { tradingStateService.loadState(1L, "KRX-005930", Exchange.KIS_PAPER) } returns null
 
         assertEquals(mapOf("status" to "not_pending"), manager.clearPending(1L, "KRX-005930", TradeSide.BUY))
 

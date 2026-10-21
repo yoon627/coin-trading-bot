@@ -34,6 +34,7 @@ class TradeRecordRepository(
             strategy = record.strategy,
             userId = record.userId,
             createdAt = record.createdAt,
+            exchange = record.exchange.name,
         )
         return r2dbcRepository.save(entity).awaitSingle()
     }

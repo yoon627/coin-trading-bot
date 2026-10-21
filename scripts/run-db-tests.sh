@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 CTR="coin-trading-bot-db-tests-$$"
 IMAGE="postgres:17-alpine"   # 운영과 같은 이미지
 # deploy.yml 의 같은 목록과 함께 고친다.
-DB_TEST_CLASSES=(TradingStateRoundTripTest TradeRecordRoundTripTest UserSettingsUpdateRoundTripTest)
+DB_TEST_CLASSES=(TradingStateRoundTripTest TradeRecordRoundTripTest UserSettingsUpdateRoundTripTest ExchangeDimensionRoundTripTest)
 xml_of() { echo "bot/build/test-results/test/TEST-com.trading.bot.persistence.$1.xml"; }
 
 cleanup() { [ -n "${CTR_STARTED:-}" ] && docker rm -f "$CTR" >/dev/null 2>&1 || true; }

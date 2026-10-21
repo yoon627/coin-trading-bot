@@ -1,5 +1,6 @@
 package com.trading.bot.domain
 
+import com.trading.common.domain.Exchange
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -64,6 +65,11 @@ data class TradingState(
     // 주문 전에 영속으로 남기는 클라이언트 identifier. 응답 전에 끊긴 주문을 거래소에서 찾는 근거이고 uuid 를 알면 비운다.
     var pendingBuyIdentifier: String? = null,
     var pendingSellIdentifier: String? = null,
+    // 이 행을 가진 거래소. 엔진은 다른 거래소의 행을 쓰지 않는다.
+    val exchange: Exchange = Exchange.UPBIT,
+    // 사람이 거래소에서 확인해야 하는 주문의 사유. 있는 동안 halt 해제를 거절한다. 방향을 담지 않으므로
+    // 매수·매도 pending 이 모두 비었을 때만 지운다(자동 확정이든 사람의 pending 해제든).
+    var reviewReason: String? = null,
 ) {
     fun hasPendingBuy(): Boolean = pendingBuyUuid != null || pendingBuyIdentifier != null
 
@@ -116,6 +122,7 @@ data class TradingState(
         pendingBuyIdentifier = null
         pendingBuyStrategy = null
         pendingBuyPriorVolume = null
+        liftReviewIfSettled()
     }
 
     fun pnlPercent(currentPrice: Double): Double {
@@ -219,6 +226,11 @@ data class TradingState(
         pendingSellAlerted = false
         pendingSellTriggerPrice = null
         pendingSellPriorVolume = null
+        liftReviewIfSettled()
+    }
+
+    private fun liftReviewIfSettled() {
+        if (!hasPendingBuy() && !hasPendingSell()) reviewReason = null
     }
 
     fun pendingRef(side: TradeSide): PendingRef? = when (side) {

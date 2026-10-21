@@ -88,23 +88,24 @@ class TradingEngine(
         if (!running.compareAndSet(false, true)) return
         // 루프 없이 running=true 로 남으면 다른 경로가 도는 엔진으로 착각하므로 되돌린다.
         try {
+            val own = ownStates(initialStates)
             userTickers = tickers.toList()
             // 목록에서 빠진 티커라도 진입 흔적(보유·미해소 주문)이 있으면 싣는다. 안 실으면 아무도 청산·reconcile 하지 않는다.
             val requested = tickers.toSet()
-            val restored = initialStates.filterValues { it.hasEntryTrace() }.keys.filter { it !in requested }
+            val restored = own.filterValues { it.hasEntryTrace() }.keys.filter { it !in requested }
             val active = (tickers + restored).distinct()
             activeTickers = active
             // 활성 ticker 의 상태만 남긴다. 먼저 채우고 나머지를 빼는 순서는 잠금 없이 읽는 getStates() 에서
             // 계속 활성인 티커가 잠깐 사라지지 않게 하려는 것이다.
-            val seeded = initialStates.filterKeys { it in active }
+            val seeded = own.filterKeys { it in active }
             seeded.forEach { (ticker, state) -> states[ticker] = state }
             states.keys.retainAll(seeded.keys)
             if (restored.isNotEmpty()) {
                 // 보유 기간이 이미 지난 티커는 첫 tick 에 팔리므로 buyDate 를 같이 남긴다.
-                log.warn("User {}: 사용자 목록 밖 티커를 청산될 때까지 관리합니다(ticker=buyDate): {}", userId, restored.associateWith { initialStates[it]?.buyDate })
+                log.warn("User {}: 사용자 목록 밖 티커를 청산될 때까지 관리합니다(ticker=buyDate): {}", userId, restored.associateWith { own[it]?.buyDate })
             }
             // 빠진 ticker 의 미해소 주문은 아무도 reconcile 하지 않으므로 사람이 봐야 한다.
-            initialStates.filterKeys { it !in active }
+            own.filterKeys { it !in active }
                 .filterValues { it.hasPendingOrder() }
                 .forEach { (ticker, state) ->
                     log.error(
@@ -119,6 +120,17 @@ class TradingEngine(
             running.set(false)
             throw e
         }
+    }
+
+    /** 다른 거래소의 행을 쓰면 그 거래소의 주문을 이 엔진이 reconcile·청산한다. 조회가 이미 거르므로 여기는 2차 방어다. */
+    private fun ownStates(initialStates: Map<String, TradingState>): Map<String, TradingState> {
+        val foreign = initialStates.filterValues { it.exchange != exchange }
+        if (foreign.isEmpty()) return initialStates
+        log.error(
+            "User {}: {} 엔진이 다른 거래소의 상태를 받아 쓰지 않습니다(ticker=exchange): {}",
+            userId, exchange, foreign.mapValues { it.value.exchange },
+        )
+        return initialStates.filterKeys { it !in foreign }
     }
 
     private fun warnIfExitConfigInert() {
@@ -165,6 +177,9 @@ class TradingEngine(
     suspend fun clearHalt(ticker: String): Boolean {
         val state = states[ticker] ?: return false
         if (!state.halted) return false
+        // 확인이 필요한 주문은 pending 해제로만 푼다. 매니저가 먼저 409 로 거절한다. 이 검사도 runLoop 와 원자적이지 않아,
+        // 검사 직후 생긴 review 는 halt 가 풀린 채 남고 다음 reconcile 의 markNeedsReview 가 다시 halt 한다.
+        if (state.reviewReason != null) return false
         val reason = state.haltReason
         val failureCount = state.reconcileFailureCount
         state.clearHalt()
@@ -213,7 +228,7 @@ class TradingEngine(
 
     private suspend fun runLoop() {
         activeTickers.forEach { ticker ->
-            states.computeIfAbsent(ticker) { TradingState(it) }
+            states.computeIfAbsent(ticker) { TradingState(it, exchange = exchange) }
         }
 
         activeTickers.forEach { ticker ->

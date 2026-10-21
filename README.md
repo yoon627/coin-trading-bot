@@ -119,7 +119,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 2. 봇을 정지한 뒤 `POST /api/bot/pending/clear {"ticker": "KRW-BTC", "side": "buy"|"sell"}`로 기록을 지운다. 봇이 돌거나 복원 중이면 409, 메모리에만 남은 매도 기록이 있으면 503이니 잠시 후 다시 시도한다.
 3. 체결된 매도를 지우면 SELL 기록이 남지 않는다. 응답의 `cleared`(지운 필드 전부, 키는 `trading_states` 컬럼명)를 보고 거래 기록을 맞춘다.
 4. 다시 시작하면 기동 시 잔고 동기화가 매수로 들어온 코인을 보유로 편입한다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
-5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다.
+5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다. 주문 확인이 필요해 멈춘 종목(review)은 그 종목의 매수·매도 pending 이 모두 비기 전까지 halt/clear 가 409 다. pending 은 자동 확정되거나 2번의 pending/clear 로 비운다.
 
 ## 리스크 관리
 
@@ -136,7 +136,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 - PR: 테스트만 실행
 - main push, main에서의 수동 실행: 테스트 → multi-arch 이미지 빌드 → GHCR push → SSH로 Vultr에 `deploy.sh deploy`. 다른 브랜치에서 수동 실행하면 이미지만 올리고 배포하지 않는다.
 - `**.md`와 `docs/**`만 바뀐 push는 배포하지 않는다. 배포가 곧 엔진 재시작이기 때문이다. 필요하면 main에서 수동 실행한다.
-- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다.
+- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다. 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
@@ -152,3 +152,34 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
 ```
 
 `APP_ENCRYPTION_SECRET`은 자동 생성하지 않는다. 운영 중인 값을 그대로 쓰고 DB 백업과 따로 보관한다. 인스턴스 재구축, 백업 복원, 방화벽 설정, 호스트 이전(같은 계정으로 봇 두 대가 돌면 주문이 이중으로 나간다)은 [`deploy/vultr/README.md`](deploy/vultr/README.md)를 본다.
+
+### 스키마를 바꾸는 배포 (V30 같은)
+
+실거래 테이블의 제약을 바꾸는 마이그레이션은 단독 릴리스로 거래가 적은 시간에 낸다.
+
+1. 운영 DB 에서 읽기 전용 사전 점검. 첫 쿼리는 0, 둘째 쿼리는 0행이어야 한다(V30 의 CHECK·UNIQUE 가 기존 행에 걸린다). 셋째 쿼리에는 `uq_trading_states_user_ticker` 가 있고 V30 의 제약 이름(`uq_trading_states_user_exchange_ticker`, `ck_trading_states_exchange_ticker`)은 없어야 하며, 넷째 쿼리는 29 여야 한다.
+   ```sql
+   SELECT count(*) FROM trading_states WHERE ticker LIKE 'KRX-%';
+   SELECT user_id, ticker, count(*) FROM trading_states GROUP BY 1,2 HAVING count(*) > 1;
+   SELECT conname FROM pg_constraint WHERE conrelid = 'trading_states'::regclass AND contype IN ('u', 'c');
+   SELECT max(version::int) FROM flyway_schema_history WHERE success;
+   ```
+   첫 쿼리가 0 이 아니면 Upbit 에 없는 `KRX-` 마켓을 시작 목록에 넣었던 흔적이다. 봇을 멈추고 그 `trading_states` 행과 `bot_state.tickers` 의 해당 티커를 지운 뒤 배포한다.
+2. 서버 `/opt/app` 에서 `./backup.sh` 를 손으로 한 번 돌려 백업이 올라갔는지 확인한다. 배포 시각은 백업 cron(KST 03:00)과 겹치지 않게 한다. `pg_dump` 가 잡은 잠금을 V30 의 `ALTER TABLE` 이 기다리는 동안 헬스체크 시간이 지나간다.
+3. 되돌리기 SQL(`deploy/vultr/sql/V30_down.sql`)을 미리 읽어 둔다. Flyway 는 이 파일을 쓰지 않는다.
+4. 기동이 실패하면 자동 롤백되지 않는다. `docker compose logs app` 로 원인을 보고 V30 이 적용됐는지 확인한다.
+   ```bash
+   docker compose exec -T postgres psql -U trading -d trading -c "SELECT version, success FROM flyway_schema_history WHERE version = '30'"
+   ```
+   - 0행이면 마이그레이션이 실패해 Postgres 트랜잭션 DDL 로 V30 전체가 되돌려진 것이다. 봇이 멈춰 있는 동안 보유 포지션의 손절도 돌지 않으므로 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 먼저 되살리고, 원인을 고친 이미지로 다시 배포한다.
+   - V30 이 적용돼 있으면 고친 이미지로 앞으로 배포한다.
+
+V30 이후에는 V30 이전 이미지로 롤백하지 않는다. 옛 코드는 거래소 축을 몰라 KIS 행까지 Upbit 상태로 읽는다. 불가피하면 앱을 멈추고 `./backup.sh` 를 돌린 뒤 아래로 KIS 행을 먼저 지우고, `V30_down.sql` 을 실행한 다음 옛 이미지를 올린다. `bot_state` 는 V17 부터 거래소 축이 있어 옛 이미지도 거래소로 걸러 읽으므로 지우지 않는다. `trade_executions` 의 KIS 체결 감사 행은 지우기 전에 복사해 둔다.
+```sql
+BEGIN;
+CREATE TABLE v30_rollback_archive_trade_executions AS SELECT * FROM trade_executions WHERE exchange <> 'UPBIT';
+DELETE FROM trade_executions WHERE exchange <> 'UPBIT';
+DELETE FROM trade_records WHERE exchange <> 'UPBIT';
+DELETE FROM trading_states WHERE exchange <> 'UPBIT';
+COMMIT;
+```
