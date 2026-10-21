@@ -62,7 +62,8 @@ install -m 600 .env.example .env   # 시크릿이 들어가므로 600
 
 새 버전은 `main` push → Actions 테스트·이미지 push → `deploy-vultr` job 이 `./deploy.sh deploy` 를 실행하는
 순서로 나간다. 이미지는 대상 커밋 SHA 로 고정하고, 헬스체크(180s)가 실패하면 직전 정상 SHA 로 자동 롤백한다.
-직전 정상 SHA 와의 차이에 DB migration 이 있으면 자동 롤백하지 않고 수동 개입을 안내한다.
+직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V30(거래소 축) 마이그레이션이 없으면 자동 롤백하지 않고
+수동 개입을 안내한다. 스키마를 바꾸는 배포의 사전 점검·되돌리기 절차는 루트 README 의 배포 절에 있다.
 
 `Caddyfile` 은 서버로 복사만 되고 실행 중인 caddy 가 다시 읽지 않는다. caddy 컨테이너가 새로 뜰 때(새 이미지
 digest, 서버 재부팅) 적용된다. 바로 적용하려면 서버에서 `cd /opt/app && docker compose restart caddy` 를

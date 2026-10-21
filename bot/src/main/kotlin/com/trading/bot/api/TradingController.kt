@@ -65,7 +65,7 @@ class TradingController(
         // 대상은 항상 currentUserId() 의 봇이다.
         val ticker = requestValidators.normalizeMarkets(listOf(request.ticker)).firstOrNull()
             ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid ticker: ${request.ticker}")
-        return persisting { userTradingManager.clearHalt(currentUserId(), ticker) }
+        return failOnError(persisting { userTradingManager.clearHalt(currentUserId(), ticker) })
     }
 
     /** 막힌 pending 을 지운다. 정지된 봇만 가능하고(도는 중이면 409) 거래소에서 주문을 확인한 뒤 호출한다. */

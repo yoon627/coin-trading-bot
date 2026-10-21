@@ -41,7 +41,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
-/** trading_states.halt_reason 컬럼 길이. */
+/** trading_states.halt_reason·review_reason 컬럼 길이. */
 private const val HALT_REASON_MAX_LENGTH = 200
 
 class PositionManager(
@@ -408,6 +408,7 @@ class PositionManager(
             // 이 주문에 실제로 오간 금액. totalAmount 는 포지션 전체 원가다.
             orderAmount = orderAmount,
             exchangeOrderId = orderUuid,
+            exchange = state.exchange,
         )
         // 같은 전이를 저장용 사본과 메모리 원본에 적용하므로 now 를 고정한다.
         val now = LocalDateTime.now(TradingDay.KST)
@@ -464,6 +465,7 @@ class PositionManager(
     /**
      * 자동으로 확정할 수 없는 주문이 있어 그 종목의 신규 진입을 halt 로 막고 ERROR 로 한 번 알린다. pending 은 그대로 두고 저장은 호출부가 한다.
      * ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다. 같은 주문이면 [reason] 이 바뀌어도 다시 알리지 않는다.
+     * [TradingState.reviewReason] 이 있는 동안 halt 해제는 거절된다. 그 사유는 pending 이 모두 비면(자동 확정 또는 pending 해제) 사라진다.
      */
     internal fun markNeedsReview(ticker: String, state: TradingState, side: TradeSide, reason: String) {
         val ref = state.pendingRef(side)?.ref
@@ -472,6 +474,7 @@ class PositionManager(
         state.halted = true
         // 원문은 아래 ERROR 로그에만 남긴다. 길이를 넘기면 저장이 매번 실패해 체결 확정까지 커밋되지 못한다.
         state.haltReason = "$alertKey: $reason".take(HALT_REASON_MAX_LENGTH)
+        state.reviewReason = state.haltReason
         log.error(
             "[REVIEW] {} {} 주문 {} 을 자동으로 확정할 수 없습니다 — 신규 진입을 멈춥니다. {} 주문 내역을 확인하세요: {}",
             ticker, side.name, ref, displayName, reason,
@@ -927,6 +930,7 @@ class PositionManager(
             reason = reason?.name,
             // 재시작 뒤 reconcile 이 같은 주문을 중복 기록하지 않게 하는 키다.
             exchangeOrderId = state.pendingSellUuid,
+            exchange = state.exchange,
         )
     }
 

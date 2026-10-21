@@ -8,4 +8,6 @@ import reactor.core.publisher.Mono
 interface TradingStateRepository : R2dbcRepository<TradingStateEntity, Long> {
     fun findByUserId(userId: Long): Flux<TradingStateEntity>
     fun findByUserIdAndTicker(userId: Long, ticker: String): Mono<TradingStateEntity>
+    fun findByUserIdAndExchange(userId: Long, exchange: String): Flux<TradingStateEntity>
+    fun findByUserIdAndExchangeAndTicker(userId: Long, exchange: String, ticker: String): Mono<TradingStateEntity>
 }

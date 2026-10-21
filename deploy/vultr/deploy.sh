@@ -470,6 +470,9 @@ preflight_domain() {
     fi
 }
 
+# 이 마이그레이션이 없는 이미지는 거래소 축을 몰라 KIS 행을 Upbit 상태로 읽으므로 자동 롤백 대상이 될 수 없다.
+ROLLBACK_FLOOR_MIGRATION="bot/src/main/resources/db/migration/V30__exchange_dimension.sql"
+
 # migration 이 끼면 자동 롤백하지 않는다. 옛 앱이 새 스키마 위에서 뜰 수 있다.
 do_deploy() {
     load_state
@@ -494,6 +497,9 @@ do_deploy() {
     elif ! git -C "$repo_root" cat-file -e "${last_good}^{commit}" 2>/dev/null \
       || ! git -C "$repo_root" cat-file -e "${target_sha}^{commit}" 2>/dev/null; then
         migration_gate="blocked"
+    elif ! git -C "$repo_root" cat-file -e "${last_good}:${ROLLBACK_FLOOR_MIGRATION}" 2>/dev/null; then
+        migration_gate="below-floor"
+        log "자동 롤백 제외: 직전 정상 SHA(${last_good:0:12}) 트리에 ${ROLLBACK_FLOOR_MIGRATION##*/} 가 없다 — V30 이전 이미지로는 롤백하지 않는다"
     elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
         migration_gate="blocked"
     fi
@@ -572,6 +578,8 @@ docker compose logs --tail=120 app || true
 if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
     if [ -z "$LAST_GOOD_SHA" ]; then
         echo "자동 롤백 제외: 직전 정상 배포(LAST_GOOD) 없음."
+    elif [ "$MIGRATION_GATE" = "below-floor" ]; then
+        echo "자동 롤백 제외: 직전 정상 SHA 에 V30(거래소 축) 마이그레이션이 없다 — V30 이전 이미지는 KIS 행을 Upbit 상태로 읽는다."
     else
         echo "자동 롤백 제외: DB migration 포함 배포 — 신규 스키마가 이미 적용됐을 수 있어 구버전 앱 자동 복귀는 위험."
     fi
@@ -579,6 +587,8 @@ if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
     echo "  1) docker compose logs app  로 원인 확인"
     echo "  2) DB migration 적용 여부 점검, 필요 시 백업 복원"
     echo "  3) 수동 롤백: cd /opt/app && APP_VERSION=<이전정상SHA> docker compose up -d --pull missing"
+    echo "     V30 이후에는 V30 이전 이미지로 롤백하지 않는다 — 불가피하면 README 의 절차로 KIS 행을 먼저 지운다."
+    echo "     마이그레이션이 적용되지 않았으면(flyway_schema_history 에 30 없음) 직전 이미지로 수동 롤백해도 된다."
     exit 1
 fi
 

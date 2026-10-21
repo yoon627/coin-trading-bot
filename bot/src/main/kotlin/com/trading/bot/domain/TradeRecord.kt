@@ -1,5 +1,6 @@
 package com.trading.bot.domain
 
+import com.trading.common.domain.Exchange
 import java.time.LocalDateTime
 
 /** 체결 수수료를 sink 가 어떻게 다룰지. "모른다"를 0.0 으로 쓰면 실제 수수료 0 과 구분되지 않아 타입으로 나눈다. */
@@ -42,6 +43,9 @@ data class TradeRecord(
     /** 실제 체결 단가. [price] 는 판단 시점 tick 가격이라 둘의 차이가 슬리피지다. 장부·손익은 [price] 로 계산한다. */
     val executedVwap: Double? = null,
     val createdAt: LocalDateTime = LocalDateTime.now(),
+    val exchange: Exchange = Exchange.UPBIT,
+    /** [FeeBasis.Estimate] 일 때 체결 대금에 곱하는 편도 요율. null 이면 sink 가 설정의 왕복 요율 절반을 쓴다. */
+    val estimatedFeeRate: Double? = null,
 )
 
 enum class TradeSide {

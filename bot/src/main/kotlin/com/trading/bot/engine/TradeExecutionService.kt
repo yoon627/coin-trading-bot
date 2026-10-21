@@ -44,7 +44,7 @@ class TradeExecutionService(
         tradeExecutionRepository.save(
             TradeExecutionEntity(
                 userId = userId,
-                exchange = "UPBIT",
+                exchange = record.exchange.name,
                 market = record.ticker,
                 side = record.side.name,
                 price = record.price,
@@ -54,7 +54,9 @@ class TradeExecutionService(
                 fee = when (val basis = record.fee) {
                     // NaN 이 한 번 들어가면 SUM(fee) 가 계속 NaN 이 되므로 DB 직전에서 다시 거른다.
                     is FeeBasis.Measured -> basis.amount.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-                    FeeBasis.Estimate -> TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
+                    // 거래소마다 매수·매도 비용이 다르면 생성부가 편도 요율을 싣는다.
+                    FeeBasis.Estimate -> record.estimatedFeeRate?.takeIf { it.isFinite() && it >= 0.0 }?.let { record.totalAmount * it }
+                        ?: TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
                     // 0 은 미기록을 뜻한다(V21 스키마 규약).
                     FeeBasis.Unrecorded -> 0.0
                 },

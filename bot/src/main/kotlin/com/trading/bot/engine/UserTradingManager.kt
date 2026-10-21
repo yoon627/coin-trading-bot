@@ -381,7 +381,14 @@ class UserTradingManager(
                 )
             }
         }
-        val state = tradingStateService.loadState(userId, ticker)
+        val state = tradingStateService.loadState(userId, ticker, runtime.exchange)
+        // 다른 거래소 행을 이 매니저가 풀면 그 거래소의 미확정 주문 기록이 사라진다.
+        if (state != null && state.exchange != runtime.exchange) {
+            return@withLock mapOf(
+                "error" to "$ticker 의 상태는 ${state.exchange} 거래소 행이다 — ${runtime.exchange} 에서 해제하지 않는다",
+                "code" to CONFLICT_CODE,
+            )
+        }
         val ref = state?.pendingRef(side) ?: return@withLock mapOf("status" to "not_pending")
         if (engine != null) engines.remove(userId, engine)
         val cleared = state.pendingFields(side)
@@ -398,6 +405,13 @@ class UserTradingManager(
 
     suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
         val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
+        // 거래소 확인이 필요한 주문은 halt 만 풀면 그 주문이 확정되지 않은 채 매수가 다시 열린다.
+        engine.getStates()[ticker]?.reviewReason?.let { reason ->
+            return@withLock mapOf(
+                "error" to "$ticker 는 주문 확인이 필요하다($reason) — 거래소에서 확인한 뒤 /api/bot/pending/clear 로 해제한다",
+                "code" to CONFLICT_CODE,
+            )
+        }
         val cleared = persistOrFail(userId, HALT_CLEAR_UNPERSISTED_MESSAGE) { engine.clearHalt(ticker) }
         mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
@@ -454,7 +468,7 @@ class UserTradingManager(
             try {
                 val unrecorded = flushStoppedEngine(userId, existing)
                 check(unrecorded.isEmpty()) { "매도 주문 기록을 DB 에 남기지 못함: ${sellRefs(unrecorded)}" }
-                tradingStateService.loadStates(userId)
+                tradingStateService.loadStates(userId, runtime.exchange)
             } catch (e: CancellationException) {
                 // stop() 은 이미 끝났으므로 되살리지 않으면 손절이 멈춘 엔진만 남는다.
                 if (!leftToShutdown(userId)) {
@@ -660,7 +674,7 @@ class UserTradingManager(
      */
     private suspend fun loadInitialStates(userId: Long): Map<String, TradingState> {
         val unrecorded = engines[userId]?.let { flushOrLog(userId, it) }.orEmpty()
-        val loaded = tradingStateService.loadStates(userId)
+        val loaded = tradingStateService.loadStates(userId, runtime.exchange)
         alertDroppedSells(userId, unrecorded)
         return loaded
     }
