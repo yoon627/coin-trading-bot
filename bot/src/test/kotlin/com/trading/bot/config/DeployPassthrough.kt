@@ -1,5 +1,7 @@
 package com.trading.bot.config
 
+import com.trading.bot.kis.config.KisApiProperties
+import com.trading.bot.kis.config.KisTradingProperties
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
 import kotlin.reflect.KClass
@@ -19,6 +21,7 @@ internal object DeployPassthrough {
         ShadowExitProperties::class,
         WatchlistProperties::class,
         MarketDataWatchdogProperties::class,
+        KisTradingProperties::class,
     )
 
     val EXCLUDED: Map<KClass<*>, String> = mapOf(
@@ -26,6 +29,7 @@ internal object DeployPassthrough {
         UpbitProperties::class to "거래소 주소 — 운영에서 바꾸지 않는다",
         DiscordProperties::class to "compose 가 값과 함께(`\${…:-}`) 따로 넘긴다",
         ErrorAlertProperties::class to "compose 가 값과 함께 따로 넘긴다 — enabled 오기는 preflight 가 보지 않는다",
+        KisApiProperties::class to "거래소 주소·HTTP 시간 제한 — 운영에서 바꾸지 않는다",
     )
 
     /**

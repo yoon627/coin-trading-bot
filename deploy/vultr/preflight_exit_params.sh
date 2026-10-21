@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 렌더된 서버 .env 의 설정 값을 업로드 전에 검사한다. 종료코드 0=통과 1=위반 2=사용법 오류.
 # 앱 기동 실패로 막으면 보유 포지션의 손절이 평가되지 않는 공백이 생기고 롤백도 같은 .env 를 쓰므로 여기서 막는다.
-# 구간 표는 ExitParamRanges.kt 의 사본이며 ExitParamsPreflightScriptTest 가 대조한다.
+# 구간 표는 ExitParamRanges.kt 와 KisExitParamRanges.kt 의 사본이며 ExitParamsPreflightScriptTest 가 대조한다.
 # 배포 로그가 공개되므로 값은 출력하지 않는다. macOS bash 3.2 에서도 돌아야 한다.
 set -euo pipefail
 export LC_ALL=C
@@ -25,14 +25,23 @@ RANGE_RULES=(
     "TRADING_ROUND_TRIP_FEE_RATE decimal 0 1 0.01 0"
     "TRADING_SHADOW_EXIT_TRAILING_STOP_PCT decimal 0 0 100 0"
     "TRADING_SHADOW_EXIT_TRAILING_ARM_PCT decimal 0 1 - 0"
+    "KIS_TRADING_TAKE_PROFIT_PCT decimal 0 0 100 1"
+    "KIS_TRADING_MAX_LOSS_PCT decimal 0 0 100 0"
+    "KIS_TRADING_TRAILING_STOP_PCT decimal 0 0 100 0"
+    "KIS_TRADING_TRAILING_ARM_PCT decimal 0 1 100 1"
+    "KIS_TRADING_MAX_HOLD_DAYS integer 1 1 - 0"
+    "KIS_TRADING_INVEST_RATIO decimal 0 0 1 1"
 )
 # Spring 은 yes·on 등도 받지만 여기서는 소문자 true/false 만 받는다.
 BOOLEAN_KEYS=(
     TRADING_AUTO_START
     TRADING_SHADOW_EXIT_ENABLED
     MARKETDATA_WATCHDOG_ENABLED
+    KIS_TRADING_ENABLED
+    KIS_TRADING_LIVE_ENABLED
 )
 # 0 이하는 기동이 실패하거나 워치독 재연결·재구독이 쉬지 않고 돈다.
+# KIS 금액 상한·주기·요청 간격이 0 이하면 앱이 KIS 클라이언트를 만들지 않으므로 배포 전에 막는다.
 POSITIVE_INTEGER_KEYS=(
     TRADING_INTERVAL_SECONDS
     TRADING_RECONCILE_HALT_THRESHOLD
@@ -40,6 +49,11 @@ POSITIVE_INTEGER_KEYS=(
     MARKETDATA_WATCHDOG_INTERVAL_MS
     MARKETDATA_WATCHDOG_INITIAL_DELAY_MS
     MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
+    KIS_TRADING_MAX_INVEST_AMOUNT
+    KIS_TRADING_MAX_ORDER_AMOUNT
+    KIS_TRADING_INTERVAL_SECONDS
+    KIS_TRADING_PAPER_MIN_REQUEST_INTERVAL_MS
+    KIS_TRADING_LIVE_MIN_REQUEST_INTERVAL_MS
 )
 # 구간 없이 형식만 보는 소수.
 DECIMAL_KEYS=(

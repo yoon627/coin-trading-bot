@@ -1,5 +1,6 @@
 package com.trading.bot.config
 
+import com.trading.bot.kis.config.KisExitParamRanges
 import com.trading.common.config.ExitParamRanges
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
@@ -56,7 +57,7 @@ class ExitParamsPreflightScriptTest {
 
     private val script = repoFile("deploy/vultr/preflight_exit_params.sh")
 
-    private val rangeKeys: List<Key> = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW).map { entry ->
+    private val rangeKeys: List<Key> = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW + KisExitParamRanges.KIS).map { entry ->
         val grammar = if (entry.property.returnType.classifier == Int::class) Grammar.RANGE_INTEGER else Grammar.RANGE_DECIMAL
         Key(envName(entry.key), ownerOf(entry.property), entry.key.substringBeforeLast('.'), entry.property, grammar, entry)
     }
@@ -341,7 +342,7 @@ class ExitParamsPreflightScriptTest {
         val MARKET_FORMAT = Regex("""[A-Z]+-[A-Z0-9]+""")
 
         val FLAGGED = Regex("""(?m)^ {2}([A-Z][A-Z0-9_]+): """)
-        val RANGE_ROW = Regex(""""(TRADING_[A-Z0-9_]+) (decimal|integer) (\S+) ([01]) (\S+) ([01])""")
+        val RANGE_ROW = Regex(""""((?:KIS_)?TRADING_[A-Z0-9_]+) (decimal|integer) (\S+) ([01]) (\S+) ([01])""")
         val ENV_NAME = Regex("""[A-Z][A-Z0-9]*_[A-Z0-9_]+""")
 
         val CANONICAL = listOf("-5", "5", "5.0", "-0", "-0.0", "1.5", "123.456789", "999999999", "999999999.5")

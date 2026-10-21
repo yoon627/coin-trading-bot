@@ -67,6 +67,38 @@ class LogMessageSanitizerTest {
     }
 
     @Test
+    fun `KIS access_token 값 마스킹, 만료 시각은 보존`() {
+        val r = LogMessageSanitizer.sanitize(
+            """{"access_token":"tokVALUE123.abc","access_token_token_expired":"2026-10-22 09:00:00","expires_in":86400}""",
+        )
+        assertFalse(r.contains("tokVALUE123"))
+        assertTrue(r.contains("2026-10-22 09:00:00"))
+    }
+
+    @Test
+    fun `KIS CANO 값 쿼리형 JSON형 마스킹`() {
+        val query = LogMessageSanitizer.sanitize("GET /uapi/domestic-stock/v1/trading/inquire-balance?CANO=12345678&ACNT_PRDT_CD=01&PDNO=005930")
+        assertFalse(query.contains("12345678"))
+        assertTrue(query.contains("PDNO=005930"))
+        val json = LogMessageSanitizer.sanitize("""{"CANO":"87654321","ACNT_PRDT_CD":"01"}""")
+        assertFalse(json.contains("87654321"))
+    }
+
+    @Test
+    fun `8-2 형태 계좌번호 마스킹, 자릿수가 다르면 보존`() {
+        val r = LogMessageSanitizer.sanitize("account 12345678-01 rejected, order 987654321-012")
+        assertFalse(r.contains("12345678"))
+        assertTrue(r.contains("987654321-012"))
+    }
+
+    @Test
+    fun `숫자 8자리로 시작하는 Upbit 주문 uuid 는 보존`() {
+        val uuid = "12345678-90ab-4fec-9f0a-48cd83c2eaae"
+        val r = LogMessageSanitizer.sanitize("order uuid=$uuid not found")
+        assertTrue(r.contains(uuid))
+    }
+
+    @Test
     fun `base64 문자 포함 Bearer 토큰 전체 마스킹`() {
         val r = LogMessageSanitizer.sanitize("Bearer abc+def/ghi==")
         assertFalse(r.contains("def/ghi"))
