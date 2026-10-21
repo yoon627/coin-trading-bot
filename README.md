@@ -165,7 +165,7 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
    SELECT max(version::int) FROM flyway_schema_history WHERE success;
    ```
    첫 쿼리가 0 이 아니면 Upbit 에 없는 `KRX-` 마켓을 시작 목록에 넣었던 흔적이다. 봇을 멈추고 그 `trading_states` 행과 `bot_state.tickers` 의 해당 티커를 지운 뒤 배포한다.
-2. 서버 `/opt/app` 에서 `./backup.sh` 를 손으로 한 번 돌려 백업이 올라갔는지 확인한다. 배포 시각은 백업 cron(KST 03:00)과 겹치지 않게 한다. `pg_dump` 가 잡은 잠금을 V30 의 `ALTER TABLE` 이 기다리는 동안 헬스체크 시간이 지나간다.
+2. 서버 `/opt/app` 에서 `./backup.sh` 를 손으로 한 번 돌려 백업이 올라갔는지 확인한다. 백업 cron 을 등록해 두었다면(`deploy/vultr/README.md` 6절, KST 03:00) 배포 시각이 그와 겹치지 않게 한다. `pg_dump` 가 잡은 잠금을 V30 의 `ALTER TABLE` 이 기다리는 동안 헬스체크 시간이 지나간다.
 3. 되돌리기 SQL(`deploy/vultr/sql/V30_down.sql`)을 미리 읽어 둔다. Flyway 는 이 파일을 쓰지 않는다.
 4. 기동이 실패하면 자동 롤백되지 않는다. `docker compose logs app` 로 원인을 보고 V30 이 적용됐는지 확인한다.
    ```bash
