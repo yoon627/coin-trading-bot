@@ -93,6 +93,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `KIS_TRADING_INVEST_RATIO`, `KIS_TRADING_INTERVAL_SECONDS`, 청산 키 5개(`KIS_TRADING_TAKE_PROFIT_PCT` 등) | 같은 이름의 `TRADING_*` 기본값 | KIS 프로파일. 허용 구간도 `TRADING_*`와 같다 |
 | `KIS_TRADING_MAX_INVEST_AMOUNT` / `KIS_TRADING_MAX_ORDER_AMOUNT` | `1000000` / `2000000` | KIS 1회 투자·주문 금액 상한(KRW) |
 | `KIS_TRADING_PAPER_MIN_REQUEST_INTERVAL_MS` / `KIS_TRADING_LIVE_MIN_REQUEST_INTERVAL_MS` | `667` / `60` | 모의·실전 KIS 요청 사이 최소 간격(ms) |
+| `KIS_TRADING_COMMISSION_RATE` / `KIS_TRADING_SELL_TAX_RATE` | `0.0002` / `0.002` | KIS 편도 수수료율(매수·매도 양쪽), 매도 증권거래세율. 퍼센트가 아니라 비율이고 허용 구간은 둘 다 `[0, 0.01)`. ETF 거래세 면제는 반영하지 않는다 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 |
 | `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림 |
 | `APP_DOMAIN` | 없음 | 운영 CORS origin과 Caddy TLS 도메인 |
@@ -130,7 +131,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 - 익절은 트레일링 폭과 활성 수익률보다 커야 한다. 작으면 익절이 항상 먼저 걸려 트레일링이 동작하지 않는다.
 - 매도 기록의 `pnl_percent`는 수수료를 뺀 값이고, 청산 판정은 수수료 전 수익률로 한다.
 - 청산 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀려 적는 실수를 거르기 위한 것이다.
-- `deploy/vultr/preflight_exit_params.sh`가 배포 전에 형식과 구간을 검사한다. `TRADING_AUTO_START`가 켜져 있으면 청산 키 5개(`TAKE_PROFIT_PCT`, `MAX_LOSS_PCT`, `TRAILING_STOP_PCT`, `TRAILING_ARM_PCT`, `MAX_HOLD_DAYS`)를 `.env`에 명시하지 않은 배포도 막는다. `KIS_TRADING_*` 청산 키는 같은 구간으로 검사하지만 선언은 요구하지 않는다. 앱은 KIS 값을 기동 로그에 남기지 않고, `KIS_TRADING_ENABLED=true` 일 때만 구간 위반을 ERROR 로 알린다.
+- `deploy/vultr/preflight_exit_params.sh`가 배포 전에 형식과 구간을 검사한다. `TRADING_AUTO_START`가 켜져 있으면 청산 키 5개(`TAKE_PROFIT_PCT`, `MAX_LOSS_PCT`, `TRAILING_STOP_PCT`, `TRAILING_ARM_PCT`, `MAX_HOLD_DAYS`)를 `.env`에 명시하지 않은 배포도 막는다. `KIS_TRADING_*` 청산 키는 같은 구간으로, 비용 요율 키 2개는 `[0, 0.01)`로 검사하지만 선언은 요구하지 않는다. 앱은 KIS 값을 기동 로그에 남기지 않고, `KIS_TRADING_ENABLED=true` 일 때만 구간 위반을 ERROR 로 알린다.
 - 앱은 기동 시 실효값을 로그로 남기고, 미선언이거나 구간 밖이면 ERROR로 알린다. 보유 포지션의 손절이 멈추지 않도록 거래는 막지 않는다.
 
 ## 배포

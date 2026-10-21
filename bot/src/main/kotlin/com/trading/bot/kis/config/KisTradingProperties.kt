@@ -26,6 +26,10 @@ data class KisTradingProperties(
     // 초당 건수가 아니라 요청 사이 최소 간격(ms)이다. 667 은 초당 약 1.5건.
     val paperMinRequestIntervalMs: Long = 667,
     val liveMinRequestIntervalMs: Long = 60,
+    // 편도 비율. KIS 온라인 수수료와 유관기관 제비용(합계 약 0.0177%)을 올려 잡았다.
+    val commissionRate: Double = 0.0002,
+    // 매도에만 붙는 비율. ETF 는 면제지만 종목을 구분하지 않는다.
+    val sellTaxRate: Double = 0.002,
 ) {
     private companion object {
         // 숫자를 다시 적으면 Upbit 기본값을 바꿀 때 KIS 쪽이 따라가지 않는다.

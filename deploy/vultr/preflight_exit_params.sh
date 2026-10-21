@@ -31,6 +31,8 @@ RANGE_RULES=(
     "KIS_TRADING_TRAILING_ARM_PCT decimal 0 1 100 1"
     "KIS_TRADING_MAX_HOLD_DAYS integer 1 1 - 0"
     "KIS_TRADING_INVEST_RATIO decimal 0 0 1 1"
+    "KIS_TRADING_COMMISSION_RATE decimal 0 1 0.01 0"
+    "KIS_TRADING_SELL_TAX_RATE decimal 0 1 0.01 0"
 )
 # Spring 은 yes·on 등도 받지만 여기서는 소문자 true/false 만 받는다.
 BOOLEAN_KEYS=(

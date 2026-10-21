@@ -71,12 +71,34 @@ class KisTradingPropertiesTest {
         val trading = ExitParamRanges.TRADING.associateBy { it.property.name }
         assertThat(KisExitParamRanges.KIS.map { it.property.name }).containsExactlyInAnyOrder(
             "takeProfitPct", "maxLossPct", "trailingStopPct", "trailingArmPct", "maxHoldDays", "investRatio",
+            *COST_RATE_NAMES.toTypedArray(),
         )
         val prefix = KisTradingProperties::class.findAnnotation<ConfigurationProperties>()!!.prefix
         KisExitParamRanges.KIS.forEach { entry ->
-            assertThat(entry.range).describedAs(entry.key).isEqualTo(trading.getValue(entry.property.name).range)
+            if (entry.property.name !in COST_RATE_NAMES) {
+                assertThat(entry.range).describedAs(entry.key).isEqualTo(trading.getValue(entry.property.name).range)
+            }
             assertThat(entry.key.substringBeforeLast('.')).isEqualTo(prefix)
         }
         assertThat(KisExitParamRanges.violations(KisTradingProperties())).isEmpty()
+    }
+
+    @Test
+    fun `비용 요율 기본값은 편도 수수료 0_0002·매도 거래세 0_002 이고 구간은 비율 0 이상 0_01 미만이다`() {
+        val kis = KisTradingProperties()
+        assertThat(kis.commissionRate).isEqualTo(0.0002)
+        assertThat(kis.sellTaxRate).isEqualTo(0.002)
+        val cost = KisExitParamRanges.KIS.filter { it.property.name in COST_RATE_NAMES }
+        assertThat(cost.map { it.key }).containsExactly("kis.trading.commission-rate", "kis.trading.sell-tax-rate")
+        cost.forEach { assertThat(it.range).describedAs(it.key).isEqualTo(ExitParamRanges.Range(0.0, true, 0.01, false)) }
+        assertThat(KisExitParamRanges.violations(KisTradingProperties(commissionRate = 0.2, sellTaxRate = -0.001))).containsExactly(
+            "kis.trading.commission-rate=0.2 (허용 [0, 0.01))",
+            "kis.trading.sell-tax-rate=-0.001 (허용 [0, 0.01))",
+        )
+    }
+
+    private companion object {
+        // TRADING 에 같은 이름이 없어 KIS 가 자체 구간을 두는 항목.
+        val COST_RATE_NAMES = listOf("commissionRate", "sellTaxRate")
     }
 }
