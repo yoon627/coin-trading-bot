@@ -240,7 +240,9 @@ class ExitParamsPreflightScriptTest {
     fun `앱 기본값을 그대로 적어도 통과한다`() {
         // 운영자가 기본값을 secret 에 명시해도 배포가 막히면 안 된다.
         val lines = allKeys.map { key ->
-            "${key.env}=${key.property.getter.call(key.owner.kotlin.createInstance())}"
+            val value = key.property.getter.call(key.owner.kotlin.createInstance())
+            // 운영자는 소스의 소수 표기를 옮겨 적는다. Double.toString 은 0.001 미만을 지수 표기(2.0E-4)로 내 스크립트 형식 밖이다.
+            "${key.env}=${if (value is Double) BigDecimal.valueOf(value).toPlainString() else value}"
         }
         val run = run(*lines.toTypedArray())
         assertThat(run.exit).describedAs(run.stderr).isEqualTo(0)

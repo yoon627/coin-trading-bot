@@ -4,12 +4,16 @@ import com.trading.common.config.ExitParamRanges
 import kotlin.reflect.KProperty1
 
 /**
- * [KisTradingProperties] 의 청산·투자비율 허용 구간. 구간은 [ExitParamRanges.TRADING] 의 같은 이름 항목을 그대로 쓴다.
+ * [KisTradingProperties] 의 청산·투자비율·비용 요율 허용 구간. 청산·투자비율은 [ExitParamRanges.TRADING] 의 같은 이름 항목을
+ * 그대로 쓰고, 비용 요율은 Upbit 에 같은 항목이 없어 따로 둔다.
  * `deploy/vultr/preflight_exit_params.sh` 에 사본이 있어 함께 바꿔야 한다.
  */
 object KisExitParamRanges {
 
     private const val PREFIX = "kis.trading"
+
+    // 퍼센트가 아니라 비율이다. 0.2% 를 0.2 로 잘못 적는 경우를 거른다.
+    private val COST_RATE = ExitParamRanges.Range(0.0, true, 0.01, false)
 
     val KIS: List<ExitParamRanges.Entry<KisTradingProperties>> = listOf(
         sameAsTrading(KisTradingProperties::takeProfitPct),
@@ -18,6 +22,8 @@ object KisExitParamRanges {
         sameAsTrading(KisTradingProperties::trailingArmPct),
         sameAsTrading(KisTradingProperties::maxHoldDays),
         sameAsTrading(KisTradingProperties::investRatio),
+        ExitParamRanges.Entry(PREFIX, KisTradingProperties::commissionRate, COST_RATE),
+        ExitParamRanges.Entry(PREFIX, KisTradingProperties::sellTaxRate, COST_RATE),
     )
 
     fun violations(properties: KisTradingProperties): List<String> = KIS.mapNotNull { it.violation(properties) }
