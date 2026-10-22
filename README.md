@@ -113,6 +113,10 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | POST | `/api/bot/pending/clear` | 미해소 주문 기록 삭제(봇 정지 상태에서만) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 |
 | GET | `/api/trades`, `/api/trades/roundtrips` | 거래 이력, 라운드트립 |
+| GET | `/api/kis/keys` | KIS 모의(`KIS_PAPER`)·실전(`KIS`) 키 저장 여부, 마스킹한 계좌(`****5678-01`), 갱신 시각(`updated_at`, UTC ISO-8601) |
+| PUT, DELETE | `/api/kis/keys/{KIS_PAPER\|KIS}` | KIS 키 저장(`app_key`, `app_secret`, `account_number`)·삭제 |
+
+`/api/kis/keys`는 `KIS_TRADING_ENABLED=true`일 때만 있다(꺼져 있으면 404). 세 값은 `APP_ENCRYPTION_SECRET`으로 각각 암호화해 `user_broker_keys`에 두고, 응답에는 앱키·앱시크릿을 어떤 형태로도 내지 않는다. 앱키는 128자, 앱시크릿은 512자 이하의 공백 없는 ASCII, 계좌번호는 `12345678-01` 또는 `1234567801`이다. 형식이 틀리거나 경로가 `KIS_PAPER`·`KIS`가 아니면 400, `KIS_TRADING_LIVE_ENABLED=false`에서 실전(`KIS`) 키를 저장하면 409, DB 가 10초 안에 답하지 않거나 DB 오류면 503 이다(저장 요청이었다면 반영됐는지 상태 조회로 확인한다). 삭제는 실전 키도 받는다. 저장·삭제는 도는 엔진에 반영하지 않는다(KIS 엔진이 아직 이 키를 읽지 않는다). `APP_ENCRYPTION_SECRET`을 바꾸면 저장된 KIS 키를 복호화하지 못하므로 키를 다시 저장한다. 그때 상태 조회는 `configured: true`에 `account: null`로 보인다.
 
 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
 
@@ -188,3 +192,24 @@ DELETE FROM trade_records WHERE exchange <> 'UPBIT';
 DELETE FROM trading_states WHERE exchange <> 'UPBIT';
 COMMIT;
 ```
+
+### V31 (KIS 키 테이블)
+
+V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 전 `./backup.sh` 는 다른 스키마 배포와 같이 돌리고, 실패하면(버킷 접근에 실패하면 덤프를 남기지 않는다) 같은 `pg_dump` 를 서버 디스크에 먼저 남긴 뒤 배포한다. main 머지가 곧 배포이므로 백업은 머지 전에 한다.
+
+- V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 `deploy.sh` 의 자동 롤백 하한은 V30 그대로다.
+- 다만 V31 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 V31 적용 여부와 관계없이 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백해도 되고, `V31_down.sql` 은 필요 없다.
+- V30 이전으로 내려가야 하면 `V31_down.sql` 을 먼저 돌리고 위 V30 절차를 따른다. `V30_down.sql` 은 V30 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V31_down.sql` 을 쓴다. 저장된 KIS 앱키·앱시크릿·계좌번호가 모두 사라져 사용자가 다시 넣어야 한다. V31 이 마지막 적용 버전일 때만 돌고, 아니면 아무것도 바꾸지 않고 멈춘다. 테이블과 `flyway_schema_history` 의 V31 행을 한 트랜잭션으로 지우므로, 이후 V31 이 든 이미지를 올리면 테이블을 다시 만든다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V31_down.sql
+  APP_VERSION=<V31 이전 SHA> docker compose up -d --pull missing
+  ```
+  `/tmp/V31_down.sql` 은 저장소의 파일을 서버로 올린 것이다. `backup.sh` 가 실패하면 down 은 돌지 않는다. S3 백업을 쓸 수 없으면 `docker compose exec -T postgres pg_dump -U trading -d trading --no-owner | gzip` 으로 덤프를 먼저 남기고 `&&` 뒤 명령만 실행한다.
+- `KIS_TRADING_ENABLED=false` 이면 `/api/kis/keys` 가 없어 사용자가 저장한 키를 API 로 지울 수 없다. 그때 한 사용자의 키를 지우려면 `/opt/app` 에서 아래를 실행한다. 한 환경만 지우면 `<환경>` 에 `KIS_PAPER`(모의) 또는 `KIS`(실전)를 넣고, 두 환경을 모두 지우면 `AND exchange = ...` 를 뺀다. 백업 조건은 위 down 과 같다.
+  ```bash
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
+    -c "DELETE FROM user_broker_keys WHERE user_id = <사용자 id> AND exchange = '<환경>'"
+  ```

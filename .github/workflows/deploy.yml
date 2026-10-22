@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           # scripts/run-db-tests.sh 의 DB_TEST_CLASSES 와 같은 목록을 유지한다.
-          for c in TradingStateRoundTripTest TradeRecordRoundTripTest UserSettingsUpdateRoundTripTest ExchangeDimensionRoundTripTest; do
+          for c in TradingStateRoundTripTest TradeRecordRoundTripTest UserSettingsUpdateRoundTripTest ExchangeDimensionRoundTripTest UserBrokerKeyRoundTripTest; do
             XML="bot/build/test-results/test/TEST-com.trading.bot.persistence.$c.xml"
             if [ ! -f "$XML" ]; then
               echo "::error::DB 통합테스트 결과가 없다 — 실행되지 않았다 ($XML)"
