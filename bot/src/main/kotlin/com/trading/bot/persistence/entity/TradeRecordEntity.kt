@@ -22,7 +22,7 @@ data class TradeRecordEntity(
     val strategy: String? = null,
     val userId: Long? = null,
     val createdAt: LocalDateTime = LocalDateTime.now(),
-    // [com.trading.common.domain.Exchange.name]. /api/trades 가 이 엔티티를 그대로 내보내므로 거래소 파라미터를 붙이기 전까지 응답에서 뺀다.
+    // [com.trading.common.domain.Exchange.name]. /api/trades 가 이 엔티티를 그대로 내보내는데, 응답은 요청한 한 거래소의 행뿐이라 이 열은 빼서 응답 형태를 유지한다.
     @get:JsonIgnore
     val exchange: String = "UPBIT",
 )

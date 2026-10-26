@@ -3,6 +3,7 @@ package com.trading.bot.persistence
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import com.trading.common.domain.Exchange
 import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.test.runTest
@@ -105,7 +106,7 @@ class TradeRecordRoundTripTest {
         val known = repository.save(record(userId, TradeSide.BUY, totalAmount = 1_000_000.0, orderAmount = 50_000.0))
         val unknown = repository.save(record(userId, TradeSide.BUY, totalAmount = 1_000_000.0, orderAmount = null))
 
-        val rows = repository.findByUserId(userId).associateBy { it.id }
+        val rows = repository.findByUserIdAndExchange(userId, Exchange.UPBIT, limit = 100, offset = 0).associateBy { it.id }
         assertThat(rows.getValue(known.id!!).orderAmount).isCloseTo(50_000.0, within(1e-9))
         assertThat(rows.getValue(unknown.id!!).orderAmount).isNull()
     }

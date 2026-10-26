@@ -1,25 +1,33 @@
 package com.trading.bot.api
 
 import com.trading.bot.auth.currentUserId
-import com.trading.bot.engine.UserTradingManager
+import com.trading.bot.engine.TradingManagers
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.security.UserSecretsService
+import com.trading.common.domain.Exchange
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
 
 @RestController
 @RequestMapping("/api/portfolio")
 class PortfolioController(
-    private val userTradingManager: UserTradingManager,
+    private val managers: TradingManagers,
     private val userRepository: UserRepository,
     private val userSecretsService: UserSecretsService,
+    private val requestValidators: RequestValidators,
 ) {
     @GetMapping
-    suspend fun getPortfolio(): Map<String, Any> {
+    suspend fun getPortfolio(@RequestParam(required = false) exchange: String? = null): Map<String, Any> {
+        // 원화 현금 행과 "KRW-" 마켓 규칙이 Upbit 계좌 어휘라 다른 거래소는 받지 않는다.
+        if (requestValidators.parseExchange(exchange) != Exchange.UPBIT) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "포트폴리오 조회는 아직 UPBIT 만 지원한다")
+        }
+        val manager = managers.get(Exchange.UPBIT)
         val userId = currentUserId()
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND)
@@ -27,7 +35,7 @@ class PortfolioController(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Upbit API keys not configured")
         }
 
-        val client = userTradingManager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
+        val client = manager.createUpbitClient(userSecretsService.decryptUserSecrets(user))
         val accounts = client.getAccounts()
 
         val krw = accounts.find { it.currency == "KRW" }
