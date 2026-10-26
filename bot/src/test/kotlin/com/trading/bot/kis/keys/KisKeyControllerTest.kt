@@ -3,12 +3,19 @@ package com.trading.bot.kis.keys
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.databind.SerializationFeature
+import com.trading.bot.engine.RuntimeReloadFailedException
+import com.trading.bot.engine.TradingManagers
+import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.kis.config.KisTradingProperties
 import com.trading.bot.persistence.UserBrokerKeyRepository
 import com.trading.bot.security.SecretsCrypto
+import com.trading.common.domain.Exchange
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.reactor.mono
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -29,6 +36,7 @@ import org.springframework.test.web.reactive.server.WebTestClient
 import org.springframework.web.server.WebFilter
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.core.publisher.Sinks
 
 /**
  * 상태 코드는 예외가 WebFlux 를 거쳐야 정해지므로 실제 파이프라인으로 본다.
@@ -51,8 +59,12 @@ class KisKeyControllerTest {
         )
     }
 
-    private fun client(liveEnabled: Boolean = false, dbTimeoutMs: Long = KisKeyStore.DB_TIMEOUT_MS): WebTestClient = WebTestClient
-        .bindToController(KisKeyController(keyStore(keys, liveEnabled = liveEnabled, dbTimeoutMs = dbTimeoutMs)))
+    private fun client(
+        liveEnabled: Boolean = false,
+        dbTimeoutMs: Long = KisKeyStore.DB_TIMEOUT_MS,
+        managers: TradingManagers = TradingManagers.of(),
+    ): WebTestClient = WebTestClient
+        .bindToController(KisKeyController(keyStore(keys, liveEnabled = liveEnabled, dbTimeoutMs = dbTimeoutMs), managers))
         .httpMessageCodecs {
             it.defaultCodecs().jackson2JsonDecoder(Jackson2JsonDecoder(mapper))
             it.defaultCodecs().jackson2JsonEncoder(Jackson2JsonEncoder(mapper))
@@ -162,6 +174,56 @@ class KisKeyControllerTest {
     }
 
     @Test
+    fun `저장·삭제 뒤 그 환경의 매니저만 다시 읽히고 매니저가 없으면 저장만 한다`() {
+        val upbit = mockk<UserTradingManager>(relaxed = true)
+        val paper = mockk<UserTradingManager>(relaxed = true)
+        val client = client(liveEnabled = true, managers = TradingManagers.of(Exchange.UPBIT to upbit, Exchange.KIS_PAPER to paper))
+
+        client.put("KIS_PAPER").expectStatus().isOk
+        client.delete().uri("/api/kis/keys/KIS_PAPER").exchange().expectStatus().isOk
+        client.put("KIS").expectStatus().isOk
+        client.delete().uri("/api/kis/keys/KIS").exchange().expectStatus().isOk
+
+        coVerify(exactly = 2) { paper.reloadUserRuntime(1L) }
+        coVerify(exactly = 0) { upbit.reloadUserRuntime(any()) }
+    }
+
+    @Test
+    fun `저장 뒤 엔진 교체가 실패하면 503 이고 키는 저장돼 있다`() {
+        val paper = mockk<UserTradingManager>()
+        coEvery { paper.reloadUserRuntime(1L) } throws
+            RuntimeReloadFailedException(1L, RuntimeException("kis down"), engineRestored = true)
+
+        client(managers = TradingManagers.of(Exchange.KIS_PAPER to paper)).put("KIS_PAPER")
+            .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
+        assertTrue(keys.rows.containsKey(1L to "KIS_PAPER"))
+    }
+
+    @Test
+    fun `저장·삭제 중 요청이 끊겨도 끝까지 마치고 엔진이 다시 읽는다`() {
+        val paper = mockk<UserTradingManager>(relaxed = true)
+        val controller = KisKeyController(keyStore(keys), TradingManagers.of(Exchange.KIS_PAPER to paper))
+        val auth = ReactiveSecurityContextHolder.withAuthentication(UsernamePasswordAuthenticationToken(1L, null, emptyList()))
+        val saving = Sinks.one<Int>()
+        val deleting = Sinks.one<Int>()
+        every { keys.repository.upsert(any(), any(), any(), any(), any()) } returns saving.asMono()
+        every { keys.repository.deleteByUserIdAndExchange(any(), any()) } returns deleting.asMono()
+
+        val save = mono { controller.save("KIS_PAPER", KisKeyRequest(FAKE_APP_KEY, FAKE_APP_SECRET, FAKE_ACCOUNT)) }
+            .contextWrite(auth).subscribe({}, {})
+        verify(timeout = 2_000) { keys.repository.upsert(1L, "KIS_PAPER", any(), any(), any()) }
+        save.dispose()
+        saving.tryEmitValue(1)
+        coVerify(timeout = 2_000, exactly = 1) { paper.reloadUserRuntime(1L) }
+
+        val delete = mono { controller.delete("KIS_PAPER") }.contextWrite(auth).subscribe({}, {})
+        verify(timeout = 2_000) { keys.repository.deleteByUserIdAndExchange(1L, "KIS_PAPER") }
+        delete.dispose()
+        deleting.tryEmitValue(1)
+        coVerify(timeout = 2_000, exactly = 2) { paper.reloadUserRuntime(1L) }
+    }
+
+    @Test
     fun `요청 객체의 toString 은 원문을 내지 않는다`() {
         val text = KisKeyRequest(FAKE_APP_KEY, FAKE_APP_SECRET, FAKE_ACCOUNT).toString()
         FAKE_RAW_VALUES.forEach { assertFalse(text.contains(it), text) }
@@ -177,6 +239,7 @@ class KisKeyControllerTest {
             .withUserConfiguration(Config::class.java, KisKeyStore::class.java, KisKeyController::class.java)
             .withBean(UserBrokerKeyRepository::class.java, { mockk<UserBrokerKeyRepository>() })
             .withBean(SecretsCrypto::class.java, { testCrypto() })
+            .withBean(TradingManagers::class.java, { TradingManagers.of() })
 
         listOf(runner, runner.withPropertyValues("kis.trading.enabled=false")).forEach {
             it.run { context ->

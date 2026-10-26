@@ -13,30 +13,35 @@ class TradeHistoryController(
     private val tradeRecordRepository: TradeRecordRepository,
     private val requestValidators: RequestValidators,
 ) {
+    /** 한 거래소의 기록만 돌려주고 total 도 그 거래소 기준이다. */
     @GetMapping
     suspend fun getTrades(
         @RequestParam(defaultValue = "100") limit: Int,
         @RequestParam(defaultValue = "0") offset: Int,
+        @RequestParam(required = false) exchange: String? = null,
     ): Map<String, Any> {
+        val target = requestValidators.parseExchange(exchange)
         val userId = currentUserId()
         val sanitizedLimit = requestValidators.sanitizeTradeLimit(limit)
         val sanitizedOffset = offset.coerceAtLeast(0)
-        val records = tradeRecordRepository.findByUserId(userId, sanitizedLimit, sanitizedOffset)
-        val total = tradeRecordRepository.countByUserId(userId)
+        val records = tradeRecordRepository.findByUserIdAndExchange(userId, target, sanitizedLimit, sanitizedOffset)
+        val total = tradeRecordRepository.countByUserIdAndExchange(userId, target)
         return mapOf("total" to total, "limit" to sanitizedLimit, "offset" to sanitizedOffset, "records" to records)
     }
 
     /**
-     * 매수→매도를 짝지어 돌려준다. flat 한 [getTrades] 만으로는 어느 매도가 어느 매수의 청산인지 알 수 없다.
+     * 한 거래소의 매수→매도를 짝지어 돌려준다. flat 한 [getTrades] 만으로는 어느 매도가 어느 매수의 청산인지 알 수 없다.
      */
     @GetMapping("/roundtrips")
     suspend fun getRoundTrips(
         @RequestParam(defaultValue = "100") limit: Int,
+        @RequestParam(required = false) exchange: String? = null,
     ): Map<String, Any> {
+        val target = requestValidators.parseExchange(exchange)
         val userId = currentUserId()
         val sanitizedLimit = requestValidators.sanitizeTradeLimit(limit)
         // 상한을 넘었는지 알려고 한 건 더 받는다.
-        val fetched = tradeRecordRepository.findRecentAscending(userId, MAX_SOURCE_RECORDS + 1)
+        val fetched = tradeRecordRepository.findRecentAscending(userId, target, MAX_SOURCE_RECORDS + 1)
         val truncated = fetched.size > MAX_SOURCE_RECORDS
         // 오름차순이라 버리는 한 건은 가장 오래된 행이다.
         val records = if (truncated) fetched.takeLast(MAX_SOURCE_RECORDS) else fetched

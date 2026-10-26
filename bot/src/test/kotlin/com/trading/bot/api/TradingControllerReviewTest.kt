@@ -1,6 +1,8 @@
 package com.trading.bot.api
 
+import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
+import com.trading.common.domain.Exchange
 import io.mockk.coEvery
 import io.mockk.mockk
 import java.time.Duration
@@ -18,7 +20,7 @@ class TradingControllerReviewTest {
 
     private val userId = 42L
     private val manager = mockk<UserTradingManager>()
-    private val controller = TradingController(manager, mockk(), RequestValidators(), mockk())
+    private val controller = TradingController(TradingManagers.of(Exchange.UPBIT to manager), mockk(), RequestValidators(), mockk())
 
     @Test
     fun `halt clear refused for an order review is 409`() {
