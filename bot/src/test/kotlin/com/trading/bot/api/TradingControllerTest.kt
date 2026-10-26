@@ -2,10 +2,12 @@ package com.trading.bot.api
 
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.BotControlPersistFailedException
+import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
+import com.trading.common.domain.Exchange
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -37,7 +39,7 @@ class TradingControllerTest {
     private val userRepo = mockk<UserRepository>()
     private val validators = RequestValidators()
     private val secrets = mockk<UserSecretsService>()
-    private val controller = TradingController(manager, userRepo, validators, secrets)
+    private val controller = TradingController(TradingManagers.of(Exchange.UPBIT to manager), userRepo, validators, secrets)
 
     private fun <T : Any> authed(block: suspend () -> T): T =
         mono { block() }.contextWrite(authContext).block()!!

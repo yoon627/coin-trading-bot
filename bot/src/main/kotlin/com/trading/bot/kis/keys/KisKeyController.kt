@@ -1,7 +1,12 @@
 package com.trading.bot.kis.keys
 
 import com.trading.bot.auth.currentUserId
+import com.trading.bot.engine.RuntimeReloadFailedException
+import com.trading.bot.engine.TradingManagers
+import com.trading.bot.engine.reloadFailureMessage
 import com.trading.common.domain.Exchange
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -14,13 +19,14 @@ import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
 
 /**
- * KIS 키 저장·상태·삭제. 저장·삭제해도 도는 엔진을 다시 읽히지 않는다 — KIS 엔진이 아직 이 키에 연결되지 않았다.
+ * KIS 키 저장·상태·삭제. 저장·삭제 뒤 그 환경의 매니저가 등록돼 있으면 도는 엔진이 키를 다시 읽는다. 매니저가 없으면 저장만 한다.
  */
 @RestController
 @RequestMapping("/api/kis/keys")
 @ConditionalOnProperty(prefix = "kis.trading", name = ["enabled"], havingValue = "true")
 class KisKeyController(
     private val store: KisKeyStore,
+    private val managers: TradingManagers,
 ) {
 
     @GetMapping
@@ -30,7 +36,7 @@ class KisKeyController(
     suspend fun save(@PathVariable exchange: String, @RequestBody request: KisKeyRequest): Map<String, String> {
         val target = parseExchange(exchange)
         val userId = currentUserId()
-        translated {
+        untilDone {
             store.save(
                 userId = userId,
                 exchange = target,
@@ -39,14 +45,28 @@ class KisKeyController(
                 accountNumber = request.accountNumber ?: throw missing("account_number"),
             )
         }
+        reload(userId, target)
         return mapOf("status" to "saved")
     }
 
     @DeleteMapping("/{exchange}")
     suspend fun delete(@PathVariable exchange: String): Map<String, String> {
         val target = parseExchange(exchange)
-        translated { store.delete(currentUserId(), target) }
+        val userId = currentUserId()
+        untilDone { store.delete(userId, target) }
+        reload(userId, target)
         return mapOf("status" to "deleted")
+    }
+
+    // 커밋 뒤 요청이 끊겨 reload 가 빠지면 DB 와 도는 엔진의 키가 갈리므로 저장·삭제는 취소되지 않게 끝까지 마친다. 상한은 저장소가 둔다.
+    private suspend fun <T> untilDone(block: suspend () -> T): T = withContext(NonCancellable) { translated { block() } }
+
+    private suspend fun reload(userId: Long, exchange: Exchange) {
+        try {
+            managers.find(exchange)?.reloadUserRuntime(userId)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
     }
 
     private fun parseExchange(raw: String): Exchange =

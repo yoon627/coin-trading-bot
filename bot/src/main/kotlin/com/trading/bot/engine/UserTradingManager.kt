@@ -18,6 +18,7 @@ import com.trading.common.config.ExitParamRanges
 import com.trading.common.config.TradingProperties
 import com.trading.bot.persistence.ShadowExitObservationRepository
 import com.trading.common.config.ShadowExitProperties
+import com.trading.common.domain.Exchange
 import com.trading.common.strategy.TradingStrategy
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -68,6 +69,7 @@ class UserTradingManager(
     private val log = LoggerFactory.getLogger(javaClass)
     private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
     private val runtime: ExchangeRuntime = runtime ?: upbitRuntime
+    val exchange: Exchange get() = runtime.exchange
     private val exchangeKey: String = this.runtime.exchange.name
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
     // 엔진 등록과 start() 사이에 stop 이 끼지 않도록 사용자별로 start/stop/reload 를 직렬화한다.

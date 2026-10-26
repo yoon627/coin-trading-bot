@@ -3,10 +3,12 @@ package com.trading.bot.api
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.STOP_UNPERSISTED_MESSAGE
+import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
+import com.trading.common.domain.Exchange
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.verify
@@ -39,7 +41,7 @@ class ReloadFailureResponseWebFluxTest {
 
     private fun userClient(): WebTestClient = WebTestClient
         .bindToController(
-            TradingController(userTradingManager, userRepository, requestValidators, userSecretsService),
+            TradingController(TradingManagers.of(Exchange.UPBIT to userTradingManager), userRepository, requestValidators, userSecretsService),
         )
         .webFilter<WebTestClient.ControllerSpec>(authFilter())
         .build()

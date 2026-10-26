@@ -106,17 +106,19 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 |---|---|---|
 | POST | `/api/auth/register`, `/api/auth/login`, `/api/auth/logout` | 첫 계정 생성, 로그인, 로그아웃 |
 | GET | `/api/user/me` | 내 정보 |
-| POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장 |
-| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 |
-| GET | `/api/bot/status` | 봇 상태, 포지션, 미해소 주문 |
-| POST | `/api/bot/halt/clear` | 종목 halt 해제 |
-| POST | `/api/bot/pending/clear` | 미해소 주문 기록 삭제(봇 정지 상태에서만) |
+| POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
+| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`) |
+| GET | `/api/bot/status` | 봇 상태, 포지션, 미해소 주문 (`exchange`) |
+| POST | `/api/bot/halt/clear` | 종목 halt 해제 (`exchange`) |
+| POST | `/api/bot/pending/clear` | 미해소 주문 기록 삭제(봇 정지 상태에서만) (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 |
 | GET | `/api/trades`, `/api/trades/roundtrips` | 거래 이력, 라운드트립 |
 | GET | `/api/kis/keys` | KIS 모의(`KIS_PAPER`)·실전(`KIS`) 키 저장 여부, 마스킹한 계좌(`****5678-01`), 갱신 시각(`updated_at`, UTC ISO-8601) |
 | PUT, DELETE | `/api/kis/keys/{KIS_PAPER\|KIS}` | KIS 키 저장(`app_key`, `app_secret`, `account_number`)·삭제 |
 
-`/api/kis/keys`는 `KIS_TRADING_ENABLED=true`일 때만 있다(꺼져 있으면 404). 세 값은 `APP_ENCRYPTION_SECRET`으로 각각 암호화해 `user_broker_keys`에 두고, 응답에는 앱키·앱시크릿을 어떤 형태로도 내지 않는다. 앱키는 128자, 앱시크릿은 512자 이하의 공백 없는 ASCII, 계좌번호는 `12345678-01` 또는 `1234567801`이다. 형식이 틀리거나 경로가 `KIS_PAPER`·`KIS`가 아니면 400, `KIS_TRADING_LIVE_ENABLED=false`에서 실전(`KIS`) 키를 저장하면 409, DB 가 10초 안에 답하지 않거나 DB 오류면 503 이다(저장 요청이었다면 반영됐는지 상태 조회로 확인한다). 삭제는 실전 키도 받는다. 저장·삭제는 도는 엔진에 반영하지 않는다(KIS 엔진이 아직 이 키를 읽지 않는다). `APP_ENCRYPTION_SECRET`을 바꾸면 저장된 KIS 키를 복호화하지 못하므로 키를 다시 저장한다. 그때 상태 조회는 `configured: true`에 `account: null`로 보인다.
+표에 `exchange` 가 붙은 API 는 쿼리 파라미터 `exchange`(`UPBIT`·`KIS_PAPER`·`KIS`, 철자 그대로)로 거래소를 고른다. 없거나 빈 값이면 `UPBIT` 다. 모르는 값은 400 이다. 제어 API(`/api/bot/*`)는 그 거래소의 매니저가 등록돼 있어야 하고 아니면 400 이다 — 지금은 `UPBIT` 만 등록돼 있다. KIS 티커는 `KRX-` 와 종목코드 6~7자(영문 대문자·숫자)다. 앞뒤 공백은 빼고 소문자는 대문자로 바꿔 받는다(`krx-005930` → `KRX-005930`). `/api/account` 도 `exchange` 를 받지만 `UPBIT` 가 아니면 400 이다.
+
+`/api/kis/keys`는 `KIS_TRADING_ENABLED=true`일 때만 있다(꺼져 있으면 404). 세 값은 `APP_ENCRYPTION_SECRET`으로 각각 암호화해 `user_broker_keys`에 두고, 응답에는 앱키·앱시크릿을 어떤 형태로도 내지 않는다. 앱키는 128자, 앱시크릿은 512자 이하의 공백 없는 ASCII, 계좌번호는 `12345678-01` 또는 `1234567801`이다. 형식이 틀리거나 경로가 `KIS_PAPER`·`KIS`가 아니면 400, `KIS_TRADING_LIVE_ENABLED=false`에서 실전(`KIS`) 키를 저장하면 409, DB 가 10초 안에 답하지 않거나 DB 오류면 503 이다(저장 요청이었다면 반영됐는지 상태 조회로 확인한다). 삭제는 실전 키도 받는다. 저장·삭제 뒤 그 환경의 매니저가 등록돼 있으면 도는 엔진이 키를 다시 읽는다. 지금은 KIS 매니저가 없어 저장·삭제만 한다. 다시 읽기에 실패하면 503 이고 저장·삭제는 이미 반영된 상태다. `APP_ENCRYPTION_SECRET`을 바꾸면 저장된 KIS 키를 복호화하지 못하므로 키를 다시 저장한다. 그때 상태 조회는 `configured: true`에 `account: null`로 보인다.
 
 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
 
