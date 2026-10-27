@@ -80,6 +80,19 @@ class UserTradingManager(
     @Volatile private var lifecycleRunning = false
     @Volatile private var shuttingDown = false
     private var restoreJob: Job? = null
+    @Volatile private var restoreProgress = RestoreStatus.NOT_STARTED
+    // 사용자 목록 없이 끝난 복원(bot state 조회 실패·예기치 않은 오류). 재시작 전까지 FAILED 다.
+    @Volatile private var restoreAborted = false
+    // 재시도를 다 쓰고 복원하지 못한 사용자. 그 사용자를 손으로 시작하거나 멈추면 빠진다.
+    private val restoreFailedUsers: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    /** 기동 복원의 결과. 배포 판정(health)이 읽는다. */
+    val restoreStatus: RestoreStatus
+        get() = if (restoreProgress == RestoreStatus.DONE && (restoreAborted || restoreFailedUsers.isNotEmpty())) {
+            RestoreStatus.FAILED
+        } else {
+            restoreProgress
+        }
 
     private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { Mutex() }
 
@@ -88,6 +101,7 @@ class UserTradingManager(
     @Order(Ordered.LOWEST_PRECEDENCE)
     fun restoreOnStartup() {
         if (!runtime.profile.autoStart) {
+            restoreProgress = RestoreStatus.DISABLED
             log.info("Auto-start disabled. Skipping bot restoration.")
             return
         }
@@ -168,12 +182,26 @@ class UserTradingManager(
 
     /** 일시적인 DB·API 실패는 backoff 로 재시도한다. ERROR 는 최종 실패와 종료가 아닌 취소에만 낸다. */
     internal suspend fun restoreAllRunningBots() {
+        restoreProgress = RestoreStatus.IN_PROGRESS
         try {
             restoreWithRetries()
         } catch (e: CancellationException) {
-            if (!shuttingDown) log.error("봇 미복원: 복원이 취소로 중단됐다 — 복원되지 않은 봇이 있을 수 있다", e)
+            if (!shuttingDown) {
+                log.error("봇 미복원: 복원이 취소로 중단됐다 — 복원되지 않은 봇이 있을 수 있다", e)
+                abortRestore()
+            }
+            throw e
+        } catch (e: Throwable) {
+            log.error("봇 미복원: 예기치 않은 오류로 복원이 중단됐다 — 복원되지 않은 봇이 있을 수 있다", e)
+            abortRestore()
             throw e
         }
+        restoreProgress = RestoreStatus.DONE
+    }
+
+    private fun abortRestore() {
+        restoreAborted = true
+        restoreProgress = RestoreStatus.DONE
     }
 
     private suspend fun restoreWithRetries() {
@@ -202,8 +230,12 @@ class UserTradingManager(
         }
         // 조회가 끝까지 실패하면 pendingUserIds 가 비어 있어도 복원된 봇은 없다.
         if (lastQueryFailed) {
+            restoreAborted = true
             log.error("봇 미복원: bot state 조회가 재시도 {}회 모두 실패 — 복원된 봇 없음", RESTORE_MAX_ATTEMPTS)
         } else if (pendingUserIds.isNotEmpty()) {
+            restoreFailedUsers.addAll(pendingUserIds)
+            // 마지막 시도와 이 줄 사이에 손으로 시작된 봇은 실패로 세지 않는다.
+            restoreFailedUsers.removeIf { engines[it]?.isRunning() == true }
             log.error("봇 미복원: {}개 유저 복원 실패 (재시도 {}회 소진) — userIds={}", pendingUserIds.size, RESTORE_MAX_ATTEMPTS, pendingUserIds)
         }
     }
@@ -247,7 +279,10 @@ class UserTradingManager(
         if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
         // 도는 엔진의 start 는 no-op 이므로 저장하기 전에 가른다.
         val running = engines[userId]?.takeIf { it.isRunning() }
-        if (running != null) return@withLock respondToRunningEngine(userId, running, tickers)
+        if (running != null) {
+            restoreFailedUsers.remove(userId)
+            return@withLock respondToRunningEngine(userId, running, tickers)
+        }
         val user = userRepository.findById(userId).awaitSingleOrNull()
             ?: return@withLock mapOf("error" to "User not found")
 
@@ -273,6 +308,7 @@ class UserTradingManager(
         if (shuttingDown) return@withLock mapOf("error" to START_SAVED_SHUTTING_DOWN_MESSAGE)
         engine.start(tickerList, initialStates)
         if (stopIfShutdownStarted(userId, engine)) return@withLock mapOf("error" to START_SAVED_SHUTTING_DOWN_MESSAGE)
+        restoreFailedUsers.remove(userId)
         mapOf("status" to "started", "strategy" to strategy.name)
     }
 
@@ -315,6 +351,8 @@ class UserTradingManager(
             unpersistedStops.add(userId)
             // 엔진이 맵에서 빠졌으므로 여기서 끊기면 저장하지 못한 매도가 사라진다.
             if (engine != null) flushOrAlert(userId, engine)
+            // 멈추기로 한 사용자는 복원 실패로 세지 않는다.
+            restoreFailedUsers.remove(userId)
         }
         // 걸린 DB 호출이 lock 을 계속 쥐지 않게 시간 제한을 둔다. 실패하면 종료 때 다시 저장한다.
         persistOrFail(userId, STOP_UNPERSISTED_MESSAGE) {
