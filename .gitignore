@@ -64,3 +64,8 @@ replay_pid*
 
 ### Worktrees ###
 .worktrees/
+
+### Local tool state ###
+.claude/
+.codex/
+.serena/
