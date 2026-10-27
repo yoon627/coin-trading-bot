@@ -1,6 +1,7 @@
 package com.trading.bot.config
 
 import com.trading.bot.domain.ExitParamsSnapshot
+import com.trading.bot.exchange.UpbitMarketRules
 import com.trading.common.config.ExitParamRanges
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
@@ -13,7 +14,7 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
 import org.springframework.boot.context.properties.ConfigurationProperties
 
-/** 청산·주문 파라미터의 의미상 구간. 운영값이 아니라 판정식이 뜻을 잃는 경계다. */
+/** 청산·주문·주기 파라미터의 허용 구간. 운영값이 아니라 판정식이 뜻을 잃는 경계와 단위·자릿수 오기를 거르는 경계다. */
 class ExitParamRangesTest {
 
     private val entries = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW).associateBy { it.key }
@@ -30,7 +31,7 @@ class ExitParamRangesTest {
         "trading.take-profit-pct, 0, false",
         "trading.take-profit-pct, 0.01, true",
         "trading.take-profit-pct, 100, true",
-        // 상한 100 은 판정식 근거가 없다. 완화하면 preflight 사본과 함께 이 행을 바꾼다.
+        // 상한 100 은 판정식이 아니라 퍼센트 오기(5 를 500 으로)를 거르는 경계다.
         "trading.take-profit-pct, 100.01, false",
         "trading.trailing-stop-pct, 0, false",
         "trading.trailing-stop-pct, 1.5, true",
@@ -45,20 +46,36 @@ class ExitParamRangesTest {
         "trading.invest-ratio, 0, false",
         "trading.invest-ratio, 1, true",
         "trading.invest-ratio, 1.01, false",
+        // 최소 주문(5,000원) 미만이면 모든 매수가 건너뛰어진다.
+        "trading.max-invest-amount, 0, false",
+        "trading.max-invest-amount, 4999.99, false",
+        "trading.max-invest-amount, 5000, true",
+        "trading.max-invest-amount, 100000, true",
         "trading.round-trip-fee-rate, -0.001, false",
         "trading.round-trip-fee-rate, 0, true",
         "trading.round-trip-fee-rate, 0.009, true",
         "trading.round-trip-fee-rate, 0.01, false",
         // 0.1% 를 퍼센트 단위로 적은 오기. 비율로는 10% 다.
         "trading.round-trip-fee-rate, 0.1, false",
+        // 음수면 돌파 기준가가 시가 아래로 내려가 돌파 필터가 풀린다. 상한 2 는 0.5 를 5 로 적은 오기를 거른다.
+        "trading.k-value, -0.001, false",
+        "trading.k-value, 0, true",
+        "trading.k-value, 2, true",
+        "trading.k-value, 2.001, false",
+        // 상한 60 초는 손절 평가 지연의 상한이다. 10000 은 ms 로 잘못 적은 값이다.
+        "trading.interval-seconds, 0, false",
+        "trading.interval-seconds, 1, true",
+        "trading.interval-seconds, 60, true",
+        "trading.interval-seconds, 61, false",
+        "trading.interval-seconds, 10000, false",
         "trading.shadow-exit.trailing-stop-pct, 0, false",
         "trading.shadow-exit.trailing-stop-pct, 1.5, true",
         "trading.shadow-exit.trailing-stop-pct, 100, false",
         "trading.shadow-exit.trailing-arm-pct, -1, false",
-        // 라이브 arm 의 상한은 판정식 근거가 없어 그림자에는 두지 않았다.
-        "trading.shadow-exit.trailing-arm-pct, 1000, true",
+        "trading.shadow-exit.trailing-arm-pct, 100, true",
+        "trading.shadow-exit.trailing-arm-pct, 100.01, false",
     )
-    fun `구간은 판정식이 뜻을 잃는 경계에서 갈린다`(key: String, value: Double, inside: Boolean) {
+    fun `구간은 판정식이 뜻을 잃거나 오기로만 나올 값에서 갈린다`(key: String, value: Double, inside: Boolean) {
         val entry = entries[key] ?: error("표에 $key 가 없다")
         assertThat(value in entry.range).isEqualTo(inside)
     }
@@ -80,10 +97,17 @@ class ExitParamRangesTest {
 
     @Test
     fun `위반은 키·값·허용 구간을 싣는다`() {
-        assertThat(ExitParamRanges.violations(TradingProperties(maxLossPct = -5.0, maxHoldDays = 0))).containsExactly(
+        assertThat(ExitParamRanges.violations(TradingProperties(maxLossPct = -5.0, maxHoldDays = 0, intervalSeconds = 61))).containsExactly(
             "trading.max-loss-pct=-5.0 (허용 (0, 100))",
             "trading.max-hold-days=0 (허용 [1, ∞))",
+            "trading.interval-seconds=61 (허용 [1, 60])",
         )
+    }
+
+    @Test
+    fun `1회 매수 상한의 하한은 Upbit 최소 주문과 같다`() {
+        // 표는 common 모듈이라 bot 의 상수를 쓰지 못해 숫자로 적었다.
+        assertThat(entries.getValue("trading.max-invest-amount").range.min).isEqualTo(UpbitMarketRules.MIN_ORDER_KRW)
     }
 
     @Test
@@ -95,7 +119,10 @@ class ExitParamRangesTest {
             "trading.trailing-arm-pct",
             "trading.max-hold-days",
             "trading.invest-ratio",
+            "trading.max-invest-amount",
             "trading.round-trip-fee-rate",
+            "trading.k-value",
+            "trading.interval-seconds",
         )
         assertThat(ExitParamRanges.SHADOW.map { it.key }).containsExactly(
             "trading.shadow-exit.trailing-stop-pct",
@@ -125,7 +152,9 @@ class ExitParamRangesTest {
         assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingArmPct = -1.0)).single())
             .contains("trading.shadow-exit.trailing-arm-pct")
         assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = Double.NaN))).hasSize(1)
-        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = 1.5, trailingArmPct = 1000.0))).isEmpty()
+        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingStopPct = 1.5, trailingArmPct = 100.0))).isEmpty()
+        assertThat(ExitParamRanges.violations(ShadowExitProperties(trailingArmPct = 1000.0)).single())
+            .contains("trading.shadow-exit.trailing-arm-pct")
     }
 
     companion object {

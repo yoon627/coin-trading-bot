@@ -80,7 +80,7 @@ class ExitParamsDeclarationCheckTest {
     @Test
     fun `선언 검사는 값을 보지 않는다`() {
         // 선언 검사가 운영값을 강제하면 운영이 값을 바꿀 때마다 코드를 고쳐야 한다.
-        // 값은 의미상 구간(ExitParamRanges)만 따로 본다.
+        // 값은 허용 구간(ExitParamRanges)만 따로 본다.
         val env = MockEnvironment().apply {
             ExitParamsDeclarationCheck.REQUIRED_KEYS.forEach { setProperty(it, "-999") }
         }

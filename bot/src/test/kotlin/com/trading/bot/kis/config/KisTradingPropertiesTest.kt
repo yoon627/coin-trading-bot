@@ -62,7 +62,13 @@ class KisTradingPropertiesTest {
             assertThat(KisExitParamRanges.violations(kis)).containsExactly(
                 "kis.trading.max-loss-pct=-5.0 (허용 (0, 100))",
                 "kis.trading.max-hold-days=0 (허용 [1, ∞))",
+                "kis.trading.interval-seconds=0 (허용 [1, 60])",
             )
+            // 주기는 구간 표가 하한까지 보므로 프로파일 검사에 같은 키가 두 번 나오지 않는다.
+            assertThat(KisExitParamRanges.problems(kis).filter { it.startsWith("kis.trading.interval-seconds=") }).hasSize(1)
+            // 상한 60 을 넘으면 KIS 클라이언트를 만들지 않는 프로파일 문제다.
+            assertThat(KisExitParamRanges.problems(KisTradingProperties(intervalSeconds = 61)))
+                .containsExactly("kis.trading.interval-seconds=61 (허용 [1, 60])")
         }
     }
 
@@ -70,7 +76,7 @@ class KisTradingPropertiesTest {
     fun `KIS 구간은 TRADING 의 같은 이름 항목과 같고 키는 kis_trading 바인딩 키다`() {
         val trading = ExitParamRanges.TRADING.associateBy { it.property.name }
         assertThat(KisExitParamRanges.KIS.map { it.property.name }).containsExactlyInAnyOrder(
-            "takeProfitPct", "maxLossPct", "trailingStopPct", "trailingArmPct", "maxHoldDays", "investRatio",
+            "takeProfitPct", "maxLossPct", "trailingStopPct", "trailingArmPct", "maxHoldDays", "investRatio", "intervalSeconds",
             *COST_RATE_NAMES.toTypedArray(),
         )
         val prefix = KisTradingProperties::class.findAnnotation<ConfigurationProperties>()!!.prefix

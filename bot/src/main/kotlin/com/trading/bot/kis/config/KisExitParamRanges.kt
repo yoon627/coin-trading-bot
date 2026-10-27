@@ -4,8 +4,8 @@ import com.trading.common.config.ExitParamRanges
 import kotlin.reflect.KProperty1
 
 /**
- * [KisTradingProperties] 의 청산·투자비율·비용 요율 허용 구간. 청산·투자비율은 [ExitParamRanges.TRADING] 의 같은 이름 항목을
- * 그대로 쓰고, 비용 요율은 Upbit 에 같은 항목이 없어 따로 둔다.
+ * [KisTradingProperties] 의 청산·투자비율·주기·비용 요율 허용 구간. 청산·투자비율·주기는 [ExitParamRanges.TRADING] 의 같은 이름
+ * 항목을 그대로 쓰고, 비용 요율은 Upbit 에 같은 항목이 없어 따로 둔다.
  * `deploy/vultr/preflight_exit_params.sh` 에 사본이 있어 함께 바꿔야 한다.
  */
 object KisExitParamRanges {
@@ -22,17 +22,17 @@ object KisExitParamRanges {
         sameAsTrading(KisTradingProperties::trailingArmPct),
         sameAsTrading(KisTradingProperties::maxHoldDays),
         sameAsTrading(KisTradingProperties::investRatio),
+        sameAsTrading(KisTradingProperties::intervalSeconds),
         ExitParamRanges.Entry(PREFIX, KisTradingProperties::commissionRate, COST_RATE),
         ExitParamRanges.Entry(PREFIX, KisTradingProperties::sellTaxRate, COST_RATE),
     )
 
     fun violations(properties: KisTradingProperties): List<String> = KIS.mapNotNull { it.violation(properties) }
 
-    /** 구간 위반에 금액·주기·요청 간격의 하한 위반을 더한 프로파일 전체 검사. 키 이름과 값만 담는다. */
+    /** 구간 위반에 금액·요청 간격의 하한 위반을 더한 프로파일 전체 검사. 키 이름과 값만 담는다. */
     fun problems(properties: KisTradingProperties): List<String> = buildList {
         atLeast("$PREFIX.max-invest-amount", properties.maxInvestAmount, 1)
         atLeast("$PREFIX.max-order-amount", properties.maxOrderAmount, 1)
-        atLeast("$PREFIX.interval-seconds", properties.intervalSeconds, 1)
         atLeast("$PREFIX.paper-min-request-interval-ms", properties.paperMinRequestIntervalMs, 1)
         atLeast("$PREFIX.live-min-request-interval-ms", properties.liveMinRequestIntervalMs, 1)
         addAll(violations(properties))
