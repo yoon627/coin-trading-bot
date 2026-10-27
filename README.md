@@ -151,6 +151,8 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 - 수동 실행은 그 커밋의 이미지가 GHCR 에 이미 있으면 다시 빌드하지 않는다(force 여도). 베이스 이미지 태그가 떠 있어 다시 빌드하면 같은 태그의 내용이 바뀌고, 재기동·롤백이 검증하지 않은 이미지를 받기 때문이다. 베이스 이미지 보안 패치는 `Dockerfile` 을 고친 새 커밋으로 받는다 — 새 태그라 헬스체크가 실패하면 직전 정상 SHA 로 자동 롤백한다.
 - `force`: 판정 없이 배포한다(이미지는 위 규칙대로). secret 만 바꿨을 때처럼 파일 밖 변경을 반영할 때 쓴다. 이미지와 설정이 그대로면 force 여도 컨테이너를 다시 만들지 않는다(compose 는 바뀐 것이 없으면 그대로 둔다). 단순 재시작은 서버에서 `docker compose restart app` 이다. 수동 롤백(`APP_VERSION=… up -d`) 뒤에는 force 가 필요 없다 — 지금 컨테이너가 마지막 정상 배포가 아니라 판정이 배포한다. 마지막 정상 배포와 같은 커밋을 force 로 다시 배포하면 헬스체크가 실패해도 자동 롤백하지 않는다(롤백 대상이 배포 대상과 같다).
 - 이 방식을 되돌릴 때는 커밋을 revert 하지 말고 고쳐서 나간다. revert 하면 push 배포가 되살아나 그 revert push 가 곧바로 main 최신을 배포한다.
+- 헬스체크(`/actuator/health`)는 웹·DB 와 함께 실행 중이던 봇의 복원이 끝났는지 본다. 복원 중이면 503(OUT_OF_SERVICE), 재시도를 다 쓰고 복원하지 못한 봇이 있으면 503(DOWN)이다. 그 봇을 손으로 시작하거나 멈추면 다시 200 이 된다. bot state 조회 자체가 끝까지 실패했으면 재시작 전까지 503 이고, `TRADING_AUTO_START=false` 면 복원하지 않으므로 언제나 200 이다.
+- 배포 결과(성공·자동 롤백·실패)를 Discord 로 알린다. 성공은 `DISCORD_WEBHOOK_URL`, 롤백·실패는 `DISCORD_ERROR_WEBHOOK_URL`(없으면 일반 webhook)로 간다. 원격 배포 전에 멈춘 실패(설정 검사·preflight·업로드, Actions 의 준비 스텝)는 알리지 않는다 — 운영 컨테이너를 건드리기 전이고 Actions 실패로 보인다.
 - 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다. 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.

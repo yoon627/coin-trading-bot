@@ -61,7 +61,9 @@ install -m 600 .env.example .env   # 시크릿이 들어가므로 600
 ```
 
 새 버전은 `main` push(테스트·이미지 push 까지만) 뒤 main 에서 Actions 를 수동 실행하면 `deploy-vultr` job 이
-`./deploy.sh deploy` 를 실행하는 순서로 나간다. push 만으로는 배포하지 않는다. 이미지는 대상 커밋 SHA 로 고정하고, 헬스체크(180s)가 실패하면 직전 정상 SHA 로 자동 롤백한다.
+`./deploy.sh deploy` 를 실행하는 순서로 나간다. push 만으로는 배포하지 않는다. 이미지는 대상 커밋 SHA 로 고정하고,
+헬스체크(180s, 실행 중이던 봇의 복원 완료 포함)가 실패하면 직전 정상 SHA 로 자동 롤백한다. 결과는 Discord 로 알린다
+(성공은 일반 webhook, 롤백·실패는 에러 webhook).
 직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V30(거래소 축) 마이그레이션이 없으면 자동 롤백하지 않고
 수동 개입을 안내한다. 스키마를 바꾸는 배포의 사전 점검·되돌리기 절차는 루트 README 의 배포 절에 있다.
 
@@ -262,7 +264,14 @@ crontab -e
 ## 8. 트러블슈팅
 
 - API 호출이 전부 401/403: `Access Control` 에 현재 공인 IP 가 있는지 본다.
-- `deploy` 헬스체크 실패: `./deploy.sh logs`. Flyway 마이그레이션 오류나 시크릿 누락이 흔하다.
+- `deploy` 헬스체크 실패: `./deploy.sh logs`. Flyway 마이그레이션 오류나 시크릿 누락이 흔하다. 헬스체크는 실행 중이던
+  봇의 복원이 끝나야 통과한다 — 배포 로그의 `--- 봇 복원 실패 로그 ---` 아래에 `봇 미복원` 줄이 있으면 복원 실패다.
+  한 사용자의 키 복호화 실패처럼 데이터 때문이면 롤백 이미지도 같은 이유로 실패하므로, 그 사용자의 봇을 멈춘 뒤
+  다시 배포한다. 봇을 멈추거나 손으로 시작하면 health 가 다시 UP 이 된다. 화면의 정지는 자기 봇만 멈추므로 다른
+  사용자의 봇은 DB 에서 내린다: `docker compose exec -T postgres psql -U trading -d trading -c "UPDATE bot_state SET
+  running=false WHERE user_id=<id> AND exchange='UPBIT'"` 뒤 `docker compose restart app`. bot state 조회 실패처럼
+  사용자 목록 없이 실패했으면 재시작 전까지 DOWN 이라 서버에서 `cd /opt/app && docker compose restart app` 으로 다시 띄운다.
+  배포 로그의 `--- health 응답 ---` 이 `OUT_OF_SERVICE` 면 복원이 끝나지 않은 것(DB 응답 지연 등), `DOWN` 이면 실패다.
 - cloud-init 실패(Docker 또는 AWS CLI 없음): `./deploy.sh ssh` 후 `cat /var/log/cloud-init-output.log`. AWS CLI 는
   [공식 Linux v2 설치 방식](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)으로 깔리고,
   설치가 끝나야 `/opt/app/.userdata-done` 마커가 생긴다.
