@@ -49,6 +49,8 @@ tasks.test {
         rootProject.file("deploy/vultr/deploy.sh"),
         rootProject.file("deploy/vultr/docker-compose.prod.yml"),
         rootProject.file("deploy/vultr/preflight_exit_params.sh"),
+        rootProject.file("deploy/vultr/deploy_needed.sh"),
+        rootProject.file(".github/workflows/deploy.yml"),
     ).withPropertyName("deployScripts").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
