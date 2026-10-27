@@ -145,13 +145,17 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 `.github/workflows/deploy.yml`
 
 - PR: 테스트만 실행
-- main push, main에서의 수동 실행: 테스트 → multi-arch 이미지 빌드 → GHCR push → SSH로 Vultr에 `deploy.sh deploy`. 다른 브랜치에서 수동 실행하면 이미지만 올리고 배포하지 않는다.
-- `**.md`와 `docs/**`만 바뀐 push는 배포하지 않는다. 배포가 곧 엔진 재시작이기 때문이다. 필요하면 main에서 수동 실행한다.
+- main push: 테스트 → multi-arch 이미지 빌드 → GHCR push. 배포하지 않는다. 배포가 곧 엔진 재시작이라 머지할 때마다 재시작하지 않으려는 것이다. `**.md`와 `docs/**`만 바뀐 push는 테스트·빌드도 건너뛴다.
+- main에서의 수동 실행(workflow_dispatch): 테스트 → 이미지 빌드 → GHCR push → 운영 변경 판정 → SSH로 Vultr에 `deploy.sh deploy`. 실행한 커밋을 그대로 배포한다. 다른 브랜치에서 수동 실행하면 이미지만 올리고(이미 있으면 건너뜀) 배포하지 않는다.
+- 운영 변경 판정(`deploy/vultr/deploy_needed.sh`): 서버의 마지막 정상 배포(`/opt/app/.last-good-sha`)의 컨테이너가 healthy 로 돌고 있고, 그 뒤 제외 목록(문서·테스트·`scripts/`·`.gitignore`·로컬 개발 파일) 밖 파일이 바뀌지 않았으면 배포하지 않고 알림(notice)만 남긴다. 지금 컨테이너가 마지막 정상 배포가 아니거나 healthy 가 아니면(실패한 배포가 남긴 컨테이너, 수동 롤백, 정지) 배포한다. 실행한 커밋이 마지막 정상 배포보다 옛 커밋이면 실패로 멈춘다(수동 실행 두 개가 순서가 뒤바뀌어 끝난 경우).
+- 수동 실행은 그 커밋의 이미지가 GHCR 에 이미 있으면 다시 빌드하지 않는다(force 여도). 베이스 이미지 태그가 떠 있어 다시 빌드하면 같은 태그의 내용이 바뀌고, 재기동·롤백이 검증하지 않은 이미지를 받기 때문이다. 베이스 이미지 보안 패치는 `Dockerfile` 을 고친 새 커밋으로 받는다 — 새 태그라 헬스체크가 실패하면 직전 정상 SHA 로 자동 롤백한다.
+- `force`: 판정 없이 배포한다(이미지는 위 규칙대로). secret 만 바꿨을 때처럼 파일 밖 변경을 반영할 때 쓴다. 이미지와 설정이 그대로면 force 여도 컨테이너를 다시 만들지 않는다(compose 는 바뀐 것이 없으면 그대로 둔다). 단순 재시작은 서버에서 `docker compose restart app` 이다. 수동 롤백(`APP_VERSION=… up -d`) 뒤에는 force 가 필요 없다 — 지금 컨테이너가 마지막 정상 배포가 아니라 판정이 배포한다. 마지막 정상 배포와 같은 커밋을 force 로 다시 배포하면 헬스체크가 실패해도 자동 롤백하지 않는다(롤백 대상이 배포 대상과 같다).
+- 이 방식을 되돌릴 때는 커밋을 revert 하지 말고 고쳐서 나간다. revert 하면 push 배포가 되살아나 그 revert push 가 곧바로 main 최신을 배포한다.
 - 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다. 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
-Actions 배포는 `VULTR_DEPLOY_ENV`를 그대로 `deploy/vultr/.env`로 쓰고 서버 `.env`를 다시 만든다. 로컬 `deploy/vultr/.env`만 고치고 수동 배포하면 다음 main push 때 secret 값으로 되돌아가므로 secret도 함께 고친다. 배포 계층은 `TRADING_*`·`KIS_TRADING_*`·`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않아, `.env`에 적은 키만 컨테이너로 넘기고 나머지는 앱 기본값을 쓴다. 앱 기본값에 맡길 키는 secret에서도 지운다. 단 청산 키 5개는 자동매매 배포의 preflight가 요구하므로 지우지 않는다. 넘긴 키 이름은 배포 로그의 `서버 .env override 키:` 줄에서 확인한다.
+Actions 배포는 `VULTR_DEPLOY_ENV`를 그대로 `deploy/vultr/.env`로 쓰고 서버 `.env`를 다시 만든다. 로컬 `deploy/vultr/.env`만 고치고 로컬에서 배포하면 다음 Actions 배포 때 secret 값으로 되돌아가므로 secret도 함께 고친다. secret만 바꾼 뒤에는 파일 변경이 없어 판정이 배포를 건너뛰므로 `force`로 실행한다. 배포 계층은 `TRADING_*`·`KIS_TRADING_*`·`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않아, `.env`에 적은 키만 컨테이너로 넘기고 나머지는 앱 기본값을 쓴다. 앱 기본값에 맡길 키는 secret에서도 지운다. 단 청산 키 5개는 자동매매 배포의 preflight가 요구하므로 지우지 않는다. 넘긴 키 이름은 배포 로그의 `서버 .env override 키:` 줄에서 확인한다.
 
 수동 배포와 운영 명령:
 
@@ -197,7 +201,7 @@ COMMIT;
 
 ### V31 (KIS 키 테이블)
 
-V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 전 `./backup.sh` 는 다른 스키마 배포와 같이 돌리고, 실패하면(버킷 접근에 실패하면 덤프를 남기지 않는다) 같은 `pg_dump` 를 서버 디스크에 먼저 남긴 뒤 배포한다. main 머지가 곧 배포이므로 백업은 머지 전에 한다.
+V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 전 `./backup.sh` 는 다른 스키마 배포와 같이 돌리고, 실패하면(버킷 접근에 실패하면 덤프를 남기지 않는다) 같은 `pg_dump` 를 서버 디스크에 먼저 남긴 뒤 배포한다. main 머지는 배포하지 않으므로 백업은 배포(main 수동 실행) 직전에 한다.
 
 - V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 `deploy.sh` 의 자동 롤백 하한은 V30 그대로다.
 - 다만 V31 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 V31 적용 여부와 관계없이 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백해도 되고, `V31_down.sql` 은 필요 없다.
