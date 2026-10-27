@@ -497,8 +497,10 @@ do_deploy() {
 
     local last_good="${LAST_GOOD_SHA:-}"
     local migration_gate="rollback-ok"
-    if [[ -z "$last_good" || "$last_good" == "$target_sha" ]]; then
+    if [[ -z "$last_good" ]]; then
         migration_gate="blocked"
+    elif [[ "$last_good" == "$target_sha" ]]; then
+        migration_gate="same-sha"
     elif ! git -C "$repo_root" cat-file -e "${last_good}^{commit}" 2>/dev/null \
       || ! git -C "$repo_root" cat-file -e "${target_sha}^{commit}" 2>/dev/null; then
         migration_gate="blocked"
@@ -538,13 +540,17 @@ do_deploy() {
     local deploy_rc=0
     ssh_inst "APP_DOMAIN='$domain' GHCR_IMAGE='$GHCR_IMAGE' TARGET_SHA='$target_sha' LAST_GOOD_SHA='$last_good' MIGRATION_GATE='$migration_gate' bash -s" <<'REMOTE' || deploy_rc=$?
 set -e
+# 원격 명령이 set -e 로 멈추면 그 명령의 종료 코드가 나가 2(자동 롤백)·3(롤백 실패)과 섞인다. 실패는 1 로 모은다.
+trap 'exit 1' ERR
 cd /opt/app
 : "${TARGET_SHA:?TARGET_SHA 필요}"
 
 # 이 스크립트는 bash -s 의 stdin 으로 들어온다. exec -T 가 stdin 을 붙잡아 남은 스크립트를 먹지 않게 끊는다.
+# health 는 실행 중이던 봇의 복원이 끝나야 200 이다. 시도 횟수가 아니라 마감으로 묶는다 — exec·curl 이 걸려도 180초를 넘지 않는다.
 health_ok() {
-    for _ in $(seq 1 36); do
-        if docker compose exec -T app curl -fsS http://localhost:8080/actuator/health </dev/null > /dev/null 2>&1; then
+    local deadline=$((SECONDS + 180))
+    while (( SECONDS < deadline )); do
+        if timeout -k 5 15 docker compose exec -T app curl -fsS --max-time 5 http://localhost:8080/actuator/health </dev/null > /dev/null 2>&1; then
             return 0
         fi
         sleep 5
@@ -579,10 +585,20 @@ fi
 echo "ERROR: 180s 내 헬스체크 실패 (SHA=$TARGET_SHA)"
 docker compose ps || true
 docker compose logs --tail=120 app || true
+# 503 이 복원 중(OUT_OF_SERVICE)인지 실패(DOWN)인지 가른다. 본문은 상태 한 줄뿐이다.
+echo "--- health 응답 ---"
+timeout -k 5 15 docker compose exec -T app curl -sS --max-time 5 http://localhost:8080/actuator/health </dev/null || true
+echo ""
+# 봇 복원 실패는 기동 직후에 찍혀 위 꼬리 로그에서 밀려날 수 있다.
+echo "--- 봇 복원 실패 로그 ---"
+docker compose logs app 2>/dev/null | grep -F '봇 미복원' | tail -n 5 || true
 
 if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
     if [ -z "$LAST_GOOD_SHA" ]; then
         echo "자동 롤백 제외: 직전 정상 배포(LAST_GOOD) 없음."
+    elif [ "$MIGRATION_GATE" = "same-sha" ]; then
+        echo "자동 롤백 제외: 마지막 정상 배포와 같은 커밋이다 — 이미지·설정이 같으면 compose 가 컨테이너를 다시 만들지 않는다."
+        echo "  봇 복원 실패라면 그 사용자의 봇을 멈추거나 서버에서 'cd /opt/app && docker compose restart app' 으로 다시 띄운다."
     elif [ "$MIGRATION_GATE" = "below-floor" ]; then
         echo "자동 롤백 제외: 직전 정상 SHA 에 V30(거래소 축) 마이그레이션이 없다 — V30 이전 이미지는 KIS 행을 Upbit 상태로 읽는다."
     else
@@ -616,23 +632,44 @@ exit 3
 REMOTE
 
     echo ""
+    local run_url=""
+    [[ -n "${GITHUB_RUN_ID:-}" ]] && run_url=" — ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID}"
     case "$deploy_rc" in
         0)
             update_state LAST_GOOD_SHA "$target_sha"
             log "배포 완료 (SHA=${target_sha:0:12} — LAST_GOOD 갱신)"
             echo "  App: https://$domain  (Caddy 가 Let's Encrypt 인증서 발급까지 최대 ~30초)"
             echo "  ⚠️ 2GB 박스이므로 기동 후 실사용량을 확인하세요:  ./deploy/vultr/deploy.sh mem"
+            notify_deploy success "운영 배포 성공: ${target_sha:0:12}${run_url}"
             ;;
         2)
             log "자동 롤백됨 → 이전 정상 SHA(${last_good:0:12}) 로 복구 (LAST_GOOD 유지)"
             echo "  원인 조사 후 재배포하세요. App: https://$domain"
+            notify_deploy rollback "운영 배포 자동 롤백: ${target_sha:0:12} 이 헬스체크(봇 복원 포함)를 통과하지 못해 ${last_good:0:12} 로 되돌렸다${run_url}"
             exit 2
             ;;
         *)
             echo "ERROR: 배포 실패 (rc=$deploy_rc) — 위 원격 로그/안내 참조. LAST_GOOD 미변경."
+            notify_deploy failure "$(deploy_failure_message "$deploy_rc" "$target_sha" "$last_good")${run_url}"
             exit 1
             ;;
     esac
+}
+
+# 원격 스크립트의 종료 코드: 1 수동 개입(자동 롤백 대상 아님·원격 명령 실패), 3 롤백까지 실패. 그 밖은 SSH 가 끊긴 경우 등.
+deploy_failure_message() {
+    local rc="$1" target="${2:0:12}" last_good="${3:0:12}"
+    case "$rc" in
+        1) echo "운영 배포 실패(수동 개입 필요): $target — 자동 롤백 대상이 아니거나 원격 명령이 실패했다. 새 컨테이너가 떠 있을 수 있다" ;;
+        3) echo "운영 배포 실패(앱 중단 가능): $target 이 헬스체크를 통과하지 못했고 ${last_good:-?} 로의 롤백도 기동이나 헬스체크에 실패했다" ;;
+        *) echo "운영 배포 결과 불명(rc=$rc): $target — 원격 실행이 끊겼을 수 있다. 서버 상태를 확인한다" ;;
+    esac
+}
+
+# .env 를 source 한 셸 변수라 export 되지 않으므로 알림 스크립트에 명시해 넘긴다. 알림 실패가 배포 결과를 바꾸지 않는다.
+notify_deploy() {
+    DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}" DISCORD_ERROR_WEBHOOK_URL="${DISCORD_ERROR_WEBHOOK_URL:-}" \
+        bash "$SCRIPT_DIR/notify_deploy.sh" "$@" || true
 }
 
 do_ssh()    { load_state; ssh "${SSH_HOST_KEY_OPTIONS[@]}" -i "$KEY_PEM" "${SSH_USER}@${PUBLIC_IP}"; }

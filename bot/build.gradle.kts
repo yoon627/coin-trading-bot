@@ -51,6 +51,7 @@ tasks.test {
         rootProject.file("deploy/vultr/preflight_exit_params.sh"),
         rootProject.file("deploy/vultr/deploy_needed.sh"),
         rootProject.file(".github/workflows/deploy.yml"),
+        rootProject.file("deploy/vultr/notify_deploy.sh"),
     ).withPropertyName("deployScripts").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
