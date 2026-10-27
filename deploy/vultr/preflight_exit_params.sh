@@ -35,12 +35,14 @@ RANGE_RULES=(
     "KIS_TRADING_SELL_TAX_RATE decimal 0 1 0.01 0"
 )
 # Spring 은 yes·on 등도 받지만 여기서는 소문자 true/false 만 받는다.
+# DISCORD_ERROR_ALERT_ENABLED 는 compose 가 값과 함께 넘기는 키라 오기면 새 컨테이너와 롤백이 함께 기동에 실패한다.
 BOOLEAN_KEYS=(
     TRADING_AUTO_START
     TRADING_SHADOW_EXIT_ENABLED
     MARKETDATA_WATCHDOG_ENABLED
     KIS_TRADING_ENABLED
     KIS_TRADING_LIVE_ENABLED
+    DISCORD_ERROR_ALERT_ENABLED
 )
 # 0 이하는 기동이 실패하거나 워치독 재연결·재구독이 쉬지 않고 돈다.
 # KIS 금액 상한·주기·요청 간격이 0 이하면 앱이 KIS 클라이언트를 만들지 않으므로 배포 전에 막는다.

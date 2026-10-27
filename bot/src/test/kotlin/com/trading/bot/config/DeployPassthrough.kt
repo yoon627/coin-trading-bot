@@ -12,7 +12,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 
 /**
  * 배포가 서버 `.env` → compose → 앱으로 이름만 넘기는 설정 클래스 목록. 앱의 설정 클래스는 [PASSED] 와 [EXCLUDED] 중
- * 정확히 한쪽에 있어야 하고 [DeployEnvPassthroughTest] 가 스캔으로 확인한다. 분류는 클래스 단위다.
+ * 정확히 한쪽에 있어야 하고 [DeployEnvPassthroughTest] 가 스캔으로 확인한다. 이 분류는 클래스 단위이고,
+ * [EXCLUDED] 클래스 중 preflight 가 따로 보는 프로퍼티는 [CHECKED_WITH_VALUE] 에 둔다.
  */
 internal object DeployPassthrough {
 
@@ -28,7 +29,7 @@ internal object DeployPassthrough {
         AppProperties::class to "비밀 값 — compose 가 `:?` 로 필수 전달한다",
         UpbitProperties::class to "거래소 주소 — 운영에서 바꾸지 않는다",
         DiscordProperties::class to "compose 가 값과 함께(`\${…:-}`) 따로 넘긴다",
-        ErrorAlertProperties::class to "compose 가 값과 함께 따로 넘긴다 — enabled 오기는 preflight 가 보지 않는다",
+        ErrorAlertProperties::class to "compose 가 값과 함께 따로 넘긴다 — enabled 는 CHECKED_WITH_VALUE 로 preflight 가 검사한다",
         KisApiProperties::class to "거래소 주소·HTTP 시간 제한 — 운영에서 바꾸지 않는다",
     )
 
@@ -37,6 +38,12 @@ internal object DeployPassthrough {
      * 여기 없는 String 은 [ExitParamsPreflightScriptTest] 가 실패시킨다.
      */
     val TICKER_LIST: Set<KProperty1<*, String>> = setOf(TradingProperties::tickers, WatchlistProperties::tickers)
+
+    /**
+     * compose 가 값과 함께(`${…:-기본값}`) 넘겨 [PASSED] 계약 밖이지만 preflight 가 검사하는 프로퍼티. 앱이 바인딩하지 못하는
+     * 값이면 새 컨테이너와 같은 `.env` 로 뜨는 자동 롤백이 함께 기동에 실패한다.
+     */
+    val CHECKED_WITH_VALUE: Set<KProperty1<*, *>> = setOf(ErrorAlertProperties::enabled)
 
     fun prefix(klass: KClass<*>): String = klass.findAnnotation<ConfigurationProperties>()?.prefix
         ?: error("${klass.simpleName} 에 @ConfigurationProperties prefix 가 없다")

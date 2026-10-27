@@ -95,7 +95,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `KIS_TRADING_PAPER_MIN_REQUEST_INTERVAL_MS` / `KIS_TRADING_LIVE_MIN_REQUEST_INTERVAL_MS` | `667` / `60` | 모의·실전 KIS 요청 사이 최소 간격(ms) |
 | `KIS_TRADING_COMMISSION_RATE` / `KIS_TRADING_SELL_TAX_RATE` | `0.0002` / `0.002` | KIS 편도 수수료율(매수·매도 양쪽), 매도 증권거래세율. 퍼센트가 아니라 비율이고 허용 구간은 둘 다 `[0, 0.01)`. ETF 거래세 면제는 반영하지 않는다 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 |
-| `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림 |
+| `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림. 스위치는 배포 preflight 가 소문자 `true`/`false` 만 받는다(오기면 새 컨테이너와 롤백이 함께 기동에 실패한다) |
 | `APP_DOMAIN` | 없음 | 운영 CORS origin과 Caddy TLS 도메인 |
 
 ## API
