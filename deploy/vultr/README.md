@@ -60,8 +60,8 @@ install -m 600 .env.example .env   # 시크릿이 들어가므로 600
 ./deploy.sh destroy  # 인스턴스·방화벽 삭제
 ```
 
-새 버전은 `main` push → Actions 테스트·이미지 push → `deploy-vultr` job 이 `./deploy.sh deploy` 를 실행하는
-순서로 나간다. 이미지는 대상 커밋 SHA 로 고정하고, 헬스체크(180s)가 실패하면 직전 정상 SHA 로 자동 롤백한다.
+새 버전은 `main` push(테스트·이미지 push 까지만) 뒤 main 에서 Actions 를 수동 실행하면 `deploy-vultr` job 이
+`./deploy.sh deploy` 를 실행하는 순서로 나간다. push 만으로는 배포하지 않는다. 이미지는 대상 커밋 SHA 로 고정하고, 헬스체크(180s)가 실패하면 직전 정상 SHA 로 자동 롤백한다.
 직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V30(거래소 축) 마이그레이션이 없으면 자동 롤백하지 않고
 수동 개입을 안내한다. 스키마를 바꾸는 배포의 사전 점검·되돌리기 절차는 루트 README 의 배포 절에 있다.
 
@@ -75,7 +75,7 @@ docker run --rm -e APP_DOMAIN=bot.example.test -v "$PWD/deploy/vultr/Caddyfile":
   caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
 
-### GitHub Actions 자동 배포
+### GitHub Actions 배포
 
 `.github/workflows/deploy.yml` 의 `deploy-vultr` job 은 인스턴스를 만들거나 지우지 않고 현재 운영 호스트에
 SSH 로 배포한다. 필요한 repository secret:
@@ -116,7 +116,14 @@ job 동작:
 - 롤백 기준은 원격 `/opt/app/.last-good-sha` 다. 파일이 없으면 현재 app 컨테이너가 healthy 이고 이미지 태그가
   40자리 SHA 일 때만 그 값을 쓰고, 그 밖의 경우(`latest`·digest·중지된 컨테이너)는 배포를 거부한다. 성공한 배포와
   롤백이 이 파일을 갱신한다.
-- 대기하던 실행의 SHA 가 최신 `origin/main` 과 다르면 건너뛴다. 단 차이가 문서(`**.md`·`docs/**`)뿐이면 배포한다.
+- main 수동 실행(workflow_dispatch)에서만 돈다. 실행한 커밋 SHA 를 그대로 배포한다.
+- 롤백 기준 SHA 의 컨테이너가 healthy 로 돌고 있고 그 뒤 `deploy_needed.sh` 의 제외 목록 밖 파일이 바뀌지 않았으면
+  배포하지 않는다(엔진 재시작 없음). 지금 컨테이너가 롤백 기준과 다르거나 healthy 가 아니면 배포하고, 롤백 기준 커밋이
+  체크아웃에 없으면 판정할 수 없어 배포한다. 실행한 커밋이 롤백 기준보다 옛 커밋이면 실패로 멈춘다.
+- 수동 실행은 그 커밋 이미지가 이미 있으면 다시 빌드하지 않는다(force 여도). 베이스 이미지 패치는 `Dockerfile` 을
+  고친 새 커밋으로 받는다. secret 처럼 파일 밖 변경을 반영하려면 `force` 입력을 켠다(판정 없이 배포). 이미지와 설정이
+  그대로면 force 여도 컨테이너를 다시 만들지 않는다 — 단순 재시작은 서버에서 `docker compose restart app`.
+  운영 컨테이너 조회 SSH 가 실패하면 판정하지 않고 멈춘다.
 - 임시 `.env`·`.state`·SSH 키는 끝나면 runner 에서 지운다.
 - 수동 배포와 Actions 배포를 동시에 돌리지 않는다.
 
@@ -184,9 +191,9 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 
 빠뜨리면 안 되는 항목:
 
-- 배포 동결: 이전 동안 main 머지를 멈추고 Actions 배포를 끈다. 켜 두면 secret 의 옛 IP 로 배포해 멈춘 옛 호스트를
-  다시 띄운다. 그동안 PR 테스트·이미지 빌드도 멈추므로 수동 `deploy` 는 `.env` 의 `APP_VERSION` 을 이미지가 있는
-  SHA(서버 `/opt/app/.last-good-sha`)로 고정한다.
+- 배포 동결: 이전 동안 Actions 배포(main 수동 실행)를 하지 않는다. 실행하면 secret 의 옛 IP 로 배포해 멈춘 옛 호스트를
+  다시 띄운다. main 머지는 배포하지 않는다. 실수로 실행하지 않도록 워크플로를 꺼 두면 PR 테스트·이미지 빌드도 멈추므로,
+  그때 수동 `deploy` 는 `.env` 의 `APP_VERSION` 을 이미지가 있는 SHA(서버 `/opt/app/.last-good-sha`)로 고정한다.
 - 새 호스트는 거래 없이 먼저 띄운다: `TRADING_AUTO_START=false`, 복원·검증 전까지 `APP_ALLOW_CIDR` 를 운영자 IP/32 로
   둔다(7절 회원가입 참고). `APP_ENCRYPTION_SECRET` 은 운영 값 그대로 쓴다.
 - 옛 호스트는 `docker compose stop app` 으로 앱만 멈춘다. `./deploy.sh stop` 은 `docker compose down` 이라 postgres

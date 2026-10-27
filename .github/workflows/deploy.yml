@@ -1,19 +1,22 @@
 name: CI/CD (test + GHCR + Vultr)
 
-# PR 은 테스트만 돌린다. push 와 수동 실행은 이미지를 GHCR 에 올리고, main push 와 main 수동 실행만 Vultr 에 배포한다.
+# PR 은 테스트만 돌린다. push 와 수동 실행은 이미지를 GHCR 에 올린다.
+# 배포는 엔진 재시작이라 push 로는 하지 않고 main 수동 실행으로만 한다.
 on:
   push:
     branches: [main]
-    # 배포는 엔진 재시작이라 이미지에 들어가지 않는 문서 변경으로는 배포하지 않는다.
-    # deploy/·Dockerfile·gradle 처럼 배포에 영향을 주는 경로는 넣지 않는다.
-    # bot/·common/ 의 실행 리소스에 .md 를 두지 않는다. 그 파일만 바꾼 push 는 배포 없이 건너뛴다.
-    # 아래 Check deployment commit is current main 의 제외 목록과 같게 유지한다.
+    # 문서만 바뀐 push 는 테스트·이미지 빌드도 건너뛴다.
     paths-ignore:
       - '**.md'
       - 'docs/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force:
+        description: 마지막 정상 배포 이후 운영에 들어가는 파일 변경이 없어도 배포한다(secret 만 바꾼 경우 등)
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -80,6 +83,11 @@ jobs:
     needs: test
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    # 같은 커밋의 push 실행과 수동 실행이 함께 빌드하면 같은 태그를 두 번 덮는다. 어느 쪽이 먼저 오든 뒤의 실행은
+    # 앞의 빌드를 기다렸다가 아래 이미지 확인에서 빌드를 건너뛴다.
+    concurrency:
+      group: image-${{ github.sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -93,7 +101,23 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # 베이스 이미지 태그가 떠 있어 같은 커밋을 다시 빌드하면 같은 태그의 내용이 바뀐다. 이미 배포·검증한 태그를
+      # 덮으면 재기동·롤백이 검증하지 않은 이미지를 받으므로, 태그가 없을 때만 빌드한다(force 여도). 새 커밋의 push 는
+      # 태그가 없으니 늘 빌드하고, 재실행·같은 커밋의 수동 실행이 건너뛴다.
+      # 베이스 이미지 패치는 새 커밋으로 받는다 — 새 태그라 직전 정상 SHA 로 자동 롤백할 수 있다.
+      - name: Check existing image for this commit
+        id: image
+        shell: bash
+        run: |
+          ref="$REGISTRY/$IMAGE_NAME:$GITHUB_SHA"
+          if out="$(docker buildx imagetools inspect "$ref" 2>&1)"; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_SHA 이미지가 이미 있어 다시 빌드하지 않는다"
+          else
+            echo "$ref 이미지를 확인하지 못해 빌드한다: ${out##*$'\n'}"
+          fi
       - name: Build and push app image (amd64 + arm64)
+        if: steps.image.outputs.exists != 'true'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -107,7 +131,7 @@ jobs:
 
   deploy-vultr:
     needs: [test, build-and-push]
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -121,36 +145,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check deployment commit is current main
-        id: main-head
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main --quiet
-          current_main="$(git rev-parse origin/main)"
-          if [[ "$current_main" == "$GITHUB_SHA" ]]; then
-            echo 'current=true' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # 뒤따른 문서 전용 push 는 paths-ignore 로 실행이 생기지 않는다. 여기서 건너뛰면
-          # 이 커밋을 배포할 실행이 없으므로, 차이가 배포 무관 경로뿐이면 그대로 배포한다.
-          # 제외 목록은 on.push.paths-ignore 와 같게 유지한다.
-          code_changes="$(git diff --name-only "$GITHUB_SHA" "$current_main" -- . \
-            ':(exclude)**.md' ':(exclude)docs/**')"
-
-          if [[ -z "$code_changes" ]]; then
-            echo 'current=true' >> "$GITHUB_OUTPUT"
-            echo "origin/main($current_main) is ahead of $GITHUB_SHA but differs only in non-deploy paths — deploying anyway"
-          else
-            echo 'current=false' >> "$GITHUB_OUTPUT"
-            echo "Skipping stale deployment for $GITHUB_SHA; origin/main is $current_main"
-            echo "code changes since this commit:"
-            echo "$code_changes"
-          fi
-
       - name: Prepare Vultr deploy files
-        if: steps.main-head.outputs.current == 'true'
+        id: prepare
         env:
           VULTR_DEPLOY_ENV: ${{ secrets.VULTR_DEPLOY_ENV }}
           VULTR_PUBLIC_IP: ${{ secrets.VULTR_PUBLIC_IP }}
@@ -197,9 +193,57 @@ jobs:
           printf 'PUBLIC_IP=%s\nLAST_GOOD_SHA=%s\n' "$VULTR_PUBLIC_IP" "$last_good_sha" \
             > deploy/vultr/.state
           chmod 600 deploy/vultr/.state
+          echo "last_good_sha=$last_good_sha" >> "$GITHUB_OUTPUT"
+
+          # 실패한 배포가 남긴 컨테이너·수동 롤백·정지 뒤에는 .last-good-sha 가 지금 도는 것과 다르다.
+          # 원격 검사가 실패하면(컨테이너 없음·healthy 아님) '-' 로 보고 배포한다. SSH 자체가 실패(255)하면
+          # 모르는 상태로 재시작하지 않도록 멈춘다.
+          rc=0
+          running="$(ssh "${ssh_opts[@]}" \
+            "${VULTR_SSH_USER}@${VULTR_PUBLIC_IP}" \
+            'cd /opt/app && cid="$(docker compose ps -q app | head -n 1)" && test -n "$cid" && test "$(docker inspect --format "{{.State.Health.Status}}" "$cid")" = healthy && docker inspect --format "{{.Config.Image}}" "$cid"')" || rc=$?
+          if [[ "$rc" -eq 255 ]]; then
+            echo "ERROR: 운영 컨테이너를 조회하는 SSH 가 실패했다 — 다시 실행한다" >&2
+            exit 1
+          fi
+          running_sha="${running##*:}"
+          [[ "$rc" -eq 0 && "$running_sha" =~ ^[0-9a-f]{40}$ ]] || running_sha=-
+          echo "running_sha=$running_sha" >> "$GITHUB_OUTPUT"
+
+      # 실행한 커밋을 그대로 배포한다. 운영에 들어가는 파일이 그대로면 엔진을 재시작하지 않는다.
+      - name: Check production changes since last good deploy
+        id: changes
+        env:
+          FORCE: ${{ inputs.force }}
+          LAST_GOOD_SHA: ${{ steps.prepare.outputs.last_good_sha }}
+          RUNNING_SHA: ${{ steps.prepare.outputs.running_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$FORCE" == "true" ]]; then
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+            echo "force — 판정 없이 배포한다"
+            exit 0
+          fi
+          rc=0
+          result="$(bash ./deploy/vultr/deploy_needed.sh "$LAST_GOOD_SHA" "$RUNNING_SHA" "$GITHUB_SHA")" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::판정 스크립트가 exit $rc 로 끝났다(3 = 마지막 정상 배포보다 옛 커밋) — 배포하지 않는다"
+            exit 1
+          fi
+          printf '%s\n' "$result"
+          decision="${result%%$'\n'*}"
+          if [[ "$decision" != 'deploy=true' && "$decision" != 'deploy=false' ]]; then
+            echo "::error::판정 출력의 첫 줄이 deploy=true|false 가 아니다: $decision"
+            exit 1
+          fi
+          echo "$decision" >> "$GITHUB_OUTPUT"
+          if [[ "$decision" == 'deploy=false' ]]; then
+            echo "::notice::마지막 정상 배포 $LAST_GOOD_SHA 이후 운영에 들어가는 파일 변경이 없어 배포하지 않았다. secret 처럼 파일 밖 변경을 반영하려면 force 로 다시 실행한다."
+          fi
 
       - name: Deploy to Vultr
-        if: steps.main-head.outputs.current == 'true'
+        if: steps.changes.outputs.deploy == 'true'
         env:
           SSH_KNOWN_HOSTS: ${{ github.workspace }}/deploy/vultr/known_hosts
         run: ./deploy/vultr/deploy.sh deploy
