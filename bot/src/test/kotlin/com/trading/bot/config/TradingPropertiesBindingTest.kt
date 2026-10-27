@@ -1,5 +1,7 @@
 package com.trading.bot.config
 
+import com.trading.bot.engine.TradingEngine
+import com.trading.bot.exchange.UpbitMarketRules
 import com.trading.common.config.TradingProperties
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -117,13 +119,10 @@ class TradingPropertiesBindingTest {
     }
 
     @Test
-    fun `기본값 조합은 트레일링 dead 경고 조건에 걸리지 않는다`() {
+    fun `바인딩된 기본값은 엔진 시작 경고에 걸리지 않는다`() {
         runner.run { ctx ->
             val p = ctx.getBean(TradingProperties::class.java)
-            // TradingEngine.warnIfExitConfigInert() 의 경고 조건
-            assertThat(p.takeProfitPct).isGreaterThan(p.trailingStopPct)
-            assertThat(p.takeProfitPct).isGreaterThan(p.trailingArmPct)
-            assertThat(p.trailingArmPct).isGreaterThan(p.trailingStopPct)
+            assertThat(TradingEngine.startupConfigWarnings(p, UpbitMarketRules.minOrderNotional)).isEmpty()
         }
     }
 }
