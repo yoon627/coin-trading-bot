@@ -95,8 +95,9 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    # 진행 중인 tick 의 주문 후처리가 끝나도록 앱 종료 타임아웃(30s)보다 길게 둔다.
-    stop_grace_period: 40s
+    # 앱 정지 상한 합보다 길게 둔다(합과 각 항은 ShutdownBudgetTest). 호스트 docker.service 의 정지 시한이 90초이고
+    # dockerd 는 StopTimeout + 5초를 기다리므로 85초가 상한이다.
+    stop_grace_period: 85s
     mem_limit: 832m
     mem_reservation: 640m
     healthcheck:

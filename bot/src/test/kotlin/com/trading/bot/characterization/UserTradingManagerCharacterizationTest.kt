@@ -56,7 +56,7 @@ import reactor.core.publisher.Mono
  * 복원은 autoStart 일 때만, access key 만 확인하고, 복호화 → 상태 로드 → 엔진 등록 → 기동 순서이며 실패하면 1·2·4·8초 간격으로 5회까지 한다.
  * 시작은 access·secret key 를 둘 다 요구하고 기동 전에 running=true 를 저장하며, 도는 엔진에 다른 목록을 주면 CONFLICT 다.
  * 정지는 running=false 를 저장하고, pending 해제는 엔진도 DB 행도 멈췄을 때만 받는다. 엔진은 복호화된 키로 서명하는 Upbit 클라이언트,
- * TradeExecutionService.commitFill, KST 시계의 DailyResetManager 로 만든다. SmartLifecycle phase 는 0, 종료 예산은 25초다.
+ * TradeExecutionService.commitFill, KST 시계의 DailyResetManager 로 만든다. SmartLifecycle phase 는 100, 종료 예산은 25초다.
  */
 class UserTradingManagerCharacterizationTest {
 
@@ -333,8 +333,8 @@ class UserTradingManagerCharacterizationTest {
     }
 
     @Test
-    fun `the lifecycle phase is 0`() {
-        assertEquals(0, manager.phase)
+    fun `the lifecycle phase is 100`() {
+        assertEquals(100, manager.phase)
     }
 
     @Test
