@@ -1,7 +1,8 @@
 spring:
   application:
     name: coin-trading-bot
-  # SIGTERM 때 진행 중인 요청과 트레이딩 tick 이 끝날 때까지 기다린다. server.shutdown=graceful 과 함께 쓴다.
+  # SIGTERM 때 진행 중인 웹 요청을 최대 이만큼 기다린다(server.shutdown=graceful). 엔진 정지는 동기 stop() 이라
+  # 이 값이 아니라 ExchangeRuntime.stopBudget 이 묶는다. 바꾸면 compose 의 stop_grace_period 도 본다(ShutdownBudgetTest).
   lifecycle:
     timeout-per-shutdown-phase: 30s
   jackson:

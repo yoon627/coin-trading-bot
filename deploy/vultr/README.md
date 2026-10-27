@@ -199,7 +199,7 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 - 새 호스트는 거래 없이 먼저 띄운다: `TRADING_AUTO_START=false`, 복원·검증 전까지 `APP_ALLOW_CIDR` 를 운영자 IP/32 로
   둔다(7절 회원가입 참고). `APP_ENCRYPTION_SECRET` 은 운영 값 그대로 쓴다.
 - 옛 호스트는 `docker compose stop app` 으로 앱만 멈춘다. `./deploy.sh stop` 은 `docker compose down` 이라 postgres
-  까지 내려 덤프를 뜰 수 없다. 진행 중이던 tick·주문 후처리가 끝났는지 로그로 확인하고(`stop_grace_period: 40s`),
+  까지 내려 덤프를 뜰 수 없다. 진행 중이던 tick·주문 후처리가 끝났는지 로그로 확인하고(`stop_grace_period: 85s`),
   Upbit 의 미체결 주문·잔고·보유 포지션을 기록해 둔다. 그 뒤 최종 덤프(3절 1 a)를 뜨고, 미리 뜬 덤프는 버린다.
 - 3절로 복원·검증하고, Upbit API 키에 허용 IP 를 쓰면 새 호스트 IP 를 등록한 뒤 UI 에서 직접 거래를 켠다.
 - 백업 cron: 스크립트는 cron 을 등록하지 않는다. 옛 호스트의 cron 을 끄고(두면 멈춘 옛 DB 가 S3 의 최신 객체가 된다)

@@ -24,11 +24,7 @@ class UpbitExchangeRuntime(
 ) : ExchangeRuntime {
     override val exchange: Exchange = Exchange.UPBIT
 
-    // Spring timeout-per-shutdown-phase(30s) 보다 짧게
     override val stopBudget: Duration = Duration.ofSeconds(25)
-
-    // 웹 서버의 graceful shutdown(phase 가 0 보다 크다)이 진행 중 요청을 끝낸 뒤에 엔진을 멈춘다.
-    override val lifecyclePhase: Int = 0
 
     override fun canStart(user: UserEntity): Boolean =
         !user.upbitAccessKey.isNullOrBlank() && !user.upbitSecretKey.isNullOrBlank()

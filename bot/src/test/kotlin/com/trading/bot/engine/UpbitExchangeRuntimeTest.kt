@@ -36,11 +36,11 @@ class UpbitExchangeRuntimeTest {
         UserEntity(id = 1L, username = "u1", password = "p", upbitAccessKey = accessKey, upbitSecretKey = secretKey)
 
     @Test
-    fun `upbit keeps the UPBIT key, phase 0 and a 25 second stop budget`() {
+    fun `upbit keeps the UPBIT key, the engine phase and a 25 second stop budget`() {
         val runtime = runtime()
         assertEquals(Exchange.UPBIT, runtime.exchange)
         assertEquals("UPBIT", runtime.exchange.name)
-        assertEquals(0, runtime.lifecyclePhase)
+        assertEquals(100, runtime.lifecyclePhase)
         assertEquals(Duration.ofSeconds(25), runtime.stopBudget)
         assertSame(properties, runtime.profile)
     }
