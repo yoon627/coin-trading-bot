@@ -12,7 +12,7 @@ import org.springframework.core.env.Environment
 import org.springframework.stereotype.Component
 
 /**
- * 청산 파라미터가 env 에 선언되지 않아 코드 기본값으로 떨어졌거나 의미상 구간 밖이면 ERROR 로 알린다.
+ * 청산 파라미터가 env 에 선언되지 않아 코드 기본값으로 떨어졌거나 청산·주문·주기 파라미터가 허용 구간 밖이면 ERROR 로 알린다.
  * 기동·거래는 막지 않는다. 막으면 보유 포지션의 손절·트레일링이 평가되지 않아 그쪽 손해가 더 크고,
  * 실제 차단은 배포 단계의 preflight_exit_params.sh 가 맡는다.
  */
@@ -45,8 +45,8 @@ class ExitParamsDeclarationCheck(
             val outOfRange = ExitParamRanges.violations(tradingProperties)
             if (outOfRange.isNotEmpty()) {
                 log.error(
-                    "[{}] 청산·주문 파라미터가 의미상 구간 밖입니다: {} — 이 값으로 거래합니다. 이 값으로 연 포지션은 청산될 때까지 " +
-                        "진입 시점 값을 유지합니다. 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요.",
+                    "[{}] 청산·주문·주기 파라미터가 허용 구간 밖입니다: {} — 이 값으로 거래합니다. 청산 파라미터(익절·손절·트레일링·보유상한)는 " +
+                        "이 값으로 연 포지션이 청산될 때까지 진입 시점 값을 유지합니다. 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요.",
                     context, outOfRange,
                 )
             }

@@ -24,7 +24,7 @@ import org.springframework.core.env.SystemEnvironmentPropertySource
 
 /**
  * 배포 preflight(`deploy/vultr/preflight_exit_params.sh`)의 표는 앱 구간 정의([ExitParamRanges])의 사본이라 같은 판정을 내는지 본다.
- * 배포가 넘기는 키([DeployPassthrough.PASSED])는 모두 검사 하나를 받고, 구간 표에 없으면 타입으로 정한다.
+ * 배포가 넘기는 키([DeployPassthrough.PASSED], [DeployPassthrough.CHECKED_WITH_VALUE])는 모두 검사 하나를 받고, 구간 표에 없으면 타입으로 정한다.
  * preflight 는 앱보다 엄격해도 되지만 느슨하면 안 된다. 스크립트가 받은 값을 앱이 바인딩하지 못하면 기동이 막히고
  * 자동 롤백도 같은 `.env` 로 뜬다.
  */
@@ -34,10 +34,10 @@ class ExitParamsPreflightScriptTest {
     /** 스크립트의 검사 종류. [array] 는 그 키들을 담는 스크립트 배열이다(구간은 RANGE_RULES 표). */
     private enum class Grammar(val array: String?) {
         RANGE_DECIMAL(null), RANGE_INTEGER(null),
-        BOOLEAN("BOOLEAN_KEYS"), POSITIVE_INTEGER("POSITIVE_INTEGER_KEYS"), DECIMAL("DECIMAL_KEYS"), TICKER_LIST("TICKER_LIST_KEYS");
+        BOOLEAN("BOOLEAN_KEYS"), POSITIVE_INTEGER("POSITIVE_INTEGER_KEYS"), TICKER_LIST("TICKER_LIST_KEYS");
 
         fun accepts(value: String): Boolean = when (this) {
-            RANGE_DECIMAL, DECIMAL -> DECIMAL_FORMAT.matches(value)
+            RANGE_DECIMAL -> DECIMAL_FORMAT.matches(value)
             RANGE_INTEGER -> INTEGER_FORMAT.matches(value)
             BOOLEAN -> BOOLEAN_FORMAT.matches(value)
             POSITIVE_INTEGER -> POSITIVE_INTEGER_FORMAT.matches(value)
@@ -58,31 +58,30 @@ class ExitParamsPreflightScriptTest {
     private val script = repoFile("deploy/vultr/preflight_exit_params.sh")
 
     private val rangeKeys: List<Key> = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW + KisExitParamRanges.KIS).map { entry ->
-        val grammar = if (entry.property.returnType.classifier == Int::class) Grammar.RANGE_INTEGER else Grammar.RANGE_DECIMAL
+        val integer = entry.property.returnType.classifier == Int::class || entry.property.returnType.classifier == Long::class
+        val grammar = if (integer) Grammar.RANGE_INTEGER else Grammar.RANGE_DECIMAL
         Key(envName(entry.key), ownerOf(entry.property), entry.key.substringBeforeLast('.'), entry.property, grammar, entry)
     }
 
     // 표에 없는 키는 타입으로 검사를 정한다. 손으로 고르면 새 키가 검사를 빠져나간다.
-    private val typedKeys: List<Key> = DeployPassthrough.PASSED.flatMap { owner ->
-        val prefix = DeployPassthrough.prefix(owner)
+    private val typedKeys: List<Key> = run {
         val rangeEnvs = rangeKeys.map { it.env }.toSet()
-        DeployPassthrough.parameters(owner).mapNotNull { param ->
-            val property = owner.memberProperties.single { it.name == param.name }
+        val passed = DeployPassthrough.PASSED.flatMap { owner ->
+            DeployPassthrough.parameters(owner).map { param -> owner.memberProperties.single { it.name == param.name } }
+        }
+        (passed + DeployPassthrough.CHECKED_WITH_VALUE).mapNotNull { property ->
+            val owner = ownerOf(property)
+            val prefix = DeployPassthrough.prefix(owner.kotlin)
             val env = DeployPassthrough.envName(prefix, property.name)
-            val grammar = when {
-                env in rangeEnvs -> return@mapNotNull null
-                param.type.classifier == Boolean::class -> Grammar.BOOLEAN
-                // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 0 을 허용할 정수는 구간 표로 옮긴다.
-                param.type.classifier == Long::class || param.type.classifier == Int::class -> Grammar.POSITIVE_INTEGER
-                param.type.classifier == Double::class -> Grammar.DECIMAL
-                DeployPassthrough.TICKER_LIST.any { it.name == property.name && ownerOf(it) == owner.java } -> Grammar.TICKER_LIST
-                else -> error("$env: preflight 검사 배정이 없다 — 구간 표나 DeployPassthrough.TICKER_LIST 에 넣거나 여기 규칙을 더할 것")
-            }
-            Key(env, owner.java, prefix, property, grammar, null)
+            if (env in rangeEnvs) null else Key(env, owner, prefix, property, grammarOf(env, property, owner), null)
         }
     }
 
     private val allKeys: List<Key> = rangeKeys + typedKeys
+
+    private val checkedWithValueEnvs: List<String> = DeployPassthrough.CHECKED_WITH_VALUE.map {
+        DeployPassthrough.envName(DeployPassthrough.prefix(ownerOf(it).kotlin), it.name)
+    }
 
     private val requiredEnvs = ExitParamsDeclarationCheck.REQUIRED_KEYS.map(::envName)
 
@@ -183,7 +182,41 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `배포가 넘기는 키는 전부 preflight 검사 하나를 받는다`() {
         assertThat(allKeys.map { it.env })
-            .containsExactlyInAnyOrderElementsOf(DeployPassthrough.PASSED.flatMap(DeployPassthrough::envNames))
+            .containsExactlyInAnyOrderElementsOf(DeployPassthrough.PASSED.flatMap(DeployPassthrough::envNames) + checkedWithValueEnvs)
+    }
+
+    @Test
+    fun `값과 함께 넘기는 검사 대상은 배포가 실제로 렌더해 넘기고 클래스는 EXCLUDED 다`() {
+        // 위 단언은 목록을 양쪽에 넣어 이 키들에 대해서는 같은 말이므로 배포 파일로 따로 고정한다.
+        val compose = repoFile("deploy/vultr/docker-compose.prod.yml").readLines().map { it.trim() }
+        val deploySh = repoFile("deploy/vultr/deploy.sh").readLines()
+        val renderStart = deploySh.indexOfFirst { it.startsWith("render_server_env()") }
+        assertThat(renderStart).describedAs("render_server_env 정의").isNotNegative()
+        val render = deploySh.drop(renderStart).takeWhile { it != "}" }
+        DeployPassthrough.CHECKED_WITH_VALUE.zip(checkedWithValueEnvs).forEach { (property, env) ->
+            assertThat(DeployPassthrough.EXCLUDED).describedAs(env).containsKey(ownerOf(property).kotlin)
+            assertThat(compose).describedAs("compose 의 $env").anyMatch { it.startsWith("- $env=") }
+            assertThat(render).describedAs("render_server_env 의 $env").anyMatch { it.startsWith("$env=") }
+        }
+    }
+
+    @Test
+    fun `ms 로 잘못 적은 매매 주기는 막는다`() {
+        // 10000 초는 손절 평가가 약 2.8시간에 한 번이다.
+        assertThat(run("TRADING_INTERVAL_SECONDS=10000", "KIS_TRADING_INTERVAL_SECONDS=10000").flagged)
+            .containsExactlyInAnyOrder("TRADING_INTERVAL_SECONDS", "KIS_TRADING_INTERVAL_SECONDS")
+        assertThat(run("TRADING_INTERVAL_SECONDS=60", "KIS_TRADING_INTERVAL_SECONDS=10").exit).isEqualTo(0)
+    }
+
+    @Test
+    fun `에러 알림 스위치는 소문자 true·false 만 받는다`() {
+        // Spring 은 True·1 도 받지만 그 밖의 오기는 기동과 같은 .env 로 뜨는 롤백을 함께 막는다.
+        listOf("True", "ture", "1", "").forEach { value ->
+            assertThat(run("DISCORD_ERROR_ALERT_ENABLED=$value").flagged).describedAs(value).containsExactly("DISCORD_ERROR_ALERT_ENABLED")
+        }
+        listOf("true", "false").forEach { value ->
+            assertThat(run("DISCORD_ERROR_ALERT_ENABLED=$value").exit).describedAs(value).isEqualTo(0)
+        }
     }
 
     @Test
@@ -232,6 +265,7 @@ class ExitParamsPreflightScriptTest {
             "WATCHLIST_TICKERS=KRW-BTC,KRW-ETH",
             "MARKETDATA_WATCHDOG_ENABLED=false",
             "MARKETDATA_WATCHDOG_STALE_MS=60000",
+            "DISCORD_ERROR_ALERT_ENABLED=true",
         )
         assertThat(run.exit).describedAs(run.stderr).isEqualTo(0)
     }
@@ -311,6 +345,15 @@ class ExitParamsPreflightScriptTest {
             }
         }
         return (fromBounds + CANONICAL + NON_CANONICAL + TICKERS).distinct()
+    }
+
+    private fun grammarOf(env: String, property: KProperty1<*, *>, owner: Class<*>): Grammar = when {
+        property.returnType.classifier == Boolean::class -> Grammar.BOOLEAN
+        // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 0 을 허용할 정수는 구간 표로 옮긴다.
+        property.returnType.classifier == Long::class || property.returnType.classifier == Int::class -> Grammar.POSITIVE_INTEGER
+        DeployPassthrough.TICKER_LIST.any { it.name == property.name && ownerOf(it) == owner } -> Grammar.TICKER_LIST
+        // 소수는 형식만으로는 뜻을 잃는 값(음수·자릿수 오기)을 거르지 못해 구간 표에 넣는다.
+        else -> error("$env: preflight 검사 배정이 없다 — 구간 표나 DeployPassthrough.TICKER_LIST 에 넣거나 여기 규칙을 더할 것")
     }
 
     private fun verdict(accepts: Boolean) = if (accepts) "통과" else "거부"

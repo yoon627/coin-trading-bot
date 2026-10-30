@@ -170,14 +170,16 @@ class PositionManager(
         }
         val krw = accounts.find { it.currency == "KRW" }?.balanceDouble() ?: 0.0
         val investAmount = calculateInvestAmount(krw)
-        if (investAmount < rules.minOrderNotional) {
-            log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
-            return null
-        }
-        // 손절가까지 내려가도 최소주문 이상이어야 손절할 수 있다.
-        if (investAmount * (1 - tradingProperties.exitParamsSnapshot().maxLossPct / 100) < rules.minOrderNotional) {
-            log.debug("Skip buy for {}: investAmount={} would be unsellable at the stop-loss", ticker, investAmount)
-            return null
+        when (buySkip(investAmount, tradingProperties.exitParamsSnapshot().maxLossPct, rules.minOrderNotional)) {
+            BuySkip.BELOW_MIN_ORDER -> {
+                log.debug("Insufficient funds for {}: investAmount={}", ticker, investAmount)
+                return null
+            }
+            BuySkip.UNSELLABLE_AT_STOP_LOSS -> {
+                log.debug("Skip buy for {}: investAmount={} would be unsellable at the stop-loss", ticker, investAmount)
+                return null
+            }
+            null -> Unit
         }
         // 장부 밖 잔고도 주문 전 보유량에 넣어야 체결 판정이 이 주문의 증분만 본다.
         val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0

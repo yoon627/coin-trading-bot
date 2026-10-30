@@ -22,30 +22,35 @@ RANGE_RULES=(
     "TRADING_TRAILING_ARM_PCT decimal 0 1 100 1"
     "TRADING_MAX_HOLD_DAYS integer 1 1 - 0"
     "TRADING_INVEST_RATIO decimal 0 0 1 1"
+    "TRADING_MAX_INVEST_AMOUNT decimal 5000 1 - 0"
     "TRADING_ROUND_TRIP_FEE_RATE decimal 0 1 0.01 0"
+    "TRADING_K_VALUE decimal 0 1 2 1"
+    "TRADING_INTERVAL_SECONDS integer 1 1 60 1"
     "TRADING_SHADOW_EXIT_TRAILING_STOP_PCT decimal 0 0 100 0"
-    "TRADING_SHADOW_EXIT_TRAILING_ARM_PCT decimal 0 1 - 0"
+    "TRADING_SHADOW_EXIT_TRAILING_ARM_PCT decimal 0 1 100 1"
     "KIS_TRADING_TAKE_PROFIT_PCT decimal 0 0 100 1"
     "KIS_TRADING_MAX_LOSS_PCT decimal 0 0 100 0"
     "KIS_TRADING_TRAILING_STOP_PCT decimal 0 0 100 0"
     "KIS_TRADING_TRAILING_ARM_PCT decimal 0 1 100 1"
     "KIS_TRADING_MAX_HOLD_DAYS integer 1 1 - 0"
     "KIS_TRADING_INVEST_RATIO decimal 0 0 1 1"
+    "KIS_TRADING_INTERVAL_SECONDS integer 1 1 60 1"
     "KIS_TRADING_COMMISSION_RATE decimal 0 1 0.01 0"
     "KIS_TRADING_SELL_TAX_RATE decimal 0 1 0.01 0"
 )
 # Spring 은 yes·on 등도 받지만 여기서는 소문자 true/false 만 받는다.
+# DISCORD_ERROR_ALERT_ENABLED 는 compose 가 값과 함께 넘기는 키라 오기면 새 컨테이너와 롤백이 함께 기동에 실패한다.
 BOOLEAN_KEYS=(
     TRADING_AUTO_START
     TRADING_SHADOW_EXIT_ENABLED
     MARKETDATA_WATCHDOG_ENABLED
     KIS_TRADING_ENABLED
     KIS_TRADING_LIVE_ENABLED
+    DISCORD_ERROR_ALERT_ENABLED
 )
 # 0 이하는 기동이 실패하거나 워치독 재연결·재구독이 쉬지 않고 돈다.
-# KIS 금액 상한·주기·요청 간격이 0 이하면 앱이 KIS 클라이언트를 만들지 않으므로 배포 전에 막는다.
+# KIS 금액 상한·요청 간격이 0 이하면 앱이 KIS 클라이언트를 만들지 않으므로 배포 전에 막는다.
 POSITIVE_INTEGER_KEYS=(
-    TRADING_INTERVAL_SECONDS
     TRADING_RECONCILE_HALT_THRESHOLD
     MARKETDATA_WATCHDOG_STALE_MS
     MARKETDATA_WATCHDOG_INTERVAL_MS
@@ -53,14 +58,8 @@ POSITIVE_INTEGER_KEYS=(
     MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS
     KIS_TRADING_MAX_INVEST_AMOUNT
     KIS_TRADING_MAX_ORDER_AMOUNT
-    KIS_TRADING_INTERVAL_SECONDS
     KIS_TRADING_PAPER_MIN_REQUEST_INTERVAL_MS
     KIS_TRADING_LIVE_MIN_REQUEST_INTERVAL_MS
-)
-# 구간 없이 형식만 보는 소수.
-DECIMAL_KEYS=(
-    TRADING_MAX_INVEST_AMOUNT
-    TRADING_K_VALUE
 )
 # 쉼표로 구분한 대문자 마켓 코드. watchlist 는 하나만 틀려도 WS 구독 전체가 끊기고,
 # TRADING_TICKERS 는 소문자를 그대로 주문에 쓴다.
@@ -143,11 +142,6 @@ done
 for key in "${POSITIVE_INTEGER_KEYS[@]}"; do
     while IFS= read -r value; do
         [[ $value =~ $POSITIVE_INTEGER_FORMAT ]] || violations+=("$key: 형식 — 1 이상 정수(9자리까지, 앞자리 0·단위·부호·소수점 없이)로 적으세요")
-    done < <(values_of "$key")
-done
-for key in "${DECIMAL_KEYS[@]}"; do
-    while IFS= read -r value; do
-        [[ $value =~ $DECIMAL_FORMAT ]] || violations+=("$key: 형식 — 소수로 적으세요(정수부 9자리까지, 부호는 - 만, 지수·공백·쉼표 없이)")
     done < <(values_of "$key")
 done
 for key in "${TICKER_LIST_KEYS[@]}"; do

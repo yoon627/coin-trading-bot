@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import org.slf4j.event.Level
 import kotlin.math.max
 
 class TradingEngine(
@@ -69,7 +70,32 @@ class TradingEngine(
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
         // 1분봉 폴링 주기와 캐시 TTL 때문에 경계 직후 몇 분은 오늘 일봉이 없어도 정상이다.
         private const val STALE_DAILY_CANDLE_WARN_MS = 5 * 60_000L
+
+        /** 엔진 시작 경로(기동 복원·수동 시작·resume)에서 불리므로 어떤 값에도 예외를 던지지 않는다 — 문자열 템플릿만 쓴다. */
+        internal fun startupConfigWarnings(p: TradingProperties, minOrderNotional: Double): List<ConfigWarning> = buildList {
+            if (p.takeProfitPct <= p.trailingStopPct || p.takeProfitPct <= p.trailingArmPct) {
+                add(ConfigWarning(Level.WARN, "takeProfitPct(${p.takeProfitPct}) <= trailingStopPct(${p.trailingStopPct}) or trailingArmPct(${p.trailingArmPct}) — take-profit 이 선행해 트레일링이 사실상 도달 불가(dead)입니다"))
+            }
+            if (p.trailingArmPct > 0 && p.trailingArmPct <= p.trailingStopPct) {
+                add(ConfigWarning(Level.WARN, "0 < trailingArmPct(${p.trailingArmPct}) <= trailingStopPct(${p.trailingStopPct}) — arm 임계가 수학적으로 자동 충족되어 효과가 없습니다"))
+            }
+            // 청산 판정은 수수료 전 수익률이라 익절이 왕복 수수료 이하면 익절할 때마다 순손실이다.
+            if (p.takeProfitPct <= p.roundTripFeeRate * 100) {
+                add(ConfigWarning(Level.WARN, "takeProfitPct(${p.takeProfitPct}) <= roundTripFeeRate(${p.roundTripFeeRate}) × 100 — 익절해도 수수료를 빼면 순손실입니다"))
+            }
+            // 1회 매수액은 상한 이하라 상한이 걸리면 모든 매수가 걸린다. 매수 직전에는 DEBUG 로그뿐이라 ERROR 로 알린다.
+            val maxLossPct = p.exitParamsSnapshot().maxLossPct
+            when (buySkip(p.maxInvestAmount, maxLossPct, minOrderNotional)) {
+                BuySkip.BELOW_MIN_ORDER -> add(ConfigWarning(Level.ERROR, "maxInvestAmount(${p.maxInvestAmount}) < 최소 주문($minOrderNotional) — 모든 매수가 건너뛰어집니다"))
+                BuySkip.UNSELLABLE_AT_STOP_LOSS -> add(ConfigWarning(Level.ERROR, "maxInvestAmount(${p.maxInvestAmount}) × (1 − maxLossPct($maxLossPct)/100) < 최소 주문($minOrderNotional) — 손절가에서 팔 수 없는 크기라 모든 매수가 건너뛰어집니다"))
+                null -> Unit
+            }
+        }
     }
+
+    /** 엔진 시작 때 알릴 설정 조합. ERROR 는 Discord 로 간다. */
+    internal data class ConfigWarning(val level: Level, val message: String)
+
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val running = AtomicBoolean(false)
     @Volatile
@@ -113,7 +139,7 @@ class TradingEngine(
                         ticker, state.pendingBuyRef(), state.pendingSellRef(),
                     )
                 }
-            warnIfExitConfigInert()
+            reportStartupConfig()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, strategy.name)
             loopJob = scope.launch { runLoop() }
         } catch (e: Throwable) {
@@ -133,20 +159,9 @@ class TradingEngine(
         return initialStates.filterKeys { it !in foreign }
     }
 
-    private fun warnIfExitConfigInert() {
-        val p = tradingProperties
-        if (p.takeProfitPct <= p.trailingStopPct || p.takeProfitPct <= p.trailingArmPct) {
-            log.warn(
-                "takeProfitPct({}) <= trailingStopPct({}) or trailingArmPct({}) — take-profit 이 선행해 트레일링이 사실상 도달 불가(dead)입니다",
-                p.takeProfitPct, p.trailingStopPct, p.trailingArmPct,
-            )
-        }
-        if (p.trailingArmPct > 0 && p.trailingArmPct <= p.trailingStopPct) {
-            log.warn(
-                "0 < trailingArmPct({}) <= trailingStopPct({}) — arm 임계가 수학적으로 자동 충족되어 효과가 없습니다",
-                p.trailingArmPct, p.trailingStopPct,
-            )
-        }
+    // 설정은 런타임 전체에 걸려 엔진마다 같은 문구가 나간다. 사용자를 붙이지 않아야 Discord 가 같은 알림을 하나로 묶는다.
+    private fun reportStartupConfig() {
+        startupConfigWarnings(tradingProperties, rules.minOrderNotional).forEach { log.atLevel(it.level).log(it.message) }
     }
 
     // 동시에 들어온 stop 도 같은 loopJob 이 끝날 때까지 기다리게 한다.

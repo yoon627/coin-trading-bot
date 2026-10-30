@@ -92,6 +92,30 @@ class TradingEngineTest {
     }
 
     @Test
+    fun `엔진 시작 때 설정 경고를 수준대로 로그로 낸다`(): Unit = runBlocking {
+        // 매수가 모두 건너뛰어지는 조합은 Discord 로 가는 ERROR, 익절 ≤ 수수료는 WARN 이다.
+        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            val fee = 0.001
+            val engine = createEngine(
+                TradingProperties(
+                    intervalSeconds = 1, maxInvestAmount = 4_000.0,
+                    takeProfitPct = fee * 100, trailingStopPct = 0.05, trailingArmPct = 0.0, roundTripFeeRate = fee,
+                ),
+            )
+            engine.start(listOf("KRW-BTC"))
+            engine.stop()
+            fun levelsOf(text: String) = appender.list.filter { it.formattedMessage.contains(text) }.map { it.level }
+            assertEquals(listOf(Level.ERROR), levelsOf("모든 매수가 건너뛰어집니다"))
+            assertEquals(listOf(Level.WARN), levelsOf("익절해도 수수료를 빼면 순손실"))
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    @Test
     fun `stop sets engine to not running`() = runBlocking {
         val engine = createEngine()
         engine.start(listOf("KRW-BTC"))
