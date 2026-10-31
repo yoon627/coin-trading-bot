@@ -105,6 +105,8 @@ class RequestValidatorsExtendedTest {
         assertEquals("KRW-BTC", validators.normalizeMarket("KRW-BTC"))
         assertEquals("KRW-ETH", validators.normalizeMarket("krw-eth"))
         assertEquals("USDT-BTC", validators.normalizeMarket("usdt-btc"))
+        // Upbit 에는 1글자 자산이 있다.
+        assertEquals("KRW-T", validators.normalizeMarket("krw-t"))
     }
 
     @Test

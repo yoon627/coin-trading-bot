@@ -2,6 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.domain.TradeSide
 import com.trading.common.domain.Exchange
+import com.trading.common.domain.MarketPair
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import org.springframework.web.server.ResponseStatusException
@@ -45,9 +46,11 @@ class RequestValidators {
         return normalized
     }
 
-    fun normalizeMarket(market: String): String {
+    fun normalizeMarket(market: String): String = normalizeMarket(Exchange.UPBIT, market)
+
+    private fun normalizeMarket(exchange: Exchange, market: String): String {
         val normalized = market.trim().uppercase()
-        if (!MARKET_REGEX.matches(normalized)) {
+        if (!MarketPair.isValid(exchange, normalized)) {
             throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid market format")
         }
         return normalized
@@ -59,13 +62,7 @@ class RequestValidators {
         else -> throw ResponseStatusException(HttpStatus.BAD_REQUEST, "side must be buy or sell")
     }
 
-    fun normalizeMarkets(markets: List<String>): List<String> {
-        val normalized = markets.map(::normalizeMarket).distinct()
-        if (normalized.isEmpty() || normalized.size > 20) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Tickers must contain between 1 and 20 markets")
-        }
-        return normalized
-    }
+    fun normalizeMarkets(markets: List<String>): List<String> = normalizeMarkets(Exchange.UPBIT, markets)
 
     /** 값이 없으면 UPBIT 다. 파라미터 없이 오는 기존 요청이 Upbit 를 가리킨다. 철자는 enum 이름과 정확히 같아야 한다. */
     fun parseExchange(raw: String?): Exchange {
@@ -77,21 +74,10 @@ class RequestValidators {
             )
     }
 
-    fun normalizeMarkets(exchange: Exchange, markets: List<String>): List<String> = when (exchange) {
-        Exchange.UPBIT -> normalizeMarkets(markets)
-        Exchange.KIS_PAPER, Exchange.KIS -> {
-            val normalized = markets.map(::normalizeKrxMarket).distinct()
-            if (normalized.isEmpty() || normalized.size > 20) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Tickers must contain between 1 and 20 markets")
-            }
-            normalized
-        }
-    }
-
-    private fun normalizeKrxMarket(market: String): String {
-        val normalized = market.trim().uppercase()
-        if (!KRX_MARKET_REGEX.matches(normalized)) {
-            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid market format")
+    fun normalizeMarkets(exchange: Exchange, markets: List<String>): List<String> {
+        val normalized = markets.map { normalizeMarket(exchange, it) }.distinct()
+        if (normalized.isEmpty() || normalized.size > 20) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Tickers must contain between 1 and 20 markets")
         }
         return normalized
     }
@@ -121,9 +107,6 @@ class RequestValidators {
     companion object {
         private val USERNAME_REGEX = Regex("^[a-z0-9_-]{3,30}$")
         private val API_KEY_REGEX = Regex("^[A-Za-z0-9_-]+$")
-        private val MARKET_REGEX = Regex("^[A-Z]{2,10}-[A-Z0-9]{2,20}$")
-        // 영문이 섞인 신규 종목코드와 7자리 코드(ETN 등)를 받는다.
-        private val KRX_MARKET_REGEX = Regex("^KRX-[0-9A-Z]{6,7}$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
         private const val MIN_PASSWORD_LENGTH = 10
         private const val MAX_PASSWORD_BYTES = 72
