@@ -4,19 +4,27 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
+import org.springframework.boot.autoconfigure.AutoConfigurations
+import org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration
+import org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration
 import org.springframework.boot.test.context.runner.ReactiveWebApplicationContextRunner
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.FilterType
 import org.springframework.http.HttpHeaders
+import org.springframework.security.authentication.BadCredentialsException
+import org.springframework.security.authentication.ReactiveAuthenticationManager
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
+import org.springframework.security.core.userdetails.ReactiveUserDetailsService
 import org.springframework.test.web.reactive.server.WebTestClient
 import org.springframework.web.reactive.config.EnableWebFlux
 import org.springframework.web.reactive.function.server.bodyValueAndAwait
 import org.springframework.web.reactive.function.server.coRouter
 
-/** auth 패키지를 실제 애노테이션 그대로 스캔해 필터의 전역 WebFilter 중복 등록과 허용 경로 목록을 본다. */
+/** auth 패키지를 실제 애노테이션 그대로 스캔해 필터의 전역 WebFilter 중복 등록, 허용 경로 목록, Boot 기본 사용자 자동 구성이 물러나는지를 본다. */
 class JwtAuthFilterRegistrationTest {
 
     @Configuration
@@ -67,6 +75,24 @@ class JwtAuthFilterRegistrationTest {
                 client.get().uri(it).exchange().expectStatus().isUnauthorized
             }
         }
+    }
+
+    // 기본 사용자가 생기면 기동 로그에 생성 비밀번호가 찍힌다. Security 의 비밀번호 인증 매니저 경로는 쓰지 않는다
+    // (로그인 비밀번호는 AuthController 가 PasswordEncoder 로 직접 확인한다).
+    @Test
+    fun `Boot 기본 사용자 자동 구성이 물러나고 비밀번호 인증은 모두 거절된다`() {
+        ReactiveWebApplicationContextRunner()
+            .withUserConfiguration(Config::class.java)
+            .withConfiguration(
+                AutoConfigurations.of(ReactiveSecurityAutoConfiguration::class.java, ReactiveUserDetailsServiceAutoConfiguration::class.java),
+            )
+            .run { ctx ->
+                assertThat(ctx).hasNotFailed()
+                assertThat(ctx).doesNotHaveBean(ReactiveUserDetailsService::class.java)
+                val manager = ctx.getBean(ReactiveAuthenticationManager::class.java)
+                assertThatThrownBy { manager.authenticate(UsernamePasswordAuthenticationToken("user", "password")).block() }
+                    .isInstanceOf(BadCredentialsException::class.java)
+            }
     }
 
     private companion object {

@@ -58,10 +58,10 @@ class ShutdownBudgetTest {
         assertThat(phase).isLessThan(WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE - 1024)
     }
 
-    /** 이 테스트가 읽는 yml 값을 운영에서 다른 값이 덮으면 합이 맞아도 실제 정지 시간은 다르다. */
+    /** yml 이 고정한 정지·R2DBC 풀 값을 운영에서 다른 값이 덮으면 테스트가 본 값과 실제 동작이 다르다(R2dbcPoolTimeoutTest). */
     @Test
-    fun `컨테이너 설정이 정지 설정을 덮지 않는다`() {
-        assertThat(env.keys.filter { it.startsWith("SPRING_LIFECYCLE_") || it.startsWith("SERVER_SHUTDOWN") || it in JVM_OPTION_ENVS })
+    fun `컨테이너 설정이 yml 의 정지·R2DBC 풀 설정을 덮지 않는다`() {
+        assertThat(env.keys.filter { key -> OVERRIDING_ENV_PREFIXES.any { key.startsWith(it) } || key in JVM_OPTION_ENVS })
             .isEmpty()
         assertThat(env["SPRING_PROFILES_ACTIVE"]).describedAs("이 테스트는 prod 프로파일만 읽는다").isEqualTo("prod")
         val javaOpts = env["JAVA_OPTS"]
@@ -91,7 +91,8 @@ class ShutdownBudgetTest {
         const val PROD_YML = "bot/src/main/resources/application-prod.yml"
         val GRACE_FORMAT = Regex("""(\d+)s""")
         val JVM_OPTION_ENVS = setOf("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "SPRING_APPLICATION_JSON")
-        val OVERRIDING_SYSTEM_PROPERTIES = listOf("-Dspring.lifecycle", "-Dserver.shutdown", "reactor.netty.ioShutdown")
+        val OVERRIDING_ENV_PREFIXES = listOf("SPRING_LIFECYCLE_", "SERVER_SHUTDOWN", "SPRING_R2DBC_")
+        val OVERRIDING_SYSTEM_PROPERTIES = listOf("-Dspring.lifecycle", "-Dserver.shutdown", "reactor.netty.ioShutdown", "-Dspring.r2dbc")
 
         /** reactor-netty 1.2.13 `DisposableChannel.disposeNow()` 의 기본 시한. 공개 상수가 없다. */
         val NETTY_DISPOSE_NOW: Duration = Duration.ofSeconds(3)

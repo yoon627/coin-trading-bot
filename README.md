@@ -74,7 +74,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5433` / `trading` / `trading` / `trading` | prod 프로필의 기본 포트는 5432 |
 | `JWT_SECRET` | 없음 | 바꾸면 기존 세션이 끊긴다 |
 | `APP_ENCRYPTION_SECRET` | 없음 | 바꾸면 저장된 API 키를 복호화할 수 없다 |
-| `TRADING_TICKERS` | `KRW-BTC` | 거래 종목, 쉼표 구분한 대문자 Upbit 마켓 코드(예: `KRW-BTC`). 형식이 틀리면 배포 preflight 가 막는다 |
+| `TRADING_TICKERS` | `KRW-BTC` | 거래 종목, 쉼표 구분한 대문자 Upbit 마켓 코드(예: `KRW-BTC`). 형식이 틀리면 배포 preflight 가 막는다. 앱은 목록을 바꾸지 않고 형식이 틀린 항목이나 빈 목록을 기동 뒤 ERROR 로 알린다(복원되는 봇은 저장된 목록을 쓴다) |
 | `TRADING_AUTO_START` | `false` | 기동 시 봇 자동 시작 |
 | `TRADING_INVEST_RATIO` | `0.1` | 주문당 투자 비율 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 주문당 최대 금액(KRW). 허용 `[5000, ∞)` — Upbit 최소 주문 미만이면 모든 매수가 건너뛰어진다 |
