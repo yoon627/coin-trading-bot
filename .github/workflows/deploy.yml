@@ -42,6 +42,13 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      # 배포는 바뀐 Caddyfile 을 reload 로 적용하므로 틀린 설정은 머지 전에 막는다. 이미지는 compose 의 caddy 와 같게 둔다
+      # (CaddyValidateStepTest). APP_DOMAIN 이 비면 사이트 주소가 빈 문자열이 되어 임의 도메인을 준다.
+      - name: Caddyfile 검증 (운영과 같은 이미지)
+        run: >-
+          docker run --rm -e APP_DOMAIN=bot.example.test
+          -v "$PWD/deploy/vultr/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

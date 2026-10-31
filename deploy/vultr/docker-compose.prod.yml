@@ -12,7 +12,8 @@ services:
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?APP_DOMAIN is required (e.g. 141-164-1-2.sslip.io)}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 파일 하나를 마운트하면 inode 가 고정돼, 서버에서 파일을 바꿔치기하면 caddy 가 옛 내용을 계속 읽고 reload 도 옛 설정을 다시 읽는다.
+      - ./caddy:/etc/caddy:ro
       - caddy_data:/data       # 인증서 보관. 없으면 재시작마다 재발급해 Let's Encrypt rate limit 에 걸린다
       - caddy_config:/config
     depends_on:

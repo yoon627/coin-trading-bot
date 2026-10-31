@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
+import org.yaml.snakeyaml.Yaml
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -25,6 +26,7 @@ class DeployNotifyScriptTest {
     private val curlArgs by lazy { File(dir, "curl.args") }
     private val curlStdin by lazy { File(dir, "curl.stdin") }
     private val sshRemote by lazy { File(dir, "ssh.remote") }
+    private val scpCalls by lazy { File(dir, "scp.calls") }
 
     private class Run(val exit: Int, val output: String)
 
@@ -76,7 +78,13 @@ class DeployNotifyScriptTest {
     @Test
     fun `deploy 는 원격 결과마다 알맞은 webhook 으로 알리고 종료 코드를 지킨다`() {
         val repo = deployRepo()
-        val cases = mapOf(0 to (0 to GENERAL), 2 to (2 to ERROR), 1 to (1 to ERROR), 3 to (1 to ERROR))
+        val cases = mapOf(
+            0 to Triple(0, GENERAL, "성공"),
+            2 to Triple(2, ERROR, "자동 롤백"),
+            1 to Triple(1, ERROR, "수동 개입"),
+            4 to Triple(1, ERROR, "Caddyfile"),
+            3 to Triple(1, ERROR, "앱 중단"),
+        )
 
         for ((remoteRc, expected) in cases) {
             curlStdin.delete()
@@ -84,9 +92,79 @@ class DeployNotifyScriptTest {
 
             assertThat(result.exit).describedAs("원격 rc=$remoteRc\n${result.output}").isEqualTo(expected.first)
             assertThat(curlStdin.readText()).describedAs("원격 rc=$remoteRc").contains(expected.second)
+            assertThat(curlArgs.readText()).describedAs("원격 rc=$remoteRc").contains(expected.third)
             assertThat(result.output).describedAs("원격 rc=$remoteRc").doesNotContain("example.test")
         }
-        assertThat(curlArgs.readText()).contains("앱 중단")
+    }
+
+    /** 원격 4 는 앱이 새 SHA 로 정상이라는 뜻이라 롤백 기준은 그 SHA 로 옮기고, 배포는 실패로 남긴다. */
+    @Test
+    fun `원격 4 는 롤백 기준을 대상 커밋으로 갱신하고 실패로 끝난다`() {
+        val repo = deployRepo()
+        val target = git(repo, "rev-parse", "HEAD").trim()
+
+        val result = deploy(repo, remoteRc = 4)
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(1)
+        assertThat(File(repo, "deploy/vultr/.state").readText()).contains("LAST_GOOD_SHA=$target")
+    }
+
+    /** 업로드가 중간에 끊겨도 빈 ./caddy 를 가리키는 compose 가 남지 않게 Caddyfile 을 먼저 올린다. */
+    @Test
+    fun `Caddyfile 은 compose 가 마운트하는 디렉터리로 compose 파일보다 먼저 올린다`() {
+        val repo = deployRepo()
+        val compose: Map<*, *> = Yaml().load(RepoFiles.file("deploy/vultr/docker-compose.prod.yml").readText())
+        val caddyVolumes = ((compose["services"] as Map<*, *>)["caddy"] as Map<*, *>)["volumes"] as List<*>
+
+        deploy(repo, remoteRc = 0)
+
+        // 파일 하나를 마운트하면 올린 Caddyfile 이 컨테이너에 닿지 않거나 바꿔치기한 뒤 옛 inode 를 읽는다.
+        assertThat(caddyVolumes).contains("./caddy:/etc/caddy:ro")
+        val uploads = scpCalls.readLines().map { it.substringAfterLast(':') }
+        assertThat(uploads).containsSubsequence("/opt/app/caddy/Caddyfile", "/opt/app/docker-compose.yml")
+        assertThat(uploads).containsSubsequence("/opt/app/apply_caddyfile.sh", "/opt/app/docker-compose.yml")
+        assertThat(sshRemote.readText()).contains("mkdir -p /opt/app/caddy")
+    }
+
+    /** 원격 배포 스크립트라 실행하지 않고 본문을 본다. exec 가 표준입력을 붙잡으면 bash -s 로 들어온 남은 스크립트를 먹는다. */
+    @Test
+    fun `원격 스크립트는 앱이 healthy 이고 롤백 기준을 쓴 뒤에만 Caddyfile 을 적용하고 표준입력을 넘기지 않는다`() {
+        val remote = remoteScript()
+        val healthy = remote.substringAfter("if health_ok; then").substringBefore("echo \"ERROR: 180s")
+
+        val apply = healthy.indexOf("bash ./apply_caddyfile.sh </dev/null || caddy_rc=\$?")
+        val verdict = healthy.indexOf("caddy_verdict \"\$caddy_rc\" \"\$tls_ok\" || verdict=\$?")
+        assertThat(healthy.indexOf(".last-good-sha")).isGreaterThanOrEqualTo(0).isLessThan(apply)
+        // 판정이 HTTPS 확인보다 앞서면 바뀐 Caddyfile 을 적용한 배포가 모두 4 가 된다.
+        assertThat(verdict).isGreaterThan(healthy.indexOf("tls_ok=true"))
+        assertThat(healthy).contains("exit \"\$verdict\"")
+        assertThat(remote.substringAfter("echo \"ERROR: 180s")).doesNotContain("apply_caddyfile.sh")
+    }
+
+    /**
+     * 성공 배포의 종료 코드: 바뀐 Caddyfile 을 적용했으면 HTTPS e2e 까지 확인해야 0 이고, 적용 실패는 앱과 별개로 4 다.
+     * 적용했는데 HTTPS 를 확인하지 못하면 적용 기록을 지워, 다시 돌린 배포가 같은 Caddyfile 을 다시 적용하고 다시 확인한다.
+     */
+    @Test
+    fun `Caddyfile 적용 결과와 HTTPS 확인으로 성공 배포의 종료 코드와 적용 기록을 정한다`() {
+        val verdict = "caddy_verdict() {" + remoteScript().substringAfter("caddy_verdict() {").substringBefore("\n}") + "\n}\n"
+        val marker = File(dir, ".caddyfile-applied")
+        // 입력 → 종료 코드, 판정 뒤 적용 기록이 남는지
+        val cases = mapOf(
+            ("0" to "false") to (0 to true), ("0" to "true") to (0 to true), ("10" to "true") to (0 to true),
+            ("10" to "false") to (4 to false), ("1" to "true") to (4 to true), ("1" to "false") to (4 to true),
+        )
+
+        for ((input, expected) in cases) {
+            marker.writeText("hash\n")
+            val result = exec(
+                listOf("bash", "-c", verdict + "caddy_verdict \"\$1\" \"\$2\"", "verdict", input.first, input.second),
+                mapOf("TARGET_SHA" to "abc"),
+            )
+            val label = "caddy_rc=${input.first} tls_ok=${input.second}\n${result.output}"
+            assertThat(result.exit).describedAs(label).isEqualTo(expected.first)
+            assertThat(marker.exists()).describedAs(label).isEqualTo(expected.second)
+        }
     }
 
     @Test
@@ -181,7 +259,7 @@ class DeployNotifyScriptTest {
     private fun deployRepo(sameAsLastGood: Boolean = false): File {
         val repo = File(dir, "repo").apply { mkdirs() }
         val vultr = File(repo, "deploy/vultr").apply { mkdirs() }
-        for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "backup.sh")) {
+        for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "apply_caddyfile.sh", "backup.sh")) {
             RepoFiles.file("deploy/vultr/$name").copyTo(File(vultr, name))
         }
         git(repo, "init", "-q")
@@ -210,7 +288,7 @@ class DeployNotifyScriptTest {
             "remote=\"${'$'}{@: -1}\"\nprintf '%s\\n' \"${'$'}remote\" >> \"${sshRemote.path}\"\n" +
                 "case \"${'$'}remote\" in *'bash -s'*) cat > /dev/null; exit \"${'$'}FAKE_REMOTE_RC\" ;; esac\nexit 0",
         )
-        script("scp", "exit 0")
+        script("scp", "printf '%s\\n' \"${'$'}{@: -1}\" >> \"${scpCalls.path}\"\nexit 0")
         script("dig", "echo 203.0.113.10")
         fakeCurl()
         return repo
