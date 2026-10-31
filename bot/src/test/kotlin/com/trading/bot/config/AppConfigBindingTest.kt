@@ -2,6 +2,7 @@ package com.trading.bot.config
 
 import com.trading.bot.ci.RepoFiles
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatCode
 import org.junit.jupiter.api.Test
 import org.springframework.boot.context.properties.bind.Binder
 import org.springframework.boot.context.properties.source.ConfigurationPropertyName
@@ -23,17 +24,23 @@ class AppConfigBindingTest {
 
     @Test
     fun `application yml 은 설정 클래스 키 중 env 이름이 다른 통로만 둔다`() {
+        // 케밥이 아닌 이름(takeProfitPct)도 relaxed binding 으로 같은 키이고 logging.level.<클래스> 처럼 대문자 키도 있어 adapt 로 비교한다.
         val forbidden = (DeployPassthrough.PASSED + DeployPassthrough.EXCLUDED.keys).flatMap { klass ->
             DeployPassthrough.parameters(klass).mapNotNull { it.name }
-                .map { ConfigurationPropertyName.of("${DeployPassthrough.prefix(klass)}.${kebab(it)}") }
+                .map { ConfigurationPropertyName.adapt("${DeployPassthrough.prefix(klass)}.$it", '.') }
         }
-        for ((file, allowed) in mapOf(BASE_YML to ENV_ALIASES, PROD_YML to emptySet())) {
+        val files = RepoFiles.file(RESOURCES).listFiles().orEmpty().filter { YML_FILE.matches(it.name) }.map { "$RESOURCES/${it.name}" }
+        assertThat(files).contains(BASE_YML, PROD_YML)
+
+        for (file in files) {
+            val allowed = if (file == BASE_YML) ENV_ALIASES else emptySet()
             val keys = yml(file).flatMap { (it as EnumerablePropertySource<*>).propertyNames.toList() }
             val underClasses = keys.filter { key ->
-                val name = ConfigurationPropertyName.of(key)
+                val name = ConfigurationPropertyName.adapt(key, '.')
                 forbidden.any { it == name || it.isAncestorOf(name) }
             }
-            assertThat(underClasses).describedAs("$file — 기본값은 설정 클래스에만 둔다").containsExactlyInAnyOrderElementsOf(allowed)
+            assertThat(underClasses).describedAs("$file — 설정 클래스 키는 env 이름이 다른 통로 $allowed 만 둔다")
+                .containsExactlyInAnyOrderElementsOf(allowed)
         }
     }
 
@@ -43,9 +50,10 @@ class AppConfigBindingTest {
             val binder = binder(files, emptyMap())
 
             assertThat(binder.bindOrCreate("app", AppProperties::class.java)).describedAs("$files").isEqualTo(AppProperties("", 86_400_000, ""))
-            assertThat(binder.bindOrCreate("upbit", UpbitProperties::class.java)).isEqualTo(UpbitProperties("https://api.upbit.com"))
-            assertThat(binder.bindOrCreate("discord", DiscordProperties::class.java)).isEqualTo(DiscordProperties(""))
-            assertThat(binder.bindOrCreate("discord.error-alert", ErrorAlertProperties::class.java)).isEqualTo(ErrorAlertProperties(false, ""))
+            assertThat(binder.bindOrCreate("upbit", UpbitProperties::class.java)).describedAs("$files").isEqualTo(UpbitProperties("https://api.upbit.com"))
+            assertThat(binder.bindOrCreate("discord", DiscordProperties::class.java)).describedAs("$files").isEqualTo(DiscordProperties(""))
+            assertThat(binder.bindOrCreate("discord.error-alert", ErrorAlertProperties::class.java)).describedAs("$files")
+                .isEqualTo(ErrorAlertProperties(false, ""))
         }
     }
 
@@ -70,6 +78,24 @@ class AppConfigBindingTest {
             .isEqualTo(ErrorAlertProperties(true, "https://discord.example.test/error"))
     }
 
+    /** 루트 compose 가 `.env` 를 env_file 로 통째로 넘기므로 빈 `KEY=` 도 빈 문자열로 앱에 닿는다. */
+    @Test
+    fun `루트 env 템플릿을 그대로 복사해도 모든 설정 클래스가 바인딩된다`() {
+        val lines = RepoFiles.file(ROOT_TEMPLATE).readLines()
+        // compose 는 줄 끝 주석·따옴표·export 를 벗겨 읽는다. 그런 줄이 생기면 아래 단순 파싱이 compose 와 달라진다.
+        assertThat(lines.filterNot { TEMPLATE_LINE.matches(it) }).describedAs("$ROOT_TEMPLATE 은 KEY=값·주석·빈 줄로만 적는다").isEmpty()
+        val env = lines
+            .mapNotNull { ACTIVE_LINE.matchEntire(it) }
+            .associate { it.groupValues[1] to it.groupValues[2] as Any }
+        assertThat(env).describedAs("$ROOT_TEMPLATE 의 활성 줄").isNotEmpty()
+        val binder = binder(listOf(BASE_YML), env)
+
+        for (klass in DeployPassthrough.PASSED + DeployPassthrough.EXCLUDED.keys) {
+            val prefix = DeployPassthrough.prefix(klass)
+            assertThatCode { binder.bindOrCreate(prefix, klass.java) }.describedAs("$prefix ← $ROOT_TEMPLATE").doesNotThrowAnyException()
+        }
+    }
+
     private fun yml(file: String): List<PropertySource<*>> = YamlPropertySourceLoader().load(file, FileSystemResource(RepoFiles.file(file)))
 
     /** prod 프로필은 Boot 처럼 prod 파일을 기본 파일 앞에 둔다. */
@@ -81,11 +107,14 @@ class AppConfigBindingTest {
         return Binder.get(environment)
     }
 
-    private fun kebab(name: String) = name.replace(Regex("([a-z0-9])([A-Z])"), "$1-$2").lowercase()
-
     private companion object {
         const val BASE_YML = "bot/src/main/resources/application.yml"
         const val PROD_YML = "bot/src/main/resources/application-prod.yml"
+        const val RESOURCES = "bot/src/main/resources"
+        const val ROOT_TEMPLATE = ".env.example"
+        val YML_FILE = Regex("""application(-[a-z0-9]+)?\.ya?ml""")
+        val ACTIVE_LINE = Regex("""([A-Z][A-Z0-9_]*)=(.*)""")
+        val TEMPLATE_LINE = Regex("""#.*|[A-Z][A-Z0-9_]*=[^"'#\s]*|""")
 
         /** env 이름이 relaxed 이름(APP_JWT_SECRET, DISCORD_ERROR_ALERT_WEBHOOK_URL)과 달라 yml 통로가 있어야 닿는 키. */
         val ENV_ALIASES = setOf("app.jwt-secret", "discord.error-alert.webhook-url")

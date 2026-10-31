@@ -51,6 +51,7 @@ tasks.test {
     inputs.files(
         rootProject.fileTree("deploy/vultr") { include("*.sh", "*.yml", "Caddyfile", "sql/**", ".env.example") },
         rootProject.file(".github/workflows/deploy.yml"),
+        rootProject.file(".env.example"),
     ).withPropertyName("repoFilesReadByTests").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
