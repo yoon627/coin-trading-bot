@@ -152,7 +152,7 @@ class DeployWorkflowStepScriptTest {
         git("init", "-q")
         write("bot/src/main/kotlin/App.kt", "v1")
         commitAll("base")
-        if (withScript) repoFile(SCRIPT).copyTo(File(repo, SCRIPT))
+        if (withScript) RepoFiles.file(SCRIPT).copyTo(File(repo, SCRIPT))
         return git("rev-parse", "HEAD").trim()
     }
 
@@ -176,7 +176,7 @@ class DeployWorkflowStepScriptTest {
         exec(listOf("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript(job, id)), cwd, env, bin)
 
     private fun stepScript(job: String, id: String): String {
-        val workflow: Map<*, *> = Yaml().load(repoFile(WORKFLOW).readText())
+        val workflow: Map<*, *> = Yaml().load(RepoFiles.file(WORKFLOW).readText())
         val steps = ((workflow["jobs"] as Map<*, *>)[job] as Map<*, *>)["steps"] as List<*>
         val step = steps.filterIsInstance<Map<*, *>>().firstOrNull { it["id"] == id } ?: error("$job 에 id=$id 스텝이 없다")
         return step["run"] as String
@@ -204,15 +204,6 @@ class DeployWorkflowStepScriptTest {
             throw AssertionError("${command.take(2)} 가 30초 안에 끝나지 않았다:\n${out.readText()}")
         }
         return Run(process.exitValue(), out.readText(), githubOutput.readText())
-    }
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        check(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found
     }
 
     private companion object {

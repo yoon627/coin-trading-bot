@@ -1,5 +1,6 @@
 package com.trading.bot.config
 
+import com.trading.bot.ci.RepoFiles
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
@@ -139,7 +140,7 @@ class DeployNotifyScriptTest {
 
     /** `ssh_inst "…" <<'REMOTE' || deploy_rc=$?` 다음 줄부터 단독 `REMOTE` 줄 앞까지. */
     private fun remoteScript(): String {
-        val text = repoFile("deploy/vultr/deploy.sh").readText()
+        val text = RepoFiles.file("deploy/vultr/deploy.sh").readText()
         val start = text.indexOf("<<'REMOTE'")
         check(start >= 0) { "deploy.sh 에서 <<'REMOTE' 를 찾지 못했다" }
         val bodyStart = text.indexOf('\n', start) + 1
@@ -151,7 +152,7 @@ class DeployNotifyScriptTest {
     private fun notify(level: String, message: String, general: String, error: String, curlExit: Int = 0): Run {
         fakeCurl(curlExit)
         return exec(
-            listOf("bash", repoFile(NOTIFY).path, level, message),
+            listOf("bash", RepoFiles.file(NOTIFY).path, level, message),
             mapOf("DISCORD_WEBHOOK_URL" to general, "DISCORD_ERROR_WEBHOOK_URL" to error),
         )
     }
@@ -181,7 +182,7 @@ class DeployNotifyScriptTest {
         val repo = File(dir, "repo").apply { mkdirs() }
         val vultr = File(repo, "deploy/vultr").apply { mkdirs() }
         for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "backup.sh")) {
-            repoFile("deploy/vultr/$name").copyTo(File(vultr, name))
+            RepoFiles.file("deploy/vultr/$name").copyTo(File(vultr, name))
         }
         git(repo, "init", "-q")
         git(repo, "add", "deploy")
@@ -255,15 +256,6 @@ class DeployNotifyScriptTest {
             throw AssertionError("${command.take(3)} 가 60초 안에 끝나지 않았다:\n${out.readText()}")
         }
         return Run(process.exitValue(), out.readText())
-    }
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        check(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found
     }
 
     private companion object {

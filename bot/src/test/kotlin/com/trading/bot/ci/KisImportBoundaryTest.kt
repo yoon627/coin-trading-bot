@@ -8,19 +8,7 @@ import org.junit.jupiter.api.Test
 /** KIS 코드는 kis 패키지 안에만 두고 엔진·Upbit 경로는 포트로만 닿는다. */
 class KisImportBoundaryTest {
 
-    private fun mainSources(): File {
-        val relative = "bot/src/main/kotlin"
-        System.getProperty("repo.root")?.let { root ->
-            File(root, relative).takeIf { it.isDirectory }?.let { return it }
-        }
-        var dir: File? = File(".").absoluteFile
-        while (dir != null) {
-            File(dir, relative).takeIf { it.isDirectory }?.let { return it }
-            File(dir, "src/main/kotlin").takeIf { it.isDirectory && File(it, "com/trading/bot").isDirectory }?.let { return it }
-            dir = dir.parentFile
-        }
-        error("$relative 을 찾지 못했다 (cwd=${File(".").absolutePath})")
-    }
+    private fun mainSources(): File = RepoFiles.file("bot/src/main/kotlin")
 
     private fun kotlinFiles(dir: File): List<File> = dir.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
 

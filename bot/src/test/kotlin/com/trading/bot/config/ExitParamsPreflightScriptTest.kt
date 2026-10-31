@@ -1,5 +1,7 @@
 package com.trading.bot.config
 
+import com.trading.bot.ci.RepoFiles
+import com.trading.bot.ci.bashArrayBody
 import com.trading.bot.kis.config.KisExitParamRanges
 import com.trading.common.config.ExitParamRanges
 import com.trading.common.domain.Exchange
@@ -13,7 +15,6 @@ import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.jvm.javaGetter
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
@@ -55,7 +56,7 @@ class ExitParamsPreflightScriptTest {
         val flagged: Set<String> = FLAGGED.findAll(stderr).map { it.groupValues[1] }.toSet()
     }
 
-    private val script = repoFile("deploy/vultr/preflight_exit_params.sh")
+    private val script = RepoFiles.file("deploy/vultr/preflight_exit_params.sh")
 
     private val rangeKeys: List<Key> = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW + KisExitParamRanges.KIS).map { entry ->
         val integer = entry.property.returnType.classifier == Int::class || entry.property.returnType.classifier == Long::class
@@ -150,9 +151,8 @@ class ExitParamsPreflightScriptTest {
 
     @Test
     fun `스크립트의 표는 Kotlin 표와 키·형식·구간이 같다`() {
-        val text = script.readText()
-        fun array(name: String) = Regex("""(?m)^$name=\((.*?)\)""", RegexOption.DOT_MATCHES_ALL).find(text)?.groupValues?.get(1)
-            ?: throw AssertionError("스크립트에서 $name 배열을 못 찾았다")
+        val lines = script.readLines()
+        fun array(name: String) = bashArrayBody(lines, name) ?: throw AssertionError("스크립트에서 $name 배열을 못 찾았거나 닫히지 않는다")
 
         // 후보 대조만으로는 포함 끝이 ε 보다 작게 느슨해진 것을 놓쳐 끝점을 숫자로 직접 대조한다.
         val rangeRows = RANGE_ROW.findAll(array("RANGE_RULES")).associate { m ->
@@ -188,8 +188,8 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `값과 함께 넘기는 검사 대상은 배포가 실제로 렌더해 넘기고 클래스는 EXCLUDED 다`() {
         // 위 단언은 목록을 양쪽에 넣어 이 키들에 대해서는 같은 말이므로 배포 파일로 따로 고정한다.
-        val compose = repoFile("deploy/vultr/docker-compose.prod.yml").readLines().map { it.trim() }
-        val deploySh = repoFile("deploy/vultr/deploy.sh").readLines()
+        val compose = RepoFiles.file("deploy/vultr/docker-compose.prod.yml").readLines().map { it.trim() }
+        val deploySh = RepoFiles.file("deploy/vultr/deploy.sh").readLines()
         val renderStart = deploySh.indexOfFirst { it.startsWith("render_server_env()") }
         assertThat(renderStart).describedAs("render_server_env 정의").isNotNegative()
         val render = deploySh.drop(renderStart).takeWhile { it != "}" }
@@ -206,6 +206,13 @@ class ExitParamsPreflightScriptTest {
         assertThat(run("TRADING_INTERVAL_SECONDS=10000", "KIS_TRADING_INTERVAL_SECONDS=10000").flagged)
             .containsExactlyInAnyOrder("TRADING_INTERVAL_SECONDS", "KIS_TRADING_INTERVAL_SECONDS")
         assertThat(run("TRADING_INTERVAL_SECONDS=60", "KIS_TRADING_INTERVAL_SECONDS=10").exit).isEqualTo(0)
+    }
+
+    @Test
+    fun `자릿수를 잘못 적은 halt 임계는 막는다`() {
+        // 2000 이면 주기 10초에서 막힌 매도 알림이 약 5.5시간 뒤에 나간다.
+        assertThat(run("TRADING_RECONCILE_HALT_THRESHOLD=2000").flagged).containsExactly("TRADING_RECONCILE_HALT_THRESHOLD")
+        assertThat(run("TRADING_RECONCILE_HALT_THRESHOLD=100").exit).isEqualTo(0)
     }
 
     @Test
@@ -309,7 +316,7 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `배포 스크립트는 렌더한 env 를 올리기 전에 preflight 를 bash 로 부른다`() {
         // 스크립트가 맞아도 부르지 않거나 업로드 뒤에 부르면 잘못된 .env 가 서버에 닿는다. 실행 비트에 기대지 않게 bash 로 부른다.
-        val lines = repoFile("deploy/vultr/deploy.sh").readLines().map { it.trim() }
+        val lines = RepoFiles.file("deploy/vultr/deploy.sh").readLines().map { it.trim() }
         val render = lines.indexOf("render_server_env \"\$tmp_env\"")
         val call = lines.indexOf("bash \"\$SCRIPT_DIR/preflight_exit_params.sh\" \"\$tmp_env\"")
         val upload = lines.indexOfFirst { it.startsWith("scp ") && it.contains("\"\$tmp_env\"") }
@@ -349,7 +356,7 @@ class ExitParamsPreflightScriptTest {
 
     private fun grammarOf(env: String, property: KProperty1<*, *>, owner: Class<*>): Grammar = when {
         property.returnType.classifier == Boolean::class -> Grammar.BOOLEAN
-        // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 0 을 허용할 정수는 구간 표로 옮긴다.
+        // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 구간(하한·상한)이 있는 정수는 구간 표로 옮긴다.
         property.returnType.classifier == Long::class || property.returnType.classifier == Int::class -> Grammar.POSITIVE_INTEGER
         DeployPassthrough.TICKER_LIST.any { it.name == property.name && ownerOf(it) == owner } -> Grammar.TICKER_LIST
         // 소수는 형식만으로는 뜻을 잃는 값(음수·자릿수 오기)을 거르지 못해 구간 표에 넣는다.
@@ -364,15 +371,6 @@ class ExitParamsPreflightScriptTest {
 
     /** `trading.shadow-exit.trailing-stop-pct` → `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT`. */
     private fun envName(key: String) = key.replace('.', '_').replace('-', '_').uppercase()
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        assertTrue(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found!!
-    }
 
     private companion object {
         // 정수부 자릿수가 넘치면 앱이 Int 바인딩에 실패하거나 Double 이 무한대가 된다.

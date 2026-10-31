@@ -1,7 +1,8 @@
 package com.trading.bot.config
 
 import com.trading.bot.CoinTradingBotApplication
-import java.io.File
+import com.trading.bot.ci.RepoFiles
+import com.trading.bot.ci.bashArrayBody
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.boot.context.properties.ConfigurationProperties
@@ -81,26 +82,17 @@ class DeployEnvPassthroughTest {
             .also { assertTrue(it.size >= DeployPassthrough.PASSED.size) { "설정 클래스 스캔 실패로 보인다: $it" } }
     }
 
-    /**
-     * `APP_OVERRIDE_KEYS=( … )` 의 키. 줄마다 `#` 뒤를 먼저 지워 주석 속 키를 목록에서 빼고,
-     * 주석 속 `)` 를 배열 끝으로 읽지 않는다.
-     */
+    /** `APP_OVERRIDE_KEYS=( … )` 의 키(주석 처리는 [bashArrayBody]). */
     private fun deployShKeys(): Set<String> {
-        val lines = repoFile(DEPLOY_SH).readLines()
-        val start = lines.indexOfFirst { it.trimStart().startsWith(OVERRIDE_ARRAY_START) }
-        assertTrue(start >= 0) { "$DEPLOY_SH 에서 APP_OVERRIDE_KEYS 배열을 못 찾았다" }
-        val code = (listOf(lines[start].substringAfter(OVERRIDE_ARRAY_START)) + lines.drop(start + 1))
-            .map { it.substringBefore('#') }
-        val end = code.indexOfFirst { ')' in it }
-        assertTrue(end >= 0) { "$DEPLOY_SH 의 APP_OVERRIDE_KEYS 배열이 닫히지 않는다" }
-        val body = code.take(end + 1).joinToString("\n").substringBefore(')')
+        val body = bashArrayBody(RepoFiles.file(DEPLOY_SH).readLines(), OVERRIDE_ARRAY)
+            ?: throw AssertionError("$DEPLOY_SH 에서 $OVERRIDE_ARRAY 배열을 못 찾았거나 닫히지 않는다")
         // 접두어로 거르지 않아야 전달 대상 밖의 키(DISCORD_* 등)를 배열에 넣었을 때 역방향 단언이 잡는다.
         return ANY_ENV_NAME.findAll(body).map { it.value }.toSet().also { assertParsed(DEPLOY_SH, it) }
     }
 
     /** `services.app.environment` 중 전달 대상 접두어를 가진 항목 원문(`NAME` 또는 `NAME=값`). */
     private fun composeEntries(): List<String> {
-        val compose: Map<*, *> = Yaml().load(repoFile(COMPOSE).readText())
+        val compose: Map<*, *> = Yaml().load(RepoFiles.file(COMPOSE).readText())
         val app = (compose["services"] as? Map<*, *>)?.get("app") as? Map<*, *>
         val environment = app?.get("environment") as? List<*>
             ?: error("$COMPOSE 의 services.app.environment 가 목록이 아니다")
@@ -121,19 +113,10 @@ class DeployEnvPassthroughTest {
     private fun perFile(keysByFile: Map<String, Set<String>>): String =
         keysByFile.entries.joinToString("") { (file, keys) -> "  $file: ${keys.sorted()}\n" }
 
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        assertTrue(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found!!
-    }
-
     private companion object {
         const val DEPLOY_SH = "deploy/vultr/deploy.sh"
         const val COMPOSE = "deploy/vultr/docker-compose.prod.yml"
-        const val OVERRIDE_ARRAY_START = "APP_OVERRIDE_KEYS=("
+        const val OVERRIDE_ARRAY = "APP_OVERRIDE_KEYS"
         const val MIN_PARSED = 10
         val ANY_ENV_NAME = Regex("""[A-Z][A-Z0-9_]+""")
     }

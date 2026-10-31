@@ -1,12 +1,12 @@
 package com.trading.bot.persistence
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.common.domain.Exchange
-import java.io.File
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.LocalDateTime
@@ -263,7 +263,7 @@ class ExchangeDimensionRoundTripTest {
 
     @Test
     fun `the down sql refuses while KIS rows or later migrations remain, then restores V29 and V30 applies again`() = withScratchSchema("v30down") { schema ->
-        val downSql = repoFile("deploy/vultr/sql/V30_down.sql").readText()
+        val downSql = RepoFiles.file("deploy/vultr/sql/V30_down.sql").readText()
         migrate(schema, "29")
         inSchema(schema) { seedV29(it) }
         migrate(schema, "30")
@@ -303,10 +303,4 @@ class ExchangeDimensionRoundTripTest {
             assertThat(conn.strings("SELECT exchange FROM trading_states")).containsExactly("UPBIT")
         }
     }
-
-    private fun repoFile(relative: String): File =
-        generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-            ?: error("$relative 를 못 찾았다 (cwd=${File("").absolutePath})")
 }

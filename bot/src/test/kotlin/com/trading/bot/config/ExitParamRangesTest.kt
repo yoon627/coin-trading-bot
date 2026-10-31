@@ -68,6 +68,12 @@ class ExitParamRangesTest {
         "trading.interval-seconds, 60, true",
         "trading.interval-seconds, 61, false",
         "trading.interval-seconds, 10000, false",
+        // 막힌 매도 알림은 이 값 × 주기 뒤에 나간다. 상한 100 은 20 을 200·2000 으로 적은 자릿수 오기를 거른다.
+        "trading.reconcile-halt-threshold, 0, false",
+        "trading.reconcile-halt-threshold, 1, true",
+        "trading.reconcile-halt-threshold, 100, true",
+        "trading.reconcile-halt-threshold, 101, false",
+        "trading.reconcile-halt-threshold, 2000, false",
         "trading.shadow-exit.trailing-stop-pct, 0, false",
         "trading.shadow-exit.trailing-stop-pct, 1.5, true",
         "trading.shadow-exit.trailing-stop-pct, 100, false",
@@ -97,10 +103,13 @@ class ExitParamRangesTest {
 
     @Test
     fun `위반은 키·값·허용 구간을 싣는다`() {
-        assertThat(ExitParamRanges.violations(TradingProperties(maxLossPct = -5.0, maxHoldDays = 0, intervalSeconds = 61))).containsExactly(
+        // 101 로 TradingProperties 를 만들 수 있어야 한다 — 기동은 막지 않고 알리기만 한다.
+        val properties = TradingProperties(maxLossPct = -5.0, maxHoldDays = 0, intervalSeconds = 61, reconcileHaltThreshold = 101)
+        assertThat(ExitParamRanges.violations(properties)).containsExactly(
             "trading.max-loss-pct=-5.0 (허용 (0, 100))",
             "trading.max-hold-days=0 (허용 [1, ∞))",
             "trading.interval-seconds=61 (허용 [1, 60])",
+            "trading.reconcile-halt-threshold=101 (허용 [1, 100])",
         )
     }
 
@@ -123,6 +132,7 @@ class ExitParamRangesTest {
             "trading.round-trip-fee-rate",
             "trading.k-value",
             "trading.interval-seconds",
+            "trading.reconcile-halt-threshold",
         )
         assertThat(ExitParamRanges.SHADOW.map { it.key }).containsExactly(
             "trading.shadow-exit.trailing-stop-pct",
