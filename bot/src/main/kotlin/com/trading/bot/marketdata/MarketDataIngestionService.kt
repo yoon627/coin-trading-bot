@@ -26,6 +26,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
+import org.springframework.core.Ordered
+import org.springframework.core.annotation.Order
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
@@ -77,13 +81,20 @@ class MarketDataIngestionService(
         internal const val M1_FETCH_COUNT = 5
 
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
+
+        // 규칙이 받는 가장 긴 코드(31자)보다 넉넉하게. 값을 통째로 붙여 넣은 항목이 Discord 로 그대로 나가지 않게 한다.
+        private const val REPORTED_ENTRY_MAX_LENGTH = 40
     }
 
     @PostConstruct
     fun start() {
-        val m = watchlistProperties.tickerList().map { MarketPair.normalize(Exchange.UPBIT, it) }
+        val m = watchlistProperties.validTickers().map { MarketPair.normalize(Exchange.UPBIT, it) }
         if (m.isEmpty()) {
-            log.warn("No watchlist markets configured; market data ingestion disabled")
+            if (watchlistProperties.tickerList().isEmpty()) {
+                log.warn("No watchlist markets configured; market data ingestion disabled")
+            } else {
+                log.warn("Every watchlist market is malformed; market data ingestion disabled")
+            }
             return
         }
         markets = m
@@ -91,6 +102,19 @@ class MarketDataIngestionService(
         log.info("Starting in-process market data ingestion for {} markets: {}", m.size, m)
         tickerJob = scope.launch { runTickerCollection(m) }
         scope.launch { collectCandlesPeriodically(m) }
+    }
+
+    // @PostConstruct 는 Discord appender 가 붙기 전이라 그 ERROR 는 Discord 에 가지 않는다.
+    @EventListener(ApplicationReadyEvent::class)
+    @Order(Ordered.HIGHEST_PRECEDENCE + 1)
+    fun reportInvalidWatchlist() {
+        val invalid = watchlistProperties.invalidTickers()
+        if (invalid.isEmpty()) return
+        val outcome = if (watchlistProperties.validTickers().isEmpty()) "를 빼면 남는 마켓이 없어 시세 수집을 끕니다" else "는 빼고 시세를 수집합니다"
+        log.error(
+            "WATCHLIST_TICKERS 의 형식이 틀린 항목 {} {} — 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요",
+            invalid.map { it.take(REPORTED_ENTRY_MAX_LENGTH) }, outcome,
+        )
     }
 
     @PreDestroy

@@ -1,5 +1,7 @@
 package com.trading.bot.config
 
+import com.trading.common.domain.Exchange
+import com.trading.common.domain.MarketPair
 import org.springframework.boot.context.properties.ConfigurationProperties
 
 @ConfigurationProperties(prefix = "app")
@@ -20,6 +22,11 @@ data class WatchlistProperties(
 ) {
     fun tickerList(): List<String> =
         tickers.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct()
+
+    // KRW_BTC 같은 항목이 섞이면 구독 메시지를 만들다 예외가 나 모든 마켓의 시세가 끊기므로 형식이 틀린 항목은 구독하지 않는다.
+    fun validTickers(): List<String> = tickerList().filter { MarketPair.isValid(Exchange.UPBIT, it) }
+
+    fun invalidTickers(): List<String> = tickerList() - validTickers().toSet()
 }
 
 /**

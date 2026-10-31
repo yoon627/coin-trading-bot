@@ -74,7 +74,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5433` / `trading` / `trading` / `trading` | prod 프로필의 기본 포트는 5432 |
 | `JWT_SECRET` | 없음 | 바꾸면 기존 세션이 끊긴다 |
 | `APP_ENCRYPTION_SECRET` | 없음 | 바꾸면 저장된 API 키를 복호화할 수 없다 |
-| `TRADING_TICKERS` | `KRW-BTC` | 거래 종목, 쉼표 구분 |
+| `TRADING_TICKERS` | `KRW-BTC` | 거래 종목, 쉼표 구분한 대문자 Upbit 마켓 코드(예: `KRW-BTC`). 형식이 틀리면 배포 preflight 가 막는다 |
 | `TRADING_AUTO_START` | `false` | 기동 시 봇 자동 시작 |
 | `TRADING_INVEST_RATIO` | `0.1` | 주문당 투자 비율 |
 | `TRADING_MAX_INVEST_AMOUNT` | `100000` | 주문당 최대 금액(KRW). 허용 `[5000, ∞)` — Upbit 최소 주문 미만이면 모든 매수가 건너뛰어진다 |
@@ -87,7 +87,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
 | `TRADING_INTERVAL_SECONDS` | `10` | 매매 루프 주기(초). 허용 `[1, 60]` — 손절·익절·트레일링 평가가 이 주기로만 돈다 |
 | `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 그 종목의 신규 매수를 멈춘다(매도는 계속). 막힌 매도 알림은 이 값 × 매매 주기 뒤에 나간다. 허용 `[1, 100]` |
-| `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상 |
+| `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상. 형식은 `TRADING_TICKERS`와 같고 배포 preflight 가 막는다. 앱은 형식이 틀린 항목을 구독에서 빼고 기동 뒤 ERROR 로 알린다 |
 | `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |
 | `KIS_TRADING_INVEST_RATIO`, `KIS_TRADING_INTERVAL_SECONDS`, 청산 키 5개(`KIS_TRADING_TAKE_PROFIT_PCT` 등) | 같은 이름의 `TRADING_*` 기본값 | KIS 프로파일. 허용 구간도 `TRADING_*`와 같다 |

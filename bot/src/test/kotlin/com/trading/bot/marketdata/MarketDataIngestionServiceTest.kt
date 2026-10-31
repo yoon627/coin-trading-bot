@@ -1,7 +1,13 @@
 package com.trading.bot.marketdata
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
+import com.trading.bot.engine.UserTradingManager
+import com.trading.bot.notification.DiscordErrorLogAppender
 import com.trading.bot.stream.CandleAggregator
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
@@ -15,12 +21,21 @@ import io.mockk.verify
 import io.mockk.verifyOrder
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.slf4j.LoggerFactory
+import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.event.EventListener
+import org.springframework.core.annotation.AnnotatedElementUtils
+import org.springframework.core.annotation.Order
+import org.springframework.core.annotation.OrderUtils
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MarketDataIngestionServiceTest {
@@ -211,5 +226,64 @@ class MarketDataIngestionServiceTest {
         service.collectCandlesRound(listOf("BTC/KRW"))
 
         coVerify(exactly = 1) { feed.getCandles("BTC/KRW", CandleInterval.M1, any()) }
+    }
+
+    private fun serviceWatching(tickers: String) =
+        MarketDataIngestionService(feed, store, aggregator, WatchlistProperties(tickers), MarketDataWatchdogProperties())
+
+    // KRW_BTC 같은 항목이 섞이면 구독 메시지를 만들다 예외가 나 모든 마켓의 시세가 끊긴다.
+    @Test
+    fun `형식이 틀린 watchlist 항목은 빼고 나머지 마켓만 구독한다`() {
+        every { feed.tickerFlow(any()) } returns emptyFlow()
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = serviceWatching("KRW-BTC,KRW_BTC,krw-t")
+        try {
+            service.start()
+            verify(timeout = 5_000) { feed.tickerFlow(listOf("BTC/KRW", "T/KRW")) }
+        } finally {
+            service.stop()
+        }
+    }
+
+    @Test
+    fun `빠진 watchlist 항목은 기동 뒤 ERROR 한 줄로 알리고 모두 맞으면 알리지 않는다`() {
+        val errors = errorsWhileReporting(serviceWatching("KRW-BTC,KRW_BTC,K-BTC"))
+        assertEquals(1, errors.size)
+        assertTrue(errors.single().contains("KRW_BTC") && errors.single().contains("K-BTC"), errors.single())
+        assertTrue(errors.single().contains("빼고 시세를 수집합니다"), errors.single())
+        assertTrue(errorsWhileReporting(serviceWatching("KRW-BTC,KRW-T")).isEmpty())
+        // 남는 마켓이 없으면 수집이 꺼진다고 알린다. start() 의 WARN 은 Discord 에 가지 않는다.
+        val allInvalid = errorsWhileReporting(serviceWatching("KRW-BTC KRW-ETH")).single()
+        assertTrue(allInvalid.contains("시세 수집을 끕니다"), allInvalid)
+        // ERROR 는 Discord 로 나가므로 값을 통째로 붙여 넣은 항목은 잘라서 싣는다.
+        val pasted = errorsWhileReporting(serviceWatching("KRW-BTC," + "A".repeat(500))).single()
+        assertTrue(pasted.contains("A".repeat(40)) && !pasted.contains("A".repeat(41)), pasted)
+    }
+
+    // @PostConstruct 는 Discord appender attach 전이라 ERROR 가 Discord 에 가지 않는다.
+    @Test
+    fun `watchlist 보고는 Discord appender 뒤·복원 앞에 도는 ApplicationReadyEvent 리스너다`() {
+        val report = MarketDataIngestionService::class.java.getMethod("reportInvalidWatchlist")
+        val listener = AnnotatedElementUtils.findMergedAnnotation(report, EventListener::class.java)
+        assertEquals(listOf(ApplicationReadyEvent::class.java), listener?.classes?.map { it.java })
+        assertTrue(!report.isAnnotationPresent(PostConstruct::class.java))
+        val appenderOrder = OrderUtils.getOrder(DiscordErrorLogAppender::class.java)!!
+        val reportOrder = AnnotatedElementUtils.findMergedAnnotation(report, Order::class.java)!!.value
+        val restore = UserTradingManager::class.java.getMethod("restoreOnStartup")
+        val restoreOrder = AnnotatedElementUtils.findMergedAnnotation(restore, Order::class.java)!!.value
+        assertTrue(reportOrder in (appenderOrder + 1) until restoreOrder, "appender $appenderOrder < report $reportOrder < restore $restoreOrder")
+    }
+
+    private fun errorsWhileReporting(service: MarketDataIngestionService): List<String> {
+        val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        return try {
+            service.reportInvalidWatchlist()
+            appender.list.filter { it.level == Level.ERROR }.map { it.formattedMessage }
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
     }
 }

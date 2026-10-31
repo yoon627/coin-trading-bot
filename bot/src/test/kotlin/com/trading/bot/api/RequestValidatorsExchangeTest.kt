@@ -51,7 +51,8 @@ class RequestValidatorsExchangeTest {
         val valid = listOf(" krw-btc ", "KRW-ETH", "BTC-XRP", "KRW-BTC")
         assertEquals(validators.normalizeMarkets(valid), validators.normalizeMarkets(Exchange.UPBIT, valid))
         assertEquals(listOf("KRW-BTC", "KRW-ETH", "BTC-XRP"), validators.normalizeMarkets(Exchange.UPBIT, valid))
-        listOf(listOf("KRWBTC"), listOf("K-BTC"), emptyList(), (1..21).map { "KRW-C$it" }).forEach { bad ->
+        // KRX- 는 KIS 티커 네임스페이스라 Upbit 집합에서 뺀다.
+        listOf(listOf("KRWBTC"), listOf("K-BTC"), listOf("KRX-005930"), emptyList(), (1..21).map { "KRW-C$it" }).forEach { bad ->
             assertBadRequest { validators.normalizeMarkets(bad) }
             assertBadRequest { validators.normalizeMarkets(Exchange.UPBIT, bad) }
         }
