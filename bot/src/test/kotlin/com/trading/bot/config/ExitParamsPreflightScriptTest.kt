@@ -1,5 +1,6 @@
 package com.trading.bot.config
 
+import com.trading.bot.ci.RepoFiles
 import com.trading.bot.kis.config.KisExitParamRanges
 import com.trading.common.config.ExitParamRanges
 import com.trading.common.domain.Exchange
@@ -13,7 +14,6 @@ import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.jvm.javaGetter
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
@@ -55,7 +55,7 @@ class ExitParamsPreflightScriptTest {
         val flagged: Set<String> = FLAGGED.findAll(stderr).map { it.groupValues[1] }.toSet()
     }
 
-    private val script = repoFile("deploy/vultr/preflight_exit_params.sh")
+    private val script = RepoFiles.file("deploy/vultr/preflight_exit_params.sh")
 
     private val rangeKeys: List<Key> = (ExitParamRanges.TRADING + ExitParamRanges.SHADOW + KisExitParamRanges.KIS).map { entry ->
         val integer = entry.property.returnType.classifier == Int::class || entry.property.returnType.classifier == Long::class
@@ -188,8 +188,8 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `값과 함께 넘기는 검사 대상은 배포가 실제로 렌더해 넘기고 클래스는 EXCLUDED 다`() {
         // 위 단언은 목록을 양쪽에 넣어 이 키들에 대해서는 같은 말이므로 배포 파일로 따로 고정한다.
-        val compose = repoFile("deploy/vultr/docker-compose.prod.yml").readLines().map { it.trim() }
-        val deploySh = repoFile("deploy/vultr/deploy.sh").readLines()
+        val compose = RepoFiles.file("deploy/vultr/docker-compose.prod.yml").readLines().map { it.trim() }
+        val deploySh = RepoFiles.file("deploy/vultr/deploy.sh").readLines()
         val renderStart = deploySh.indexOfFirst { it.startsWith("render_server_env()") }
         assertThat(renderStart).describedAs("render_server_env 정의").isNotNegative()
         val render = deploySh.drop(renderStart).takeWhile { it != "}" }
@@ -316,7 +316,7 @@ class ExitParamsPreflightScriptTest {
     @Test
     fun `배포 스크립트는 렌더한 env 를 올리기 전에 preflight 를 bash 로 부른다`() {
         // 스크립트가 맞아도 부르지 않거나 업로드 뒤에 부르면 잘못된 .env 가 서버에 닿는다. 실행 비트에 기대지 않게 bash 로 부른다.
-        val lines = repoFile("deploy/vultr/deploy.sh").readLines().map { it.trim() }
+        val lines = RepoFiles.file("deploy/vultr/deploy.sh").readLines().map { it.trim() }
         val render = lines.indexOf("render_server_env \"\$tmp_env\"")
         val call = lines.indexOf("bash \"\$SCRIPT_DIR/preflight_exit_params.sh\" \"\$tmp_env\"")
         val upload = lines.indexOfFirst { it.startsWith("scp ") && it.contains("\"\$tmp_env\"") }
@@ -371,15 +371,6 @@ class ExitParamsPreflightScriptTest {
 
     /** `trading.shadow-exit.trailing-stop-pct` → `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT`. */
     private fun envName(key: String) = key.replace('.', '_').replace('-', '_').uppercase()
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        assertTrue(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found!!
-    }
 
     private companion object {
         // 정수부 자릿수가 넘치면 앱이 Int 바인딩에 실패하거나 Double 이 무한대가 된다.

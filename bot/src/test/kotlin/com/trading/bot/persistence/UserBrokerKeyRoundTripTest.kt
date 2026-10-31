@@ -1,6 +1,6 @@
 package com.trading.bot.persistence
 
-import java.io.File
+import com.trading.bot.ci.RepoFiles
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.Instant
@@ -232,7 +232,7 @@ class UserBrokerKeyRoundTripTest {
 
     @Test
     fun `the down sql refuses unless V31 is the last migration, then drops the table and V31 applies again`() = withScratchSchema("v31down") { schema ->
-        val downSql = repoFile("deploy/vultr/sql/V31_down.sql").readText()
+        val downSql = RepoFiles.file("deploy/vultr/sql/V31_down.sql").readText()
         migrate(schema, "30")
         inSchema(schema) { it.update("INSERT INTO users (username, password) VALUES ('it-seed-$runId', 'x')") }
 
@@ -270,10 +270,4 @@ class UserBrokerKeyRoundTripTest {
             assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '31'")).containsExactly("31")
         }
     }
-
-    private fun repoFile(relative: String): File =
-        generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-            ?: error("$relative 를 못 찾았다 (cwd=${File("").absolutePath})")
 }

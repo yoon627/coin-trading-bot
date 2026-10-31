@@ -1,9 +1,9 @@
 package com.trading.bot.config
 
+import com.trading.bot.ci.RepoFiles
 import com.trading.bot.engine.UpbitExchangeRuntime
 import com.trading.common.config.TradingProperties
 import io.mockk.mockk
-import java.io.File
 import java.time.Duration
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
@@ -28,7 +28,7 @@ import reactor.netty.resources.LoopResources
  */
 class ShutdownBudgetTest {
 
-    private val compose: Map<*, *> = Yaml().load(repoFile(COMPOSE).readText())
+    private val compose: Map<*, *> = Yaml().load(RepoFiles.file(COMPOSE).readText())
     private val app = (compose["services"] as Map<*, *>)["app"] as Map<*, *>
     private val env: Map<String, String?> = (app["environment"] as List<*>).associate { entry ->
         val raw = entry.toString()
@@ -79,19 +79,10 @@ class ShutdownBudgetTest {
     /** Spring 과 같은 relaxed binding 으로 읽는다. prod 프로파일 값이 기본 값을 덮는다. */
     private fun webDrain(): Duration {
         val loader = YamlPropertySourceLoader()
-        val sources = listOf(PROD_YML, BASE_YML).flatMap { loader.load(it, FileSystemResource(repoFile(it))) }
+        val sources = listOf(PROD_YML, BASE_YML).flatMap { loader.load(it, FileSystemResource(RepoFiles.file(it))) }
         return Binder(ConfigurationPropertySources.from(sources))
             .bind("spring.lifecycle.timeout-per-shutdown-phase", Duration::class.java)
             .orElseThrow { IllegalStateException("spring.lifecycle.timeout-per-shutdown-phase 가 없다 — Boot 기본값(30s)에 기대지 말고 적어 둔다") }
-    }
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        check(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found
     }
 
     private companion object {

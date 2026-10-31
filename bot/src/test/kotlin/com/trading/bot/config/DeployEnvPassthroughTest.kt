@@ -1,7 +1,7 @@
 package com.trading.bot.config
 
 import com.trading.bot.CoinTradingBotApplication
-import java.io.File
+import com.trading.bot.ci.RepoFiles
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.boot.context.properties.ConfigurationProperties
@@ -86,7 +86,7 @@ class DeployEnvPassthroughTest {
      * 주석 속 `)` 를 배열 끝으로 읽지 않는다.
      */
     private fun deployShKeys(): Set<String> {
-        val lines = repoFile(DEPLOY_SH).readLines()
+        val lines = RepoFiles.file(DEPLOY_SH).readLines()
         val start = lines.indexOfFirst { it.trimStart().startsWith(OVERRIDE_ARRAY_START) }
         assertTrue(start >= 0) { "$DEPLOY_SH 에서 APP_OVERRIDE_KEYS 배열을 못 찾았다" }
         val code = (listOf(lines[start].substringAfter(OVERRIDE_ARRAY_START)) + lines.drop(start + 1))
@@ -100,7 +100,7 @@ class DeployEnvPassthroughTest {
 
     /** `services.app.environment` 중 전달 대상 접두어를 가진 항목 원문(`NAME` 또는 `NAME=값`). */
     private fun composeEntries(): List<String> {
-        val compose: Map<*, *> = Yaml().load(repoFile(COMPOSE).readText())
+        val compose: Map<*, *> = Yaml().load(RepoFiles.file(COMPOSE).readText())
         val app = (compose["services"] as? Map<*, *>)?.get("app") as? Map<*, *>
         val environment = app?.get("environment") as? List<*>
             ?: error("$COMPOSE 의 services.app.environment 가 목록이 아니다")
@@ -120,15 +120,6 @@ class DeployEnvPassthroughTest {
 
     private fun perFile(keysByFile: Map<String, Set<String>>): String =
         keysByFile.entries.joinToString("") { (file, keys) -> "  $file: ${keys.sorted()}\n" }
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        assertTrue(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found!!
-    }
 
     private companion object {
         const val DEPLOY_SH = "deploy/vultr/deploy.sh"

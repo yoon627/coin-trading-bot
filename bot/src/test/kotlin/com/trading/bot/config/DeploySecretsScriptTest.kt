@@ -1,5 +1,6 @@
 package com.trading.bot.config
 
+import com.trading.bot.ci.RepoFiles
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -27,7 +28,7 @@ class DeploySecretsScriptTest {
     private class Run(val exit: Int, val output: String)
 
     private fun prepare(env: Map<String, String>, state: String?): File {
-        repoFile("deploy/vultr/deploy.sh").copyTo(File(dir, "deploy.sh"))
+        RepoFiles.file("deploy/vultr/deploy.sh").copyTo(File(dir, "deploy.sh"))
         File(dir, ".env").writeText(env.entries.joinToString("\n", postfix = "\n") { "${it.key}=${it.value}" })
         state?.let { File(dir, ".state").writeText(it) }
         return File(dir, ".env")
@@ -126,14 +127,5 @@ class DeploySecretsScriptTest {
         val written = env.readLines()
         assertTrue(written.any { it.matches(Regex("DB_PASSWORD=[0-9a-f]{32}")) }, written.joinToString("\n"))
         assertTrue(written.any { it.startsWith("JWT_SECRET=") && it.length > "JWT_SECRET=".length }, written.joinToString("\n"))
-    }
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        assertTrue(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found!!
     }
 }

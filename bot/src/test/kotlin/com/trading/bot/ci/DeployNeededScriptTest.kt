@@ -147,7 +147,7 @@ class DeployNeededScriptTest {
     fun `하위 디렉터리에서 불러도 저장소 전체를 비교한다`() {
         val target = change("bot/src/main/kotlin/App.kt")
 
-        val result = exec(listOf("bash", repoFile(SCRIPT).path, base, base, target), File(dir, "deploy/vultr"))
+        val result = exec(listOf("bash", RepoFiles.file(SCRIPT).path, base, base, target), File(dir, "deploy/vultr"))
 
         assertThat(result.decision).describedAs(result.output).isEqualTo("deploy=true")
     }
@@ -173,7 +173,7 @@ class DeployNeededScriptTest {
         check(it.exit == 0) { "git ${args.joinToString(" ")} 실패:\n${it.output}" }
     }.output
 
-    private fun judge(vararg args: String): Run = exec(listOf("bash", repoFile(SCRIPT).path, *args))
+    private fun judge(vararg args: String): Run = exec(listOf("bash", RepoFiles.file(SCRIPT).path, *args))
 
     private fun exec(command: List<String>, cwd: File = dir): Run {
         val out = File(outDir, "out.txt")
@@ -193,15 +193,6 @@ class DeployNeededScriptTest {
             throw AssertionError("${command.joinToString(" ")} 가 30초 안에 끝나지 않았다:\n${out.readText()}")
         }
         return Run(process.exitValue(), out.readText())
-    }
-
-    private fun repoFile(relative: String): File {
-        // 테스트 cwd 는 gradle 서브프로젝트(`bot/`)라 repo 루트까지 거슬러 올라간다.
-        val found = generateSequence(File("").absoluteFile) { it.parentFile }
-            .map { File(it, relative) }
-            .firstOrNull { it.exists() }
-        check(found != null) { "$relative 를 못 찾았다 (cwd=${File("").absolutePath})" }
-        return found
     }
 
     companion object {

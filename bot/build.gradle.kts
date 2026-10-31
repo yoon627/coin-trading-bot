@@ -44,15 +44,14 @@ tasks.test {
     // 알림 금액을 기본 로케일로 포맷하고 테스트가 "," 구분자를 단언하므로 로케일을 고정한다.
     systemProperty("user.language", "en")
     systemProperty("user.country", "US")
-    // 배포 스크립트를 읽는 테스트가 있어, 입력으로 선언하지 않으면 스크립트만 바꿨을 때 테스트가 UP-TO-DATE 로 건너뛰어진다.
+    // 저장소 파일을 읽는 테스트는 이 경로에서만 찾는다(RepoFiles). 작업 디렉터리에서 올라가면 worktree 가 main checkout 의 파일을 읽는다.
+    systemProperty("repo.root", rootProject.rootDir.absolutePath)
+    // 테스트가 읽는 저장소 파일을 입력으로 선언하지 않으면 그 파일만 바꿨을 때 테스트가 UP-TO-DATE 로 건너뛰어진다.
+    // 비밀 파일(.env, *.pem)은 해시에도 넣지 않도록 읽는 종류만 고른다.
     inputs.files(
-        rootProject.file("deploy/vultr/deploy.sh"),
-        rootProject.file("deploy/vultr/docker-compose.prod.yml"),
-        rootProject.file("deploy/vultr/preflight_exit_params.sh"),
-        rootProject.file("deploy/vultr/deploy_needed.sh"),
+        rootProject.fileTree("deploy/vultr") { include("*.sh", "*.yml", "Caddyfile", "sql/**", ".env.example") },
         rootProject.file(".github/workflows/deploy.yml"),
-        rootProject.file("deploy/vultr/notify_deploy.sh"),
-    ).withPropertyName("deployScripts").withPathSensitivity(PathSensitivity.RELATIVE)
+    ).withPropertyName("repoFilesReadByTests").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.jacocoTestReport {

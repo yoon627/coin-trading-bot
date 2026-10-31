@@ -12,22 +12,9 @@ import org.yaml.snakeyaml.Yaml
  */
 class DeployWorkflowPathListTest {
 
-    private val root: File = findRepoRoot()
+    private val root: File = RepoFiles.root
 
     private val workflow: Map<*, *> = Yaml().load(File(root, WORKFLOW).readText())
-
-    /** IDE 에서 이 테스트만 돌리면 `repo.root` 가 없을 수 있어 위로 올라가며 찾는다. */
-    private fun findRepoRoot(): File {
-        System.getProperty("repo.root")?.let { root ->
-            if (File(root, WORKFLOW).isFile) return File(root)
-        }
-        var dir: File? = File(".").absoluteFile
-        while (dir != null) {
-            if (File(dir, WORKFLOW).isFile) return dir
-            dir = dir.parentFile
-        }
-        error("$WORKFLOW 을 찾지 못했다 (repo.root=${System.getProperty("repo.root")}, cwd=${File(".").absolutePath})")
-    }
 
     private fun job(name: String): Map<*, *> {
         val jobs = workflow["jobs"] as Map<*, *>
