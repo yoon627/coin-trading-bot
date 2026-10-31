@@ -29,22 +29,14 @@ management:
       exposure:
         include: health,info
 
-upbit:
-  base-url: https://api.upbit.com
-
-# trading.* 기본값은 TradingProperties 에만 둔다. 환경변수는 relaxed binding 으로 바로 들어온다.
-
+# 설정 클래스(TradingProperties·AppConfig.kt 등)의 기본값은 클래스에만 두고, env 는 relaxed binding 으로 바로 들어온다.
+# 아래 두 키만 env 이름이 relaxed 이름(APP_JWT_SECRET, DISCORD_ERROR_ALERT_WEBHOOK_URL)과 달라 통로를 둔다(AppConfigBindingTest).
+# 끝의 `:` 를 빼면 env 가 없을 때 `${JWT_SECRET}` 글자 그대로가 값이 된다.
 app:
   jwt-secret: ${JWT_SECRET:}
-  jwt-expiration-ms: 86400000
-  encryption-secret: ${APP_ENCRYPTION_SECRET:}
-
-# watchlist.*·marketdata.watchdog.* 기본값도 같은 이유로 AppConfig.kt 의 설정 클래스에만 둔다.
 
 discord:
-  webhook-url: ${DISCORD_WEBHOOK_URL:}
   error-alert:
-    enabled: ${DISCORD_ERROR_ALERT_ENABLED:false}
     webhook-url: ${DISCORD_ERROR_WEBHOOK_URL:}
 
 logging:

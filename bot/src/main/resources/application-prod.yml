@@ -12,10 +12,6 @@ spring:
     user: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
 
-app:
-  jwt-secret: ${JWT_SECRET:}
-  encryption-secret: ${APP_ENCRYPTION_SECRET:}
-
 logging:
   level:
     com.trading.bot: INFO

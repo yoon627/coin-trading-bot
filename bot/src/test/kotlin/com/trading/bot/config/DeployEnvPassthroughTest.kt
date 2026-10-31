@@ -42,7 +42,7 @@ class DeployEnvPassthroughTest {
         ).filterValues { it.isNotEmpty() }
         assertTrue(missing.isEmpty()) {
             "전달 화이트리스트에서 빠졌다 → .env 에 적어도 앱에 도달하지 않는다.\n" +
-                perFile(missing) + "  두 곳 모두에 추가하고 .env.example 에도 적을 것."
+                perFile(missing) + "  두 곳 모두에 추가하고 $TEMPLATE 에도 #KEY= 로 적을 것."
         }
     }
 
@@ -56,7 +56,27 @@ class DeployEnvPassthroughTest {
         assertTrue(stale.isEmpty()) {
             "읽는 설정이 없는 키가 전달 화이트리스트에 남았다 → .env 에 적어도 아무 효과가 없다.\n" +
                 perFile(stale) +
-                "  설정을 지웠으면 두 곳과 .env.example 에서도 지우고, 새 설정이면 그 @ConfigurationProperties 생성자에 추가할 것."
+                "  설정을 지웠으면 두 곳과 $TEMPLATE 에서도 지우고, 새 설정이면 그 @ConfigurationProperties 생성자에 추가할 것."
+        }
+    }
+
+    /** 운영 `.env` 는 이 템플릿에서 시작하므로 빠진 키는 운영자가 모르고, 남은 키는 효과 없이 적힌다. */
+    @Test
+    fun `운영 env 템플릿은 배포가 넘기는 키를 빠짐없이 그것만 싣는다`() {
+        val lines = RepoFiles.file(TEMPLATE).readLines()
+        val listed = lines.mapNotNull { TEMPLATE_KEY.matchEntire(it)?.groupValues?.get(1) }
+            .filter { key -> DeployPassthrough.ENV_PREFIXES.any { key.startsWith(it) } }
+            .toSet().also { assertParsed(TEMPLATE, it) }
+        // `# KEY=` 처럼 # 뒤에 공백을 두면 위 파싱이 키로 읽지 않아, 낡은 키가 그렇게 남으면 역방향 대조를 빠져나간다.
+        val spaced = lines.filter { line ->
+            val key = SPACED_KEY.matchEntire(line)?.groupValues?.get(1) ?: return@filter false
+            DeployPassthrough.ENV_PREFIXES.any { key.startsWith(it) }
+        }
+
+        val expected = expectedKeys()
+        assertTrue(spaced.isEmpty() && listed == expected) {
+            "$TEMPLATE 가 배포가 넘기는 키와 어긋났다.\n  빠짐: ${(expected - listed).sorted()}\n  남음: ${(listed - expected).sorted()}\n" +
+                "  공백 주석: $spaced\n  키는 KEY= 또는 #KEY= 로(# 뒤 공백 없이) 적는다."
         }
     }
 
@@ -117,7 +137,10 @@ class DeployEnvPassthroughTest {
         const val DEPLOY_SH = "deploy/vultr/deploy.sh"
         const val COMPOSE = "deploy/vultr/docker-compose.prod.yml"
         const val OVERRIDE_ARRAY = "APP_OVERRIDE_KEYS"
+        const val TEMPLATE = "deploy/vultr/.env.example"
         const val MIN_PARSED = 10
         val ANY_ENV_NAME = Regex("""[A-Z][A-Z0-9_]+""")
+        val TEMPLATE_KEY = Regex("""#?([A-Z][A-Z0-9_]*)=.*""")
+        val SPACED_KEY = Regex("""#\s+([A-Z][A-Z0-9_]*)=.*""")
     }
 }
