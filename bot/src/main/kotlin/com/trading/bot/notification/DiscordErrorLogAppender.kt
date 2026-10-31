@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component
  * appender 안에서 SLF4J 로 로깅하면 자기 자신으로 되돌아오므로 실패는 logback addError 로 남긴다.
  */
 @Component
-// 청산 파라미터 기동 보고와 포지션 복원보다 먼저 붙어야 그 에러가 Discord 로 나간다.
+// 청산 파라미터·watchlist 기동 보고와 포지션 복원보다 먼저 붙어야 그 에러가 Discord 로 나간다.
 @Order(Ordered.HIGHEST_PRECEDENCE)
 class DiscordErrorLogAppender internal constructor(
     private val discordNotifier: DiscordNotifier,

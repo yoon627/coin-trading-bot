@@ -32,6 +32,13 @@ class WatchlistPropertiesTest {
     }
 
     @Test
+    fun `형식이 틀린 항목은 구독 목록에서 빠지고 따로 모인다`() {
+        val properties = WatchlistProperties("KRW-BTC,KRW-BTC KRW-ETH,KRW_BTC,KRW-BTC-X,krw-t,KRX-005930")
+        assertEquals(listOf("KRW-BTC", "KRW-T"), properties.validTickers())
+        assertEquals(listOf("KRW-BTC KRW-ETH", "KRW_BTC", "KRW-BTC-X", "KRX-005930"), properties.invalidTickers())
+    }
+
+    @Test
     fun `tickerList is empty when blank`() {
         assertTrue(WatchlistProperties("").tickerList().isEmpty())
     }
