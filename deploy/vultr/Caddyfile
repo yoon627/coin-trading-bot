@@ -5,5 +5,9 @@
 	# 클라이언트가 보낸 X-Forwarded-For 는 믿지 않는다. 앱의 IP rate limit 이 실제 peer IP 를 보게 덮어쓴다.
 	reverse_proxy app:8080 {
 		header_up X-Forwarded-For {remote_host}
+		# 배포가 app 컨테이너를 바꾸는 동안 502 대신 새 컨테이너에 연결될 때까지 기다린다.
+		# 연결이 안 된 실패는 모든 요청을, 연결된 뒤 끊긴 실패는 GET 만 다시 보내므로 POST 는 두 번 가지 않고,
+		# 앱이 응답한 5xx 는 그대로 나간다.
+		lb_try_duration 30s
 	}
 }
