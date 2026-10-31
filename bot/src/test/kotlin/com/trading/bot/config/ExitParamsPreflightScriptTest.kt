@@ -44,7 +44,7 @@ class ExitParamsPreflightScriptTest {
             POSITIVE_INTEGER -> POSITIVE_INTEGER_FORMAT.matches(value)
             // 빈 조각은 앱이 거르므로 받고, 조각이 하나도 없으면 막는다.
             TICKER_LIST -> value.split(',').map { it.trim(' ') }.filter { it.isNotEmpty() }
-                .let { pieces -> pieces.isNotEmpty() && pieces.all { MARKET_FORMAT.matches(it) } }
+                .let { pieces -> pieces.isNotEmpty() && pieces.all { MarketPair.isValid(Exchange.UPBIT, it) } }
         }
     }
 
@@ -381,8 +381,6 @@ class ExitParamsPreflightScriptTest {
         val INTEGER_FORMAT = Regex("""-?[0-9]{1,$MAX_INTEGER_DIGITS}""")
         val BOOLEAN_FORMAT = Regex("""true|false""")
         val POSITIVE_INTEGER_FORMAT = Regex("""[1-9][0-9]{0,${MAX_INTEGER_DIGITS - 1}}""")
-        // Upbit 에는 1글자 자산(KRW-T 등)이 있어 길이는 보지 않는다.
-        val MARKET_FORMAT = Regex("""[A-Z]+-[A-Z0-9]+""")
 
         val FLAGGED = Regex("""(?m)^ {2}([A-Z][A-Z0-9_]+): """)
         val RANGE_ROW = Regex(""""((?:KIS_)?TRADING_[A-Z0-9_]+) (decimal|integer) (\S+) ([01]) (\S+) ([01])""")
@@ -398,11 +396,13 @@ class ExitParamsPreflightScriptTest {
             "true", "false", "TRUE", "True", "yes", "on", "1", "0", " true", "ture",
         )
 
-        // 티커 목록 후보. 앞쪽은 받아야 할 값(쉼표 뒤 공백·앞뒤 공백·빈 조각·숫자로 시작하는 자산·1글자 자산·다른 통화),
-        // 뒤쪽은 막아야 할 값(공백 구분·소문자·조각 수·구분자·빈 자산/통화·조각 없음).
+        // 티커 목록 후보. 앞쪽은 받아야 할 값(쉼표 뒤 공백·앞뒤 공백·빈 조각·숫자로 시작하는 자산·1글자 자산·다른 통화·길이 끝),
+        // 뒤쪽은 막아야 할 값(공백 구분·소문자·조각 수·구분자·빈 자산/통화·조각 없음·길이 초과·KIS 티커).
         val TICKERS = listOf(
             "KRW-BTC", "KRW-BTC,KRW-ETH", "KRW-BTC, KRW-ETH", " KRW-BTC ", "KRW-BTC,", ",KRW-BTC", "KRW-BTC,,KRW-ETH", "KRW-1INCH", "KRW-T", "USDT-BTC",
+            "ABCDEFGHIJ-BTC", "KRW-ABCDEFGHIJ0123456789",
             "KRW-BTC KRW-ETH", "krw-btc", "KRW-btc", "KRW-BTC-X", "KRW-", "-BTC", "KRW_BTC", "KRWBTC", ",", ",,",
+            "K-BTC", "ABCDEFGHIJK-BTC", "KRW-ABCDEFGHIJ01234567890", "KRX-005930",
         )
     }
 }

@@ -18,7 +18,7 @@ object MarketPair {
     // Upbit 에는 KRW-T 같은 1글자 자산이 있다.
     private val UPBIT_CODE = Regex("[A-Z]{2,10}-[A-Z0-9]{1,20}")
 
-    /** 거래소별 내부 마켓 코드 형식. 대문자로 정규화한 값을 받는다. */
+    /** 거래소별 내부 마켓 코드 형식. 대문자로 정규화한 값을 받는다. 배포 preflight 의 MARKET_FORMAT 이 Upbit 규칙의 사본이다. */
     fun isValid(exchange: Exchange, code: String): Boolean = when (exchange) {
         Exchange.UPBIT -> UPBIT_CODE.matches(code) && !code.startsWith(KRX_PREFIX)
         Exchange.KIS_PAPER, Exchange.KIS -> code.startsWith(KRX_PREFIX) && KRX_CODE.matches(code.removePrefix(KRX_PREFIX))

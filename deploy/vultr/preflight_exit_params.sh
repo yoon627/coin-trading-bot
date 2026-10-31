@@ -80,8 +80,8 @@ DECIMAL_FORMAT='^-?[0-9]{1,9}([.][0-9]+)?$'
 INTEGER_FORMAT='^-?[0-9]{1,9}$'
 BOOLEAN_FORMAT='^(true|false)$'
 POSITIVE_INTEGER_FORMAT='^[1-9][0-9]{0,8}$'
-# Upbit 에는 KRW-T 같은 1글자 자산이 있어 길이는 보지 않는다.
-MARKET_FORMAT='^[A-Z]+-[A-Z0-9]+$'
+# MarketPair.isValid(UPBIT) 의 사본이다. Upbit 에는 KRW-T 같은 1글자 자산이 있고, KRX- 는 KIS 티커 네임스페이스라 받지 않는다.
+MARKET_FORMAT='^[A-Z]{2,10}-[A-Z0-9]{1,20}$'
 
 # 같은 키가 여러 줄이면 모두 검사한다.
 values_of() { grep "^$1=" "$env_file" | cut -d= -f2- || true; }
@@ -105,6 +105,7 @@ ticker_list_ok() {
         piece=${piece%"${piece##*[! ]}"}
         [[ -z $piece ]] && continue
         [[ $piece =~ $MARKET_FORMAT ]] || return 1
+        [[ $piece == KRX-* ]] && return 1
         count=$((count + 1))
     done
     (( count > 0 ))
