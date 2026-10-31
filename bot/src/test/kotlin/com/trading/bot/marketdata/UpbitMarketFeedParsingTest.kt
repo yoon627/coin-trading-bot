@@ -5,11 +5,29 @@ import com.trading.common.domain.Exchange
 import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
+import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import org.springframework.web.reactive.function.client.WebClient
 
 class UpbitMarketFeedParsingTest {
 
     private val feed = UpbitMarketFeed(mockk<WebClient>(relaxed = true), ObjectMapper())
+
+    // 생성자가 둘이라 이름이 틀리거나 @Autowired 가 빠지면 배포에서야 드러난다. WebClient 빈이 둘이다.
+    @Test
+    fun `the bean is created with the Upbit client among two WebClients`() {
+        val upbitClient = WebClient.create()
+        ApplicationContextRunner()
+            .withBean("upbitWebClient", WebClient::class.java, { upbitClient })
+            .withBean("discordWebClient", WebClient::class.java, { WebClient.create() })
+            .withBean(ObjectMapper::class.java)
+            .withBean(UpbitMarketFeed::class.java)
+            .run { context ->
+                assertNull(context.startupFailure)
+                val created = context.getBean(UpbitMarketFeed::class.java)
+                val field = UpbitMarketFeed::class.java.getDeclaredField("upbitWebClient").apply { isAccessible = true }
+                assertSame(upbitClient, field.get(created))
+            }
+    }
 
     @Test
     fun `parses a valid ticker frame`() {
