@@ -62,6 +62,8 @@ object ExitParamRanges {
         Entry("trading", TradingProperties::kValue, Range(0.0, true, 2.0, true)),
         // 손절·익절·트레일링 평가가 이 주기로만 돈다. 상한 60 은 ms 로 잘못 적은 값을 거르고 평가 지연을 1분으로 묶는다.
         Entry("trading", TradingProperties::intervalSeconds, Range(1.0, true, 60.0, true)),
+        // 막힌 매도 알림이 이 값 × 주기 뒤에 나간다. 상한 100 은 20 을 200·2000 으로 적은 자릿수 오기를 거른다.
+        Entry("trading", TradingProperties::reconcileHaltThreshold, Range(1.0, true, 100.0, true)),
     )
 
     val SHADOW: List<Entry<ShadowExitProperties>> = listOf(

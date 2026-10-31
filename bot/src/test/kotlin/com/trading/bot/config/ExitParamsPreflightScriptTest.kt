@@ -209,6 +209,13 @@ class ExitParamsPreflightScriptTest {
     }
 
     @Test
+    fun `자릿수를 잘못 적은 halt 임계는 막는다`() {
+        // 2000 이면 주기 10초에서 막힌 매도 알림이 약 5.5시간 뒤에 나간다.
+        assertThat(run("TRADING_RECONCILE_HALT_THRESHOLD=2000").flagged).containsExactly("TRADING_RECONCILE_HALT_THRESHOLD")
+        assertThat(run("TRADING_RECONCILE_HALT_THRESHOLD=100").exit).isEqualTo(0)
+    }
+
+    @Test
     fun `에러 알림 스위치는 소문자 true·false 만 받는다`() {
         // Spring 은 True·1 도 받지만 그 밖의 오기는 기동과 같은 .env 로 뜨는 롤백을 함께 막는다.
         listOf("True", "ture", "1", "").forEach { value ->
@@ -349,7 +356,7 @@ class ExitParamsPreflightScriptTest {
 
     private fun grammarOf(env: String, property: KProperty1<*, *>, owner: Class<*>): Grammar = when {
         property.returnType.classifier == Boolean::class -> Grammar.BOOLEAN
-        // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 0 을 허용할 정수는 구간 표로 옮긴다.
+        // 0·음수는 require·스케줄 등록이 기동을 막거나, 바인딩에 성공해 폭주한다. 구간(하한·상한)이 있는 정수는 구간 표로 옮긴다.
         property.returnType.classifier == Long::class || property.returnType.classifier == Int::class -> Grammar.POSITIVE_INTEGER
         DeployPassthrough.TICKER_LIST.any { it.name == property.name && ownerOf(it) == owner } -> Grammar.TICKER_LIST
         // 소수는 형식만으로는 뜻을 잃는 값(음수·자릿수 오기)을 거르지 못해 구간 표에 넣는다.

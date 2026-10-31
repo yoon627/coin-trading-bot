@@ -86,7 +86,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `TRADING_MAX_HOLD_DAYS` | `1` | 보유 상한(거래일, KST 09:00 경계) |
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
 | `TRADING_INTERVAL_SECONDS` | `10` | 매매 루프 주기(초). 허용 `[1, 60]` — 손절·익절·트레일링 평가가 이 주기로만 돈다 |
-| `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 그 종목의 신규 매수를 멈춘다(매도는 계속) |
+| `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 그 종목의 신규 매수를 멈춘다(매도는 계속). 막힌 매도 알림은 이 값 × 매매 주기 뒤에 나간다. 허용 `[1, 100]` |
 | `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상 |
 | `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |
@@ -137,7 +137,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 - 익절은 트레일링 폭과 활성 수익률보다 커야 한다. 작으면 익절이 항상 먼저 걸려 트레일링이 동작하지 않는다.
 - 엔진을 시작할 때 설정 조합을 알린다. 익절이 트레일링 폭·활성 수익률 이하이거나 왕복 수수료 이하면 WARN 이다. 1회 매수 상한이 최소 주문에 못 미치거나 손절가에서 팔 때 최소 주문 미만이 돼 모든 매수가 건너뛰어지는 조합이면 ERROR(Discord)다.
 - 매도 기록의 `pnl_percent`는 수수료를 뺀 값이고, 청산 판정은 수수료 전 수익률로 한다.
-- 청산·주문·주기 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀리거나, 주기 `10`초를 ms 로 `10000`처럼 단위·자릿수를 틀려 적는 실수를 거른다. 익절·arm 상한 100, 돌파 계수 상한 2, 주기 상한 60초는 판정식이 아니라 이런 오기를 거르는 경계다.
+- 청산·주문·주기 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀리거나, 주기 `10`초를 ms 로 `10000`처럼 단위·자릿수를 틀려 적는 실수를 거른다. 익절·arm 상한 100, 돌파 계수 상한 2, 주기 상한 60초, 미확인 주문 halt 임계 상한 100 은 판정식이 아니라 이런 오기를 거르는 경계다.
 - `deploy/vultr/preflight_exit_params.sh`가 배포 전에 형식과 구간을 검사한다. `TRADING_AUTO_START`가 켜져 있으면 청산 키 5개(`TAKE_PROFIT_PCT`, `MAX_LOSS_PCT`, `TRAILING_STOP_PCT`, `TRAILING_ARM_PCT`, `MAX_HOLD_DAYS`)를 `.env`에 명시하지 않은 배포도 막는다. `KIS_TRADING_*` 청산 키는 같은 구간으로, 비용 요율 키 2개는 `[0, 0.01)`로 검사하지만 선언은 요구하지 않는다. 앱은 KIS 값을 기동 로그에 남기지 않고, `KIS_TRADING_ENABLED=true` 일 때만 구간 위반을 ERROR 로 알린다.
 - 앱은 기동 시 실효값을 로그로 남기고, 미선언이거나 구간 밖이면 ERROR로 알린다. 보유 포지션의 손절이 멈추지 않도록 거래는 막지 않는다.
 
