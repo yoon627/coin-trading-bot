@@ -2,6 +2,7 @@ package com.trading.bot.marketdata
 
 import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
+import com.trading.bot.config.reportableEntries
 import com.trading.bot.stream.CandleAggregator
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
@@ -81,9 +82,6 @@ class MarketDataIngestionService(
         internal const val M1_FETCH_COUNT = 5
 
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
-
-        // 규칙이 받는 가장 긴 코드(31자)보다 넉넉하게. 값을 통째로 붙여 넣은 항목이 Discord 로 그대로 나가지 않게 한다.
-        private const val REPORTED_ENTRY_MAX_LENGTH = 40
     }
 
     @PostConstruct
@@ -113,7 +111,7 @@ class MarketDataIngestionService(
         val outcome = if (watchlistProperties.validTickers().isEmpty()) "를 빼면 남는 마켓이 없어 시세 수집을 끕니다" else "는 빼고 시세를 수집합니다"
         log.error(
             "WATCHLIST_TICKERS 의 형식이 틀린 항목 {} {} — 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요",
-            invalid.map { it.take(REPORTED_ENTRY_MAX_LENGTH) }, outcome,
+            reportableEntries(invalid), outcome,
         )
     }
 
