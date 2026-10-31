@@ -82,6 +82,12 @@ caddy 가 이전 설정을 그대로 둔다. 바뀐 Caddyfile 을 적용한 배�
 - 서버에서 손으로 고쳤으면 `cd /opt/app && docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`
   로 적용하고 `rm -f /opt/app/.caddyfile-applied` 로 적용 기록을 지운다. 기록이 남으면 다음 배포가 repo 의 Caddyfile 로
   파일만 덮어쓰고 reload 하지 않아, caddy 는 손으로 고친 설정으로 계속 돈다. 고친 내용은 repo 에도 반영한다.
+- 배포가 app 컨테이너를 바꾸는 동안 caddy 는 새 컨테이너에 연결될 때까지 요청마다 약 30초(`lb_try_duration`) 기다린다.
+  연결이 안 된 실패는 모든 요청을, 연결된 뒤 끊긴 실패는 GET 만 다시 보내므로 POST 는 두 번 가지 않고, 앱이 응답한 5xx 는
+  그대로 나간다. 그래서 GET 은 앱에 닿은 뒤 연결이 끊기면 다시 갈 수 있다 — GET 핸들러는 읽기만 한다. 옛 컨테이너가 닫히는
+  순간 재사용하던 연결 위의 POST 는 드물게 바로 502 가 된다. 이 설정을 처음 싣는 배포는 reload 가 앱 교체 뒤라 보통 그
+  교체 창을 덮지 못하고, 그다음 앱 교체 배포부터 덮는다. 새 앱이 뜨지 못한 배포(자동 롤백 포함)에서는 그동안 화면 요청이
+  요청마다 약 30초 멈춘 뒤 502 로 끝난다.
 
 틀린 Caddyfile 은 CI 의 test job 이 운영과 같은 이미지로 막는다. 손으로 검증하려면(`APP_DOMAIN` 이 비면 빈 문자열이 되므로
 임의 도메인을 준다):
