@@ -4,6 +4,8 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpStatus
+import org.springframework.security.authentication.BadCredentialsException
+import org.springframework.security.authentication.ReactiveAuthenticationManager
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder
 import org.springframework.security.config.web.server.ServerHttpSecurity
@@ -41,6 +43,12 @@ class SecurityConfig(
             .addFilterAt(JwtAuthFilter(jwtProvider), SecurityWebFiltersOrder.AUTHENTICATION)
             .build()
     }
+
+    // 이 빈이 없으면 Boot 가 기본 사용자를 만들고 생성 비밀번호를 기동 로그에 찍는다. 요청 인증은 JwtAuthFilter 가, 로그인
+    // 비밀번호 확인은 AuthController 가 PasswordEncoder 로 직접 하므로 Security 의 매니저 경로는 쓰지 않아 모두 거절한다.
+    @Bean
+    fun authenticationManager(): ReactiveAuthenticationManager =
+        ReactiveAuthenticationManager { Mono.error(BadCredentialsException("Password authentication is disabled")) }
 
     @Bean
     fun passwordEncoder(): PasswordEncoder = BCryptPasswordEncoder()
