@@ -521,11 +521,14 @@ do_deploy() {
     render_server_env "$tmp_env"
     # 잘못된 .env 는 롤백으로 되돌려지지 않으므로 업로드 전에 검사한다.
     bash "$SCRIPT_DIR/preflight_exit_params.sh" "$tmp_env"
-    ssh_inst 'mkdir -p /opt/app'
+    ssh_inst 'mkdir -p /opt/app/caddy'
     local scp_opts=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM")
-    scp "${scp_opts[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/Caddyfile
+    # compose 가 ./caddy 를 마운트하므로 그 안의 Caddyfile 을 먼저 올린다. 업로드가 중간에 끊겨도 빈 ./caddy 를
+    # 가리키는 compose 가 남아 다음 up 에서 caddy 가 설정 없이 뜨는 일이 없다.
+    scp "${scp_opts[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/caddy/Caddyfile
+    scp "${scp_opts[@]}" "$SCRIPT_DIR/apply_caddyfile.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/apply_caddyfile.sh
     scp "${scp_opts[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
+    scp "${scp_opts[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
     scp "${scp_opts[@]}" "$tmp_env"               "${SSH_USER}@${PUBLIC_IP}":/opt/app/.env
     rm -f "$tmp_env"; trap - EXIT
     ssh_inst 'chmod +x /opt/app/backup.sh && chmod 600 /opt/app/.env'
@@ -558,6 +561,26 @@ health_ok() {
     return 1
 }
 
+# 앱이 healthy 인 배포의 종료 코드. 바뀐 Caddyfile 을 적용했으면(10) HTTPS e2e 까지 확인해야 0 이다.
+# 4 는 앱은 새 SHA 로 정상인데 Caddyfile 적용이 실패했거나 적용 뒤 HTTPS 를 확인하지 못했다는 뜻이다.
+caddy_verdict() {
+    local caddy_rc="$1" tls_ok="$2"
+    if [ "$caddy_rc" = 0 ]; then
+        return 0
+    fi
+    if [ "$caddy_rc" = 10 ]; then
+        if [ "$tls_ok" = true ]; then
+            return 0
+        fi
+        # 적용 기록이 남으면 다시 돌린 배포가 "변경 없음" 으로 HTTPS 확인을 경고로만 넘긴다.
+        rm -f .caddyfile-applied
+        echo "ERROR: 바뀐 Caddyfile 을 적용한 뒤 HTTPS e2e 를 확인하지 못했다 — 앱은 정상($TARGET_SHA), 위 caddy 로그를 본다"
+        return 4
+    fi
+    echo "ERROR: Caddyfile 적용 실패(rc=$caddy_rc) — 앱은 정상($TARGET_SHA), caddy 는 이전 설정이거나 적용을 확인하지 못했다"
+    return 4
+}
+
 echo "배포: SHA=$TARGET_SHA"
 docker compose pull
 docker compose up -d --remove-orphans
@@ -567,6 +590,9 @@ if health_ok; then
     chmod 600 /opt/app/.last-good-sha
     echo "App healthy! ($TARGET_SHA)"
     docker compose ps
+    # up 이 caddy 를 다시 만들었으면(새 이미지 digest·서비스 변경) 새 Caddyfile 은 이미 살아 있고 reload 는 아무것도 하지 않는다.
+    caddy_rc=0
+    bash ./apply_caddyfile.sh </dev/null || caddy_rc=$?
     tls_ok=false
     for _ in $(seq 1 18); do
         if curl -fsS --max-time 5 --resolve "${APP_DOMAIN}:443:127.0.0.1" \
@@ -579,7 +605,9 @@ if health_ok; then
     docker images "$GHCR_IMAGE" --format '{{.Repository}}:{{.Tag}}' \
         | grep -vE ":(${TARGET_SHA}|latest)\$" | xargs -r docker rmi > /dev/null 2>&1 || true
     docker image prune -f > /dev/null 2>&1 || true
-    exit 0
+    verdict=0
+    caddy_verdict "$caddy_rc" "$tls_ok" || verdict=$?
+    exit "$verdict"
 fi
 
 echo "ERROR: 180s 내 헬스체크 실패 (SHA=$TARGET_SHA)"
@@ -648,6 +676,13 @@ REMOTE
             notify_deploy rollback "운영 배포 자동 롤백: ${target_sha:0:12} 이 헬스체크(봇 복원 포함)를 통과하지 못해 ${last_good:0:12} 로 되돌렸다${run_url}"
             exit 2
             ;;
+        4)
+            # 서버의 롤백 기준은 이미 대상 SHA 다. 앱 결과는 성공과 같고 Caddyfile 만 확인되지 않았다.
+            update_state LAST_GOOD_SHA "$target_sha"
+            echo "ERROR: 앱은 배포됐지만(LAST_GOOD 갱신) Caddyfile 적용 또는 적용 뒤 HTTPS 확인에 실패했다 — 위 원격 로그 참조."
+            notify_deploy failure "$(deploy_failure_message "$deploy_rc" "$target_sha" "$last_good")${run_url}"
+            exit 1
+            ;;
         *)
             echo "ERROR: 배포 실패 (rc=$deploy_rc) — 위 원격 로그/안내 참조. LAST_GOOD 미변경."
             notify_deploy failure "$(deploy_failure_message "$deploy_rc" "$target_sha" "$last_good")${run_url}"
@@ -656,12 +691,14 @@ REMOTE
     esac
 }
 
-# 원격 스크립트의 종료 코드: 1 수동 개입(자동 롤백 대상 아님·원격 명령 실패), 3 롤백까지 실패. 그 밖은 SSH 가 끊긴 경우 등.
+# 원격 스크립트의 종료 코드: 1 수동 개입(자동 롤백 대상 아님·원격 명령 실패), 3 롤백까지 실패,
+# 4 앱은 정상인데 Caddyfile 적용·적용 뒤 HTTPS 확인 실패. 그 밖은 SSH 가 끊긴 경우 등.
 deploy_failure_message() {
     local rc="$1" target="${2:0:12}" last_good="${3:0:12}"
     case "$rc" in
         1) echo "운영 배포 실패(수동 개입 필요): $target — 자동 롤백 대상이 아니거나 원격 명령이 실패했다. 새 컨테이너가 떠 있을 수 있다" ;;
         3) echo "운영 배포 실패(앱 중단 가능): $target 이 헬스체크를 통과하지 못했고 ${last_good:-?} 로의 롤백도 기동이나 헬스체크에 실패했다" ;;
+        4) echo "운영 배포 부분 실패: $target 앱은 정상(롤백 기준 갱신)이지만 Caddyfile 적용 또는 적용 뒤 HTTPS 확인에 실패했다 — 원격 로그를 보고, 같은 커밋은 Actions 의 force(수동 deploy 는 다시 실행)로 재시도한다 — 엔진은 다시 시작하지 않는다" ;;
         *) echo "운영 배포 결과 불명(rc=$rc): $target — 원격 실행이 끊겼을 수 있다. 서버 상태를 확인한다" ;;
     esac
 }

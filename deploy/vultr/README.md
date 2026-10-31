@@ -67,10 +67,24 @@ install -m 600 .env.example .env   # 시크릿이 들어가므로 600
 직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V30(거래소 축) 마이그레이션이 없으면 자동 롤백하지 않고
 수동 개입을 안내한다. 스키마를 바꾸는 배포의 사전 점검·되돌리기 절차는 루트 README 의 배포 절에 있다.
 
-`Caddyfile` 은 서버로 복사만 되고 실행 중인 caddy 가 다시 읽지 않는다. caddy 컨테이너가 새로 뜰 때(새 이미지
-digest, 서버 재부팅) 적용된다. 바로 적용하려면 서버에서 `cd /opt/app && docker compose restart caddy` 를
-실행한다(수 초간 HTTPS 중단, 인증서는 `caddy_data` 볼륨에 남는다). 자동 롤백은 app 헬스만 보고 HTTPS 실패는
-경고로 끝나므로, Caddyfile 을 바꿀 때는 머지 전에 검증한다(`APP_DOMAIN` 이 비면 빈 문자열이 되므로 임의 도메인을 준다):
+`Caddyfile` 은 서버의 `/opt/app/caddy/Caddyfile` 로 올라가고 caddy 는 그 디렉터리를 `/etc/caddy` 로 마운트한다
+(예전 경로 `/opt/app/Caddyfile` 은 더 쓰지 않는다). 앱이 healthy 가 된 배포는 `apply_caddyfile.sh` 로 마지막으로 적용한
+해시(`/opt/app/.caddyfile-applied`)와 비교해 바뀌었으면 `caddy reload` 한다. reload 는 중단이 없고, 새 설정이 틀리면
+caddy 가 이전 설정을 그대로 둔다. 바뀐 Caddyfile 을 적용한 배포는 HTTPS e2e 까지 확인해야 성공이다.
+
+- reload 가 실패하거나 시간 초과로 적용을 확인하지 못했거나, 적용 뒤 HTTPS e2e 가 실패하면 배포는 실패(에러 webhook)로
+  끝난다. 앱은 새 SHA 로 정상이고 롤백 기준(LAST_GOOD)도 그 SHA 로 갱신된다. 적용 기록은 남지 않아(적용 뒤 HTTPS 실패면
+  배포가 지운다) 같은 커밋을 다시 돌리면 Caddyfile 을 다시 적용하고 HTTPS 까지 다시 확인한다. Actions 는 force 로, 수동
+  `deploy` 는 그대로 다시 실행한다 — 이미지 태그와 `.env` 가 같아 엔진은 다시 시작하지 않는다.
+- `docker compose up` 이 caddy 를 다시 만들면(새 이미지 digest, caddy 서비스 설정 변경) 새 Caddyfile 은 헬스 결과 전에 이미
+  살아 있다. 앱 자동 롤백·실패 배포에서는 reload 로 적용하지 않지만, 그렇게 이미 살아 있을 수 있고 Caddyfile 은 되돌리지 않는다.
+- reload 는 컨테이너 안 caddy admin(`127.0.0.1:2019`)을 쓴다. Caddyfile 에 `admin off` 를 넣으면 모든 적용이 실패한다.
+- 서버에서 손으로 고쳤으면 `cd /opt/app && docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`
+  로 적용하고 `rm -f /opt/app/.caddyfile-applied` 로 적용 기록을 지운다. 기록이 남으면 다음 배포가 repo 의 Caddyfile 로
+  파일만 덮어쓰고 reload 하지 않아, caddy 는 손으로 고친 설정으로 계속 돈다. 고친 내용은 repo 에도 반영한다.
+
+틀린 Caddyfile 은 CI 의 test job 이 운영과 같은 이미지로 막는다. 손으로 검증하려면(`APP_DOMAIN` 이 비면 빈 문자열이 되므로
+임의 도메인을 준다):
 
 ```bash
 docker run --rm -e APP_DOMAIN=bot.example.test -v "$PWD/deploy/vultr/Caddyfile":/etc/caddy/Caddyfile:ro \
@@ -117,7 +131,7 @@ job 동작:
 
 - 롤백 기준은 원격 `/opt/app/.last-good-sha` 다. 파일이 없으면 현재 app 컨테이너가 healthy 이고 이미지 태그가
   40자리 SHA 일 때만 그 값을 쓰고, 그 밖의 경우(`latest`·digest·중지된 컨테이너)는 배포를 거부한다. 성공한 배포와
-  롤백이 이 파일을 갱신한다.
+  롤백, 앱은 healthy 인데 Caddyfile 적용이나 적용 뒤 HTTPS 확인만 실패한 배포가 이 파일을 갱신한다.
 - main 수동 실행(workflow_dispatch)에서만 돈다. 실행한 커밋 SHA 를 그대로 배포한다.
 - 롤백 기준 SHA 의 컨테이너가 healthy 로 돌고 있고 그 뒤 `deploy_needed.sh` 의 제외 목록 밖 파일이 바뀌지 않았으면
   배포하지 않는다(엔진 재시작 없음). 지금 컨테이너가 롤백 기준과 다르거나 healthy 가 아니면 배포하고, 롤백 기준 커밋이
