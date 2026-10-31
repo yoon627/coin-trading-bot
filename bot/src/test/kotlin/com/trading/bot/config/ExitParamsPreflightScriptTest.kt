@@ -1,6 +1,7 @@
 package com.trading.bot.config
 
 import com.trading.bot.ci.RepoFiles
+import com.trading.bot.ci.bashArrayBody
 import com.trading.bot.kis.config.KisExitParamRanges
 import com.trading.common.config.ExitParamRanges
 import com.trading.common.domain.Exchange
@@ -150,9 +151,8 @@ class ExitParamsPreflightScriptTest {
 
     @Test
     fun `스크립트의 표는 Kotlin 표와 키·형식·구간이 같다`() {
-        val text = script.readText()
-        fun array(name: String) = Regex("""(?m)^$name=\((.*?)\)""", RegexOption.DOT_MATCHES_ALL).find(text)?.groupValues?.get(1)
-            ?: throw AssertionError("스크립트에서 $name 배열을 못 찾았다")
+        val lines = script.readLines()
+        fun array(name: String) = bashArrayBody(lines, name) ?: throw AssertionError("스크립트에서 $name 배열을 못 찾았거나 닫히지 않는다")
 
         // 후보 대조만으로는 포함 끝이 ε 보다 작게 느슨해진 것을 놓쳐 끝점을 숫자로 직접 대조한다.
         val rangeRows = RANGE_ROW.findAll(array("RANGE_RULES")).associate { m ->
