@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
@@ -31,10 +32,17 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Upbit ticker 는 WebSocket, 캔들은 REST 로 가져와 정규화한다. */
 @Component
-class UpbitMarketFeed(
+class UpbitMarketFeed internal constructor(
     private val upbitWebClient: WebClient,
     private val objectMapper: ObjectMapper,
+    private val wsUri: URI,
+    private val baseReconnectDelayMs: Long,
 ) {
+    // 기본값 파라미터로 두면 같은 타입의 빈이 생겼을 때 조용히 주입되므로 생성자를 따로 둔다.
+    @Autowired
+    constructor(upbitWebClient: WebClient, objectMapper: ObjectMapper) :
+        this(upbitWebClient, objectMapper, URI.create(WS_URL), BASE_RECONNECT_DELAY_MS)
+
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
@@ -56,10 +64,9 @@ class UpbitMarketFeed(
             val httpClient = HttpClient.create()
             val subscription = httpClient
                 .websocket(WebsocketClientSpec.builder().maxFramePayloadLength(65536).build())
-                .uri(URI.create(WS_URL))
+                .uri(wsUri)
                 .handle { inbound, outbound ->
                     connected.set(true)
-                    reconnectAttempts.set(0)
                     log.info("Upbit WebSocket connected. Markets: {}", markets)
 
                     val subscriptionMessage = buildSubscriptionMessage(markets)
@@ -68,7 +75,15 @@ class UpbitMarketFeed(
                     val receiveMono = inbound.receive()
                         .asByteArray()
                         .map { bytes -> String(bytes, StandardCharsets.UTF_8) }
-                        .doOnNext { message -> parseTickerMessage(message)?.let { trySend(it) } }
+                        .doOnNext { message ->
+                            parseTickerMessage(message)?.let { ticker ->
+                                // handshake 성공만으로는 구독이 받아들여졌는지 알 수 없어 시세를 받은 뒤에 횟수를 되돌린다.
+                                // 횟수는 연결이 끝날 때만 늘어 한 연결에서는 첫 시세에서만 0 이 아니다.
+                                val failed = reconnectAttempts.getAndSet(0)
+                                if (failed > 0) log.info("Upbit WS receiving tickers; reconnect backoff reset after {} attempts", failed)
+                                trySend(ticker)
+                            }
+                        }
                         .doOnError { e -> log.warn("Upbit WS receive error: {}", e.message) }
                         .then()
 
@@ -82,7 +97,7 @@ class UpbitMarketFeed(
                     connected.set(false)
                     if (running.get()) {
                         val attempt = reconnectAttempts.incrementAndGet()
-                        val delay = (BASE_RECONNECT_DELAY_MS * (1L shl minOf(attempt - 1, 5)))
+                        val delay = (baseReconnectDelayMs * (1L shl minOf(attempt - 1, 5)))
                             .coerceAtMost(MAX_RECONNECT_DELAY_MS)
                         log.info("Upbit WS reconnecting in {}ms (attempt {})", delay, attempt)
                         // netty 스레드에서 sleep 하면 이벤트 루프를 붙잡으므로 별도 스레드에서 기다린다.
