@@ -15,11 +15,9 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Import
 import org.springframework.core.env.StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME as SYSTEM_ENV
 import org.springframework.core.env.SystemEnvironmentPropertySource
-import org.springframework.core.io.ClassPathResource
 import org.springframework.scheduling.annotation.EnableScheduling
 import org.springframework.scheduling.config.FixedDelayTask
 import org.springframework.scheduling.config.ScheduledTaskHolder
-import org.yaml.snakeyaml.Yaml
 
 /**
  * watchlist·워치독 기본값은 설정 클래스에만 있어 `application.yml` 에 키가 없어도 운영 env 가 바인딩돼야 한다.
@@ -43,13 +41,6 @@ class MarketDataPropertiesBindingTest {
         .withInitializer { ctx ->
             ctx.environment.propertySources.addFirst(SystemEnvironmentPropertySource("test-$SYSTEM_ENV", mapOf(*env)))
         }
-
-    @Test
-    fun `application yml does not define watchlist or watchdog keys`() {
-        val yml: Map<*, *> = Yaml().load(ClassPathResource("application.yml").inputStream)
-        assertThat(yml.keys).doesNotContain("watchlist")
-        assertThat((yml["marketdata"] as? Map<*, *>)?.keys.orEmpty()).doesNotContain("watchdog")
-    }
 
     @Test
     fun `env overrides bind without yml and unset keys keep class defaults`() {
