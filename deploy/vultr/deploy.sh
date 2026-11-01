@@ -44,6 +44,9 @@ if [[ -n "${SSH_KNOWN_HOSTS:-}" ]]; then
 else
     SSH_HOST_KEY_OPTIONS=(-o StrictHostKeyChecking=accept-new)
 fi
+# 접속 시한만으로는 조용히 끊긴 연결에서 job 시한까지 기다린다. 응답 없이 약 120초면 끊는다 — 더 짧게 잡으면 job 시한
+# 앞에서 빨리 알 이득 없이 잠깐 끊긴 연결에 클라이언트가 먼저 나가는 일만 는다.
+SSH_OPTIONS=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -i "$KEY_PEM")
 
 save_state() { echo "$1=$2" >> "$STATE_FILE"; }
 update_state() {
@@ -437,8 +440,7 @@ do_setup() {
 
 # CI 는 SSH_KNOWN_HOSTS 로 호스트 키를 고정한다. 수동 실행은 처음 보는 키를 받아 두고 이후 변경을 거부한다.
 ssh_inst() {
-    ssh "${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM" \
-        "${SSH_USER}@${PUBLIC_IP}" "$@"
+    ssh "${SSH_OPTIONS[@]}" "${SSH_USER}@${PUBLIC_IP}" "$@"
 }
 
 wait_for_docker() {
@@ -522,14 +524,13 @@ do_deploy() {
     # 잘못된 .env 는 롤백으로 되돌려지지 않으므로 업로드 전에 검사한다.
     bash "$SCRIPT_DIR/preflight_exit_params.sh" "$tmp_env"
     ssh_inst 'mkdir -p /opt/app/caddy'
-    local scp_opts=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM")
     # compose 가 ./caddy 를 마운트하므로 그 안의 Caddyfile 을 먼저 올린다. 업로드가 중간에 끊겨도 빈 ./caddy 를
     # 가리키는 compose 가 남아 다음 up 에서 caddy 가 설정 없이 뜨는 일이 없다.
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/caddy/Caddyfile
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/apply_caddyfile.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/apply_caddyfile.sh
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
-    scp "${scp_opts[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
-    scp "${scp_opts[@]}" "$tmp_env"               "${SSH_USER}@${PUBLIC_IP}":/opt/app/.env
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/caddy/Caddyfile
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/apply_caddyfile.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/apply_caddyfile.sh
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
+    scp "${SSH_OPTIONS[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
+    scp "${SSH_OPTIONS[@]}" "$tmp_env"               "${SSH_USER}@${PUBLIC_IP}":/opt/app/.env
     rm -f "$tmp_env"; trap - EXIT
     ssh_inst 'chmod +x /opt/app/backup.sh && chmod 600 /opt/app/.env'
 
@@ -545,6 +546,11 @@ do_deploy() {
 set -e
 # 원격 명령이 set -e 로 멈추면 그 명령의 종료 코드가 나가 2(자동 롤백)·3(롤백 실패)과 섞인다. 실패는 1 로 모은다.
 trap 'exit 1' ERR
+# SSH 가 끊겨도(job 시한·취소·무응답) 원격 배포가 끝까지 돌게 출력을 서버 파일에도 쓴다. tee -p 는 끊긴 파이프를 넘기고
+# 파일에 계속 써 bash 가 SIGPIPE 로 죽지 않는다. 파일은 마지막 배포 하나만 두고, 끝 줄이 없으면 아직 돌거나 강제로 죽었다.
+install -m 600 /dev/null /opt/app/.deploy-last.log
+exec > >(tee -p -a /opt/app/.deploy-last.log) 2>&1
+trap 'echo "=== 원격 배포 끝 (rc=$?) ==="' EXIT
 cd /opt/app
 : "${TARGET_SHA:?TARGET_SHA 필요}"
 
@@ -699,7 +705,7 @@ deploy_failure_message() {
         1) echo "운영 배포 실패(수동 개입 필요): $target — 자동 롤백 대상이 아니거나 원격 명령이 실패했다. 새 컨테이너가 떠 있을 수 있다" ;;
         3) echo "운영 배포 실패(앱 중단 가능): $target 이 헬스체크를 통과하지 못했고 ${last_good:-?} 로의 롤백도 기동이나 헬스체크에 실패했다" ;;
         4) echo "운영 배포 부분 실패: $target 앱은 정상(롤백 기준 갱신)이지만 Caddyfile 적용 또는 적용 뒤 HTTPS 확인에 실패했다 — 원격 로그를 보고, 같은 커밋은 Actions 의 force(수동 deploy 는 다시 실행)로 재시도한다 — 엔진은 다시 시작하지 않는다" ;;
-        *) echo "운영 배포 결과 불명(rc=$rc): $target — 원격 실행이 끊겼을 수 있다. 서버 상태를 확인한다" ;;
+        *) echo "운영 배포 결과 불명(rc=$rc): $target — SSH 가 끊겼을 수 있다. 원격 배포는 서버에서 계속 돌 수 있다 — 다시 실행하기 전에 서버의 /opt/app/.deploy-last.log 끝 줄과 앱 상태를 확인한다" ;;
     esac
 }
 

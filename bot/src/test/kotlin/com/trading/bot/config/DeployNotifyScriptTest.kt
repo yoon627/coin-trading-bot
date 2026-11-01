@@ -4,10 +4,13 @@ import com.trading.bot.ci.RepoFiles
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.EnabledOnOs
 import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import org.yaml.snakeyaml.Yaml
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.TimeUnit
 
 /**
@@ -26,7 +29,9 @@ class DeployNotifyScriptTest {
     private val curlArgs by lazy { File(dir, "curl.args") }
     private val curlStdin by lazy { File(dir, "curl.stdin") }
     private val sshRemote by lazy { File(dir, "ssh.remote") }
+    private val sshArgs by lazy { File(dir, "ssh.args") }
     private val scpCalls by lazy { File(dir, "scp.calls") }
+    private val scpArgs by lazy { File(dir, "scp.args") }
 
     private class Run(val exit: Int, val output: String)
 
@@ -79,11 +84,13 @@ class DeployNotifyScriptTest {
     fun `deploy 는 원격 결과마다 알맞은 webhook 으로 알리고 종료 코드를 지킨다`() {
         val repo = deployRepo()
         val cases = mapOf(
-            0 to Triple(0, GENERAL, "성공"),
-            2 to Triple(2, ERROR, "자동 롤백"),
-            1 to Triple(1, ERROR, "수동 개입"),
-            4 to Triple(1, ERROR, "Caddyfile"),
-            3 to Triple(1, ERROR, "앱 중단"),
+            0 to Triple(0, GENERAL, listOf("성공")),
+            2 to Triple(2, ERROR, listOf("자동 롤백")),
+            1 to Triple(1, ERROR, listOf("수동 개입")),
+            4 to Triple(1, ERROR, listOf("Caddyfile")),
+            3 to Triple(1, ERROR, listOf("앱 중단")),
+            // ssh 자체의 실패(연결 끊김). 원격 배포는 서버에서 계속 돌 수 있어 결과는 서버 로그로 본다.
+            255 to Triple(1, ERROR, listOf("결과 불명", REMOTE_LOG)),
         )
 
         for ((remoteRc, expected) in cases) {
@@ -92,7 +99,7 @@ class DeployNotifyScriptTest {
 
             assertThat(result.exit).describedAs("원격 rc=$remoteRc\n${result.output}").isEqualTo(expected.first)
             assertThat(curlStdin.readText()).describedAs("원격 rc=$remoteRc").contains(expected.second)
-            assertThat(curlArgs.readText()).describedAs("원격 rc=$remoteRc").contains(expected.third)
+            assertThat(curlArgs.readText()).describedAs("원격 rc=$remoteRc").contains(*expected.third.toTypedArray())
             assertThat(result.output).describedAs("원격 rc=$remoteRc").doesNotContain("example.test")
         }
     }
@@ -124,6 +131,23 @@ class DeployNotifyScriptTest {
         assertThat(uploads).containsSubsequence("/opt/app/caddy/Caddyfile", "/opt/app/docker-compose.yml")
         assertThat(uploads).containsSubsequence("/opt/app/apply_caddyfile.sh", "/opt/app/docker-compose.yml")
         assertThat(sshRemote.readText()).contains("mkdir -p /opt/app/caddy")
+    }
+
+    /** 접속 시한만으로는 조용히 끊긴 연결에서 job 시한(20분)까지 알림 없이 기다린다. 긴 원격 배포(`bash -s`)가 빠지면 안 된다. */
+    @Test
+    fun `배포의 모든 ssh 와 scp 는 접속·무응답 시한을 건다`() {
+        val repo = deployRepo()
+
+        val result = deploy(repo, remoteRc = 0)
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+        val ssh = sshArgs.readLines()
+        val scp = scpArgs.readLines()
+        assertThat(ssh).anyMatch { it.contains("bash -s") }
+        assertThat(scp).hasSize(5)
+        assertThat(ssh + scp).describedAs((ssh + scp).joinToString("\n")).allSatisfy {
+            assertThat(it).contains("-o ConnectTimeout=10", "-o ServerAliveInterval=15", "-o ServerAliveCountMax=8")
+        }
     }
 
     /** 원격 배포 스크립트라 실행하지 않고 본문을 본다. exec 가 표준입력을 붙잡으면 bash -s 로 들어온 남은 스크립트를 먹는다. */
@@ -197,6 +221,59 @@ class DeployNotifyScriptTest {
         assertThat(result.exit).describedAs(result.output).isEqualTo(0)
     }
 
+    /**
+     * pty 없는 원격 `bash -s` 는 SSH 가 끊긴 뒤(runner 가 떠남·job 시한·keepalive) 첫 출력 쓰기에서 SIGPIPE 로 죽어 `up` 도중이나
+     * `.last-good-sha` 쓰기 전에 멈출 수 있다. 원격 배포 머리의 세 줄만 떼어 SSH 출력 끊김을 흉내 낸다 — GNU `tee -p` 동작이라 Linux 만.
+     * 출력 사이 sleep 은 tee 가 끊김을 먼저 겪게 해 `-p` 가 빠지면 bash 가 확실히 죽게 한다.
+     */
+    @Test
+    @EnabledOnOs(OS.LINUX, disabledReason = "GNU tee -p — 원격 배포는 Linux 서버에서 돈다")
+    fun `원격 배포는 SSH 출력이 끊겨도 끝까지 돌고 출력과 종료 코드는 서버 로그에 남는다`() {
+        val log = File(dir, "deploy-last.log")
+        val done = File(dir, "done")
+        val head = remoteLogLines().replace(REMOTE_LOG, log.path)
+
+        val process = ProcessBuilder("bash", "-s").directory(dir)
+            .apply { environment().keys.retainAll(setOf("PATH")) }
+            .start()
+        process.outputStream.bufferedWriter().use {
+            it.write(head + "echo before; sleep 0.5; echo after; sleep 0.5; echo after2 >&2; touch '${done.path}'\n")
+        }
+        val first = process.inputStream.bufferedReader().readLine()
+        process.inputStream.close()
+        process.errorStream.close()
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            throw AssertionError("출력이 끊긴 원격 배포가 10초 안에 끝나지 않았다")
+        }
+
+        assertThat(first).isEqualTo("before")
+        assertThat(process.exitValue()).describedAs(log.readText()).isEqualTo(0)
+        assertThat(done).describedAs("끊긴 뒤의 명령까지 돌았다").exists()
+        assertThat(awaitEndLine(log)).containsSubsequence("before", "after", "after2").endsWith(endLine(0))
+        assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(log.toPath()))).isEqualTo("rw-------")
+
+        // 끝 줄 trap 이 원격 종료 코드(2 롤백·3 롤백 실패·4 Caddy)를 바꾸면 로컬 결과 처리가 어긋난다.
+        val failed = exec(listOf("bash", "-c", head + "exit 3"), emptyMap())
+        assertThat(failed.exit).isEqualTo(3)
+        assertThat(awaitEndLine(log)).endsWith(endLine(3))
+    }
+
+    /** 원격 배포 스크립트라 실행하지 않고 본문을 본다. 갈라짐이 pull 뒤면 pull 이 걸린 동안 끊긴 원격 배포가 죽는다. */
+    @Test
+    fun `원격 배포 출력은 pull 전에 서버 로그로 갈라진다`() {
+        val remote = remoteScript()
+        val pull = remote.indexOf("docker compose pull")
+        val install = remote.indexOf("install -m 600 /dev/null $REMOTE_LOG\n")
+        val tee = remote.indexOf("exec > >(tee -p -a $REMOTE_LOG) 2>&1\n")
+        val trap = remote.indexOf("trap 'echo \"${endLine("\$?")}\"' EXIT\n")
+
+        // 로그를 비우고 600 으로 만든 뒤에 tee 가 연다 — 거꾸로면 tee 가 umask 권한으로 만든 파일을 install 이 뒤늦게 비운다.
+        assertThat(install).isGreaterThanOrEqualTo(0).isLessThan(tee)
+        assertThat(tee).isLessThan(pull)
+        assertThat(trap).isGreaterThanOrEqualTo(0).isLessThan(pull)
+    }
+
     @Test
     fun `Actions 에서 돌면 알림에 실행 링크를 붙인다`() {
         val repo = deployRepo()
@@ -225,6 +302,27 @@ class DeployNotifyScriptTest {
         val end = text.indexOf("\nREMOTE\n", bodyStart)
         check(end > bodyStart) { "deploy.sh 에서 원격 스크립트의 끝(REMOTE 줄)을 찾지 못했다" }
         return text.substring(bodyStart, end + 1)
+    }
+
+    /** 원격 배포 머리에서 출력을 서버 로그로 가르는 줄들 — 로그 새로 만들기, tee, 끝 줄 trap. */
+    private fun remoteLogLines(): String {
+        val lines = remoteScript().lines()
+        val picked = listOf(
+            lines.find { it.startsWith("install ") && it.contains(REMOTE_LOG) },
+            lines.find { it.startsWith("exec > >(tee ") },
+            lines.find { it.startsWith("trap ") && it.endsWith(" EXIT") },
+        )
+        check(null !in picked) { "원격 배포 스크립트에 서버 로그 줄이 없다: $picked" }
+        return picked.joinToString("\n", postfix = "\n")
+    }
+
+    private fun endLine(rc: Any) = "=== 원격 배포 끝 (rc=$rc) ==="
+
+    /** bash 는 프로세스 치환(tee)을 기다리지 않고 끝나므로 tee 가 끝 줄을 쓸 때까지 잠시 기다린다. */
+    private fun awaitEndLine(log: File): String {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!log.readText().contains("원격 배포 끝 (rc=") && System.nanoTime() < deadline) Thread.sleep(20)
+        return log.readText().trimEnd()
     }
 
     private fun notify(level: String, message: String, general: String, error: String, curlExit: Int = 0): Run {
@@ -285,10 +383,14 @@ class DeployNotifyScriptTest {
         File(vultr, ".state").writeText("PUBLIC_IP=203.0.113.10\nLAST_GOOD_SHA=$lastGood\n")
         script(
             "ssh",
-            "remote=\"${'$'}{@: -1}\"\nprintf '%s\\n' \"${'$'}remote\" >> \"${sshRemote.path}\"\n" +
+            "printf '%s\\n' \"${'$'}*\" >> \"${sshArgs.path}\"\n" +
+                "remote=\"${'$'}{@: -1}\"\nprintf '%s\\n' \"${'$'}remote\" >> \"${sshRemote.path}\"\n" +
                 "case \"${'$'}remote\" in *'bash -s'*) cat > /dev/null; exit \"${'$'}FAKE_REMOTE_RC\" ;; esac\nexit 0",
         )
-        script("scp", "printf '%s\\n' \"${'$'}{@: -1}\" >> \"${scpCalls.path}\"\nexit 0")
+        script(
+            "scp",
+            "printf '%s\\n' \"${'$'}*\" >> \"${scpArgs.path}\"\nprintf '%s\\n' \"${'$'}{@: -1}\" >> \"${scpCalls.path}\"\nexit 0",
+        )
         script("dig", "echo 203.0.113.10")
         fakeCurl()
         return repo
@@ -338,6 +440,7 @@ class DeployNotifyScriptTest {
 
     private companion object {
         const val NOTIFY = "deploy/vultr/notify_deploy.sh"
+        const val REMOTE_LOG = "/opt/app/.deploy-last.log"
         const val GENERAL = "https://discord.example.test/api/webhooks/1/general"
         const val ERROR = "https://discord.example.test/api/webhooks/2/error"
     }

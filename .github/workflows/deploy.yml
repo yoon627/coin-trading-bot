@@ -157,6 +157,8 @@ jobs:
 
       - name: Prepare Vultr deploy files
         id: prepare
+        # 운영을 조회만 하는 스텝이라 시한에 걸려도 서버는 그대로다. SSH 한 번이 최악 약 130초(접속 10 + 무응답 120)다.
+        timeout-minutes: 3
         env:
           VULTR_DEPLOY_ENV: ${{ secrets.VULTR_DEPLOY_ENV }}
           VULTR_PUBLIC_IP: ${{ secrets.VULTR_PUBLIC_IP }}
@@ -191,6 +193,7 @@ jobs:
 
           ssh_opts=(-o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$known_hosts_file" -o ConnectTimeout=10 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
             -i deploy/vultr/coin-trading-bot-key.pem)
           remote_last_good="$(ssh "${ssh_opts[@]}" \
             "${VULTR_SSH_USER}@${VULTR_PUBLIC_IP}" \

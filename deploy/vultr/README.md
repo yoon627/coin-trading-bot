@@ -146,6 +146,10 @@ job 동작:
   고친 새 커밋으로 받는다. secret 처럼 파일 밖 변경을 반영하려면 `force` 입력을 켠다(판정 없이 배포). 이미지와 설정이
   그대로면 force 여도 컨테이너를 다시 만들지 않는다 — 단순 재시작은 서버에서 `docker compose restart app`.
   운영 컨테이너 조회 SSH 가 실패하면 판정하지 않고 멈춘다.
+- 배포 SSH·scp(수동 `status`·`logs`·`stop`·`start`·`mem`·`destroy` 의 최종 백업 포함, `ssh` 제외)는 응답 없이 약
+  120초면 끊는다. 원격 배포 중 끊기면 결과 불명으로 알린다(8절). 준비 대기에서 끊기면 다시 시도하고, 업로드·로그인에서
+  끊기면 Discord 알림 없이 run 만 실패한다. 운영 조회(Prepare) 스텝은 3분 시한이고(SSH 두 번이 각각 최악 약 130초라 이것이 실효 상한이다)
+  시한에 걸리면 조회 실패 문구 없이 스텝 시간 초과로 끝난다. 전체 시한은 job 의 20분이다.
 - 임시 `.env`·`.state`·SSH 키는 끝나면 runner 에서 지운다.
 - 수동 배포와 Actions 배포를 동시에 돌리지 않는다.
 
@@ -275,7 +279,8 @@ crontab -e
 - 스크립트는 `notes` 가 `ctb-` 로 시작하는 규칙만 교체하므로 SSH 대역이 바뀌어도 옛 규칙이 남지 않고, 직접 추가한
   규칙은 건드리지 않는다.
 - 수동 배포 SSH 는 `StrictHostKeyChecking=accept-new`, Actions 배포는 `deploy/vultr/known_hosts` 와
-  `StrictHostKeyChecking=yes` 를 쓴다.
+  `StrictHostKeyChecking=yes` 를 쓰고, 둘 다 `ServerAliveInterval=15`·`ServerAliveCountMax=8` 을 붙인다(대화형
+  `./deploy.sh ssh` 는 제외).
 - PostgreSQL 은 호스트에 노출하지 않는다.
 - 회원가입은 계정이 하나도 없을 때만 열린다(첫 계정이 소유자). 빈 DB 로 443 이 열리면 먼저 가입한 사람이 유일한
   사용자가 되므로, 백업을 복원한 뒤 공개하거나 배포 직후 바로 가입한다.
@@ -292,6 +297,14 @@ crontab -e
   running=false WHERE user_id=<id> AND exchange='UPBIT'"` 뒤 `docker compose restart app`. bot state 조회 실패처럼
   사용자 목록 없이 실패했으면 재시작 전까지 DOWN 이라 서버에서 `cd /opt/app && docker compose restart app` 으로 다시 띄운다.
   배포 로그의 `--- health 응답 ---` 이 `OUT_OF_SERVICE` 면 복원이 끝나지 않은 것(DB 응답 지연 등), `DOWN` 이면 실패다.
+- 배포가 결과 불명(rc 255)·job 시한·취소로 끝남: 원격 배포 출력은 서버 `/opt/app/.deploy-last.log`(600, 마지막
+  배포만)에도 남고 끝 줄이 `=== 원격 배포 끝 (rc=N) ===` 다. 원격 배포가 이미 시작됐다면 이렇게 끝나도 서버에서 계속
+  돈다. 다시 실행하기 전에 `./deploy.sh ssh` 로 들어가 본다 — `ls -l --time-style=full-iso /opt/app/.deploy-last.log`
+  의 수정 시각이 이번 배포 시작보다 이르면 원격 배포는 시작되지 않았다(로그는 앞 배포의 것). 끝 줄이 없을 때
+  `pgrep -af '^bash -s$'` 에 원격 배포가 보이면 아직 도는 중이니 기다리고, 보이지 않으면 중간에 강제로 죽은 것이다
+  (OOM·재부팅). 그다음 `.last-good-sha`·`docker compose ps`·app health 를 본다. 업로드 중 끊겼다면 올린
+  `.env`·`docker-compose.yml` 이 잘렸을 수 있다 — 손으로 `docker compose up` 하지 말고 같은 입력(`force` 포함)으로
+  배포를 다시 실행한다(`force` 없는 새 실행은 바뀐 것이 없다고 보고 올리지 않을 수 있다).
 - cloud-init 실패(Docker 또는 AWS CLI 없음): `./deploy.sh ssh` 후 `cat /var/log/cloud-init-output.log`. AWS CLI 는
   [공식 Linux v2 설치 방식](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)으로 깔리고,
   설치가 끝나야 `/opt/app/.userdata-done` 마커가 생긴다.
