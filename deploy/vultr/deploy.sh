@@ -545,6 +545,11 @@ do_deploy() {
 set -e
 # 원격 명령이 set -e 로 멈추면 그 명령의 종료 코드가 나가 2(자동 롤백)·3(롤백 실패)과 섞인다. 실패는 1 로 모은다.
 trap 'exit 1' ERR
+# SSH 가 끊겨도(job 시한·취소·무응답) 원격 배포가 끝까지 돌게 출력을 서버 파일에도 쓴다. tee -p 는 끊긴 파이프를 넘기고
+# 파일에 계속 써 bash 가 SIGPIPE 로 죽지 않는다. 파일은 마지막 배포 하나만 두고, 끝 줄이 없으면 아직 돌거나 강제로 죽었다.
+install -m 600 /dev/null /opt/app/.deploy-last.log
+exec > >(tee -p -a /opt/app/.deploy-last.log) 2>&1
+trap 'echo "=== 원격 배포 끝 (rc=$?) ==="' EXIT
 cd /opt/app
 : "${TARGET_SHA:?TARGET_SHA 필요}"
 
@@ -699,7 +704,7 @@ deploy_failure_message() {
         1) echo "운영 배포 실패(수동 개입 필요): $target — 자동 롤백 대상이 아니거나 원격 명령이 실패했다. 새 컨테이너가 떠 있을 수 있다" ;;
         3) echo "운영 배포 실패(앱 중단 가능): $target 이 헬스체크를 통과하지 못했고 ${last_good:-?} 로의 롤백도 기동이나 헬스체크에 실패했다" ;;
         4) echo "운영 배포 부분 실패: $target 앱은 정상(롤백 기준 갱신)이지만 Caddyfile 적용 또는 적용 뒤 HTTPS 확인에 실패했다 — 원격 로그를 보고, 같은 커밋은 Actions 의 force(수동 deploy 는 다시 실행)로 재시도한다 — 엔진은 다시 시작하지 않는다" ;;
-        *) echo "운영 배포 결과 불명(rc=$rc): $target — 원격 실행이 끊겼을 수 있다. 서버 상태를 확인한다" ;;
+        *) echo "운영 배포 결과 불명(rc=$rc): $target — SSH 가 끊겼을 수 있다. 원격 배포는 서버에서 계속 돌 수 있다 — 다시 실행하기 전에 서버의 /opt/app/.deploy-last.log 끝 줄과 앱 상태를 확인한다" ;;
     esac
 }
 

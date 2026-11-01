@@ -292,6 +292,14 @@ crontab -e
   running=false WHERE user_id=<id> AND exchange='UPBIT'"` 뒤 `docker compose restart app`. bot state 조회 실패처럼
   사용자 목록 없이 실패했으면 재시작 전까지 DOWN 이라 서버에서 `cd /opt/app && docker compose restart app` 으로 다시 띄운다.
   배포 로그의 `--- health 응답 ---` 이 `OUT_OF_SERVICE` 면 복원이 끝나지 않은 것(DB 응답 지연 등), `DOWN` 이면 실패다.
+- 배포가 결과 불명(rc 255)·job 시한·취소로 끝남: 원격 배포 출력은 서버 `/opt/app/.deploy-last.log`(600, 마지막
+  배포만)에도 남고 끝 줄이 `=== 원격 배포 끝 (rc=N) ===` 다. 원격 배포가 이미 시작됐다면 이렇게 끝나도 서버에서 계속
+  돈다. 다시 실행하기 전에 `./deploy.sh ssh` 로 들어가 본다 — `ls -l --time-style=full-iso /opt/app/.deploy-last.log`
+  의 수정 시각이 이번 배포 시작보다 이르면 원격 배포는 시작되지 않았다(로그는 앞 배포의 것). 끝 줄이 없을 때
+  `pgrep -af '^bash -s$'` 에 원격 배포가 보이면 아직 도는 중이니 기다리고, 보이지 않으면 중간에 강제로 죽은 것이다
+  (OOM·재부팅). 그다음 `.last-good-sha`·`docker compose ps`·app health 를 본다. 업로드 중 끊겼다면 올린
+  `.env`·`docker-compose.yml` 이 잘렸을 수 있다 — 손으로 `docker compose up` 하지 말고 같은 입력(`force` 포함)으로
+  배포를 다시 실행한다(`force` 없는 새 실행은 바뀐 것이 없다고 보고 올리지 않을 수 있다).
 - cloud-init 실패(Docker 또는 AWS CLI 없음): `./deploy.sh ssh` 후 `cat /var/log/cloud-init-output.log`. AWS CLI 는
   [공식 Linux v2 설치 방식](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)으로 깔리고,
   설치가 끝나야 `/opt/app/.userdata-done` 마커가 생긴다.
