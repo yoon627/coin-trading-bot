@@ -23,6 +23,8 @@ class DeployWorkflowStepScriptTest {
     @TempDir
     lateinit var work: File
 
+    private val sshArgs by lazy { File(work, "ssh.args") }
+
     private class Run(val exit: Int, val output: String, val githubOutput: String)
 
     @Test
@@ -73,6 +75,22 @@ class DeployWorkflowStepScriptTest {
         assertThat(sshDown.githubOutput).doesNotContain("running_sha")
     }
 
+    /**
+     * 조회 SSH 가 조용히 끊긴 연결에 걸리면 job 시한(20분)까지 기다린다. SSH 한 번이 최악 약 130초(접속 10 + 무응답 120)라
+     * 두 번이면 스텝 시한(3분)이 실효 상한이다 — 시한에 걸리면 조회 실패 문구 없이 스텝 시간 초과로 끝나고 서버는 그대로다.
+     */
+    @Test
+    fun `운영 조회 SSH 는 무응답 시한을 걸고 스텝은 실행 시한 안에서 끝난다`() {
+        val result = runPrepare("healthy")
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+        val ssh = sshArgs.readLines()
+        assertThat(ssh).describedAs(ssh.joinToString("\n")).hasSize(2).allSatisfy {
+            assertThat(it).contains("-o ConnectTimeout=10", "-o ServerAliveInterval=15", "-o ServerAliveCountMax=8")
+        }
+        assertThat(step("deploy-vultr", "prepare")["timeout-minutes"] as Int?).isBetween(1, 5)
+    }
+
     @Test
     fun `이미 있는 이미지는 다시 빌드하지 않는다`() {
         val result = runStep("build-and-push", "image", work, imageEnv(), fakeDocker(exit = 0, stderr = ""))
@@ -111,10 +129,12 @@ class DeployWorkflowStepScriptTest {
         val workspace = File(work, "ws").apply { File(this, "deploy/vultr").mkdirs() }
         File(workspace, "deploy/vultr/known_hosts").writeText("203.0.113.10 ssh-ed25519 AAAA\n")
         val bin = File(work, "bin").apply { mkdirs() }
+        sshArgs.delete()
         File(bin, "ssh").apply {
             writeText(
                 """
                 |#!/usr/bin/env bash
+                |printf '%s\n' "${'$'}*" >> "${sshArgs.path}"
                 |remote="${'$'}{@: -1}"
                 |if [[ "${'$'}remote" == *last-good-sha* ]]; then echo "$SHA"; exit 0; fi
                 |case "$running" in
@@ -175,11 +195,12 @@ class DeployWorkflowStepScriptTest {
     private fun runStep(job: String, id: String, cwd: File, env: Map<String, String>, bin: File? = null): Run =
         exec(listOf("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript(job, id)), cwd, env, bin)
 
-    private fun stepScript(job: String, id: String): String {
+    private fun stepScript(job: String, id: String): String = step(job, id)["run"] as String
+
+    private fun step(job: String, id: String): Map<*, *> {
         val workflow: Map<*, *> = Yaml().load(RepoFiles.file(WORKFLOW).readText())
         val steps = ((workflow["jobs"] as Map<*, *>)[job] as Map<*, *>)["steps"] as List<*>
-        val step = steps.filterIsInstance<Map<*, *>>().firstOrNull { it["id"] == id } ?: error("$job 에 id=$id 스텝이 없다")
-        return step["run"] as String
+        return steps.filterIsInstance<Map<*, *>>().firstOrNull { it["id"] == id } ?: error("$job 에 id=$id 스텝이 없다")
     }
 
     private fun exec(command: List<String>, cwd: File, env: Map<String, String>, bin: File?): Run {

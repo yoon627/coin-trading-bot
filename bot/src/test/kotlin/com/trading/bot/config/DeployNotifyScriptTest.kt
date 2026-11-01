@@ -29,7 +29,9 @@ class DeployNotifyScriptTest {
     private val curlArgs by lazy { File(dir, "curl.args") }
     private val curlStdin by lazy { File(dir, "curl.stdin") }
     private val sshRemote by lazy { File(dir, "ssh.remote") }
+    private val sshArgs by lazy { File(dir, "ssh.args") }
     private val scpCalls by lazy { File(dir, "scp.calls") }
+    private val scpArgs by lazy { File(dir, "scp.args") }
 
     private class Run(val exit: Int, val output: String)
 
@@ -129,6 +131,23 @@ class DeployNotifyScriptTest {
         assertThat(uploads).containsSubsequence("/opt/app/caddy/Caddyfile", "/opt/app/docker-compose.yml")
         assertThat(uploads).containsSubsequence("/opt/app/apply_caddyfile.sh", "/opt/app/docker-compose.yml")
         assertThat(sshRemote.readText()).contains("mkdir -p /opt/app/caddy")
+    }
+
+    /** 접속 시한만으로는 조용히 끊긴 연결에서 job 시한(20분)까지 알림 없이 기다린다. 긴 원격 배포(`bash -s`)가 빠지면 안 된다. */
+    @Test
+    fun `배포의 모든 ssh 와 scp 는 접속·무응답 시한을 건다`() {
+        val repo = deployRepo()
+
+        val result = deploy(repo, remoteRc = 0)
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+        val ssh = sshArgs.readLines()
+        val scp = scpArgs.readLines()
+        assertThat(ssh).anyMatch { it.contains("bash -s") }
+        assertThat(scp).hasSize(5)
+        assertThat(ssh + scp).describedAs((ssh + scp).joinToString("\n")).allSatisfy {
+            assertThat(it).contains("-o ConnectTimeout=10", "-o ServerAliveInterval=15", "-o ServerAliveCountMax=8")
+        }
     }
 
     /** 원격 배포 스크립트라 실행하지 않고 본문을 본다. exec 가 표준입력을 붙잡으면 bash -s 로 들어온 남은 스크립트를 먹는다. */
@@ -364,10 +383,14 @@ class DeployNotifyScriptTest {
         File(vultr, ".state").writeText("PUBLIC_IP=203.0.113.10\nLAST_GOOD_SHA=$lastGood\n")
         script(
             "ssh",
-            "remote=\"${'$'}{@: -1}\"\nprintf '%s\\n' \"${'$'}remote\" >> \"${sshRemote.path}\"\n" +
+            "printf '%s\\n' \"${'$'}*\" >> \"${sshArgs.path}\"\n" +
+                "remote=\"${'$'}{@: -1}\"\nprintf '%s\\n' \"${'$'}remote\" >> \"${sshRemote.path}\"\n" +
                 "case \"${'$'}remote\" in *'bash -s'*) cat > /dev/null; exit \"${'$'}FAKE_REMOTE_RC\" ;; esac\nexit 0",
         )
-        script("scp", "printf '%s\\n' \"${'$'}{@: -1}\" >> \"${scpCalls.path}\"\nexit 0")
+        script(
+            "scp",
+            "printf '%s\\n' \"${'$'}*\" >> \"${scpArgs.path}\"\nprintf '%s\\n' \"${'$'}{@: -1}\" >> \"${scpCalls.path}\"\nexit 0",
+        )
         script("dig", "echo 203.0.113.10")
         fakeCurl()
         return repo

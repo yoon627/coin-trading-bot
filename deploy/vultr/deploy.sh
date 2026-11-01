@@ -44,6 +44,9 @@ if [[ -n "${SSH_KNOWN_HOSTS:-}" ]]; then
 else
     SSH_HOST_KEY_OPTIONS=(-o StrictHostKeyChecking=accept-new)
 fi
+# 접속 시한만으로는 조용히 끊긴 연결에서 job 시한까지 기다린다. 응답 없이 약 120초면 끊는다 — 더 짧게 잡으면 job 시한
+# 앞에서 빨리 알 이득 없이 잠깐 끊긴 연결에 클라이언트가 먼저 나가는 일만 는다.
+SSH_OPTIONS=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 -i "$KEY_PEM")
 
 save_state() { echo "$1=$2" >> "$STATE_FILE"; }
 update_state() {
@@ -437,8 +440,7 @@ do_setup() {
 
 # CI 는 SSH_KNOWN_HOSTS 로 호스트 키를 고정한다. 수동 실행은 처음 보는 키를 받아 두고 이후 변경을 거부한다.
 ssh_inst() {
-    ssh "${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM" \
-        "${SSH_USER}@${PUBLIC_IP}" "$@"
+    ssh "${SSH_OPTIONS[@]}" "${SSH_USER}@${PUBLIC_IP}" "$@"
 }
 
 wait_for_docker() {
@@ -522,14 +524,13 @@ do_deploy() {
     # 잘못된 .env 는 롤백으로 되돌려지지 않으므로 업로드 전에 검사한다.
     bash "$SCRIPT_DIR/preflight_exit_params.sh" "$tmp_env"
     ssh_inst 'mkdir -p /opt/app/caddy'
-    local scp_opts=("${SSH_HOST_KEY_OPTIONS[@]}" -o ConnectTimeout=10 -i "$KEY_PEM")
     # compose 가 ./caddy 를 마운트하므로 그 안의 Caddyfile 을 먼저 올린다. 업로드가 중간에 끊겨도 빈 ./caddy 를
     # 가리키는 compose 가 남아 다음 up 에서 caddy 가 설정 없이 뜨는 일이 없다.
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/caddy/Caddyfile
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/apply_caddyfile.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/apply_caddyfile.sh
-    scp "${scp_opts[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
-    scp "${scp_opts[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
-    scp "${scp_opts[@]}" "$tmp_env"               "${SSH_USER}@${PUBLIC_IP}":/opt/app/.env
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/caddy/Caddyfile
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/apply_caddyfile.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/apply_caddyfile.sh
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
+    scp "${SSH_OPTIONS[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
+    scp "${SSH_OPTIONS[@]}" "$tmp_env"               "${SSH_USER}@${PUBLIC_IP}":/opt/app/.env
     rm -f "$tmp_env"; trap - EXIT
     ssh_inst 'chmod +x /opt/app/backup.sh && chmod 600 /opt/app/.env'
 
