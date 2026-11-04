@@ -64,6 +64,7 @@ class TradingEngine(
 
     companion object {
         private const val ERROR_RETRY_DELAY_MS = 60_000L
+        internal val STALL_THRESHOLD: java.time.Duration = java.time.Duration.ofMinutes(5)
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
         // 경고는 ticker 당 1분에 한 번. 피드 장애 중에는 tick 마다 같은 경고가 난다.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
@@ -108,12 +109,17 @@ class TradingEngine(
     // 컨트롤러 스레드(start)와 runLoop 코루틴이 함께 읽고 쓴다.
     @Volatile
     private var activeTickers: List<String> = emptyList()
+    // 감시 스케줄러가 읽는다. 티커 하나를 처리할 때마다 갱신해 느린 tick 은 멈춤으로 보지 않는다.
+    @Volatile
+    private var lastProgressAt: Instant? = null
 
     fun start(
         tickers: List<String> = tradingProperties.tickerList(),
         initialStates: Map<String, TradingState> = emptyMap(),
     ) {
         if (!running.compareAndSet(false, true)) return
+        // 감시가 이 사이에 옛 실행의 진행 시각으로 멈춤을 판정하지 않게 바로 기록한다.
+        markProgress()
         // 루프 없이 running=true 로 남으면 다른 경로가 도는 엔진으로 착각하므로 되돌린다.
         try {
             val own = ownStates(initialStates)
@@ -148,6 +154,9 @@ class TradingEngine(
                 job.invokeOnCompletion { cause ->
                     if (running.get()) {
                         log.error("[ENGINE DEAD] Trading loop for user {} ({}) ended without stop — 손절·청산 평가가 멈췄다. 봇을 정지한 뒤 다시 시작한다", userId, username, cause)
+                    } else if (cause != null && cause !is CancellationException) {
+                        // 정지 중 후처리에서 난 Error 는 scope 처리기가 버리므로 여기서만 남는다.
+                        log.warn("Trading loop for user {} ({}) failed while stopping", userId, username, cause)
                     }
                 }
             }
@@ -189,6 +198,18 @@ class TradingEngine(
     }
 
     fun isRunning(): Boolean = running.get()
+
+    fun lastProgressAt(): Instant? = lastProgressAt
+
+    /** 도는 루프가 [STALL_THRESHOLD] 넘게 진행하지 않았다. 정지·끝난 루프는 false — 끝남은 loopJob 완료 처리가 알린다. */
+    fun isStalled(now: Instant): Boolean {
+        val last = lastProgressAt ?: return false
+        return isLoopAlive() && java.time.Duration.between(last, now) > STALL_THRESHOLD
+    }
+
+    private fun markProgress() {
+        lastProgressAt = clock.instant()
+    }
 
     /** start 중(loopJob 대입 전)은 살아 있는 것으로 본다. */
     fun isLoopAlive(): Boolean = running.get() && loopJob?.isActive != false
@@ -260,6 +281,7 @@ class TradingEngine(
 
         activeTickers.forEach { ticker ->
             positionManager.syncPosition(ticker, states[ticker]!!)
+            markProgress()
         }
         releaseSettledTickers()
 
@@ -275,13 +297,17 @@ class TradingEngine(
                 for (ticker in activeTickers) {
                     if (!running.get()) break
                     processTicker(ticker)
+                    markProgress()
                 }
+                // 티커가 없어도 한 바퀴는 진행이다.
+                markProgress()
 
                 delay(tradingProperties.intervalSeconds * 1000)
             } catch (e: CancellationException) {
                 throw e // 삼키면 stop 의 join 이 루프가 다시 돌 때까지 늦어진다.
             } catch (e: Exception) {
                 log.error("Trading loop error (user {}): {}", userId, e.message, e)
+                markProgress()
                 delay(ERROR_RETRY_DELAY_MS)
             }
         }

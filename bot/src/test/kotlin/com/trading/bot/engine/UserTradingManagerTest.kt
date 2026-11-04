@@ -633,6 +633,18 @@ class UserTradingManagerTest {
     }
 
     @Test
+    fun `getStatus shows whether the trading loop is alive and when it last made progress`() {
+        assertEquals(mapOf("alive" to false, "last_progress_at" to null), manager.getStatus(1L)["loop"])
+
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.isLoopAlive() } returns true
+        every { mockEngine.lastProgressAt() } returns java.time.Instant.parse("2026-11-04T03:00:00Z")
+
+        assertEquals(mapOf("alive" to true, "last_progress_at" to "2026-11-04T03:00:00Z"), manager.getStatus(1L)["loop"])
+    }
+
+    @Test
     fun `status reports the injected strategy with or without an engine`() {
         // 전략은 주입된 하나뿐이다. 정지로 엔진이 사라진 뒤 상태가 다른 이름을 보이면 화면과 실제 매매 전략이 어긋난다.
         assertEquals("combined", manager.getStatus(1L)["strategy"])

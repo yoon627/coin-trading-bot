@@ -1,5 +1,6 @@
 package com.trading.bot.config
 
+import com.trading.bot.engine.EngineLivenessMonitor
 import com.trading.bot.marketdata.MarketDataIngestionService
 import io.mockk.mockk
 import io.mockk.verify
@@ -10,6 +11,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
+import org.springframework.context.ApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Import
@@ -33,6 +35,19 @@ class MarketDataPropertiesBindingTest {
     class Config {
         @Bean
         fun ingestion(): MarketDataIngestionService = mockk(relaxed = true)
+
+        @Bean
+        fun liveness(): EngineLivenessMonitor = mockk(relaxed = true)
+    }
+
+    /** 작업마다 따로 실행해 어떤 주기가 어떤 검사를 부르는지 묶어 본다. */
+    private fun scheduled(ctx: ApplicationContext): Map<Pair<Duration, Duration>, Runnable> {
+        val tasks = ctx.getBeansOfType(ScheduledTaskHolder::class.java).values
+            .flatMap { holder -> holder.scheduledTasks.map { it.task } }
+            .filterIsInstance<FixedDelayTask>()
+        // 같은 주기로 두 번 등록돼도 맵은 하나로 접으므로 개수를 먼저 본다.
+        assertThat(tasks).hasSize(2)
+        return tasks.associate { (it.intervalDuration to it.initialDelayDuration) to it.runnable }
     }
 
     private fun runner(vararg env: Pair<String, String>) = ApplicationContextRunner()
@@ -61,15 +76,33 @@ class MarketDataPropertiesBindingTest {
     fun `watchdog check is scheduled with the interval and initial delay from properties`() {
         runner("MARKETDATA_WATCHDOG_INTERVAL_MS" to "1234", "MARKETDATA_WATCHDOG_INITIAL_DELAY_MS" to "567000").run { ctx ->
             assertThat(ctx).hasNotFailed()
-            val tasks = ctx.getBeansOfType(ScheduledTaskHolder::class.java).values
-                .flatMap { holder -> holder.scheduledTasks.map { it.task } }
-                .filterIsInstance<FixedDelayTask>()
-            assertThat(tasks.map { it.intervalDuration to it.initialDelayDuration })
-                .containsExactly(Duration.ofMillis(1234) to Duration.ofMillis(567_000))
+            val watchdog = Duration.ofMillis(1234) to Duration.ofMillis(567_000)
+            val tasks = scheduled(ctx)
+            assertThat(tasks.keys).containsExactlyInAnyOrder(watchdog, LIVENESS)
 
             val ingestion = ctx.getBean(MarketDataIngestionService::class.java)
-            tasks.single().runnable.run()
+            val liveness = ctx.getBean(EngineLivenessMonitor::class.java)
+            tasks.getValue(watchdog).run()
             verify(exactly = 1) { ingestion.checkTickerHealth() }
+            verify(exactly = 0) { liveness.check() }
         }
+    }
+
+    @Test
+    fun `engine liveness check runs every minute`() {
+        runner().run { ctx ->
+            assertThat(ctx).hasNotFailed()
+            val ingestion = ctx.getBean(MarketDataIngestionService::class.java)
+            val liveness = ctx.getBean(EngineLivenessMonitor::class.java)
+
+            scheduled(ctx).getValue(LIVENESS).run()
+
+            verify(exactly = 1) { liveness.check() }
+            verify(exactly = 0) { ingestion.checkTickerHealth() }
+        }
+    }
+
+    private companion object {
+        val LIVENESS = Duration.ofSeconds(60) to Duration.ofSeconds(60)
     }
 }
