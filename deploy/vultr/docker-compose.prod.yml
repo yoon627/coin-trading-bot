@@ -35,7 +35,7 @@ services:
       - "8080"                 # 호스트에 노출하지 않는다
     environment:
       - SPRING_PROFILES_ACTIVE=prod
-      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=70.0
+      - JAVA_OPTS=-XX:+UseContainerSupport -XX:MaxRAMPercentage=70.0 -XX:+ExitOnOutOfMemoryError
       # 아래 키는 이름만 적는다. .env 에 없으면 전달되지 않아 앱 기본값을 쓴다. 기본값을 여기 쓰면 앱과 갈린다.
       # deploy.sh 의 APP_OVERRIDE_KEYS 와 같게 유지한다.
       - TRADING_TICKERS

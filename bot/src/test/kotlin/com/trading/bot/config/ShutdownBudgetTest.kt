@@ -69,6 +69,19 @@ class ShutdownBudgetTest {
         assertThat(OVERRIDING_SYSTEM_PROPERTIES.filter { it in javaOpts!! }).isEmpty()
     }
 
+    /**
+     * OOM 뒤 프로세스는 상태를 믿을 수 없는데 살아 남아 매매를 이어 간다. JVM 을 끝내면 restart 정책이 다시 띄워 기동 복원을 탄다.
+     * compose 의 JAVA_OPTS 가 이미지의 값을 통째로 바꾸므로 두 곳 모두에 있어야 한다.
+     */
+    @Test
+    fun `OOM 이면 JVM 이 끝나 컨테이너가 다시 뜬다`() {
+        val dockerfileOpts = RepoFiles.file("Dockerfile").readLines().single { it.startsWith("ENV JAVA_OPTS=") }
+
+        assertThat(env["JAVA_OPTS"].toString()).contains(EXIT_ON_OOM)
+        assertThat(dockerfileOpts).contains(EXIT_ON_OOM)
+        assertThat(app["restart"]).isEqualTo("unless-stopped")
+    }
+
     private fun gracePeriod(): Duration {
         val raw = app["stop_grace_period"].toString()
         val seconds = GRACE_FORMAT.matchEntire(raw)?.groupValues?.get(1)
@@ -87,6 +100,7 @@ class ShutdownBudgetTest {
 
     private companion object {
         const val COMPOSE = "deploy/vultr/docker-compose.prod.yml"
+        const val EXIT_ON_OOM = "-XX:+ExitOnOutOfMemoryError"
         const val BASE_YML = "bot/src/main/resources/application.yml"
         const val PROD_YML = "bot/src/main/resources/application-prod.yml"
         val GRACE_FORMAT = Regex("""(\d+)s""")
