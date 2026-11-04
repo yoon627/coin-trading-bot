@@ -161,6 +161,48 @@ class TradingEngineTest {
         }
     }
 
+    /** Error 는 루프의 catch(Exception) 를 지나 루프를 끝낸다. running 은 그대로라 화면·health 로는 보이지 않는다. */
+    @Test
+    fun `정지 없이 끝난 루프는 ERROR 로 알리고 생존 판정이 거짓이 된다`(): Unit = runBlocking {
+        every { dailyResetManager.checkAndReset(any()) } throws StackOverflowError("boom")
+        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            val engine = createEngine()
+            engine.start(listOf("KRW-BTC"))
+            val deadline = System.nanoTime() + 5_000_000_000
+            while (appender.list.none { it.formattedMessage.contains("[ENGINE DEAD]") } && System.nanoTime() < deadline) delay(20)
+
+            val dead = appender.list.filter { it.formattedMessage.contains("[ENGINE DEAD]") }
+            assertEquals(listOf(Level.ERROR), dead.map { it.level })
+            assertTrue(dead.single().formattedMessage.contains("user 1"), dead.single().formattedMessage)
+            assertEquals(StackOverflowError::class.java.name, dead.single().throwableProxy?.className)
+            assertFalse(engine.isLoopAlive())
+            assertTrue(engine.isRunning())
+            engine.stop()
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun `정지로 끝난 루프는 ENGINE DEAD 를 남기지 않는다`(): Unit = runBlocking {
+        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            val engine = createEngine()
+            engine.start(listOf("KRW-BTC"))
+            assertTrue(engine.isLoopAlive())
+            delay(50)
+            engine.stop()
+            assertTrue(appender.list.none { it.formattedMessage.contains("[ENGINE DEAD]") })
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
     @Test
     fun `concurrent stop calls are safe and halt the loop`() = runBlocking {
         // 동시 stop(shutdownAll, reload/stopBot)은 stopMutex 로 직렬화돼 데드락·예외 없이 끝나고 루프가 멈춘다.

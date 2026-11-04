@@ -22,6 +22,7 @@ import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -96,7 +97,8 @@ class TradingEngine(
     /** 엔진 시작 때 알릴 설정 조합. ERROR 는 Discord 로 간다. */
     internal data class ConfigWarning(val level: Level, val message: String)
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    // 루프의 끝남은 loopJob 의 완료 처리가 알린다. 처리기가 없으면 Error 가 스레드 기본 처리기로 가 stderr 에만 찍힌다.
+    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineExceptionHandler { _, _ -> })
     private val running = AtomicBoolean(false)
     @Volatile
     private var loopJob: Job? = null
@@ -141,7 +143,14 @@ class TradingEngine(
                 }
             reportStartupConfig()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, strategy.name)
-            loopJob = scope.launch { runLoop() }
+            loopJob = scope.launch { runLoop() }.also { job ->
+                // Error·뜻밖의 취소·scope 종료로 끝나면 running 은 true 인 채 손절 평가가 멈춘다. 정지는 running 을 먼저 내린다.
+                job.invokeOnCompletion { cause ->
+                    if (running.get()) {
+                        log.error("[ENGINE DEAD] Trading loop for user {} ({}) ended without stop — 손절·청산 평가가 멈췄다. 봇을 정지한 뒤 다시 시작한다", userId, username, cause)
+                    }
+                }
+            }
         } catch (e: Throwable) {
             running.set(false)
             throw e
@@ -180,6 +189,9 @@ class TradingEngine(
     }
 
     fun isRunning(): Boolean = running.get()
+
+    /** start 중(loopJob 대입 전)은 살아 있는 것으로 본다. */
+    fun isLoopAlive(): Boolean = running.get() && loopJob?.isActive != false
 
     fun getStates(): Map<String, TradingState> = states.toMap()
 
