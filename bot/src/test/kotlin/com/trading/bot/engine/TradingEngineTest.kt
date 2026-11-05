@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.BeforeEach
@@ -158,6 +159,119 @@ class TradingEngineTest {
             )
         } finally {
             logger.detachAppender(appender)
+        }
+    }
+
+    /** Error 는 루프의 catch(Exception) 를 지나 루프를 끝낸다. running 은 그대로라 화면·health 로는 보이지 않는다. */
+    @Test
+    fun `정지 없이 끝난 루프는 ERROR 로 알리고 생존 판정이 거짓이 된다`(): Unit = runBlocking {
+        every { dailyResetManager.checkAndReset(any()) } throws StackOverflowError("boom")
+        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            val engine = createEngine()
+            engine.start(listOf("KRW-BTC"))
+            val deadline = System.nanoTime() + 5_000_000_000
+            while (appender.list.none { it.formattedMessage.contains("[ENGINE DEAD]") } && System.nanoTime() < deadline) delay(20)
+
+            val dead = appender.list.filter { it.formattedMessage.contains("[ENGINE DEAD]") }
+            assertEquals(listOf(Level.ERROR), dead.map { it.level })
+            assertTrue(dead.single().formattedMessage.contains("user 1"), dead.single().formattedMessage)
+            assertEquals(StackOverflowError::class.java.name, dead.single().throwableProxy?.className)
+            assertFalse(engine.isLoopAlive())
+            assertTrue(engine.isRunning())
+            engine.stop()
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    @Test
+    fun `정지로 끝난 루프는 ENGINE DEAD 를 남기지 않는다`(): Unit = runBlocking {
+        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            val engine = createEngine()
+            engine.start(listOf("KRW-BTC"))
+            assertTrue(engine.isLoopAlive())
+            delay(50)
+            engine.stop()
+            assertTrue(appender.list.none { it.formattedMessage.contains("[ENGINE DEAD]") })
+        } finally {
+            logger.detachAppender(appender)
+        }
+    }
+
+    /** 한 단계가 막히면 진행 시각이 멈춘다. 판정은 호출자가 준 시각으로 해 시계를 돌리지 않아도 된다. */
+    @Test
+    fun `한 단계에서 막힌 루프는 진행 없이 임계를 넘기면 멈춘 것으로 판정된다`(): Unit = runBlocking {
+        val t0 = Instant.parse("2026-11-04T03:00:00Z")
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        every { dailyResetManager.checkAndReset(any()) } answers {
+            entered.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS); false
+        }
+        val engine = createEngine(clock = Clock.fixed(t0, ZoneOffset.UTC))
+
+        assertFalse(engine.isStalled(t0.plusSeconds(3600)), "시작 전")
+        engine.start(listOf("KRW-BTC"))
+        try {
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+            assertEquals(t0, engine.lastProgressAt())
+            assertFalse(engine.isStalled(t0.plus(TradingEngine.STALL_THRESHOLD)))
+            assertTrue(engine.isStalled(t0.plus(TradingEngine.STALL_THRESHOLD).plusSeconds(1)))
+        } finally {
+            release.countDown()
+            engine.stop()
+        }
+        assertFalse(engine.isStalled(t0.plusSeconds(3600)), "정지 뒤")
+    }
+
+    @Test
+    fun `도는 루프는 tick 마다 진행 시각을 갱신해 멈춘 것으로 판정되지 않는다`(): Unit = runBlocking {
+        val t0 = Instant.parse("2026-11-04T03:00:00Z")
+        // 루프 스레드가 읽으므로 volatile 이다.
+        val clock = object : Clock() {
+            @Volatile var now: Instant = t0
+            override fun instant(): Instant = now
+            override fun getZone(): java.time.ZoneId = ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId): Clock = this
+        }
+        coEvery { upbitClient.getTicker(any()) } returns emptyList()
+        val engine = createEngine(clock = clock)
+        engine.start(listOf("KRW-BTC"))
+        // 사전 동기화가 남긴 시각이 아니라 tick 이 남긴 시각을 보려고 tick 이 한 번 돈 뒤에 시계를 옮긴다.
+        coVerify(timeout = 5_000) { upbitClient.getTicker(any()) }
+        val later = t0.plusSeconds(600)
+        clock.now = later
+        val deadline = System.nanoTime() + 5_000_000_000
+        while (engine.lastProgressAt() != later && System.nanoTime() < deadline) delay(20)
+
+        assertEquals(later, engine.lastProgressAt())
+        assertFalse(engine.isStalled(later.plusSeconds(60)))
+        engine.stop()
+    }
+
+    /** 사전 잔고 동기화가 느려도 시작 시각이 첫 진행이라 판정 기준이 비지 않는다. */
+    @Test
+    fun `시작 직후 사전 동기화 중에도 진행 시각이 있다`(): Unit = runBlocking {
+        val t0 = Instant.parse("2026-11-04T03:00:00Z")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { positionManager.syncPosition(any(), any()) } coAnswers { entered.complete(Unit); release.await() }
+        val engine = createEngine(clock = Clock.fixed(t0, ZoneOffset.UTC))
+        engine.start(listOf("KRW-BTC"))
+        try {
+            withTimeout(5_000) { entered.await() }
+
+            assertEquals(t0, engine.lastProgressAt())
+            assertFalse(engine.isStalled(t0.plusSeconds(60)))
+        } finally {
+            release.complete(Unit)
+            engine.stop()
         }
     }
 

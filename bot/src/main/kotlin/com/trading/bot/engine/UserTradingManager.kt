@@ -362,12 +362,20 @@ class UserTradingManager(
         mapOf("status" to if (engine != null) "stopped" else "not_running")
     }
 
+    /** 감시용. 맵에는 정지된 채 남은 엔진도 있어 도는 것만 낸다. */
+    internal fun liveEngines(): Map<Long, TradingEngine> = engines.filterValues { it.isRunning() }
+
     fun getStatus(userId: Long): Map<String, Any> {
         val engine = engines[userId]
         // 맵에는 정지된 채 남은 엔진이 있을 수 있으므로 목록은 도는 엔진에서만 읽는다.
         val live = engine?.takeIf { it.isRunning() }
         return mapOf(
             "running" to (engine?.isRunning() ?: false),
+            // running 은 시작·정지 상태다. 루프가 정지 없이 끝났거나 멈췄는지는 이것으로 본다.
+            "loop" to mapOf<String, Any?>(
+                "alive" to (live?.isLoopAlive() ?: false),
+                "last_progress_at" to live?.lastProgressAt()?.toString(),
+            ),
             "strategy" to strategy.name,
             // states 는 루프가 돌아야 채워지므로 start 직후에도 값이 있는 activeTickers 를 쓴다.
             "tickers" to (engine?.getActiveTickers() ?: emptyList<String>()),
