@@ -4,7 +4,8 @@
 services:
   # prod 는 Secure 쿠키를 쓰므로 HTTPS 종단이 있어야 로그인이 된다.
   caddy:
-    image: caddy:2-alpine
+    # 배포마다 pull 하므로 움직이는 태그면 앱만 바꾸는 배포가 caddy·postgres 를 몰래 새 이미지로 다시 만든다. 올리는 것은 따로 PR 로.
+    image: caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9
     pull_policy: always
     ports:
       - "80:80"                # ACME HTTP-01, 전체 개방 필요
@@ -114,7 +115,7 @@ services:
         max-file: "3"
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.11-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
     environment:
       POSTGRES_DB: trading
       POSTGRES_USER: trading

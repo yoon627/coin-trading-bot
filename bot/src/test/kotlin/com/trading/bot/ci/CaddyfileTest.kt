@@ -2,6 +2,7 @@ package com.trading.bot.ci
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
+import org.yaml.snakeyaml.Yaml
 
 /** 배포가 app 컨테이너를 바꾸는 동안(옛 컨테이너 정지 → 새 컨테이너 기동) caddy 가 요청을 502 로 끝내지 않는다(#328). */
 class CaddyfileTest {
@@ -23,6 +24,27 @@ class CaddyfileTest {
         assertThat(seconds!!).isBetween(25, 45)
     }
 
+    /**
+     * caddy 는 정지할 때 새 연결을 받지 않고 진행 중 요청을 기본으로 끝없이 기다린다. 위 재시도로 붙잡힌 요청이 있으면 docker 의
+     * 정지 시한(10초)까지 HTTPS 가 막힌 채 버티다 강제 종료된다. 그보다 짧게 끊어 caddy 를 바꾸는 배포의 공백을 줄인다.
+     */
+    @Test
+    fun `caddy 정지는 진행 중 요청을 docker 정지 시한보다 짧게 기다린다`() {
+        val lines = RepoFiles.file(CADDYFILE).readLines().map { it.trim() }.filterNot { it.isEmpty() || it.startsWith("#") }
+        check(lines.firstOrNull() == "{") { "$CADDYFILE 의 첫 블록이 전역 옵션 블록이어야 한다: ${lines.firstOrNull()}" }
+        val global = blockBody(lines.drop(1))
+
+        val seconds = global.mapNotNull { GRACE.matchEntire(it)?.groupValues?.get(1)?.toInt() }
+        assertThat(seconds).describedAs("전역 옵션에 grace_period 가 한 줄 있다").hasSize(1)
+        assertThat(seconds.single()).isBetween(1, 9)
+        assertThat(caddyStopGrace()).describedAs("caddy 서비스는 docker 기본 정지 시한(10초)을 쓴다").isNull()
+    }
+
+    private fun caddyStopGrace(): Any? {
+        val compose: Map<*, *> = Yaml().load(RepoFiles.file("deploy/vultr/docker-compose.prod.yml").readText())
+        return ((compose["services"] as Map<*, *>)["caddy"] as Map<*, *>)["stop_grace_period"]
+    }
+
     /** 블록 안 줄. 안쪽 블록(`transport http { … }` 등)의 줄도 포함하고 짝이 맞는 `}` 에서 멈춘다. */
     private fun blockBody(afterOpen: List<String>): List<String> {
         var depth = 1
@@ -35,5 +57,6 @@ class CaddyfileTest {
     private companion object {
         const val CADDYFILE = "deploy/vultr/Caddyfile"
         val DURATION = Regex("""lb_try_duration\s+(\d+)s""")
+        val GRACE = Regex("""grace_period\s+(\d+)s""")
     }
 }
