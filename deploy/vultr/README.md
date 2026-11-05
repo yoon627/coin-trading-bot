@@ -94,8 +94,16 @@ caddy 가 이전 설정을 그대로 둔다. 바뀐 Caddyfile 을 적용한 배�
 
 ```bash
 docker run --rm -e APP_DOMAIN=bot.example.test -v "$PWD/deploy/vultr/Caddyfile":/etc/caddy/Caddyfile:ro \
-  caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+  caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
+
+caddy·postgres 이미지는 버전 태그와 digest 로 고정한다. 배포는 매번 `docker compose pull` 을 돌므로 움직이는 태그면 앱만 바꾸는
+배포가 caddy(그동안 HTTPS 공백)나 postgres(헬스체크 중 DB 재시작, 롤백으로 못 되돌림)를 몰래 새 이미지로 다시 만든다. 올릴 때는
+따로 PR 로 운영 compose·CI(`deploy.yml` 의 postgres 서비스와 caddy validate)·루트 `docker-compose.yml`·
+`scripts/run-db-tests.sh` 와 위 검증 예시를 같은 값으로 바꾼다(postgres 는 `InfraImagePinTest`, CI 의 caddy 검증 이미지는
+`CaddyValidateStepTest` 가 어긋나면 막고, 위 예시는 손으로 맞춘다). `image:` 문자열이 바뀌면 compose 는 digest 가 같아도
+그 컨테이너를 다시 만든다 — caddy 를 바꾸는 배포는 몇 초 HTTPS 가 끊기고, postgres 를 바꾸는 배포는 도는 엔진 밑에서 DB 가
+다시 뜨므로 봇을 멈춘 뒤 배포한다. 정지·reload 때 caddy 는 진행 중 요청을 `grace_period`(5초)까지만 기다린다.
 
 ### GitHub Actions 배포
 

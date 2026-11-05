@@ -28,7 +28,7 @@ jobs:
     # DB 통합테스트용 Postgres. 운영과 같은 이미지를 쓴다.
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17.11-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
         env:
           POSTGRES_DB: trading
           POSTGRES_USER: trading
@@ -48,7 +48,7 @@ jobs:
         run: >-
           docker run --rm -e APP_DOMAIN=bot.example.test
           -v "$PWD/deploy/vultr/Caddyfile:/etc/caddy/Caddyfile:ro"
-          caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          caddy:2.11.8-alpine@sha256:f6228111e5fafa1a5238258d0858e103f10599b8d1659a146e7726681a002bb9 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
