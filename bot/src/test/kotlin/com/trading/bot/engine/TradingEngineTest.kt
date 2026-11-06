@@ -28,6 +28,8 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -68,6 +70,7 @@ class TradingEngineTest {
     private fun createEngine(
         props: TradingProperties = tradingProperties,
         clock: Clock = Clock.systemUTC(),
+        clearHaltLockTimeoutMs: Long = 10_000,
     ): TradingEngine {
         return TradingEngine(
             upbitClient = upbitClient,
@@ -80,6 +83,7 @@ class TradingEngineTest {
             discordWebhookUrl = null,
             marketDataStore = marketDataStore,
             clock = clock,
+            clearHaltLockTimeoutMs = clearHaltLockTimeoutMs,
         )
     }
 
@@ -269,6 +273,60 @@ class TradingEngineTest {
 
             assertEquals(t0, engine.lastProgressAt())
             assertFalse(engine.isStalled(t0.plusSeconds(60)))
+        } finally {
+            release.complete(Unit)
+            engine.stop()
+        }
+    }
+
+    /**
+     * halt 해제는 루프와 같은 메모리 상태를 저장한다. 루프가 그 종목을 처리하는 중(체결 커밋 뒤 메모리 반영 전 등)에 저장하면
+     * 체결 전 스냅샷으로 DB 를 덮는다(#343). 그래서 해제는 그 처리가 끝난 뒤에 저장한다.
+     */
+    @Test
+    fun `halt 해제는 루프가 종목을 처리하는 동안 기다렸다가 저장한다`(): Unit = runBlocking {
+        val halted = TradingState("KRW-BTC").apply { halted = true; haltReason = "reconcile failures" }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { entered.complete(Unit); release.await(); emptyList() }
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-BTC" to halted))
+        try {
+            withTimeout(5_000) { entered.await() }
+            val clear = async(Dispatchers.Default) { engine.clearHalt("KRW-BTC") }
+            delay(300)
+            assertFalse(clear.isCompleted, "루프가 종목을 처리하는 동안 halt 해제가 먼저 저장했다")
+            coVerify(exactly = 0) { positionManager.persistStateOrThrow(any()) }
+
+            release.complete(Unit)
+            assertTrue(withTimeout(5_000) { clear.await() })
+            coVerify(exactly = 1) { positionManager.persistStateOrThrow(match { !it.halted }) }
+        } finally {
+            release.complete(Unit)
+            engine.stop()
+        }
+    }
+
+    /** 시한이 지나면 바꾸지 않고 돌려주고, 잠금은 남지 않아 루프와 다음 해제가 그대로 돈다. */
+    @Test
+    fun `halt 해제가 시한 안에 잠금을 얻지 못하면 바꾸지 않고 잠금도 남기지 않는다`(): Unit = runBlocking {
+        val halted = TradingState("KRW-BTC").apply { halted = true; haltReason = "reconcile failures" }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers {
+            if (!release.isCompleted) { entered.complete(Unit); release.await() }
+            emptyList()
+        }
+        val engine = createEngine(clearHaltLockTimeoutMs = 200)
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-BTC" to halted))
+        try {
+            withTimeout(5_000) { entered.await() }
+            assertThrows<HaltClearBusyException> { runBlocking { engine.clearHalt("KRW-BTC") } }
+            assertTrue(engine.getStates().getValue("KRW-BTC").halted)
+
+            release.complete(Unit)
+            assertTrue(withTimeout(5_000) { engine.clearHalt("KRW-BTC") }, "잠금이 남아 다음 해제가 막혔다")
+            coVerify(timeout = 5_000, atLeast = 2) { upbitClient.getTicker("KRW-BTC") }
         } finally {
             release.complete(Unit)
             engine.stop()

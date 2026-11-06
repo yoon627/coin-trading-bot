@@ -460,7 +460,22 @@ class UserTradingManager(
                 "code" to CONFLICT_CODE,
             )
         }
-        val cleared = persistOrFail(userId, HALT_CLEAR_UNPERSISTED_MESSAGE) { engine.clearHalt(ticker) }
+        // 바쁜 루프는 저장 실패가 아니라 ERROR 알림 없이 다시 시도하라고 돌려준다(null).
+        val cleared = persistOrFail(userId, HALT_CLEAR_UNPERSISTED_MESSAGE) {
+            try {
+                engine.clearHalt(ticker)
+            } catch (busy: HaltClearBusyException) {
+                log.warn("halt clear for user {} timed out waiting for the trading loop: {}", userId, busy.message)
+                null
+            }
+        } ?: return@withLock mapOf("error" to "매매 루프가 $ticker 를 처리 중이다 — 잠시 후 다시 시도한다", "code" to CONFLICT_CODE)
+        // 기다리는 사이 주문 확인이 필요해졌으면 위와 같이 pending 해제로 안내한다.
+        if (!cleared) engine.getStates()[ticker]?.reviewReason?.let { reason ->
+            return@withLock mapOf(
+                "error" to "$ticker 는 주문 확인이 필요하다($reason) — 거래소에서 확인한 뒤 /api/bot/pending/clear 로 해제한다",
+                "code" to CONFLICT_CODE,
+            )
+        }
         mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 
