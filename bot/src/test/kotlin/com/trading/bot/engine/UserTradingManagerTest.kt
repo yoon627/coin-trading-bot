@@ -644,6 +644,32 @@ class UserTradingManagerTest {
         assertEquals(mapOf("alive" to true, "last_progress_at" to "2026-11-04T03:00:00Z"), manager.getStatus(1L)["loop"])
     }
 
+    /** 바쁜 루프는 저장 실패가 아니다 — 503·ERROR 알림 대신 다시 시도하라는 409 다. */
+    @Test
+    fun `clearHalt answers conflict when the trading loop is busy with that ticker`() = runTest {
+        engines()[1L] = mockEngine
+        coEvery { mockEngine.clearHalt("KRW-BTC") } throws HaltClearBusyException("KRW-BTC")
+
+        val result = manager.clearHalt(1L, "KRW-BTC")
+
+        assertEquals("conflict", result["code"])
+        assertTrue((result["error"] as String).contains("다시 시도"))
+    }
+
+    @Test
+    fun `clearHalt points to pending clear when a review appeared while it waited`() = runTest {
+        engines()[1L] = mockEngine
+        val waiting = TradingState("KRW-BTC").apply { halted = true }
+        val reviewed = TradingState("KRW-BTC").apply { halted = true; reviewReason = "traced" }
+        every { mockEngine.getStates() } returnsMany listOf(mapOf("KRW-BTC" to waiting), mapOf("KRW-BTC" to reviewed))
+        coEvery { mockEngine.clearHalt("KRW-BTC") } returns false
+
+        val result = manager.clearHalt(1L, "KRW-BTC")
+
+        assertEquals("conflict", result["code"])
+        assertTrue((result["error"] as String).contains("pending/clear"))
+    }
+
     @Test
     fun `status reports the injected strategy with or without an engine`() {
         // 전략은 주입된 하나뿐이다. 정지로 엔진이 사라진 뒤 상태가 다른 이름을 보이면 화면과 실제 매매 전략이 어긋난다.
