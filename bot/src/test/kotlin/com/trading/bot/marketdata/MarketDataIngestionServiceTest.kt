@@ -274,6 +274,64 @@ class MarketDataIngestionServiceTest {
         assertTrue(reportOrder in (appenderOrder + 1) until restoreOrder, "appender $appenderOrder < report $reportOrder < restore $restoreOrder")
     }
 
+    // 워치독 재시작이 무수신 기준을 되돌리므로 장애가 길어져도 WARN 만 쌓이고 Discord(ERROR)에는 가지 않았다.
+    @Test
+    fun `시세가 5분 넘게 안 오면 장애 한 번에 ERROR 한 줄, 다시 받으면 INFO 한 줄을 남긴다`() {
+        every { feed.tickerFlow(any()) } returns emptyFlow()
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = serviceWatching("KRW-BTC")
+        val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        fun errors() = appender.list.filter { it.level == Level.ERROR }.map { it.formattedMessage }
+        try {
+            service.start()
+            val startedAt = System.currentTimeMillis()
+
+            service.checkTickerHealth(startedAt + 4 * 60_000)
+            assertTrue(errors().isEmpty(), errors().toString())
+
+            service.checkTickerHealth(startedAt + 6 * 60_000)
+            service.checkTickerHealth(startedAt + 7 * 60_000)
+            assertEquals(1, errors().size, errors().toString())
+            assertTrue(errors().single().contains("[FEED DOWN]"), errors().single())
+
+            service.ingestTicker(ticker)
+            assertEquals(1, appender.list.count { it.level == Level.INFO && it.formattedMessage.contains("[FEED RECOVERED]") })
+            service.ingestTicker(ticker)
+            assertEquals(1, appender.list.count { it.level == Level.INFO && it.formattedMessage.contains("[FEED RECOVERED]") })
+
+            service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
+            assertEquals(2, errors().size, errors().toString())
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+            service.stop()
+        }
+    }
+
+    @Test
+    fun `워치독을 꺼도 시세 장애 알림은 낸다`() {
+        every { feed.tickerFlow(any()) } returns emptyFlow()
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = MarketDataIngestionService(
+            feed, store, aggregator, WatchlistProperties("KRW-BTC"), MarketDataWatchdogProperties(enabled = false),
+        )
+        val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            service.start()
+            service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
+            assertEquals(1, appender.list.count { it.level == Level.ERROR && it.formattedMessage.contains("[FEED DOWN]") })
+            assertTrue(appender.list.none { it.formattedMessage.contains("restarting collection") })
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+            service.stop()
+        }
+    }
+
     private fun errorsWhileReporting(service: MarketDataIngestionService): List<String> {
         val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
