@@ -62,6 +62,11 @@ class MarketDataIngestionService(
     @Volatile
     private var lastTickerAt = 0L
 
+    // 재시작이 되돌리지 않는 실제 수신 시각. 장애 길이를 재고 알림을 장애 한 번에 한 번만 낸다.
+    @Volatile
+    private var lastDataAt = 0L
+    private val outageAlerted = AtomicBoolean(false)
+
     @Volatile
     private var tickerJob: Job? = null
     private val shuttingDown = AtomicBoolean(false)
@@ -82,6 +87,9 @@ class MarketDataIngestionService(
         internal const val M1_FETCH_COUNT = 5
 
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
+
+        // 이 시간 넘게 시세를 못 받으면 ERROR(Discord) 한 번. 재시작으로 금방 풀리는 끊김은 알리지 않는다.
+        internal const val FEED_OUTAGE_ALERT_MS = 300_000L
     }
 
     @PostConstruct
@@ -97,6 +105,7 @@ class MarketDataIngestionService(
         }
         markets = m
         lastTickerAt = System.currentTimeMillis()
+        lastDataAt = lastTickerAt
         log.info("Starting in-process market data ingestion for {} markets: {}", m.size, m)
         tickerJob = scope.launch { runTickerCollection(m) }
         scope.launch { collectCandlesPeriodically(m) }
@@ -186,13 +195,28 @@ class MarketDataIngestionService(
             e.message?.contains("429") == true
 
     // TCP 는 살아 있는데 수신이 끊긴 half-open 상태는 재구독이 아니라 새 연결로만 풀려서 job 을 새로 띄운다.
-    fun checkTickerHealth() {
-        if (!watchdogProperties.enabled || shuttingDown.get()) return
+    fun checkTickerHealth() = checkTickerHealth(System.currentTimeMillis())
+
+    // 워치독을 꺼도 재시작만 멈추고 장애 알림은 낸다.
+    internal fun checkTickerHealth(nowMs: Long) {
+        if (shuttingDown.get()) return
         val m = markets
         if (m.isEmpty()) return
-        if (watchdogProperties.isStale(System.currentTimeMillis(), lastTickerAt)) {
+        if (watchdogProperties.enabled && watchdogProperties.isStale(nowMs, lastTickerAt)) {
             log.warn("No ticker for >{}ms; restarting collection", watchdogProperties.staleMs)
             restartTickerCollection(m)
+        }
+        val since = lastDataAt
+        if (since > 0 && nowMs - since > FEED_OUTAGE_ALERT_MS && outageAlerted.compareAndSet(false, true)) {
+            // 읽은 뒤 시세가 들어왔으면 그 수신은 회복으로 처리되지 않았으므로 알림도 내지 않는다.
+            if (lastDataAt != since) {
+                outageAlerted.set(false)
+                return
+            }
+            log.error(
+                "[FEED DOWN] No Upbit ticker for {}s across {} markets — 엔진은 낡은 시세를 REST 로 대체하고, 수집은 계속 다시 띄운다.",
+                (nowMs - since) / 1000, m.size,
+            )
         }
     }
 
@@ -212,7 +236,10 @@ class MarketDataIngestionService(
     }
 
     internal fun ingestTicker(ticker: NormalizedTicker) {
-        lastTickerAt = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        lastTickerAt = now
+        lastDataAt = now
+        if (outageAlerted.compareAndSet(true, false)) log.info("[FEED RECOVERED] Upbit ticker feed is receiving again")
         try {
             marketDataStore.updateTicker(ticker)
         } catch (e: Exception) {
