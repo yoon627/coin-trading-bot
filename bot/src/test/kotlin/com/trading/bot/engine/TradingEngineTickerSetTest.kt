@@ -56,6 +56,9 @@ class TradingEngineTickerSetTest {
         marketDataStore = marketDataStore,
     )
 
+    /** 루프는 시세가 낡은 종목을 묶어 한 번에 조회한다(`KRW-A,KRW-B`). 물은 마켓마다 같은 가격을 돌려준다. */
+    private fun tickersAt(markets: String, price: Double) = markets.split(",").map { Ticker(market = it, tradePrice = price) }
+
     private fun held(ticker: String) = TradingState(ticker, position = true, avgBuyPrice = 100.0, holdVolume = 1.0)
 
     /** 엔진이 산 포지션. 진입 메타가 있어야 재시작 때 잔류로 실린다. */
@@ -65,7 +68,7 @@ class TradingEngineTickerSetTest {
     @Test
     fun `start keeps a ticker outside the list whose order is known only by identifier`() = runBlocking {
         val firstTick = CompletableDeferred<Unit>()
-        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { upbitClient.getTicker(any()) } coAnswers { firstTick.complete(Unit); tickersAt(firstArg(), 100.0) }
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
         val engine = createEngine()
 
@@ -126,7 +129,7 @@ class TradingEngineTickerSetTest {
         val xrp = heldEntry("KRW-XRP")
         val sold = CompletableDeferred<Unit>()
         val reconciled = CompletableDeferred<Unit>()
-        coEvery { upbitClient.getTicker(any()) } returns listOf(Ticker(tradePrice = 90.0))
+        coEvery { upbitClient.getTicker(any()) } coAnswers { tickersAt(firstArg(), 90.0) }
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
         every { positionManager.checkStopLoss(xrp, any()) } returns true
         coEvery { positionManager.sell("KRW-XRP", xrp, any(), SellReason.STOP_LOSS) } coAnswers { sold.complete(Unit); null }
@@ -164,7 +167,7 @@ class TradingEngineTickerSetTest {
     @Test
     fun `a retained row that turns out flat is dropped after the startup sync`() = runBlocking {
         val firstTick = CompletableDeferred<Unit>()
-        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { upbitClient.getTicker(any()) } coAnswers { firstTick.complete(Unit); tickersAt(firstArg(), 100.0) }
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
         // 우리 주문으로 설명되지 않는 락(releaseHoldings 뒤)은 실제 포지션일 수 있어 남긴다.
         coEvery { positionManager.syncPosition("KRW-U", any()) } coAnswers { secondArg<TradingState>().unsynced = true }
@@ -206,7 +209,7 @@ class TradingEngineTickerSetTest {
                 false
             }
         }
-        coEvery { upbitClient.getTicker("KRW-BTC") } coAnswers { firstTick.complete(Unit); listOf(Ticker(tradePrice = 100.0)) }
+        coEvery { upbitClient.getTicker(any()) } coAnswers { firstTick.complete(Unit); tickersAt(firstArg(), 100.0) }
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
 
         engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to xrp))

@@ -10,6 +10,7 @@ import com.trading.common.domain.Candle
  * 엔진이 거래소에 요구하는 동작. 값은 Upbit 응답 어휘로 돌려준다.
  * - [getAccounts]: currency = "KRW" 인 현금 행이 있고, 보유 행의 currency 는 ticker 의 '-' 뒤 부분이다.
  * - [getDayCandles]: 최신 봉이 [0] 이고, candleDateTimeUtc 는 그 거래일의 00:00(UTC 표기)이다.
+ * - [getTicker]: markets 는 쉼표로 이은 여러 마켓이고 응답마다 market 을 채운다. 엔진은 낡은 시세를 묶어 한 번에 묻는다.
  * - [Order.state] 는 wait·done·cancel 중 하나다. done·cancel 이면 trades 로 체결 단가를 계산할 수 있다.
  */
 interface ExchangeClient {

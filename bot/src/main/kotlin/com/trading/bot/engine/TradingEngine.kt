@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.client.UpbitApiException
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
 import com.trading.bot.exchange.ExchangeClient
@@ -321,10 +322,15 @@ class TradingEngine(
                     }
                 }
 
-                for (ticker in activeTickers) {
-                    if (!running.get()) break
-                    stateMutex.withLock { processTicker(ticker) }
-                    markProgress()
+                roundRestPrices = HashMap()
+                try {
+                    for (ticker in activeTickers) {
+                        if (!running.get()) break
+                        stateMutex.withLock { processTicker(ticker) }
+                        markProgress()
+                    }
+                } finally {
+                    roundRestPrices = null
                 }
                 // 티커가 없어도 한 바퀴는 진행이다.
                 markProgress()
@@ -367,6 +373,59 @@ class TradingEngine(
 
     private fun TradingState.hasPendingOrder(): Boolean = hasPendingBuy() || hasPendingSell()
 
+    /** 도는 라운드에서 REST 로 받으려 한 종목과 그 시세(못 받았으면 null). 라운드 밖에서는 null 이다. 루프 코루틴만 쓴다. */
+    private var roundRestPrices: HashMap<String, Double?>? = null
+
+    /**
+     * 따로 물어도 거래소가 모른다고 한(404) 마켓. 묶음에 넣으면 묶음 전체가 실패하므로 묶음에서만 뺀다 — 보유·미해소 주문이 있으면
+     * 일시적인 404 였을 수 있어 손절을 위해 계속 따로 묻는다. 루프 코루틴만 쓴다.
+     */
+    private val unknownRestMarkets = HashSet<String>()
+
+    private suspend fun restPrice(ticker: String): Double? {
+        if (ticker in unknownRestMarkets) {
+            return if (states[ticker]?.let { it.position || it.hasPendingOrder() } == true) fetchRestPrices(listOf(ticker))[ticker] else null
+        }
+        val round = roundRestPrices ?: return fetchRestPrices(listOf(ticker))[ticker]
+        if (ticker !in round) {
+            val markets = listOf(ticker) + activeTickers.filter {
+                it != ticker && it !in round && it !in unknownRestMarkets && willProcess(it) && getRealtimePrice(it) == null
+            }
+            val prices = fetchRestPrices(markets)
+            markets.forEach { round[it] = prices[it] }
+        }
+        return round[ticker]
+    }
+
+    /**
+     * WS 시세가 끊기면 모든 종목이 여기로 온다. 종목마다 따로 부르면 IP 당 ticker 한도를 넘어 429 가 쌓이고 418(IP 차단)이 되면
+     * 차단 동안 손절 평가가 멈추므로, 시세가 낡은 종목을 한 번에 묶어 받는다. 묶음이 한도·장애로 실패하면 그 라운드는 REST 시세 없이
+     * 넘긴다(따로 다시 부르면 차단으로 가는 부하를 키운다). 마켓 하나가 틀려(404) 묶음이 실패했으면 따로 받고 그 마켓은 묶음에서 뺀다.
+     */
+    private suspend fun fetchRestPrices(markets: List<String>): Map<String, Double> =
+        try {
+            val tickers = upbitClient.getTicker(markets.joinToString(","))
+            // 한 마켓만 물으면 응답 하나가 그 마켓이다.
+            if (markets.size == 1) tickers.firstOrNull()?.let { mapOf(markets.single() to it.tradePrice) }.orEmpty()
+            else tickers.filter { it.market in markets }.associate { it.market to it.tradePrice }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (markets.size > 1 && e.isMarketNotFound()) {
+                markets.mapNotNull { m -> singleRestPrice(m)?.let { m to it } }.toMap()
+            } else {
+                if (markets.size == 1 && e.isMarketNotFound() && unknownRestMarkets.add(markets.single())) {
+                    log.warn("{} is unknown to the exchange — excluded from batched REST ticker fallback (user {})", markets.single(), userId)
+                }
+                log.error("REST ticker fallback for {} failed (user {}): {}", markets.joinToString(","), userId, e.message, e)
+                emptyMap()
+            }
+        }
+
+    private suspend fun singleRestPrice(market: String): Double? = fetchRestPrices(listOf(market))[market]
+
+    private fun Throwable.isMarketNotFound(): Boolean = this is UpbitApiException && statusCode == 404
+
     internal fun getRealtimePrice(ticker: String): Double? {
         // 수집이 멈추면 store 가격이 그대로 얼어붙으므로 신선한 값만 쓴다.
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
@@ -388,16 +447,19 @@ class TradingEngine(
 
     private suspend fun processTicker(ticker: String) {
         val state = states[ticker] ?: return
-        // 장외에도 미해소 주문은 확정해야 다음 세션까지 결과가 밀리지 않는다.
-        if (!calendar.isSessionOpen(clock.instant()) && !state.hasPendingOrder()) return
+        if (!willProcess(ticker)) return
         processTicker(ticker, state, strategy)
+    }
+
+    // 장외에도 미해소 주문은 확정해야 다음 세션까지 결과가 밀리지 않는다.
+    private fun willProcess(ticker: String): Boolean {
+        val state = states[ticker] ?: return false
+        return calendar.isSessionOpen(clock.instant()) || state.hasPendingOrder()
     }
 
     internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
         try {
-            val currentPrice = getRealtimePrice(ticker)
-                ?: upbitClient.getTicker(ticker).firstOrNull()?.tradePrice
-                ?: return
+            val currentPrice = getRealtimePrice(ticker) ?: restPrice(ticker) ?: return
 
             // 보유 여부를 확정하지 못했으면 다시 확인한다. 계속 모르면 buy() 가 신규 진입을 막는다.
             if (state.unsynced) {
