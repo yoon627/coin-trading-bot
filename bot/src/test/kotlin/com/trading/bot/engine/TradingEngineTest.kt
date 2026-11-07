@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.trading.bot.client.UpbitApiException
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.SellReason
@@ -329,6 +330,108 @@ class TradingEngineTest {
             coVerify(timeout = 5_000, atLeast = 2) { upbitClient.getTicker("KRW-BTC") }
         } finally {
             release.complete(Unit)
+            engine.stop()
+        }
+    }
+
+    /**
+     * WS 시세가 끊기면 모든 종목이 REST 로 넘어간다. 종목마다 따로 부르면 IP 당 ticker 한도(초당 10회)를 넘어 429 → 418(IP 차단)로
+     * 번지고, 차단 동안 가격을 못 얻은 tick 은 건너뛰어 손절 평가가 멈춘다. 그래서 라운드마다 낡은 종목을 묶어 한 번만 부른다.
+     */
+    @Test
+    fun `시세가 낡은 종목이 여럿이면 REST 티커를 라운드마다 한 번에 묶어 받는다`(): Unit = runBlocking {
+        val peaks = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        coEvery { positionManager.persistPeak(any()) } coAnswers { peaks[firstArg<TradingState>().ticker] = firstArg<TradingState>().peakPrice }
+        coEvery { upbitClient.getTicker(any()) } returns listOf(
+            Ticker(market = "KRW-BTC", tradePrice = 10.0),
+            Ticker(market = "KRW-ETH", tradePrice = 20.0),
+            Ticker(market = "KRW-XRP", tradePrice = 30.0),
+        )
+        val held = listOf("KRW-BTC", "KRW-ETH", "KRW-XRP").associateWith { TradingState(it, position = true) }
+        val engine = createEngine(TradingProperties(intervalSeconds = 60))
+        engine.start(held.keys.toList(), held)
+        try {
+            val deadline = System.nanoTime() + 5_000_000_000
+            while (peaks.size < 3 && System.nanoTime() < deadline) delay(20)
+
+            assertEquals(mapOf("KRW-BTC" to 10.0, "KRW-ETH" to 20.0, "KRW-XRP" to 30.0), peaks.toMap())
+            coVerify(exactly = 1) { upbitClient.getTicker(any()) }
+            coVerify(exactly = 1) { upbitClient.getTicker("KRW-BTC,KRW-ETH,KRW-XRP") }
+        } finally {
+            engine.stop()
+        }
+    }
+
+    /** 한도·장애로 묶음이 실패하면 그 라운드는 따로 다시 부르지 않는다 — 따로 부르면 차단(418)으로 가는 부하를 키운다. */
+    @Test
+    fun `묶음 조회가 한도 초과로 실패하면 그 라운드에 종목별로 다시 부르지 않는다`(): Unit = runBlocking {
+        val rateLimited = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC,KRW-ETH,KRW-XRP") } coAnswers {
+            rateLimited.complete(Unit)
+            throw UpbitApiException(429, "too_many_requests", null, "{}")
+        }
+        val states = mapOf("KRW-BTC" to TradingState("KRW-BTC", position = true))
+        val engine = createEngine(TradingProperties(intervalSeconds = 60))
+        engine.start(listOf("KRW-BTC", "KRW-ETH", "KRW-XRP"), states)
+        try {
+            withTimeout(5_000) { rateLimited.await() }
+            delay(300)
+
+            coVerify(exactly = 1) { upbitClient.getTicker(any()) }
+            coVerify(exactly = 0) { positionManager.persistPeak(any()) }
+        } finally {
+            engine.stop()
+        }
+    }
+
+    /** 마켓 하나가 틀리면(404) 묶음 전체가 실패한다. 그 라운드는 따로 받고, 따로도 모르는 마켓은 다음 묶음에서 뺀다. */
+    @Test
+    fun `틀린 마켓 하나로 묶음이 실패하면 따로 받고 그 마켓은 다음 묶음에서 뺀다`(): Unit = runBlocking {
+        val peaks = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        coEvery { positionManager.persistPeak(any()) } coAnswers { peaks[firstArg<TradingState>().ticker] = firstArg<TradingState>().peakPrice }
+        val notFound = UpbitApiException(404, "Code not found", null, "{}")
+        coEvery { upbitClient.getTicker("KRW-BTC,KRW-ETH,KRW-BAD") } throws notFound
+        coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(market = "KRW-BTC", tradePrice = 10.0))
+        coEvery { upbitClient.getTicker("KRW-ETH") } returns listOf(Ticker(market = "KRW-ETH", tradePrice = 20.0))
+        coEvery { upbitClient.getTicker("KRW-BAD") } throws notFound
+        val nextRound = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker("KRW-BTC,KRW-ETH") } coAnswers {
+            nextRound.complete(Unit)
+            listOf(Ticker(market = "KRW-BTC", tradePrice = 11.0), Ticker(market = "KRW-ETH", tradePrice = 21.0))
+        }
+        // KRW-BAD 는 보유가 없어 묶음에서 빠진 뒤로는 따로도 묻지 않는다.
+        val held = listOf("KRW-BTC", "KRW-ETH").associateWith { TradingState(it, position = true) }
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC", "KRW-ETH", "KRW-BAD"), held)
+        try {
+            withTimeout(5_000) { nextRound.await() }
+            val deadline = System.nanoTime() + 5_000_000_000
+            while (peaks["KRW-ETH"] != 21.0 && System.nanoTime() < deadline) delay(20)
+            delay(100)
+
+            coVerify(exactly = 1) { upbitClient.getTicker("KRW-BTC,KRW-ETH,KRW-BAD") }
+            coVerify(exactly = 1) { upbitClient.getTicker("KRW-BAD") }
+            assertTrue(peaks.keys.containsAll(listOf("KRW-BTC", "KRW-ETH")), peaks.toString())
+        } finally {
+            engine.stop()
+        }
+    }
+
+    /** 신선한 WS 시세가 있는 종목은 묶음에 넣지 않는다. */
+    @Test
+    fun `신선한 시세가 있는 종목은 REST 묶음에서 빠진다`(): Unit = runBlocking {
+        every { marketDataStore.getLatestTicker(any(), "ETH/KRW") } returns
+            NormalizedTicker(exchange = Exchange.UPBIT, market = "ETH/KRW", price = 5.0, timestamp = Instant.now())
+        val fetched = CompletableDeferred<String>()
+        coEvery { upbitClient.getTicker(any()) } coAnswers {
+            fetched.complete(firstArg())
+            firstArg<String>().split(",").map { Ticker(market = it, tradePrice = 1.0) }
+        }
+        val engine = createEngine(TradingProperties(intervalSeconds = 60))
+        engine.start(listOf("KRW-BTC", "KRW-ETH", "KRW-XRP"))
+        try {
+            assertEquals("KRW-BTC,KRW-XRP", withTimeout(5_000) { fetched.await() })
+        } finally {
             engine.stop()
         }
     }
