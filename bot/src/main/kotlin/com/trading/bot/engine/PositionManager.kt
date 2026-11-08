@@ -561,7 +561,9 @@ class PositionManager(
         }
         // 잠긴 코인은 풀려서 돌아올 수 있는데, 여기서 내리면 목록 밖이라 다시 편입할 길이 없다.
         if (account != null && account.lockedDouble() > 0.0) return
-        val held = account?.let { heldVolume(it, 0.0) } ?: 0.0
+        val free = account?.let { heldVolume(it, 0.0) } ?: 0.0
+        // 장부보다 많은 잔고는 소유자 코인이다. 장부 0 은 모름이라 잔고로 본다.
+        val held = if (state.holdVolume > VOLUME_EPSILON) minOf(state.holdVolume, free) else free
         if (!rules.isBelowMinOrder(held, currentPrice)) {
             state.holdVolume = held // 기록이 낡았다. 팔 수 있는 보유로 계속 관리한다
             return
@@ -690,7 +692,7 @@ class PositionManager(
             return null
         }
 
-        // 주문 수량은 state.holdVolume 이 아니라 거래소 실잔고를 쓴다.
+        // 주문 수량은 거래소 실잔고를 기준으로 하고, 소유자가 산 코인이 남을 때만 봇 장부로 줄인다.
         val account = try {
             findAccount(ticker.substringAfter("-"))
         } catch (e: CancellationException) {
@@ -719,14 +721,37 @@ class PositionManager(
             return null
         }
 
-        // free 전량을 거래소가 준 잔고 문자열 그대로 시장가로 판다.
-        val orderVolume = account!!.balance
+        // 봇 장부보다 free 가 팔 수 있을 만큼 많으면 그 차이는 소유자가 산 코인이라 장부까지만 판다.
+        // 차이가 최소주문 미만이면 같이 판다 — 남기면 누구도 팔 수 없는 자투리가 된다. 장부 0 은 모름이라 free 를 판다.
+        val book = state.holdVolume
+        val ownerCoinsLeft = book > VOLUME_EPSILON && sellable > book && !rules.isBelowMinOrder(sellable - book, currentPrice)
+        // free 를 팔 때는 거래소가 준 잔고 문자열을 그대로 쓴다.
+        val orderVolume = if (ownerCoinsLeft) rules.sellVolume(book) else account!!.balance
+        val volume = if (ownerCoinsLeft) orderVolume.toDouble() else sellable
         // 최소주문 미만이면 거래소가 매번 거절하므로 보내지 않는다.
-        if (rules.isDustVolume(sellable, currentPrice)) {
-            // 실측 수량을 남겨 dust 로 보고 진입을 열게 한다. 락이 풀려 free 가 돌아오면 다음 청산 판정에서 판다.
-            state.holdVolume = heldVolume(account, ourSellLockCeiling(state))
-            warnDustOnce(ticker, state, "%s × %.0f".format(orderVolume, currentPrice))
+        if (rules.isDustVolume(volume, currentPrice)) {
+            // dust 로 보고 진입을 열게 한다. 락이 풀려 free 가 돌아오면 다음 청산 판정에서 판다.
+            // 장부보다 많은 잔고는 소유자 코인이라 장부를 늘리지 않는다. 줄이는 것은 잔고 합(free+locked)이 장부보다
+            // 적을 때뿐이다 — 소유자 주문이 봇 코인을 잠근 동안 줄이면 풀린 뒤 그 코인을 소유자 것으로 본다.
+            // 장부가 없으면 실측 수량을 쓴다.
+            state.holdVolume = if (book > VOLUME_EPSILON) minOf(book, account!!.totalBalance()) else heldVolume(account!!, ourSellLockCeiling(state))
+            if (ownerCoinsLeft) {
+                // 팔 수 있는 잔고를 두고 청산을 내지 않는다. 그 잔고가 실은 봇 것(낡은 장부)이면 손절이 빠진 것이다.
+                if (!state.heldBackSellAlerted) {
+                    log.error(
+                        "{} 청산 보류 — 봇 장부 {} 가 최소 주문 미만이라 팔지 않고, 거래소 잔고 {} 의 나머지는 손으로 산 코인으로 본다. " +
+                            "봇이 산 코인이면 봇을 다시 시작해 잔고로 다시 맞춘다.",
+                        ticker, orderVolume, account.balance,
+                    )
+                    state.heldBackSellAlerted = true
+                }
+            } else {
+                warnDustOnce(ticker, state, "%s × %.0f".format(orderVolume, currentPrice))
+            }
             return null
+        }
+        if (ownerCoinsLeft) {
+            log.warn("Selling only the bot's {} of {} {} on the exchange — the rest was not bought by the bot", orderVolume, account!!.balance, ticker)
         }
         // [placeBuy] 와 같은 순서로, 정지 중이면 시작하지 않고 identifier 를 먼저 기록한 뒤 보낸다.
         currentCoroutineContext().ensureActive()
@@ -737,7 +762,7 @@ class PositionManager(
         val identifier = newOrderIdentifier()
         // 재시작하면 잔고와 평단이 비므로 청산 기록에 쓸 값을 주문 시점에 남긴다. 판단 가격도 남겨
         // reconcile 이 늦게 확정해도 이 가격으로 기록하고, 주문 전 free 는 응답 없는 주문의 흔적 판정에 쓴다.
-        state.beginSellOrder(identifier, reason, clock.instant(), sellable, currentPrice, sellable)
+        state.beginSellOrder(identifier, reason, clock.instant(), volume, currentPrice, sellable)
         // 매수와 같이 기록부터 체결 반영까지 취소가 끊지 못하게 한다.
         return withContext(NonCancellable) {
             // 기록 장애가 손절을 막으면 안 되므로 매수와 달리 기록이 실패해도 보낸다.
@@ -782,9 +807,9 @@ class PositionManager(
             try {
                 val filled = upbitClient.awaitFill(order.uuid, fillPoll)
                 if (filled?.state == "done") {
-                    // free 전량이 팔렸다. 남은 locked 는 우리 주문 것이 아니다.
+                    // 주문 수량이 다 팔렸다. 남은 free·locked 는 봇 것이 아니다.
                     completeSellAtomically(
-                        ticker, state, currentPrice, sellable, reason,
+                        ticker, state, currentPrice, volume, reason,
                         remaining = 0.0,
                         // 판단 가격과의 차이가 실행 슬리피지다.
                         executedVwap = filled.filledVwap(),

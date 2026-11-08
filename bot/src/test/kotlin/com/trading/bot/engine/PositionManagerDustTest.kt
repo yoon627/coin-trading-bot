@@ -199,8 +199,9 @@ class PositionManagerDustTest {
 
     @Test
     fun `selling dust sends nothing and warns once, and a later sellable balance sells normally`() = runTest {
-        coEvery { upbit.getAccounts() } returns listOf(btc("0.0001"))
-        val state = dust()
+        // 사용자 지정가가 봇 코인 대부분을 잠가 free 가 dust 다. 잠긴 동안에도 봇 장부는 줄지 않는다.
+        coEvery { upbit.getAccounts() } returns listOf(btc("0.0001").copy(locked = "0.0099"))
+        val state = dust().apply { holdVolume = 0.01 }
 
         repeat(3) { assertNull(manager.sell("KRW-BTC", state, price, SellReason.STOP_LOSS)) }
 
@@ -209,6 +210,7 @@ class PositionManagerDustTest {
         assertTrue(logsAt(Level.ERROR).isEmpty())
         assertEquals(1, logsAt(Level.WARN).count { "dust" in it.formattedMessage })
         assertTrue(state.position)
+        assertEquals(0.01, state.holdVolume)
 
         // 사용자 지정가가 풀려 free 가 돌아오면 다음 청산 사유에서 정상으로 판다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.01"))
@@ -284,8 +286,9 @@ class PositionManagerDustTest {
 
     @Test
     fun `a sellable balance is not released as dust`() = runTest {
+        // 기록이 dust 로 낡았어도 봇 장부 안의 잔고가 팔 수 있으면 내리지 않는다. 장부보다 많은 잔고는 소유자 코인이다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.01"))
-        val state = dust()
+        val state = dust().apply { holdVolume = 0.02 }
 
         manager.releaseDust("KRW-BTC", state, price)
 

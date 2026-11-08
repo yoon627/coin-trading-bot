@@ -49,4 +49,11 @@ class KrxMarketRulesTest {
         assertThat(rules.isBelowMinOrder(volume = 1.0, price = 100.0)).isFalse()
         assertThat(rules.isDust(TradingState("KRX-005930", position = true, holdVolume = 1.0), price = 100.0)).isFalse()
     }
+
+    // 매도 수량은 엔진 장부(Double)에서 오므로 주 단위로 내린다. 소수점이 붙으면 주문 어댑터가 거절한다.
+    @Test
+    fun `sell volume is whole shares rounded down`() {
+        assertThat(rules.sellVolume(3.0)).isEqualTo("3")
+        assertThat(rules.sellVolume(2.9999)).isEqualTo("2")
+    }
 }

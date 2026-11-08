@@ -38,7 +38,9 @@ sealed interface SellRecovery {
 
 /**
  * 체결된 주문을 장부 수량·평단으로 옮기는 방법. 실잔고를 다시 읽을지, 주문의 체결 내역만 믿을지가 거래소마다 다르다.
- * sell() 이 주문 직후 done 을 받으면 free 전량이 팔린 것이라 잔량 0 으로 확정하고 [sellRemainder] 를 거치지 않는다.
+ * sell() 이 주문 직후 done 을 받으면 주문 수량(free 전량, 또는 소유자 코인이 남을 때 봇 장부)이 다 팔린 것이라 잔량 0 으로 확정하고
+ * [sellRemainder] 를 거치지 않는다.
+ * 잔량·청산 판정은 주문 수량 기준이다 — 그보다 많은 잔고는 소유자가 산 코인이라 포지션으로 다시 잡지 않는다.
  */
 interface FillAccounting {
     /** [state] 는 아직 pending 매수를 들고 있다. [executedVolume] 은 이 주문의 체결 수량이다. */

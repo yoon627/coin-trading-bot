@@ -116,8 +116,9 @@ class PositionManagerSellCharacterizationTest {
             pendingSellTriggerPrice = 50_000_000.0
         }
         coEvery { upbit.getOrder("s-1") } returns Order(uuid = "s-1", state = "cancel", executedVolume = "0.0015")
-        // 남은 잔고를 '주문 수량 0.002 − 체결 0.0015 = 0.0005' 와 다르게 둬 잔고로 잔량을 정하는지 가른다.
-        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0007"))
+        // 남은 잔고를 '주문 수량 0.002 − 체결 0.0015 = 0.0005' 보다 적게 둬 잔고가 잔량을 줄이는지 가른다.
+        // 많을 때는 주문 수량 밖의 코인이라 잔량에 넣지 않는다(PositionManagerSellOwnBookTest).
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0003"))
 
         val record = manager.reconcilePendingSell("KRW-BTC", state, 49_000_000.0)
 
@@ -129,7 +130,7 @@ class PositionManagerSellCharacterizationTest {
         assertEquals(50_000_000.0, record?.price) // 판단 가격
         assertEquals("TRAILING_STOP", record?.reason)
         assertTrue(state.position)
-        assertEquals(0.0007, state.holdVolume)
+        assertEquals(0.0003, state.holdVolume)
         assertFalse(state.hasPendingSell())
     }
 
