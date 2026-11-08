@@ -46,7 +46,7 @@ class TradingController(
 
     // UserTradingManager 는 전제 조건 실패를 {"error": ...} 로 돌려준다. 클라이언트가 상태 코드로 분기하도록 4xx 로 바꾸고,
     // code 가 있으면 문구보다 먼저 본다.
-    private fun failOnError(result: Map<String, Any>): Map<String, Any> {
+    private fun <M : Map<String, Any?>> failOnError(result: M): M {
         result["error"]?.let { msg ->
             val status = when {
                 result["code"] == UserTradingManager.CONFLICT_CODE -> HttpStatus.CONFLICT
@@ -65,8 +65,23 @@ class TradingController(
     }
 
     @GetMapping("/bot/status")
-    suspend fun getStatus(@RequestParam(required = false) exchange: String? = null): Map<String, Any> {
-        return managerFor(exchange).getStatus(currentUserId())
+    suspend fun getStatus(@RequestParam(required = false) exchange: String? = null): Map<String, Any?> {
+        val manager = managerFor(exchange)
+        val userId = currentUserId()
+        manager.loadEntriesPause(userId)
+        return manager.getStatus(userId)
+    }
+
+    /** 신규 매수만 멈추거나 다시 연다. 봇은 계속 돌고 손절·청산 매도는 그대로 낸다. */
+    @PostMapping("/bot/entries")
+    suspend fun setEntriesPaused(
+        @RequestBody request: EntriesPauseRequest,
+        @RequestParam(required = false) exchange: String? = null,
+    ): Map<String, Any?> {
+        // 빠진 Boolean 을 false 로 읽으면 "중지" 요청이 "재개"로 바뀔 수 있어 null 로 받아 거절한다.
+        val paused = request.paused ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "paused (true|false) is required")
+        val manager = managerFor(exchange)
+        return failOnError(persisting { manager.setEntriesPaused(currentUserId(), paused) })
     }
 
     @PostMapping("/bot/halt/clear")
@@ -189,5 +204,6 @@ private inline fun <T> persisting(block: () -> T): T =
 data class StartBotRequest(val tickers: List<String>? = null)
 data class ClearHaltRequest(val ticker: String)
 data class ClearPendingRequest(val ticker: String, val side: String)
+data class EntriesPauseRequest(val paused: Boolean? = null)
 data class UserSettingsRequest(val discordWebhookUrl: String? = null)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)

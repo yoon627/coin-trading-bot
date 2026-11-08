@@ -24,13 +24,16 @@ import io.mockk.slot
 import io.mockk.spyk
 import io.mockk.verify
 import java.time.Duration
+import java.time.Instant
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Flux
@@ -261,6 +264,163 @@ class UserTradingManagerExchangeRuntimeTest {
 
         assertSame(client, manager.queryClient(upbitUser))
         assertTrue(manager.createUpbitClient(upbitUser) is UpbitClientImpl)
+    }
+
+    /** 저장한 행을 다음 조회가 돌려주는 bot_state 한 행짜리 DB. */
+    private fun storedRow(initial: BotStateEntity?): MutableList<BotStateEntity> {
+        val saves = mutableListOf<BotStateEntity>()
+        var current = initial
+        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } answers { Mono.justOrEmpty(current) }
+        every { botStateRepository.save(any()) } answers {
+            current = firstArg()
+            saves += firstArg<BotStateEntity>()
+            Mono.just(firstArg())
+        }
+        return saves
+    }
+
+    // 켜도 도는 엔진에 반영되지 않으면 스위치가 켜진 것처럼 보이면서 매수가 계속 나간다.
+    @Test
+    fun `an engine built before the switch reads it on every buy`() = runTest {
+        val plain = newManager()
+        @Suppress("UNCHECKED_CAST")
+        val entriesPaused = field(field(plain.createEngine(user), "positionManager")!!, "entriesPaused") as () -> Boolean
+        storedRow(row("KIS_PAPER", running = true))
+
+        // 저장된 값을 읽지 않은 채 뜬 엔진은 사지 않는다.
+        assertTrue(entriesPaused())
+        plain.loadEntriesPause(1L)
+        assertFalse(entriesPaused())
+        plain.setEntriesPaused(1L, true)
+        assertTrue(entriesPaused())
+        plain.setEntriesPaused(1L, false)
+        assertFalse(entriesPaused())
+    }
+
+    @Test
+    fun `pausing saves the flag on this exchange's row and status shows it`() = runTest {
+        val saves = storedRow(row("KIS_PAPER", running = false))
+
+        val result = manager.setEntriesPaused(1L, true)
+
+        val saved = saves.single()
+        assertTrue(saved.entriesPaused)
+        assertFalse(saved.running)
+        assertNotNull(saved.entriesPausedChangedAt)
+        assertEquals(true, result["entries_paused"])
+        assertEquals(true, manager.getStatus(1L)["entries_paused"])
+        assertEquals(saved.entriesPausedChangedAt.toString(), manager.getStatus(1L)["entries_paused_changed_at"])
+        // 같은 값은 다시 쓰지 않아 바뀐 시각이 그대로다.
+        manager.setEntriesPaused(1L, true)
+        assertEquals(1, saves.size)
+        verifyNoUpbitRowTouched()
+    }
+
+    @Test
+    fun `a failed save leaves the switch as it was`() = runTest {
+        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.just(row("KIS_PAPER", running = true))
+        every { botStateRepository.save(any()) } returns Mono.error(RuntimeException("db down"))
+        manager.loadEntriesPause(1L)
+
+        assertThrows(BotControlPersistFailedException::class.java) { runBlocking { manager.setEntriesPaused(1L, true) } }
+
+        assertFalse(manager.entriesPaused(1L))
+    }
+
+    @Test
+    fun `a save that never finishes times out and leaves the switch as it was`() = runTest {
+        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.just(row("KIS_PAPER", running = true))
+        every { botStateRepository.save(any()) } returns Mono.never()
+        manager.loadEntriesPause(1L)
+
+        val error = runCatching { manager.setEntriesPaused(1L, true) }.exceptionOrNull()
+
+        assertTrue(error is BotControlPersistFailedException, error.toString())
+        assertFalse(manager.entriesPaused(1L))
+    }
+
+    // 상태 조회는 lock 없이 읽으므로 그사이 저장된 값을 덮으면 엔진이 중지를 놓친다.
+    @Test
+    fun `a status read that started before a pause does not undo it`() = runTest {
+        val saves = storedRow(row("KIS_PAPER", running = false))
+        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } answers {
+            val stale = row("KIS_PAPER", running = false)
+            runBlocking { manager.setEntriesPaused(1L, true) }
+            Mono.just(stale)
+        } andThenAnswer { Mono.justOrEmpty(saves.lastOrNull()) }
+
+        manager.loadEntriesPause(1L)
+
+        assertTrue(manager.entriesPaused(1L))
+        assertEquals(true, manager.getStatus(1L)["entries_paused"])
+    }
+
+    @Test
+    fun `pausing a user who never started a bot creates a stopped row`() = runTest {
+        val saves = storedRow(null)
+
+        manager.setEntriesPaused(1L, true)
+
+        val saved = saves.single()
+        assertEquals(1L, saved.userId)
+        assertEquals("KIS_PAPER", saved.exchange)
+        assertFalse(saved.running)
+        assertTrue(saved.entriesPaused)
+    }
+
+    @Test
+    fun `a stopped user's saved pause shows in status after a restart`() = runTest {
+        val changedAt = Instant.parse("2026-11-07T00:00:00Z")
+        storedRow(row("KIS_PAPER", running = false).copy(entriesPaused = true, entriesPausedChangedAt = changedAt))
+
+        manager.loadEntriesPause(1L)
+
+        assertEquals(true, manager.getStatus(1L)["entries_paused"])
+        assertEquals("2026-11-07T00:00:00Z", manager.getStatus(1L)["entries_paused_changed_at"])
+    }
+
+    @Test
+    fun `status says unknown when the saved pause cannot be read`() = runTest {
+        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.error(RuntimeException("db down"))
+
+        manager.loadEntriesPause(1L)
+
+        assertTrue(manager.getStatus(1L).containsKey("entries_paused"))
+        assertNull(manager.getStatus(1L)["entries_paused"])
+    }
+
+    @Test
+    fun `start, stop and restore keep a saved pause and load it before the engine runs`() = runTest {
+        val saves = storedRow(row("KIS_PAPER", running = false).copy(entriesPaused = true))
+        every { userRepository.findById(1L) } returns Mono.just(user)
+        every { userSecretsService.decryptUserSecrets(user) } returns user
+        coEvery { tradingStateService.loadStates(1L, any()) } returns emptyMap()
+        val pausedAtEngineStart = mutableListOf<Boolean>()
+        coEvery { engine.start(any(), any()) } answers { pausedAtEngineStart += manager.entriesPaused(1L) }
+        every { engine.isRunning() } returns false
+
+        manager.startBot(1L, null)
+        manager.stopBot(1L)
+        every { botStateRepository.findByRunningTrueAndExchange("KIS_PAPER") } returns Flux.just(row("KIS_PAPER", running = true))
+        val restarted = spyk(newManager()).also { every { it.createEngine(any()) } returns engine }
+        coEvery { engine.start(any(), any()) } answers { pausedAtEngineStart += restarted.entriesPaused(1L) }
+        saves.last().let { every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.just(it.copy(running = true)) }
+        restarted.restoreAllRunningBots()
+
+        assertEquals(listOf(true, false), saves.map { it.running })
+        assertTrue(saves.all { it.entriesPaused }, saves.toString())
+        assertEquals(listOf(true, true), pausedAtEngineStart)
+    }
+
+    @Test
+    fun `pausing is refused once shutdown has begun`() = runTest {
+        storedRow(row("KIS_PAPER", running = false))
+        manager.stop()
+
+        val result = manager.setEntriesPaused(1L, true)
+
+        assertTrue(result.containsKey("error"), result.toString())
+        verify(exactly = 0) { botStateRepository.save(any()) }
     }
 
     private fun field(target: Any, name: String): Any? =
