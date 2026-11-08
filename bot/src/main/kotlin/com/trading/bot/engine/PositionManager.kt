@@ -34,6 +34,7 @@ import com.trading.common.strategy.ExitGates
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDateTime
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -63,11 +64,16 @@ class PositionManager(
     unknownOrderPolicy: UnknownOrderPolicy = UnknownOrderPolicy.UPBIT,
     /** 운영 안내 문구에 넣는 거래소 이름. */
     private val displayName: String = "Upbit",
+    /** 소유자가 신규 매수를 멈췄는지. 매수마다 다시 읽어 도는 엔진에도 바로 적용된다. */
+    private val entriesPaused: () -> Boolean = { false },
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     // 못 찾은 이력의 수명이 이 엔진과 같아야 해서 주입하지 않고 여기서 만든다.
     private val unknownOrders = UnknownOrderResolver(upbitClient, clock, unknownOrderPolicy, displayName)
+
+    // 중지 동안 매 tick 같은 로그가 쌓이지 않게 종목마다 한 번만 남긴다. 열린 상태에서 매수를 보면 비운다.
+    private val pausedSkipLogged = ConcurrentHashMap.newKeySet<String>()
 
     private suspend fun findAccount(currency: String): Account? =
         upbitClient.getAccounts().find { it.currency == currency }
@@ -106,6 +112,15 @@ class PositionManager(
             state.unsynced = true
             log.warn("Failed to sync position for {}: {}", ticker, e.message)
         }
+    }
+
+    private fun skipWhileEntriesPaused(ticker: String): Boolean {
+        if (!entriesPaused()) {
+            if (pausedSkipLogged.isNotEmpty()) pausedSkipLogged.clear()
+            return false
+        }
+        if (pausedSkipLogged.add(ticker)) log.info("Skip buy for {}: new entries paused by the owner", ticker)
+        return true
     }
 
     /** 매수 진입 가드. dust 를 흡수하는 매수만 [allowExisting] 으로 기존 보유를 허용한다. */
@@ -148,6 +163,8 @@ class PositionManager(
         strategyName: String,
     ): TradeRecord? {
         // 팔 수 없는 dust 는 진입을 막지 않는다. 사면 합쳐서 새 포지션이 되고, 아래에서 실잔고로 다시 확인한다.
+        // 잔고 조회(비공개 REST)와 재동기화보다 먼저 본다. 중지 중에도 매수 신호는 매 tick 나온다.
+        if (skipWhileEntriesPaused(ticker)) return null
         val onDust = rules.isDust(state, currentPrice)
         if (entryBlocked(ticker, state, allowExisting = onDust)) return null
         val accounts = try {
@@ -215,6 +232,8 @@ class PositionManager(
             log.debug("Skip buy for {}: order gate closed", ticker)
             return null
         }
+        // 잔고 조회 동안 중지가 켜졌을 수 있다. 여기서 막으면 pending 을 남기지 않는다.
+        if (skipWhileEntriesPaused(ticker)) return null
         val identifier = newOrderIdentifier()
         // 체결 확인 전에 재시작해도 이전 진입 정보가 이어지지 않도록 진입 메타를 지우고 pending 을 기록한다.
         // dust 흡수일 때도 수량은 두고 메타만 지운다. 체결이 확정되면 실잔고로 덮어쓴다.

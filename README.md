@@ -108,7 +108,8 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | GET | `/api/user/me` | 내 정보 |
 | POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
 | POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`) |
-| GET | `/api/bot/status` | 봇 상태, 매매 루프 생존(`loop`), 포지션, 미해소 주문 (`exchange`) |
+| GET | `/api/bot/status` | 봇 상태, 매매 루프 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션, 미해소 주문 (`exchange`) |
+| POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
 | POST | `/api/bot/halt/clear` | 종목 halt 해제 (`exchange`) |
 | POST | `/api/bot/pending/clear` | 미해소 주문 기록 삭제(봇 정지 상태에서만) (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
@@ -121,6 +122,17 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 `/api/kis/keys`는 `KIS_TRADING_ENABLED=true`일 때만 있다(꺼져 있으면 404). 세 값은 `APP_ENCRYPTION_SECRET`으로 각각 암호화해 `user_broker_keys`에 두고, 응답에는 앱키·앱시크릿을 어떤 형태로도 내지 않는다. 앱키는 128자, 앱시크릿은 512자 이하의 공백 없는 ASCII, 계좌번호는 `12345678-01` 또는 `1234567801`이다. 형식이 틀리거나 경로가 `KIS_PAPER`·`KIS`가 아니면 400, `KIS_TRADING_LIVE_ENABLED=false`에서 실전(`KIS`) 키를 저장하면 409, DB 가 10초 안에 답하지 않거나 DB 오류면 503 이다(저장 요청이었다면 반영됐는지 상태 조회로 확인한다). 삭제는 실전 키도 받는다. 저장·삭제 뒤 그 환경의 매니저가 등록돼 있으면 도는 엔진이 키를 다시 읽는다. 지금은 KIS 매니저가 없어 저장·삭제만 한다. 다시 읽기에 실패하면 503 이고 저장·삭제는 이미 반영된 상태다. `APP_ENCRYPTION_SECRET`을 바꾸면 저장된 KIS 키를 복호화하지 못하므로 키를 다시 저장한다. 그때 상태 조회는 `configured: true`에 `account: null`로 보인다.
 
 `running` 은 시작·정지 상태이고, 매매 루프가 실제로 도는지는 `loop` 로 본다 — `alive`(루프가 정지 없이 끝나지 않았는지 — 봇이 정지돼 있으면 false)와 `last_progress_at`(시작·종목 처리·한 바퀴 끝·오류 재시도 때 남기는 마지막 진행 시각, UTC, 정지돼 있으면 null). 매 바퀴 오류로 끝나는 루프도 진행으로 보이지만 그때는 1분마다 오류 ERROR 가 따로 나간다. 루프가 정지 없이 끝나면 바로 `[ENGINE DEAD]`, 5분 넘게 진행이 없으면 `[ENGINE STALLED]` ERROR(Discord)가 한 번 나간다(회복하면 INFO). 둘 다 그 사용자의 손절·청산 평가가 멈췄다는 뜻이라 봇을 정지한 뒤 다시 시작하고, 정지가 끝나지 않으면 컨테이너를 재시작한다. 설정 저장도 엔진을 새로 띄운다.
+
+### 신규 매수 중지
+
+급락장·상장폐지 공지·거래소 장애 직후처럼 새로 사지는 말고 보유분은 계속 관리해야 할 때 `POST /api/bot/entries {"paused": true}` 로 신규 매수만 멈춘다. 봇은 계속 돌고 손절·익절·트레일링·보유 기한 매도와 미해소 주문 확정은 그대로 한다. `{"paused": false}` 로 다시 연다.
+
+- 다음 매수부터 적용된다. 이미 주문 단계에 들어간 매수는 끝까지 간다.
+- 값은 `bot_state` 에 사용자·거래소별로 저장돼 봇 정지·시작, 설정 저장, 재시작·배포 뒤에도 유지된다. 봇을 한 번도 시작하지 않았어도 켤 수 있고, 그러면 다음 시작부터 적용된다.
+- `GET /api/bot/status` 의 `entries_paused`(읽지 못했으면 null)와 `entries_paused_changed_at`(마지막으로 바뀐 시각, UTC)으로 확인한다. 같은 값을 다시 보내면 시각은 바뀌지 않는다.
+- `paused` 가 빠졌거나 참·거짓으로 읽을 수 없는 값이면 400 이다. 저장이 실패하면 503 이고 값은 바뀌지 않는다. 저장이 10초 안에 끝나지 않아도 503 인데, 이때는 DB 에 반영됐는지 알 수 없으니 상태를 확인하고 같은 요청을 다시 보낸다(같은 값이면 저장된 값을 그대로 적용한다). 봇 정지·설정 저장이 진행 중이면 그것이 끝날 때까지 기다린다.
+- DB 를 SQL 로 직접 고친 값은 재시작 전까지 도는 봇에 반영되지 않는다. API 를 쓴다.
+- V32 이전 이미지로 앱을 롤백하면 이 값을 읽지 않아 매수가 다시 나간다. 롤백할 때는 봇을 정지한다.
 
 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
 
@@ -210,7 +222,7 @@ V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건
 
 - V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 `deploy.sh` 의 자동 롤백 하한은 V30 그대로다.
 - 다만 V31 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 V31 적용 여부와 관계없이 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백해도 되고, `V31_down.sql` 은 필요 없다.
-- V30 이전으로 내려가야 하면 `V31_down.sql` 을 먼저 돌리고 위 V30 절차를 따른다. `V30_down.sql` 은 V30 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- V30 이전으로 내려가야 하면 (V32 가 적용돼 있으면 `V32_down.sql` 부터) `V31_down.sql` 을 먼저 돌리고 위 V30 절차를 따른다. `V30_down.sql` 은 V30 뒤에 적용된 마이그레이션이 있으면 멈춘다.
 - 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V31_down.sql` 을 쓴다. 저장된 KIS 앱키·앱시크릿·계좌번호가 모두 사라져 사용자가 다시 넣어야 한다. V31 이 마지막 적용 버전일 때만 돌고, 아니면 아무것도 바꾸지 않고 멈춘다. 테이블과 `flyway_schema_history` 의 V31 행을 한 트랜잭션으로 지우므로, 이후 V31 이 든 이미지를 올리면 테이블을 다시 만든다.
   ```bash
   cd /opt/app
@@ -223,4 +235,19 @@ V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건
   ```bash
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
     -c "DELETE FROM user_broker_keys WHERE user_id = <사용자 id> AND exchange = '<환경>'"
+  ```
+
+### V32 (신규 매수 중지)
+
+V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_at` 칼럼만 더한다. 기존 행은 중지되지 않은 상태로 읽히며 사전 점검 쿼리는 없다. 배포 직전 백업은 V31 과 같다.
+
+- V31 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 다만 그 이미지는 중지 값을 읽지 않아 켜 둔 중지가 풀린 것처럼 매수가 나가므로, 롤백했으면 봇을 정지한다.
+- V32 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V32_down.sql` 은 필요 없다.
+- V31 이전으로 내려가야 하면 `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V32_down.sql` 을 쓴다. 켜 둔 중지 값이 함께 사라진다. V32 가 마지막 적용 버전일 때만 돌고, 칼럼과 `flyway_schema_history` 의 V32 행을 한 트랜잭션으로 지운다. 백업 조건은 V31 down 과 같다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V32_down.sql
+  APP_VERSION=<V32 이전 SHA> docker compose up -d --pull missing
   ```

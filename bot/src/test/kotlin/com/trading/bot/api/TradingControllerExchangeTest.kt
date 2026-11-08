@@ -3,6 +3,7 @@ package com.trading.bot.api
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.TradeSide
+import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
@@ -12,6 +13,7 @@ import com.trading.bot.security.UserSecretsService
 import com.trading.common.domain.Exchange
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -174,5 +176,37 @@ class TradingControllerExchangeTest {
         client.post("/api/user/settings", mapOf("discordWebhookUrl" to "https://discord.com/api/webhooks/1/token"))
             .expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
         coVerify(exactly = 3) { paper.reloadUserRuntime(1L) }
+    }
+
+    @Test
+    fun `신규 매수 중지는 paused 값을 그대로 넘기고 빠지거나 틀린 값은 400 이다`() {
+        coEvery { upbit.setEntriesPaused(1L, any()) } returns mapOf("status" to "ok")
+        val client = client()
+
+        client.post("/api/bot/entries", mapOf("paused" to true)).expectStatus().isOk
+        client.post("/api/bot/entries", mapOf("paused" to false)).expectStatus().isOk
+        client.post("/api/bot/entries", emptyMap<String, Any>()).expectStatus().isBadRequest
+        client.post("/api/bot/entries", mapOf("paused" to "yes")).expectStatus().isBadRequest
+
+        coVerify(exactly = 1) { upbit.setEntriesPaused(1L, true) }
+        coVerify(exactly = 1) { upbit.setEntriesPaused(1L, false) }
+    }
+
+    @Test
+    fun `신규 매수 중지 저장이 실패하면 503 이다`() {
+        coEvery { upbit.setEntriesPaused(1L, true) } throws BotControlPersistFailedException("저장 실패", RuntimeException("db down"))
+
+        client().post("/api/bot/entries", mapOf("paused" to true)).expectStatus().isEqualTo(HttpStatus.SERVICE_UNAVAILABLE)
+    }
+
+    // 재시작 뒤 정지된 봇은 엔진이 없어 저장된 값을 먼저 읽어야 화면이 DB 와 같다.
+    @Test
+    fun `상태 조회는 저장된 신규 매수 중지를 먼저 읽는다`() {
+        client().get().uri("/api/bot/status").exchange().expectStatus().isOk
+
+        coVerifyOrder {
+            upbit.loadEntriesPause(1L)
+            upbit.getStatus(1L)
+        }
     }
 }

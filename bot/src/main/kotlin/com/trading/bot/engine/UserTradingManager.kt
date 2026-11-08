@@ -20,6 +20,7 @@ import com.trading.bot.persistence.ShadowExitObservationRepository
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.domain.Exchange
 import com.trading.common.strategy.TradingStrategy
+import java.time.Instant
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -85,6 +86,11 @@ class UserTradingManager(
     @Volatile private var restoreAborted = false
     // 재시도를 다 쓰고 복원하지 못한 사용자. 그 사용자를 손으로 시작하거나 멈추면 빠진다.
     private val restoreFailedUsers: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    // 엔진이 매수마다 읽으므로 저장이 끝난 값만 넣는다. 없는 사용자는 아직 행을 읽지 않은 것이다.
+    private val entriesPauses = ConcurrentHashMap<Long, EntriesPause>()
+
+    private data class EntriesPause(val paused: Boolean, val changedAt: Instant?)
 
     /** 기동 복원의 결과. 배포 판정(health)이 읽는다. */
     val restoreStatus: RestoreStatus
@@ -252,6 +258,7 @@ class UserTradingManager(
         try {
             val state = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
             if (state == null || !state.running) return@withLock true
+            rememberEntriesPause(userId, state)
             val user = userRepository.findById(userId).awaitSingleOrNull() ?: return@withLock true
             if (!runtime.canRestore(user)) return@withLock true
             val tickers = state.tickers.split(",").map { it.trim() }.filter { it.isNotEmpty() }
@@ -292,6 +299,8 @@ class UserTradingManager(
 
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val initialStates = loadInitialStates(userId)
+        // 엔진이 첫 매수를 보기 전에 저장된 중지를 읽는다. 읽지 못하면 다른 DB 실패처럼 시작하지 않는다.
+        rememberEntriesPause(userId, botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull())
         val engine = registerNewEngine(userId, decryptedUser)
 
         val tickerList = tickers ?: runtime.profile.tickerList()
@@ -365,8 +374,63 @@ class UserTradingManager(
     /** 감시용. 맵에는 정지된 채 남은 엔진도 있어 도는 것만 낸다. */
     internal fun liveEngines(): Map<Long, TradingEngine> = engines.filterValues { it.isRunning() }
 
-    fun getStatus(userId: Long): Map<String, Any> {
+    /** 상태 조회 전에 부른다. 재시작 뒤 정지된 봇은 엔진이 없어 저장된 중지를 따로 읽어야 한다. */
+    suspend fun loadEntriesPause(userId: Long) {
+        if (entriesPauses.containsKey(userId)) return
+        try {
+            val row = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
+            // lock 없이 읽으므로 그사이 저장된 새 값을 덮지 않게 빈 칸만 채운다.
+            entriesPauses.putIfAbsent(userId, entriesPauseOf(row))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("user {} 의 신규 매수 중지 상태를 읽지 못했다: {}", userId, e.message)
+        }
+    }
+
+    // 시작·복원은 엔진을 띄우기 전에 값을 채운다. 값이 없는 엔진은 채우는 경로를 빠뜨린 것이라 매수를 막는다.
+    internal fun entriesPaused(userId: Long): Boolean = entriesPauses[userId]?.paused != false
+
+    private fun rememberEntriesPause(userId: Long, row: BotStateEntity?) {
+        entriesPauses[userId] = entriesPauseOf(row)
+    }
+
+    private fun entriesPauseOf(row: BotStateEntity?) = EntriesPause(row?.entriesPaused ?: false, row?.entriesPausedChangedAt)
+
+    /**
+     * 신규 매수만 멈추거나 다시 연다. 매도·reconcile 은 그대로 돈다. 이미 주문 단계에 들어간 매수는 끝까지 간다.
+     * 저장이 끝난 뒤에만 엔진이 보는 값을 바꾼다 — 저장 없이 켜면 재시작 때 조용히 풀린다.
+     */
+    suspend fun setEntriesPaused(userId: Long, paused: Boolean): Map<String, Any?> = lockFor(userId).withLock {
+        if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
+        val saved = persistOrFail(userId, ENTRIES_UNPERSISTED_MESSAGE) {
+            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { saveEntriesPaused(userId, paused) } ?: throw IllegalStateException("bot_state 저장 시간 초과")
+        }
+        val previous = entriesPauses.put(userId, EntriesPause(saved.entriesPaused, saved.entriesPausedChangedAt))
+        if (previous?.paused != paused) log.info("user {} 신규 매수 {} ({})", userId, if (paused) "중지" else "재개", exchangeKey)
+        mapOf(
+            "status" to if (paused) "entries_paused" else "entries_resumed",
+            "entries_paused" to saved.entriesPaused,
+            "entries_paused_changed_at" to saved.entriesPausedChangedAt?.toString(),
+        )
+    }
+
+    /** 같은 값이면 쓰지 않아 바뀐 시각이 남는다. 행이 없으면 정지된 행을 만들어 다음 시작부터 적용한다. */
+    private suspend fun saveEntriesPaused(userId: Long, paused: Boolean): BotStateEntity {
+        val existing = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
+        if (existing != null && existing.entriesPaused == paused) return existing
+        val now = Instant.now()
+        val row = existing?.copy(entriesPaused = paused, entriesPausedChangedAt = now, updatedAt = LocalDateTime.now())
+            ?: BotStateEntity(
+                userId = userId, exchange = exchangeKey, running = false, strategy = strategy.name,
+                tickers = runtime.profile.tickers, entriesPaused = paused, entriesPausedChangedAt = now,
+            )
+        return botStateRepository.save(row).awaitSingle()
+    }
+
+    fun getStatus(userId: Long): Map<String, Any?> {
         val engine = engines[userId]
+        val pause = entriesPauses[userId]
         // 맵에는 정지된 채 남은 엔진이 있을 수 있으므로 목록은 도는 엔진에서만 읽는다.
         val live = engine?.takeIf { it.isRunning() }
         return mapOf(
@@ -400,6 +464,9 @@ class UserTradingManager(
                 )
             } ?: emptyList<Map<String, Any?>>()),
             "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
+            // 저장된 값을 읽지 못했으면 null 이다.
+            "entries_paused" to pause?.paused,
+            "entries_paused_changed_at" to pause?.changedAt?.toString(),
         )
     }
 
@@ -608,8 +675,9 @@ class UserTradingManager(
         val parts = if (runtime === upbitRuntime) upbitRuntime.partsFor(createUpbitClient(user)) else runtime.partsFor(user)
         val client = parts.client
         // 상태 저장과 거래 기록은 한 트랜잭션으로 커밋하고 알림은 커밋 뒤에만 보낸다.
+        val userId = user.id!!
         val positionManager = PositionManager(
-            client, parts.profile, tradingStateService, user.id!!,
+            client, parts.profile, tradingStateService, userId,
             commitFill = { persistState, record ->
                 tradeExecutionService.commitFill(persistState, record)
             },
@@ -624,6 +692,7 @@ class UserTradingManager(
             errorClassifier = parts.errorClassifier,
             unknownOrderPolicy = parts.unknownOrderPolicy,
             displayName = parts.displayName,
+            entriesPaused = { entriesPaused(userId) },
         )
         val dailyResetManager = DailyResetManager(parts.profile, userId = user.id!!, calendar = parts.calendar)
 
@@ -769,6 +838,8 @@ class UserTradingManager(
 
         private const val RESTORE_MAX_ATTEMPTS = 5
         // 저장하지 않은 "Service is shutting down" 과 달리 재시작 때 봇이 다시 뜬다.
+        private const val ENTRIES_UNPERSISTED_MESSAGE =
+            "신규 매수 중지 설정을 저장하지 못해 바꾸지 않았습니다. 잠시 후 다시 시도하세요."
         internal const val START_SAVED_SHUTTING_DOWN_MESSAGE =
             "Service is shutting down — the start is saved and the bot resumes after the restart"
         private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L

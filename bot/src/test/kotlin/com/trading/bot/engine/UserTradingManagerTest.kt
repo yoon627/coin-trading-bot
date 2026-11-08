@@ -989,6 +989,23 @@ class UserTradingManagerTest {
         return mockk<TradingEngine>(relaxed = true).also { every { manager.createEngine(decrypted) } returns it }
     }
 
+    // reload 는 엔진을 새로 만들지만 중지 값은 매니저에 남아 새 엔진의 매수 확인도 같은 값을 읽는다.
+    @Test
+    fun `a reload keeps the owner's pause for the replacement engine`() = runTest {
+        runningEngineToReload()
+        stoppableRow()
+        val saved = user(1L)
+        every { userRepository.findById(1L) } returns Mono.just(saved)
+        val replacement = newEngineFromSavedKeys(saved)
+        coEvery { tradingStateService.loadStates(1L, any()) } returns emptyMap()
+        manager.setEntriesPaused(1L, true)
+
+        manager.reloadUserRuntime(1L)
+
+        assertSame(replacement, engines()[1L])
+        assertTrue(manager.entriesPaused(1L))
+    }
+
     @Test
     fun `reload records the old engine's pending before reading the database`() = runTest {
         runningEngineToReload()

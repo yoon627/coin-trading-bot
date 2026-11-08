@@ -55,8 +55,14 @@ class PositionManagerSeamTest {
         override suspend fun recoverSellWithoutOrder(ticker: String, state: TradingState) = SellRecovery.Unsupported
     }
 
-    private fun manager(gate: OrderGate = OrderGate.OPEN, fillAccounting: FillAccounting = BalanceFillAccounting(upbit)) =
-        PositionManager(upbit, TradingProperties(), stateService, 1L, commitFill = ::commit, orderGate = gate, fillAccounting = fillAccounting)
+    private fun manager(
+        gate: OrderGate = OrderGate.OPEN,
+        fillAccounting: FillAccounting = BalanceFillAccounting(upbit),
+        entriesPaused: () -> Boolean = { false },
+    ) = PositionManager(
+        upbit, TradingProperties(), stateService, 1L, commitFill = ::commit, orderGate = gate, fillAccounting = fillAccounting,
+        entriesPaused = entriesPaused,
+    )
 
     private suspend fun commit(persistState: suspend () -> Unit, record: TradeRecord): Boolean {
         persistState()
@@ -88,6 +94,47 @@ class PositionManagerSeamTest {
         assertFalse(state.hasPendingSell())
         coVerify(exactly = 0) { stateService.upsert(any(), any()) }
         coVerify(exactly = 0) { upbit.placeOrder(any()) }
+    }
+
+    // 급락장에서 켜는 스위치라 매 tick 매수 신호마다 잔고 조회(비공개 REST)가 나가면 안 된다.
+    @Test
+    fun `paused entries stop the buy before the balance call and the next buy reads the switch again`() = runTest {
+        coEvery { upbit.getAccounts() } returns listOf(krw())
+        var paused = true
+        val manager = manager(entriesPaused = { paused })
+        val state = TradingState("KRW-BTC")
+
+        assertNull(manager.buy("KRW-BTC", state, 50_000_000.0, "test"))
+        assertFalse(state.hasPendingBuy())
+        assertFalse(state.unsynced)
+        coVerify(exactly = 0) { upbit.getAccounts() }
+        coVerify(exactly = 0) { upbit.placeOrder(any()) }
+
+        paused = false
+        manager.buy("KRW-BTC", state, 50_000_000.0, "test")
+        coVerify(exactly = 1) { upbit.placeOrder(match { it.side == "bid" }) }
+    }
+
+    @Test
+    fun `entries paused after the balance call still stop the order before any pending is recorded`() = runTest {
+        var paused = false
+        coEvery { upbit.getAccounts() } coAnswers { paused = true; listOf(krw()) }
+        val state = TradingState("KRW-BTC")
+
+        assertNull(manager(entriesPaused = { paused }).buy("KRW-BTC", state, 50_000_000.0, "test"))
+
+        assertFalse(state.hasPendingBuy())
+        coVerify(exactly = 0) { stateService.upsert(any(), any()) }
+        coVerify(exactly = 0) { upbit.placeOrder(any()) }
+    }
+
+    @Test
+    fun `paused entries still let a stop-loss sell through`() = runTest {
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.001"))
+
+        manager(entriesPaused = { true }).sell("KRW-BTC", holding(), 50_000_000.0, SellReason.STOP_LOSS)
+
+        coVerify(exactly = 1) { upbit.placeOrder(match { it.side == "ask" }) }
     }
 
     @Test
