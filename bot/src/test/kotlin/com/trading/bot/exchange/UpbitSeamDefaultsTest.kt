@@ -126,4 +126,14 @@ class UpbitSeamDefaultsTest {
         assertEquals(FillPollPolicy(FILL_POLL_ATTEMPTS, FILL_POLL_DELAY_MS), FillPollPolicy.UPBIT)
         assertEquals(UnknownOrderPolicy(2, Duration.ofSeconds(60), supportsClientOrderId = true), UnknownOrderPolicy.UPBIT)
     }
+
+    // Double 의 toString 은 작은 수를 "1.0E-5" 로 써서 거래소가 거절한다. 그러면 손절이 막힌다.
+    @Test
+    fun `Upbit sell volume is plain decimals rounded down to eight places`() {
+        assertEquals("0.00001234", UpbitMarketRules.sellVolume(0.000012345))
+        assertEquals("0.00001", UpbitMarketRules.sellVolume(1e-5))
+        assertEquals("0.01", UpbitMarketRules.sellVolume(0.01))
+        // 0.03 - 0.01 은 Double 로 0.019999999999999997 이다. 그대로 내리면 봇 코인 1e-8 이 남는다.
+        assertEquals("0.02", UpbitMarketRules.sellVolume(0.03 - 0.01))
+    }
 }

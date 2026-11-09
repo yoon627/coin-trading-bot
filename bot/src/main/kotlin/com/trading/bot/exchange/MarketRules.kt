@@ -2,6 +2,8 @@ package com.trading.bot.exchange
 
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.TradingState
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.floor
 
 /** 시장가 매수 주문의 크기. 거래소마다 금액으로 내거나 수량으로 낸다. */
@@ -25,6 +27,9 @@ interface MarketRules {
 
     fun buyOrderRequest(market: String, size: MarketBuySize, identifier: String): OrderRequest
 
+    /** 장부 수량을 시장가 매도 주문의 수량 문자열로 바꾼다. 거래소가 받는 자릿수로 내린다. */
+    fun sellVolume(volume: Double): String
+
     fun isDustVolume(volume: Double, price: Double): Boolean = tracksDust && isBelowMinOrder(volume, price)
 
     /**
@@ -44,6 +49,11 @@ object UpbitMarketRules : MarketRules {
 
     override fun buySize(investAmount: Double, price: Double): MarketBuySize =
         MarketBuySize.QuoteAmount(floor(investAmount).toLong())
+
+    // Double.toString 은 작은 수를 지수로 써서("1.0E-5") 거래소가 거절한다. Upbit 수량은 소수 8자리까지다.
+    // 내리기 전에 10자리로 반올림해 뺄셈 오차(0.03 - 0.01 = 0.0199…97)로 봇 코인 1e-8 을 남기지 않는다.
+    override fun sellVolume(volume: Double): String =
+        BigDecimal.valueOf(volume).setScale(10, RoundingMode.HALF_EVEN).setScale(8, RoundingMode.DOWN).stripTrailingZeros().toPlainString()
 
     /** Upbit 시장가 매수는 ord_type=price 에 총 주문 금액을 넣는다. 수량 시장가 매수는 없다. */
     override fun buyOrderRequest(market: String, size: MarketBuySize, identifier: String): OrderRequest {

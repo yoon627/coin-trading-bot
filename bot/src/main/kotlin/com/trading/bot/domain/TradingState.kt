@@ -62,6 +62,8 @@ data class TradingState(
     var pendingSellPriorVolume: Double? = null,
     // dust 보유를 이미 알렸는지(비영속). 포지션이 바뀔 때만 풀린다.
     var dustWarned: Boolean = false,
+    // 장부가 dust 라 팔 수 있는 잔고를 두고 청산을 보류했다고 알렸는지(비영속). dust 경고와 따로 두어 그 경고에 묻히지 않게 한다.
+    var heldBackSellAlerted: Boolean = false,
     // 주문 전에 영속으로 남기는 클라이언트 identifier. 응답 전에 끊긴 주문을 거래소에서 찾는 근거이고 uuid 를 알면 비운다.
     var pendingBuyIdentifier: String? = null,
     var pendingSellIdentifier: String? = null,
@@ -184,6 +186,7 @@ data class TradingState(
         lastTradeTime = now
         clearPendingBuy()
         dustWarned = false
+        heldBackSellAlerted = false
     }
 
     fun markSold(now: LocalDateTime = LocalDateTime.now(TradingDay.KST)) {
@@ -202,6 +205,7 @@ data class TradingState(
         lastTradeTime = now
         clearPendingBuy()
         dustWarned = false
+        heldBackSellAlerted = false
         clearPendingSell()
     }
 

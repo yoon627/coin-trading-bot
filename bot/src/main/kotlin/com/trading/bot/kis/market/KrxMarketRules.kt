@@ -15,6 +15,8 @@ class KrxMarketRules(private val maxOrderAmount: Long) : MarketRules {
     override val minOrderNotional: Double = 0.0
     override val tracksDust: Boolean = false
 
+    override fun sellVolume(volume: Double): String = floor(volume).toLong().toString()
+
     /** 1주도 살 수 없으면 null. */
     override fun buySize(investAmount: Double, price: Double): MarketBuySize? {
         // 부정 비교라 NaN 도 걸린다.
