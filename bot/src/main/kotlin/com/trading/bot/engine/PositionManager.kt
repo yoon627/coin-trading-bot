@@ -53,7 +53,6 @@ class PositionManager(
     /** 상태 저장과 거래 기록을 한 트랜잭션으로 커밋한다. 기본값은 상태만 저장하는 테스트용이다. */
     private val commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean =
         { persistState, _ -> persistState(); true },
-    private val notifyTrade: suspend (record: TradeRecord) -> Unit = {},
     private val clock: Clock = Clock.systemUTC(),
     private val rules: MarketRules = UpbitMarketRules,
     private val calendar: TradingCalendar = UpbitTradingCalendar,
@@ -447,27 +446,19 @@ class PositionManager(
         return record
     }
 
-    /** DB 커밋이 성공한 뒤에만 메모리 상태를 바꾸고, 새로 기록된 거래만 알린다. */
+    /** DB 커밋이 성공한 뒤에만 메모리 상태를 바꾼다. 체결 알림은 커밋에 든 outbox 행으로 발송기가 보낸다. */
     private suspend fun commitFillAndApply(
         state: TradingState,
         record: TradeRecord,
         applyTransition: (TradingState) -> Unit,
     ) {
-        val recorded = commitFill(
+        commitFill(
             { tradingStateService.upsert(userId, state.copy().also(applyTransition)) },
             record,
         )
         applyTransition(state)
         // 이 커밋에도 peakPrice 가 들어가므로 peak 재기록 표시를 지운다. 매도 뒤에는 달리 지울 경로가 없다.
         state.peakPersistFailed = false
-        if (!recorded) return
-        try {
-            notifyTrade(record)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("Trade notification failed after commit for {}: {}", record.ticker, e.message)
-        }
     }
 
     private fun recordReconcileFailure(state: TradingState) {

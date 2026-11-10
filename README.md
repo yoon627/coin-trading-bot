@@ -146,6 +146,23 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 4. 다시 시작하면 기동 시 잔고 동기화가 매수로 들어온 코인을 보유로 편입한다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
 5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다. 주문 확인이 필요해 멈춘 종목(review)은 그 종목의 매수·매도 pending 이 모두 비기 전까지 halt/clear 가 409 다. pending 은 자동 확정되거나 2번의 pending/clear 로 비운다.
 
+### 체결 알림
+
+체결 알림은 체결 기록과 같은 트랜잭션에 `trade_notification_outbox` 행으로 남고, 발송기가 보낸 뒤 결과를 적는다. 커밋 직후 앱이 재시작돼도(배포 포함) 기동하면 남은 알림부터 보낸다. 주문번호가 있는 체결은 행이 하나뿐이고(주문번호 없는 복구 기록은 지금도 중복 기록될 수 있다), 보낸 알림은 다시 보내지 않는다.
+
+- 커밋 직후 바로 보내고, 실패한 알림은 5초마다 다시 본다. 다시 보내는 간격은 5초부터 두 배씩 늘어 최대 10분이다.
+- 429·5xx·연결 오류는 생성 뒤 24시간까지 다시 보내고, 그런 실패가 나면 그 회차는 거기서 멈춘다(장애 중 몰아 보내지 않음). 없어진 webhook(404)·권한 오류·잘못된 webhook 주소는 바로 실패로 둔다. 실패로 끝나면 ERROR(Discord 오류 채널) 한 줄을 남긴다.
+- 사용자 webhook 이 없으면 `DISCORD_WEBHOOK_URL` 로 보낸다. 둘 다 없으면 보내지 않고 `SKIPPED` 로 적는다.
+- 보낸 직후 기록하기 전에 앱이 꺼지면 같은 알림이 한 번 더 갈 수 있다. 알림의 `주문` 칸으로 같은 체결인지 구분한다.
+- 10분 넘게 늦은 알림에는 잔고 칸을 싣지 않는다(체결 직후 잔고가 아니다).
+
+확인:
+
+```sql
+SELECT status, count(*) FROM trade_notification_outbox GROUP BY status;
+SELECT id, attempts, next_attempt_at, last_error FROM trade_notification_outbox WHERE status IN ('PENDING', 'FAILED') ORDER BY id DESC LIMIT 20;
+```
+
 ### 봇 종목을 앱에서 직접 사고팔 때
 
 봇은 자기 장부 수량까지만 판다. 봇이 보유 중인 종목을 앱에서 더 사면, 다음 청산에서 그 코인은 팔지 않고 봇이 산 만큼만 판다(WARN 한 줄). 장부와 잔고의 차이가 최소 주문(5,000원) 미만이면 팔 수 없는 자투리를 남기지 않도록 같이 판다. 체결 뒤 남은 코인과 응답 없는 매도의 확정도 이번 주문 수량 기준이라, 남은 코인을 봇 포지션으로 다시 잡지 않는다.
@@ -256,11 +273,25 @@ V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_
 
 - V31 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 다만 그 이미지는 중지 값을 읽지 않아 켜 둔 중지가 풀린 것처럼 매수가 나가므로, 롤백했으면 봇을 정지한다.
 - V32 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V32_down.sql` 은 필요 없다.
-- V31 이전으로 내려가야 하면 `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- V31 이전으로 내려가야 하면 (V33 이 적용돼 있으면 `V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
 - 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V32_down.sql` 을 쓴다. 켜 둔 중지 값이 함께 사라진다. V32 가 마지막 적용 버전일 때만 돌고, 칼럼과 `flyway_schema_history` 의 V32 행을 한 트랜잭션으로 지운다. 백업 조건은 V31 down 과 같다.
   ```bash
   cd /opt/app
   docker compose stop app
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V32_down.sql
   APP_VERSION=<V32 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V33 (체결 알림 outbox)
+
+V33 은 `trade_notification_outbox` 테이블만 새로 만든다. 사전 점검 쿼리는 없고, 배포 직전 백업은 V31 과 같다.
+
+- V32 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 그 이미지는 옛 방식(커밋 뒤 바로 발송)으로 알리고 테이블은 건드리지 않는다. 롤백 전에 남은 `PENDING` 은 다시 올렸을 때 보내지거나 24시간이 지났으면 실패로 끝난다. 늦은 알림이 필요 없으면 다시 올리기 전에 `UPDATE trade_notification_outbox SET status = 'SKIPPED' WHERE status = 'PENDING';` 를 돌린다.
+- V33 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V33_down.sql` 은 필요 없다.
+- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V33_down.sql` 을 쓴다(V33 이 마지막 적용 버전일 때만 돌고, 테이블과 `flyway_schema_history` 의 V33 행을 한 트랜잭션으로 지운다).
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V33_down.sql
+  APP_VERSION=<V33 이전 SHA> docker compose up -d --pull missing
   ```

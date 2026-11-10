@@ -12,18 +12,22 @@ import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
+import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.persistence.BotStateRepository
 import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
 import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.bot.persistence.entity.TradeRecordEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
+import io.mockk.Called
 import io.mockk.CapturingSlot
 import io.mockk.Ordering
 import io.mockk.Runs
@@ -431,10 +435,11 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `createEngine wires actual atomic commit before post-commit notification`() = runTest {
+    fun `createEngine wires the atomic commit that carries the trade notification`() = runTest {
         val client = mockk<UpbitClient>()
         val tradeRecordRepository = mockk<TradeRecordRepository>()
         val tradeExecutionRepository = mockk<TradeExecutionRepository>()
+        val outboxRepository = mockk<TradeNotificationOutboxRepository>()
         val transactionalOperator = mockk<TransactionalOperator>()
         val auditNotifier = mockk<DiscordNotifier>()
         val state = TradingState(
@@ -442,12 +447,14 @@ class UserTradingManagerTest {
             pendingBuyUuid = "fill-1",
             pendingBuyStrategy = "combined",
         )
-        val notifiedAfterMemory = AtomicBoolean(false)
+        val outboxRow = slot<TradeNotificationOutboxEntity>()
+        every { outboxRepository.save(capture(outboxRow)) } answers { Mono.just(firstArg()) }
 
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fill-1") } returns Mono.just(false)
         every { tradeExecutionRepository.save(any()) } returns Mono.just(
             TradeExecutionEntity(
+                id = 7L,
                 userId = 1L,
                 exchange = "UPBIT",
                 market = "KRW-BTC",
@@ -475,15 +482,11 @@ class UserTradingManagerTest {
         coEvery { client.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.01", avgBuyPrice = "50000000"),
         )
-        every { auditNotifier.sendTradeEmbed(any(), any(), any(), any()) } answers {
-            notifiedAfterMemory.set(state.position)
-            throw IllegalStateException("discord down")
-        }
 
         val actualTradeExecutionService = TradeExecutionService(
             tradeRecordRepository,
             tradeExecutionRepository,
-            auditNotifier,
+            outboxRepository,
             transactionalOperator,
             TradingProperties(),
         )
@@ -507,9 +510,12 @@ class UserTradingManagerTest {
 
         assertTrue(record != null)
         assertTrue(state.position)
-        assertTrue(notifiedAfterMemory.get(), "실제 UserTradingManager 배선에서도 알림보다 메모리 전이가 먼저여야 한다")
         coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
         verify(exactly = 1) { tradeExecutionRepository.save(any()) }
+        // 엔진은 Discord 를 직접 부르지 않고 같은 커밋에 알림 행을 남긴다.
+        assertEquals(7L, outboxRow.captured.tradeExecutionId)
+        assertEquals("fill-1", TradeNotificationPayload.fromJson(outboxRow.captured.payload).exchangeOrderId)
+        verify { auditNotifier wasNot Called }
     }
 
     @Test

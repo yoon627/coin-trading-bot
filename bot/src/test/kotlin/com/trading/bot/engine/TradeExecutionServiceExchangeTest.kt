@@ -4,6 +4,7 @@ import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.common.config.TradingProperties
@@ -21,12 +22,13 @@ class TradeExecutionServiceExchangeTest {
 
     private val executions = mockk<TradeExecutionRepository>()
     private val properties = TradingProperties()
-    private val service = TradeExecutionService(mockk<TradeRecordRepository>(relaxed = true), executions, mockk(relaxed = true), mockk(), properties)
+    private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(any()) } answers { Mono.just(firstArg()) } }
+    private val service = TradeExecutionService(mockk<TradeRecordRepository>(relaxed = true), executions, outbox, mockk(), properties)
     private val saved = slot<TradeExecutionEntity>()
 
     init {
         every { executions.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
-        every { executions.save(capture(saved)) } answers { Mono.just(firstArg()) }
+        every { executions.save(capture(saved)) } answers { Mono.just(firstArg<TradeExecutionEntity>().copy(id = 1L)) }
     }
 
     private fun sell(exchange: Exchange = Exchange.UPBIT, estimatedFeeRate: Double? = null) = TradeRecord(

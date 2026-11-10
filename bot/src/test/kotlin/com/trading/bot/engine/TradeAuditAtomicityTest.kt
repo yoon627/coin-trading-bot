@@ -71,11 +71,9 @@ class TradeAuditAtomicityTest {
     /** 커밋 성공. persistState 를 실행해 사본을 잡는다. */
     private fun managerWithCommitFill(
         commitFill: suspend (persistState: suspend () -> Unit, record: TradeRecord) -> Boolean,
-        notifyTrade: suspend (record: TradeRecord) -> Unit = {},
     ) = PositionManager(
         upbitClient, properties, stateService, USER_ID,
         commitFill = commitFill,
-        notifyTrade = notifyTrade,
     )
 
     private fun succeedingManager() = managerWithCommitFill(
@@ -107,41 +105,34 @@ class TradeAuditAtomicityTest {
     }
 
     @Test
-    fun `감사 커밋 후 메모리 전이를 적용하고 알림 실패를 격리한다`() = runTest {
+    fun `감사 커밋 후 메모리 전이를 적용한다`() = runTest {
+        // 체결 알림은 같은 커밋에 든 outbox 행으로 발송기가 보내므로 엔진은 Discord 를 기다리지 않는다.
         stubFilledBuy()
         val state = buyPendingState()
-        val memoryAppliedWhenNotified = AtomicBoolean(false)
         val manager = managerWithCommitFill(
             commitFill = { persistState, _ ->
                 persistState()
                 true
             },
-            notifyTrade = {
-                memoryAppliedWhenNotified.set(state.position)
-                throw IllegalStateException("discord down")
-            },
         )
 
         val record = manager.reconcilePendingBuy(TICKER, state, PRICE)
 
         assertNotNull(record)
-        assertTrue(memoryAppliedWhenNotified.get(), "알림 실패 전에도 커밋된 메모리 전이가 먼저 적용돼야 한다")
         assertTrue(state.position)
         assertNull(state.pendingBuyUuid)
     }
 
     @Test
-    fun `이미 기록된 체결(멱등 skip)은 메모리 전이만 적용하고 알림을 다시 보내지 않는다`() = runTest {
-        // 재시작 후 같은 주문을 다시 확정하면 commitFill 이 false 를 돌려준다. 알림이 두 번 나가면 안 된다.
+    fun `이미 기록된 체결(멱등 skip)도 메모리 전이는 적용한다`() = runTest {
+        // 재시작 후 같은 주문을 다시 확정하면 commitFill 이 false 를 돌려준다. 알림 행은 commitFill 이 더하지 않는다.
         stubFilledBuy()
         val state = buyPendingState()
-        var notified = 0
         val manager = managerWithCommitFill(
             commitFill = { persistState, _ ->
                 persistState()
                 false
             },
-            notifyTrade = { notified++ },
         )
 
         val record = manager.reconcilePendingBuy(TICKER, state, PRICE)
@@ -149,7 +140,6 @@ class TradeAuditAtomicityTest {
         assertNotNull(record)
         assertTrue(state.position)
         assertNull(state.pendingBuyUuid)
-        assertEquals(0, notified)
     }
 
     // --- 매수 체결 ---
