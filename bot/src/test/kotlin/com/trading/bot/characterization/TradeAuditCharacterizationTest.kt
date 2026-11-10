@@ -6,6 +6,7 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.common.config.TradingProperties
@@ -30,15 +31,16 @@ class TradeAuditCharacterizationTest {
 
     private val tradeRecordRepository = mockk<TradeRecordRepository>(relaxed = true)
     private val tradeExecutionRepository = mockk<TradeExecutionRepository>()
+    private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(any()) } answers { Mono.just(firstArg()) } }
     private val service = TradeExecutionService(
-        tradeRecordRepository, tradeExecutionRepository, mockk(relaxed = true), mockk(), TradingProperties(),
+        tradeRecordRepository, tradeExecutionRepository, outbox, mockk(), TradingProperties(),
     )
     private val saved = slot<TradeExecutionEntity>()
 
     @BeforeEach
     fun setup() {
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
-        every { tradeExecutionRepository.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        every { tradeExecutionRepository.save(capture(saved)) } answers { Mono.just(saved.captured.copy(id = 1L)) }
     }
 
     private fun sell(fee: FeeBasis, orderId: String = "s-1") = TradeRecord(

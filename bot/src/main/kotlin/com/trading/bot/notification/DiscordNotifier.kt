@@ -2,8 +2,9 @@ package com.trading.bot.notification
 
 import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
-import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
@@ -15,6 +16,20 @@ import reactor.core.publisher.Mono
 import reactor.util.retry.Retry
 import java.net.URI
 import java.time.Duration
+
+/** 기다린 체결 알림 발송의 결과. 발송기가 다시 보낼지를 정한다. */
+sealed interface TradeDelivery {
+    data object Sent : TradeDelivery
+
+    /** 사용자 webhook 도 전역 webhook 도 없다. */
+    data object Skipped : TradeDelivery
+
+    /** 429·5xx·연결 오류처럼 다시 보내면 될 수 있다. [error] 는 webhook token 을 가린 문구다. */
+    data class Retryable(val error: String) : TradeDelivery
+
+    /** 400·401·403·404·잘못된 webhook 처럼 다시 보내도 안 된다. */
+    data class Permanent(val error: String) : TradeDelivery
+}
 
 @Component
 class DiscordNotifier internal constructor(
@@ -31,7 +46,7 @@ class DiscordNotifier internal constructor(
     private val log = LoggerFactory.getLogger(javaClass)
 
     // totalAmount 는 경로마다 뜻이 달라(매수는 포지션 전체 원가, 매도는 평가액) 체결 대금이 없을 때는 중립 라벨을 쓴다.
-    private fun amountField(record: TradeRecord): Map<String, Any> {
+    private fun amountField(record: TradeNotificationPayload): Map<String, Any> {
         val (label, amount) = when (val known = record.orderAmount) {
             null -> "기록 금액(체결 미상)" to record.totalAmount
             else -> "체결금액" to known
@@ -39,13 +54,8 @@ class DiscordNotifier internal constructor(
         return mapOf("name" to label, "value" to "%,.0f원".format(amount), "inline" to true)
     }
 
-    fun sendTradeEmbed(
-        record: TradeRecord,
-        krwBalance: Double? = null,
-        webhookUrl: String? = null,
-        username: String? = null,
-    ) {
-        val isBuy = record.side == TradeSide.BUY
+    internal fun tradeEmbed(record: TradeNotificationPayload, krwBalance: Double?, username: String?): Map<String, Any> {
+        val isBuy = record.side == TradeSide.BUY.name
         val color = if (isBuy) 0x22C55E else if ((record.pnlPercent ?: 0.0) >= 0) 0x3B82F6 else 0xEF4444
         val title = if (isBuy) "📈 매수" else "📉 매도"
         val pnlText = record.pnlPercent?.let { "%+.2f%%".format(it) } ?: "-"
@@ -69,6 +79,11 @@ class DiscordNotifier internal constructor(
             fields.add(mapOf("name" to "잔고", "value" to "%,.0f원".format(krwBalance), "inline" to true))
         }
 
+        // 드물게 같은 체결이 두 번 갈 수 있어(보낸 직후 기록 전에 꺼질 때) 주문번호로 구분하게 한다.
+        if (record.exchangeOrderId != null) {
+            fields.add(mapOf("name" to "주문", "value" to record.exchangeOrderId, "inline" to false))
+        }
+
         val embed = mutableMapOf<String, Any>(
             "title" to "$title ${record.ticker}",
             "color" to color,
@@ -80,7 +95,51 @@ class DiscordNotifier internal constructor(
             embed["footer"] = mapOf("text" to username)
         }
 
-        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
+        return mapOf("embeds" to listOf(embed))
+    }
+
+    /**
+     * 체결 알림을 보내고 응답까지 기다린다. 사용자 webhook 이 없으면 전역 webhook 으로 보낸다.
+     * 한 번의 발송 안에서 429·5xx 는 [retryDelay] 대로 다시 시도한다. 오류 알림과 달리 appender lock 밖이라 기다려도 된다.
+     */
+    suspend fun deliverTrade(
+        record: TradeNotificationPayload,
+        krwBalance: Double?,
+        webhookUrl: String?,
+        username: String?,
+    ): TradeDelivery {
+        val url = try {
+            requestValidators.normalizeDiscordWebhookUrl(webhookUrl?.takeIf { it.isNotBlank() } ?: discordProperties.webhookUrl)
+        } catch (e: Exception) {
+            return TradeDelivery.Permanent("invalid webhook URL")
+        }
+        if (url.isNullOrBlank()) return TradeDelivery.Skipped
+        return try {
+            discordWebClient.post()
+                .uri(url)
+                .bodyValue(tradeEmbed(record, krwBalance, username))
+                .retrieve()
+                .bodyToMono<String>()
+                .retryWhen(Retry.from { signals ->
+                    signals.concatMap { signal ->
+                        val delay = retryDelay(signal.failure(), signal.totalRetries()) ?: return@concatMap Mono.error(signal.failure())
+                        Mono.delay(delay)
+                    }
+                })
+                .awaitSingleOrNull()
+            TradeDelivery.Sent
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val message = safeMessage(e, url).truncateForDiscord(MAX_ERROR_LENGTH)
+            val status = (e as? WebClientResponseException)?.statusCode
+            // 모르는 예외도 다시 보낸다 — 24시간 안에 끝나고, 영구로 잘못 보면 알림을 잃는다.
+            if (status != null && status.is4xxClientError && status.value() != 429) {
+                TradeDelivery.Permanent(message)
+            } else {
+                TradeDelivery.Retryable(message)
+            }
+        }
     }
 
     /** message 와 stackSummary 는 호출 측에서 마스킹해 넘긴다. */
@@ -234,6 +293,8 @@ class DiscordNotifier internal constructor(
         const val DIGEST_TRAILER_MAX = 500
         val DEFAULT_RETRY_BACKOFF: Duration = Duration.ofSeconds(1)
         const val MAX_RETRIES = 2L
+        // outbox last_error 에 남기는 길이.
+        const val MAX_ERROR_LENGTH = 500
         // 더 오래 기다리면 쌓인 알림이 한꺼번에 몰려 다시 429 가 난다.
         val MAX_RETRY_AFTER: Duration = Duration.ofSeconds(30)
     }

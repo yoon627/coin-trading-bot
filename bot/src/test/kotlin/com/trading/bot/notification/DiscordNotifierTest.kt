@@ -6,10 +6,10 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
-import com.trading.bot.domain.FeeBasis
-import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import io.mockk.*
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -24,6 +24,7 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import reactor.core.publisher.Mono
 import java.net.URI
+import java.time.Duration
 
 class DiscordNotifierTest {
 
@@ -45,150 +46,126 @@ class DiscordNotifierTest {
         every { requestBodySpec.bodyValue(any()) } returns requestBodySpec
         every { requestBodySpec.retrieve() } returns responseSpec
         every { responseSpec.bodyToMono(String::class.java) } returns Mono.just("ok")
+        every { responseSpec.bodyToMono(any<ParameterizedTypeReference<String>>()) } returns Mono.just("ok")
 
         val discordProperties = DiscordProperties(webhookUrl = "https://discord.com/api/webhooks/123/abc")
         val requestValidators = RequestValidators()
         notifier = DiscordNotifier(webClient, discordProperties, requestValidators)
     }
 
+    private fun trade(
+        side: TradeSide = TradeSide.BUY,
+        orderAmount: Double? = null,
+        strategy: String? = "combined",
+        exchangeOrderId: String? = "order-1",
+    ) = TradeNotificationPayload(
+        ticker = "KRW-BTC", side = side.name, price = 50000000.0, totalAmount = 1_000_000.0, orderAmount = orderAmount,
+        pnlPercent = if (side == TradeSide.SELL) 1.0 else null, reason = if (side == TradeSide.SELL) "TAKE_PROFIT" else null,
+        strategy = strategy, exchangeOrderId = exchangeOrderId, createdAt = "2026-11-10T09:00",
+    )
+
+    private fun sentEmbed(block: suspend () -> TradeDelivery): Pair<TradeDelivery, Map<*, *>> {
+        val payload = slot<Map<String, Any>>()
+        every { requestBodySpec.bodyValue(capture(payload)) } returns requestBodySpec
+        val result = runBlocking { block() }
+        return result to ((payload.captured["embeds"] as List<*>).single() as Map<*, *>)
+    }
+
+    private fun fields(embed: Map<*, *>) = (embed["fields"] as List<*>).map { it as Map<*, *> }
+
     @Test
-    fun `sendTradeEmbed sends BUY notification with correct fields`() {
-        val record = TradeRecord(
-            ticker = "KRW-BTC",
-            side = TradeSide.BUY,
-            price = 50000000.0,
-            volume = 0.002,
-            totalAmount = 100000.0,
-            pnlPercent = null,
-            pnlAmount = null,
-            strategy = "volatility_breakout",
-            userId = 1L,
-            fee = FeeBasis.Estimate,
-            orderAmount = null,
-        )
+    fun `a trade notification goes to the global webhook when the user has none`() {
+        val (result, embed) = sentEmbed { notifier.deliverTrade(trade(), krwBalance = 900000.0, webhookUrl = null, username = "testuser") }
 
-        notifier.sendTradeEmbed(record, krwBalance = 900000.0, username = "testuser")
-
-        verify { webClient.post() }
+        assertEquals(TradeDelivery.Sent, result)
         verify { requestSpec.uri("https://discord.com/api/webhooks/123/abc") }
-        verify { requestBodySpec.bodyValue(match<Map<String, Any>> { payload ->
-            val embeds = payload["embeds"] as? List<*>
-            embeds != null && embeds.isNotEmpty()
-        }) }
+        assertEquals("900,000원", fields(embed).single { it["name"] == "잔고" }["value"])
+        assertEquals(mapOf("text" to "testuser"), embed["footer"])
+    }
+
+    // 드물게 같은 체결 알림이 두 번 갈 때 주문번호로 같은 건인지 알아본다.
+    @Test
+    fun `a trade notification carries the order number`() {
+        val (_, embed) = sentEmbed { notifier.deliverTrade(trade(exchangeOrderId = "uuid-42"), null, null, null) }
+
+        assertEquals("uuid-42", fields(embed).single { it["name"] == "주문" }["value"])
     }
 
     // 엔진 매수의 totalAmount 는 포지션 전체 원가라 "금액"으로 보여주면 추가매수가 총보유 원가로 읽힌다.
-
-    private fun amountField(record: TradeRecord): Pair<String, String> {
-        val payload = slot<Map<String, Any>>()
-        every { requestBodySpec.bodyValue(capture(payload)) } returns requestBodySpec
-        notifier.sendTradeEmbed(record, krwBalance = null, username = "u")
-        val embed = (payload.captured["embeds"] as List<*>).single() as Map<*, *>
-        val fields = embed["fields"] as List<*>
-        val field = fields.map { it as Map<*, *> }.single { it["name"] in setOf("체결금액", "기록 금액(체결 미상)", "금액") }
+    private fun amountField(record: TradeNotificationPayload): Pair<String, String> {
+        val (_, embed) = sentEmbed { notifier.deliverTrade(record, krwBalance = null, webhookUrl = null, username = "u") }
+        val field = fields(embed).single { it["name"] in setOf("체결금액", "기록 금액(체결 미상)", "금액") }
         return field["name"] as String to field["value"] as String
     }
 
-    private fun record(side: TradeSide, orderAmount: Double?) = TradeRecord(
-        ticker = "KRW-BTC", side = side, price = 50000000.0, volume = 0.02, totalAmount = 1_000_000.0,
-        pnlPercent = if (side == TradeSide.SELL) 1.0 else null, pnlAmount = null, strategy = "combined",
-        userId = 1L, fee = FeeBasis.Estimate, orderAmount = orderAmount,
-    )
-
     @Test
     fun `amount field shows this order's funds when known and a source-neutral label otherwise`() {
-        assertEquals("체결금액" to "50,000원", amountField(record(TradeSide.BUY, orderAmount = 50_000.0)))
-        assertEquals("기록 금액(체결 미상)" to "1,000,000원", amountField(record(TradeSide.BUY, orderAmount = null)))
-        assertEquals("기록 금액(체결 미상)" to "1,000,000원", amountField(record(TradeSide.SELL, orderAmount = null)))
+        assertEquals("체결금액" to "50,000원", amountField(trade(TradeSide.BUY, orderAmount = 50_000.0)))
+        assertEquals("기록 금액(체결 미상)" to "1,000,000원", amountField(trade(TradeSide.BUY, orderAmount = null)))
+        assertEquals("기록 금액(체결 미상)" to "1,000,000원", amountField(trade(TradeSide.SELL, orderAmount = null)))
     }
 
     @Test
-    fun `sendTradeEmbed sends SELL notification with PnL`() {
-        val record = TradeRecord(
-            ticker = "KRW-BTC",
-            side = TradeSide.SELL,
-            price = 52000000.0,
-            volume = 0.002,
-            totalAmount = 104000.0,
-            pnlPercent = 4.0,
-            pnlAmount = 4000.0,
-            reason = "TAKE_PROFIT",
-            strategy = "rsi_bounce",
-            userId = 1L,
-            fee = FeeBasis.Estimate,
-            orderAmount = null,
-        )
+    fun `a sell notification shows the return and reason, and an unknown strategy still builds`() {
+        val (_, embed) = sentEmbed { notifier.deliverTrade(trade(TradeSide.SELL, strategy = null), null, null, null) }
 
-        notifier.sendTradeEmbed(record, krwBalance = 1004000.0, username = "testuser")
-
-        verify { requestBodySpec.bodyValue(any()) }
+        assertEquals("**+1.00%**", fields(embed).single { it["name"] == "수익률" }["value"])
+        assertEquals("TAKE_PROFIT", fields(embed).single { it["name"] == "사유" }["value"])
+        assertTrue(fields(embed).none { it["name"] == "전략" })
     }
 
     @Test
-    fun `sendTradeEmbed uses user webhook URL when provided`() {
-        val record = TradeRecord(
-            ticker = "KRW-BTC",
-            side = TradeSide.BUY,
-            price = 50000000.0,
-            volume = 0.002,
-            totalAmount = 100000.0,
-            pnlPercent = null,
-            pnlAmount = null,
-            strategy = null, // 전략 미상 분기(수동 매수 포지션)도 embed 를 만들 수 있어야 한다
-            userId = 1L,
-            fee = FeeBasis.Estimate,
-            orderAmount = null,
-        )
-
+    fun `a trade notification uses the user's webhook when set`() {
         val customUrl = "https://discord.com/api/webhooks/456/def"
-        notifier.sendTradeEmbed(record, webhookUrl = customUrl)
+
+        sentEmbed { notifier.deliverTrade(trade(), null, customUrl, null) }
 
         verify { requestSpec.uri(customUrl) }
     }
 
     @Test
-    fun `sendTradeEmbed skips when no webhook configured`() {
-        val properties = DiscordProperties(webhookUrl = "")
-        val notifierNoUrl = DiscordNotifier(webClient, properties, RequestValidators())
+    fun `a trade notification is skipped only when no webhook is configured anywhere`() = runTest {
+        val notifierNoUrl = DiscordNotifier(webClient, DiscordProperties(webhookUrl = ""), RequestValidators())
 
-        val record = TradeRecord(
-            ticker = "KRW-BTC",
-            side = TradeSide.BUY,
-            price = 50000000.0,
-            volume = 0.002,
-            totalAmount = 100000.0,
-            pnlPercent = null,
-            pnlAmount = null,
-            strategy = "combined",
-            userId = 1L,
-            fee = FeeBasis.Estimate,
-            orderAmount = null,
-        )
-
-        notifierNoUrl.sendTradeEmbed(record)
-
+        assertEquals(TradeDelivery.Skipped, notifierNoUrl.deliverTrade(trade(), null, null, null))
         verify(exactly = 0) { webClient.post() }
     }
 
     @Test
-    fun `sendTradeEmbed skips when webhook URL is invalid`() {
-        val record = TradeRecord(
-            ticker = "KRW-BTC",
-            side = TradeSide.BUY,
-            price = 50000000.0,
-            volume = 0.002,
-            totalAmount = 100000.0,
-            pnlPercent = null,
-            pnlAmount = null,
-            strategy = "combined",
-            userId = 1L,
-            fee = FeeBasis.Estimate,
-            orderAmount = null,
-        )
-
-        notifier.sendTradeEmbed(record, webhookUrl = "http://evil.com/steal")
-
+    fun `an invalid stored webhook fails permanently without a request`() = runTest {
+        assertTrue(notifier.deliverTrade(trade(), null, "http://evil.com/steal", null) is TradeDelivery.Permanent)
         verify(exactly = 0) { webClient.post() }
+    }
+
+    private fun rejected(status: Int, url: String): WebClientResponseException {
+        val request = mockk<HttpRequest>()
+        every { request.method } returns HttpMethod.POST
+        every { request.uri } returns URI(url)
+        every { request.headers } returns HttpHeaders()
+        every { request.attributes } returns mutableMapOf()
+        return WebClientResponseException.create(status, "status $status", HttpHeaders(), ByteArray(0), null, request)
+    }
+
+    // 다시 보낼지는 발송기가 이 분류로 정한다. 없어진 webhook(404)을 24시간 다시 보내면 안 되고, 429·5xx 는 다시 보내야 한다.
+    @Test
+    fun `a failed trade notification says whether retrying can help, without the webhook token`() = runTest {
+        val url = "https://discord.com/api/webhooks/123/secret-token"
+        val quick = DiscordNotifier(webClient, DiscordProperties(webhookUrl = ""), RequestValidators(), Duration.ZERO)
+        fun failWith(status: Int) {
+            every { responseSpec.bodyToMono(any<ParameterizedTypeReference<String>>()) } returns Mono.error(rejected(status, url))
+        }
+
+        failWith(404)
+        val gone = quick.deliverTrade(trade(), null, url, null)
+        failWith(429)
+        val limited = quick.deliverTrade(trade(), null, url, null)
+        failWith(503)
+        val down = quick.deliverTrade(trade(), null, url, null)
+
+        assertTrue(gone is TradeDelivery.Permanent, "$gone")
+        assertTrue(limited is TradeDelivery.Retryable, "$limited")
+        assertTrue(down is TradeDelivery.Retryable, "$down")
+        listOf(gone, limited, down).forEach { assertFalse(it.toString().contains("secret-token"), it.toString()) }
     }
 
     @Test

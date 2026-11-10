@@ -674,15 +674,12 @@ class UserTradingManager(
         // Upbit 엔진 클라이언트는 createUpbitClient 로 만들어야 그 메서드를 stub 한 spy 가 엔진 클라이언트도 바꾼다.
         val parts = if (runtime === upbitRuntime) upbitRuntime.partsFor(createUpbitClient(user)) else runtime.partsFor(user)
         val client = parts.client
-        // 상태 저장과 거래 기록은 한 트랜잭션으로 커밋하고 알림은 커밋 뒤에만 보낸다.
+        // 상태 저장·거래 기록·체결 알림 이벤트는 한 트랜잭션으로 커밋하고, 알림은 발송기가 커밋 뒤에 보낸다.
         val userId = user.id!!
         val positionManager = PositionManager(
             client, parts.profile, tradingStateService, userId,
             commitFill = { persistState, record ->
                 tradeExecutionService.commitFill(persistState, record)
-            },
-            notifyTrade = { record ->
-                tradeExecutionService.notifyTrade(record, client, user.username, user.discordWebhookUrl)
             },
             rules = parts.rules,
             calendar = parts.calendar,

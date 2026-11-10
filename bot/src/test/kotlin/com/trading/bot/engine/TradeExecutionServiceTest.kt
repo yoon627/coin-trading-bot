@@ -1,19 +1,21 @@
 package com.trading.bot.engine
 
-import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
-import com.trading.bot.notification.DiscordNotifier
+import com.trading.bot.notification.TradeNotificationPayload
+import com.trading.bot.notification.TradeNotificationQueued
 import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
-import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.test.runTest
 import reactor.core.publisher.Mono
@@ -26,25 +28,25 @@ class TradeExecutionServiceTest {
 
     private lateinit var tradeRecordRepository: TradeRecordRepository
     private lateinit var tradeExecutionRepository: TradeExecutionRepository
-    private lateinit var discordNotifier: DiscordNotifier
+    private lateinit var outboxRepository: TradeNotificationOutboxRepository
+    private val events = mutableListOf<Any>()
     private lateinit var transactionalOperator: TransactionalOperator
     private lateinit var service: TradeExecutionService
-    private lateinit var client: UpbitClient
 
     @BeforeEach
     fun setup() {
         tradeRecordRepository = mockk(relaxed = true)
         tradeExecutionRepository = mockk(relaxed = true)
-        discordNotifier = mockk(relaxed = true)
-        client = mockk()
+        outboxRepository = mockk()
+        every { outboxRepository.save(any()) } answers { Mono.just(firstArg()) }
         // stub 이 없으면 relaxed mockk 의 Mono 가 emit 하지 않아 saveAudit 의 awaitSingle 이 끝나지 않는다.
-        every { tradeExecutionRepository.save(any()) } returns Mono.just(mockk<TradeExecutionEntity>(relaxed = true))
+        every { tradeExecutionRepository.save(any()) } answers { Mono.just(firstArg<TradeExecutionEntity>().copy(id = 7L)) }
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
         transactionalOperator = mockk()
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
         service = TradeExecutionService(
-            tradeRecordRepository, tradeExecutionRepository, discordNotifier, transactionalOperator,
-            TradingProperties(),
+            tradeRecordRepository, tradeExecutionRepository, outboxRepository, transactionalOperator,
+            TradingProperties(), events = { events += it },
         )
     }
 
@@ -68,6 +70,9 @@ class TradeExecutionServiceTest {
         assertTrue(statePersisted.get())
         coVerify(exactly = 0) { tradeRecordRepository.save(any()) }
         coVerify(exactly = 0) { tradeExecutionRepository.save(any()) }
+        // 이미 알린 체결이라 알림 행도 더 넣지 않는다.
+        verify(exactly = 0) { outboxRepository.save(any()) }
+        assertTrue(events.isEmpty())
     }
 
     @Test
@@ -89,32 +94,47 @@ class TradeExecutionServiceTest {
     }
 
     @Test
-    fun `commitFill keeps audit committed when notification fails`() = runTest {
-        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fill-1") } returns Mono.just(false)
-        coEvery { client.getAccounts() } returns emptyList()
-        every { discordNotifier.sendTradeEmbed(any(), any(), any(), any()) } throws IllegalStateException("discord down")
-        val statePersisted = AtomicBoolean(false)
+    fun `commitFill puts exactly one notification row in the same commit and wakes the dispatcher after it`() = runTest {
+        val order = mutableListOf<String>()
+        every { transactionalOperator.transactional(any<Mono<Any>>()) } answers {
+            firstArg<Mono<Any>>().doOnSuccess { order += "committed" }
+        }
+        every { outboxRepository.save(any()) } answers { order += "outbox"; Mono.just(firstArg()) }
+        val record = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.SELL, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, pnlPercent = 1.5, pnlAmount = 750.0, strategy = "combined",
+            exchangeOrderId = "fill-1", userId = 1L,
+            fee = FeeBasis.Estimate,
+            orderAmount = 50000.0,
+        )
+        val row = slot<TradeNotificationOutboxEntity>()
+        every { outboxRepository.save(capture(row)) } answers { order += "outbox"; Mono.just(firstArg()) }
+
+        assertTrue(service.commitFill(persistState = {}, record = record))
+
+        assertEquals(listOf("outbox", "committed"), order)
+        assertEquals(7L, row.captured.tradeExecutionId)
+        assertEquals(TradeNotificationOutboxEntity.PENDING, row.captured.status)
+        val payload = TradeNotificationPayload.fromJson(row.captured.payload)
+        assertEquals("fill-1", payload.exchangeOrderId)
+        assertEquals(1.5, payload.pnlPercent)
+        assertFalse(row.captured.payload.contains("webhook"))
+        assertEquals(listOf<Any>(TradeNotificationQueued), events)
+    }
+
+    @Test
+    fun `a commit that fails wakes nothing`() = runTest {
+        every { outboxRepository.save(any()) } returns Mono.error(IllegalStateException("db down"))
         val record = TradeRecord(
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 50000000.0, volume = 0.001,
             totalAmount = 50000.0, pnlPercent = null, pnlAmount = null, strategy = "combined",
-            exchangeOrderId = "fill-1", userId = 1L,
+            exchangeOrderId = "fill-2", userId = 1L,
             fee = FeeBasis.Estimate,
             orderAmount = null,
         )
 
-        val recorded = service.commitFill(
-            persistState = { statePersisted.set(true) },
-            record = record,
-        )
-        val notificationFailure = runCatching {
-            service.notifyTrade(record, client, null, null)
-        }.exceptionOrNull()
-
-        assertTrue(recorded)
-        assertTrue(statePersisted.get())
-        assertTrue(notificationFailure is IllegalStateException)
-        coVerify(exactly = 1) { tradeRecordRepository.save(record) }
-        coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
+        assertTrue(runCatching { service.commitFill(persistState = {}, record = record) }.isFailure)
+        assertTrue(events.isEmpty())
     }
 
     // --- 감사 기록의 수수료 ---

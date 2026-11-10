@@ -3,16 +3,20 @@ package com.trading.bot.engine
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradePnl
 import com.trading.bot.domain.TradeRecord
-import com.trading.bot.exchange.ExchangeClient
-import com.trading.bot.notification.DiscordNotifier
-import com.trading.bot.persistence.TradeRecordRepository
+import com.trading.bot.notification.TradeNotificationPayload
+import com.trading.bot.notification.TradeNotificationQueued
 import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.TradeNotificationOutboxRepository
+import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
+import java.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Service
 import org.springframework.transaction.reactive.TransactionalOperator
 
@@ -20,17 +24,19 @@ import org.springframework.transaction.reactive.TransactionalOperator
 class TradeExecutionService(
     private val tradeRecordRepository: TradeRecordRepository,
     private val tradeExecutionRepository: TradeExecutionRepository,
-    private val discordNotifier: DiscordNotifier,
+    private val outboxRepository: TradeNotificationOutboxRepository,
     private val transactionalOperator: TransactionalOperator,
     private val tradingProperties: TradingProperties,
+    private val events: ApplicationEventPublisher = ApplicationEventPublisher {},
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     /**
-     * 거래 기록을 저장한다. 트랜잭션을 직접 열지 않고 호출자의 트랜잭션에 참여한다.
-     * 이미 기록된 주문이면 건너뛰고 false 를 돌려준다.
+     * 거래 기록과 그 체결 알림 이벤트를 저장한다. 트랜잭션을 직접 열지 않고 호출자의 트랜잭션에 참여한다.
+     * 이미 기록된 주문이면 건너뛰고 false 를 돌려준다. [notificationPayload] 는 트랜잭션 전에 만든 JSON 이다.
      */
-    internal suspend fun saveAudit(record: TradeRecord): Boolean {
+    internal suspend fun saveAudit(record: TradeRecord, notificationPayload: String = TradeNotificationPayload.toJson(record)): Boolean {
         val userId = record.userId ?: 0
         // 재시작 뒤 같은 주문을 다시 reconcile 해도 이중으로 기록·알림하지 않는다.
         val orderId = record.exchangeOrderId
@@ -41,7 +47,7 @@ class TradeExecutionService(
             return false
         }
         tradeRecordRepository.save(record)
-        tradeExecutionRepository.save(
+        val execution = tradeExecutionRepository.save(
             TradeExecutionEntity(
                 userId = userId,
                 exchange = record.exchange.name,
@@ -67,24 +73,19 @@ class TradeExecutionService(
                 exchangeOrderId = record.exchangeOrderId,
             )
         ).awaitSingle()
+        // 체결과 같은 트랜잭션이라 이 삽입이 실패하면 체결도 되돌아간다. 그래서 실패할 경로(직렬화·길이 제한·FK)를 두지 않았다.
+        val now = clock.instant()
+        outboxRepository.save(
+            TradeNotificationOutboxEntity(
+                tradeExecutionId = requireNotNull(execution.id) { "saved trade_executions row has no id" },
+                userId = userId,
+                exchange = record.exchange.name,
+                payload = notificationPayload,
+                nextAttemptAt = now,
+                createdAt = now,
+            )
+        ).awaitSingle()
         return true
-    }
-
-    /** 커밋 뒤 트랜잭션 밖에서 보내는 체결 알림. Discord 발송 예외는 호출자가 처리한다. */
-    suspend fun notifyTrade(
-        record: TradeRecord,
-        client: ExchangeClient,
-        username: String?,
-        discordWebhookUrl: String?,
-    ) {
-        val krwBalance = try {
-            client.getAccounts().find { it.currency == "KRW" }?.balanceDouble()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
-        }
-        discordNotifier.sendTradeEmbed(record, krwBalance, discordWebhookUrl, username)
     }
 
     /**
@@ -96,11 +97,12 @@ class TradeExecutionService(
         persistState: suspend () -> Unit,
         record: TradeRecord,
     ): Boolean {
+        val payload = TradeNotificationPayload.toJson(record)
         val recorded = try {
             transactionalOperator.transactional(
                 mono {
                     persistState()
-                    saveAudit(record)
+                    saveAudit(record, payload)
                 }
             ).awaitSingle()
         } catch (e: CancellationException) {
@@ -111,6 +113,14 @@ class TradeExecutionService(
                 record.userId, record.ticker, record.side, e,
             )
             throw e
+        }
+        // 커밋된 뒤에만 깨운다. 발송기가 못 받아도 행이 남아 주기 실행이 보낸다 — 그래서 여기서 실패해도 커밋 결과를 바꾸지 않는다.
+        if (recorded) {
+            try {
+                events.publishEvent(TradeNotificationQueued)
+            } catch (e: Exception) {
+                log.warn("Could not wake the trade notification dispatcher (the 5 s pass will send it): {}", e.message)
+            }
         }
         return recorded
     }
