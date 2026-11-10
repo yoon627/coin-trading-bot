@@ -161,7 +161,7 @@ class PositionManager(
         currentPrice: Double,
         strategyName: String,
     ): TradeRecord? {
-        // 팔 수 없는 dust 는 진입을 막지 않는다. 사면 합쳐서 새 포지션이 되고, 아래에서 실잔고로 다시 확인한다.
+        // 팔 수 없는 dust 는 진입을 막지 않는다. 사면 dust 장부에 체결을 더해 새 포지션이 되고, 주문 전에 실잔고로 다시 확인한다.
         // 잔고 조회(비공개 REST)와 재동기화보다 먼저 본다. 중지 중에도 매수 신호는 매 tick 나온다.
         if (skipWhileEntriesPaused(ticker)) return null
         val onDust = rules.isDust(state, currentPrice)
@@ -235,7 +235,7 @@ class PositionManager(
         if (skipWhileEntriesPaused(ticker)) return null
         val identifier = newOrderIdentifier()
         // 체결 확인 전에 재시작해도 이전 진입 정보가 이어지지 않도록 진입 메타를 지우고 pending 을 기록한다.
-        // dust 흡수일 때도 수량은 두고 메타만 지운다. 체결이 확정되면 실잔고로 덮어쓴다.
+        // dust 흡수일 때도 수량은 두고 메타만 지운다. 체결이 확정되면 주문 때 장부 + 이번 체결량으로 덮어쓴다.
         state.clearEntryMeta()
         state.beginBuyOrder(identifier, strategyName, priorVolume)
         // 기록부터 체결 반영까지는 stop/reload 가 끊지 못하게 한다.
@@ -436,7 +436,7 @@ class PositionManager(
         val snapshot = tradingProperties.exitParamsSnapshot()
         val applyTransition: (TradingState) -> Unit = { s ->
             s.reconcileFailureCount = 0
-            // 실잔고를 절대값으로 반영해 syncPosition 이 복원한 수량과 이중으로 세지 않는다.
+            // 절대값으로 덮어 syncPosition 이 그사이 잔고로 맞춘 수량과 이중으로 세지 않는다.
             s.markBought(fillPrice, volume, strategy, replace = true, now = now, tradingDate = tradingDate)
             // markBought 뒤에 찍어야 신규 진입은 현재 설정을, 재시작 복원은 저장된 스냅샷을 쓴다.
             s.exitParams = s.exitParams ?: snapshot

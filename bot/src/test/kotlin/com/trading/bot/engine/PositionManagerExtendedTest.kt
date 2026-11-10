@@ -175,10 +175,10 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `buy reconciles volume and avg price from exchange and sets boughtToday`() = runTest {
+    fun `buy books the executed volume and, without trade details and prior holding, the account average and sets boughtToday`() = runTest {
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")), // 투자금 사이징
-            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")), // 체결 뒤 실잔고
+            listOf(Account(currency = "BTC", balance = "0.00038", avgBuyPrice = "52000000")), // 체결 뒤 계좌 — 평단만 읽는다
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-123")
         coEvery { upbitClient.getOrder("buy-123") } returns
@@ -189,8 +189,9 @@ class PositionManagerExtendedTest {
 
         assertNotNull(result)
         assertEquals(TradeSide.BUY, result!!.side)
-        assertEquals(52000000.0, result.price)   // 거래소 평단 (currentPrice 아님)
-        assertEquals(0.00038, result.volume)     // 거래소 실잔고 (investAmount/price 아님)
+        // 주문 전 보유가 없으면 계좌 평단이 곧 이번 체결가다(판단가 50,000,000 이 아님).
+        assertEquals(52000000.0, result.price)
+        assertEquals(0.00038, result.volume)     // 주문 체결량 (investAmount/price 아님)
         assertEquals("volatility_breakout", result.strategy)
         assertTrue(state.position)
         assertTrue(state.boughtToday)
@@ -247,7 +248,7 @@ class PositionManagerExtendedTest {
         // 코인을 받았으므로 매수로 인정해야 손절·익절이 영영 동작하지 않는 유령 보유를 막는다.
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")), // 투자금 사이징
-            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")), // 부분체결 실잔고
+            listOf(Account(currency = "BTC", balance = "0.0003", avgBuyPrice = "52000000")), // 부분체결 뒤 계좌 — 평단만 읽는다
         )
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-partial")
         coEvery { upbitClient.getOrder("buy-partial") } returns
@@ -258,7 +259,7 @@ class PositionManagerExtendedTest {
 
         assertNotNull(result)
         assertEquals(0.0003, result!!.volume)
-        assertEquals(52000000.0, result.price)
+        assertEquals(52000000.0, result.price) // 주문 전 보유가 없어 계좌 평단
         assertTrue(state.position)
         assertTrue(state.boughtToday)
         assertEquals(0.0003, state.holdVolume)
@@ -1928,10 +1929,9 @@ class PositionManagerExtendedTest {
         OrderTrade(market = market, uuid = "t-$funds", price = (funds / volume).toString(), volume = volume.toString(), funds = funds.toString(), side = side)
 
     @Test
-    fun `engine buy on top of an existing holding records this order's funds, not the position snapshot`() = runTest {
-        // 거래소에 이미 0.02 BTC 가 있는 계좌(외부 입금·복원 전)에 50,000원어치 매수. completeBuy 는 실잔고로
-        // volume/totalAmount 를 채우므로 totalAmount 는 전체 원가 스냅샷(≈1,090,000)이지만 orderAmount 는 이번 주문의
-        // 체결 대금 50,000 이어야 한다.
+    fun `engine buy on top of the owner's holding books and records only this order`() = runTest {
+        // 거래소에 이미 소유자의 0.02 BTC 가 있는 계좌에 50,000원어치 매수. 장부는 이번 체결(0.001 @VWAP 50,000,000)만
+        // 담아, 다음 청산이 소유자 코인을 팔지 않고 기록 금액도 이번 주문이다.
         coEvery { upbitClient.getAccounts() } returnsMany listOf(
             listOf(Account(currency = "KRW", balance = "200000")),
             listOf(Account(currency = "BTC", balance = "0.021", avgBuyPrice = "51900000")),
@@ -1942,10 +1942,13 @@ class PositionManagerExtendedTest {
             trades = listOf(fill("KRW-BTC", 30_000.0, 0.0006, "bid"), fill("KRW-BTC", 20_000.0, 0.0004, "bid")),
         )
 
-        val result = manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50000000.0, "test")!!
+        val state = TradingState("KRW-BTC")
+        val result = manager.buy("KRW-BTC", state, 50000000.0, "test")!!
 
         assertEquals(50_000.0, result.orderAmount!!, 1e-9)
-        assertTrue(result.totalAmount > 1_000_000.0, "totalAmount 는 포지션 전체 원가 스냅샷: ${result.totalAmount}")
+        assertEquals(50_000.0, result.totalAmount, 1e-6)
+        assertEquals(0.001, state.holdVolume, 1e-12)
+        assertEquals(50_000_000.0, state.avgBuyPrice, 1e-6)
     }
 
     @Test
