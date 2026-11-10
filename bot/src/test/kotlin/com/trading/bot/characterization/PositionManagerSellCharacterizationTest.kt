@@ -142,7 +142,8 @@ class PositionManagerSellCharacterizationTest {
         val dust = holding()
         assertNull(manager.sell("KRW-BTC", dust, 50_000_000.0, SellReason.STOP_LOSS))
         assertTrue(sent.isEmpty())
-        coVerify(exactly = 0) { stateService.upsert(any(), any()) }
+        // 주문 선기록은 없다. 잔고에 맞춰 줄인 장부만 남긴다.
+        coVerify(exactly = 0) { stateService.upsert(any(), match { it.hasPendingSell() }) }
         assertEquals(0.00009, dust.holdVolume)
         assertTrue(dust.dustWarned)
         assertFalse(dust.hasPendingSell())

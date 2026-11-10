@@ -369,7 +369,9 @@ class TradingEngine(
     // unsynced 는 보유 여부를 아직 모른다는 뜻이라 확인될 때까지 빼지 않는다.
     private fun TradingState.mustKeep(): Boolean = position || unsynced || hasPendingOrder()
 
-    private fun TradingState.hasEntryTrace(): Boolean = hasPendingOrder() || entryStrategy != null || buyDate != null
+    // 저장된 봇 장부가 남아 있어도 관리할 보유다.
+    private fun TradingState.hasEntryTrace(): Boolean =
+        hasPendingOrder() || entryStrategy != null || buyDate != null || (currentBookVolume() ?: 0.0) > VOLUME_EPSILON
 
     private fun TradingState.hasPendingOrder(): Boolean = hasPendingBuy() || hasPendingSell()
 

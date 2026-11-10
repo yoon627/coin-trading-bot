@@ -77,33 +77,62 @@ class PositionManager(
     private suspend fun findAccount(currency: String): Account? =
         upbitClient.getAccounts().find { it.currency == currency }
 
+    /**
+     * 봇 장부를 거래소 잔고로 맞춘다. 장부는 줄이기만 한다 — 늘리는 것은 봇 체결과 손으로 정리한 미해소 매수의 편입뿐이다.
+     * 줄이는 기준은 잔고 합(free+locked)이라 소유자 주문이 봇 코인을 잠근 채 재시작해도 장부가 줄지 않는다.
+     * 장부를 저장하기 전의 행은 봇 흔적이 있을 때만 한 번 잔고 전체를 편입한다(소유자 결정).
+     */
     suspend fun syncPosition(ticker: String, state: TradingState) {
         try {
             val account = findAccount(ticker.substringAfter("-"))
-            if (account != null) {
-                // 매도 주문이 걸린 채 재시작하면 코인이 전부 locked 라, free 만 보면 보유 없음으로 잘못 동기화된다.
-                val held = heldVolume(account, ourSellLockCeiling(state))
-                if (held > 0.0) {
-                    state.position = true
-                    state.avgBuyPrice = account.avgBuyPriceDouble()
-                    state.holdVolume = held
-                    log.info("Synced existing position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
-                } else if (isUnattributableLock(account, state)) {
-                    // 우리 주문으로 설명되지 않는 lock 은 보유로 세지 않고 매수만 막는다.
-                    // 여기서 position 을 내리면 거래 기록 없이 포지션이 사라지므로 정리는 sell() 에 맡긴다.
-                    if (!state.unattributableLockWarned) {
-                        log.warn(
-                            "Unattributable locked balance for {}: locked={} — blocking new entries until it clears",
-                            ticker, account.lockedDouble(),
-                        )
-                        state.unattributableLockWarned = true
-                    }
-                    state.unsynced = true
-                    return
-                }
+            val free = account?.balanceDouble() ?: 0.0
+            val locked = account?.lockedDouble() ?: 0.0
+            // 우리 매도 주문으로 설명되지 않는 잠금(소유자 주문·출금 대기).
+            val foreignLock = locked - minOf(locked, ourSellLockCeiling(state))
+            // 손으로 정리한 주문의 결과와 옛 행의 편입은 free 로 판정한다. 잠금이 풀린 뒤 다시 본다.
+            val deferred = when {
+                foreignLock <= VOLUME_EPSILON -> null
+                state.sellClearVolume != null || state.adoptBaselineVolume != null -> "the manual pending clear"
+                adoptsFromBalance(state) -> "adopting the unstored book"
+                else -> null
             }
-            state.unsynced = false
-            state.unattributableLockWarned = false
+            if (deferred != null) {
+                deferSync(ticker, state, deferred, foreignLock, account)
+                return
+            }
+            var (volume, avg, fromBalance) = bookToSync(ticker, state, account)
+            applyClearedSell(ticker, state, free, fromBalance)?.let { sold -> volume = (volume - sold).coerceAtLeast(0.0) }
+            state.adoptBaselineVolume?.let { baseline ->
+                val added = (free - baseline).coerceAtLeast(0.0)
+                if (!fromBalance && added > VOLUME_EPSILON) {
+                    val accountAvg = account?.avgBuyPriceDouble() ?: 0.0
+                    avg = if (volume > VOLUME_EPSILON && avg > 0.0) (avg * volume + accountAvg * added) / (volume + added) else accountAvg
+                    volume += added
+                    log.warn("Adopted {} {} bought by the manually cleared order (average from the exchange, approximate)", added, ticker)
+                }
+                state.adoptBaselineVolume = null
+            }
+            val held = minOf(volume, free + locked)
+            if (held < volume - VOLUME_EPSILON) log.info("Book for {} shrinks to the balance: {} → {}", ticker, volume, held)
+            state.position = held > VOLUME_EPSILON
+            state.holdVolume = if (state.position) held else 0.0
+            state.avgBuyPrice = if (state.position) avg else 0.0
+            state.bookKnown = true
+            // 재시작 뒤 체결을 더할 주문 때 장부도 줄어든 장부를 넘지 않게 한다.
+            state.pendingBuyBookVolume = state.pendingBuyBookVolume?.coerceAtMost(state.holdVolume)
+            if (state.position) log.info("Synced position for {}: price={}, volume={}", ticker, state.avgBuyPrice, state.holdVolume)
+            if (account != null && isUnattributableLock(account, state)) {
+                // 장부는 두어 손절 평가는 계속하고, 보유를 모르는 채 사지 않도록 매수만 막는다.
+                if (!state.unattributableLockWarned) {
+                    log.warn("Unattributable locked balance for {}: locked={} — blocking new entries until it clears", ticker, locked)
+                    state.unattributableLockWarned = true
+                }
+                state.unsynced = true
+            } else {
+                state.unsynced = false
+                state.unattributableLockWarned = false
+            }
+            persist(state)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -111,6 +140,72 @@ class PositionManager(
             state.unsynced = true
             log.warn("Failed to sync position for {}: {}", ticker, e.message)
         }
+    }
+
+    /**
+     * 장부는 모르는 채로 두고(저장하지 않는다) 새로 사지 않는다. 옛 행은 이전 버전처럼 팔 수 있는 잔고로 손절 평가를 이어 간다.
+     * 손으로 정리한 주문은 그 결과를 모르는 동안 보유를 세우지 않는다 — 정리한 매도가 이미 팔았으면 저장된 장부로 손절할 때
+     * 소유자 코인이 팔린다.
+     */
+    private fun deferSync(ticker: String, state: TradingState, what: String, foreignLock: Double, account: Account?) {
+        if (adoptsFromBalance(state)) {
+            val volume = account?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+            state.position = volume > VOLUME_EPSILON
+            state.holdVolume = if (state.position) volume else 0.0
+            state.avgBuyPrice = if (state.position) account?.avgBuyPriceDouble() ?: 0.0 else 0.0
+        }
+        state.unsynced = true
+        if (!state.unattributableLockWarned) {
+            log.warn("Deferring {} on {}: locked={} is not ours — re-checking after it clears", what, ticker, foreignLock)
+            state.unattributableLockWarned = true
+        }
+    }
+
+    private fun adoptsFromBalance(state: TradingState): Boolean =
+        !state.bookKnown && state.storedBook == null && state.adoptBaselineVolume == null && hasBotTrace(state)
+
+    private fun hasBotTrace(state: TradingState): Boolean =
+        state.hasPendingBuy() || state.hasPendingSell() || state.entryStrategy != null || state.buyDate != null
+
+    private data class SyncBook(val volume: Double, val avg: Double, val fromBalance: Boolean)
+
+    /** 동기화의 출발 장부. [SyncBook.fromBalance] 면 이미 지금 잔고에서 잡은 값이라 손으로 정리한 주문의 결과를 다시 반영하지 않는다. */
+    private fun bookToSync(ticker: String, state: TradingState, account: Account?): SyncBook {
+        if (state.bookKnown) return SyncBook(state.holdVolume, state.avgBuyPrice, fromBalance = false)
+        state.storedBook?.let { return SyncBook(it.volume, it.avgPrice, fromBalance = false) }
+        // 장부를 저장하기 전의 행. 정리한 매수가 있으면 그 주문 전 free 위만 편입한다(아래 규칙이 0 에서 더한다).
+        if (state.adoptBaselineVolume != null) return SyncBook(0.0, 0.0, fromBalance = false)
+        val accountAvg = account?.avgBuyPriceDouble() ?: 0.0
+        if (hasBotTrace(state)) {
+            // 미해소 매도가 있으면 그 주문 수량이 봇 장부다. 주문 수량이 없는 옛 행은 잔고 전체로.
+            val volume = state.pendingSellVolume?.takeIf { state.hasPendingSell() }
+                ?: account?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+            if (volume > VOLUME_EPSILON) {
+                log.warn("Adopting {} {} as the bot's position once — its book was not stored before this version", volume, ticker)
+            }
+            return SyncBook(volume, accountAvg, fromBalance = true)
+        }
+        val free = account?.balanceDouble() ?: 0.0
+        if (free > VOLUME_EPSILON) {
+            log.warn("Not adopting {} {} — nothing shows the bot bought it, so it is treated as the owner's", free, ticker)
+        }
+        return SyncBook(0.0, 0.0, fromBalance = false)
+    }
+
+    /** 손으로 정리한 미해소 매도가 체결된 만큼(주문 전 free − 지금 free, 주문 수량까지)을 돌려주고 기준값을 비운다. */
+    private fun applyClearedSell(ticker: String, state: TradingState, free: Double, fromBalance: Boolean): Double? {
+        val ordered = state.sellClearVolume ?: return null
+        val prior = state.sellClearPriorVolume
+        state.sellClearVolume = null
+        state.sellClearPriorVolume = null
+        if (fromBalance) return null
+        if (prior == null) {
+            log.error("{}: the manually cleared sell has no balance before the order — the book is kept as is, check the exchange", ticker)
+            return null
+        }
+        val sold = (prior - free).coerceIn(0.0, ordered)
+        if (sold > VOLUME_EPSILON) log.info("Manually cleared sell on {} filled {} — reducing the book", ticker, sold)
+        return sold
     }
 
     private fun skipWhileEntriesPaused(ticker: String): Boolean {
@@ -199,13 +294,8 @@ class PositionManager(
         }
         // 장부 밖 잔고도 주문 전 보유량에 넣어야 체결 판정이 이 주문의 증분만 본다.
         val priorVolume = coin?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-        if (onDust && !rules.isBelowMinOrder(priorVolume, currentPrice)) {
-            // 기록이 낡아 실제로는 팔 수 있는 보유다. 그 위에 사면 이중 포지션이므로 실측값으로 고친다.
-            log.info("Skip buy for {}: holding is sellable on the exchange (volume={}) — resyncing", ticker, priorVolume)
-            state.holdVolume = priorVolume
-            coin?.let { state.avgBuyPrice = it.avgBuyPriceDouble() }
-            return null
-        }
+        // 장부가 dust 인데 잔고가 팔 수 있는 양이면 그 차이는 소유자 코인이다. 장부를 늘리지 않고 흡수 매수가 나간다
+        // — 체결은 dust 장부 위에만 더한다.
         val size = rules.buySize(investAmount, currentPrice) ?: run {
             log.debug("Skip buy for {}: investAmount={} buys nothing at price {}", ticker, investAmount, currentPrice)
             return null
@@ -553,10 +643,11 @@ class PositionManager(
         // 잠긴 코인은 풀려서 돌아올 수 있는데, 여기서 내리면 목록 밖이라 다시 편입할 길이 없다.
         if (account != null && account.lockedDouble() > 0.0) return
         val free = account?.let { heldVolume(it, 0.0) } ?: 0.0
-        // 장부보다 많은 잔고는 소유자 코인이다. 장부 0 은 모름이라 잔고로 본다.
+        // 장부보다 많은 잔고는 소유자 코인이다. 장부 0 은 장부를 저장하기 전 행의 첫 동기화 전에만 닿아 잔고로 본다.
         val held = if (state.holdVolume > VOLUME_EPSILON) minOf(state.holdVolume, free) else free
         if (!rules.isBelowMinOrder(held, currentPrice)) {
-            state.holdVolume = held // 기록이 낡았다. 팔 수 있는 보유로 계속 관리한다
+            // 소유자가 봇 코인 일부를 팔았으면 줄인 장부를 남긴다.
+            if (state.shrinkBookTo(held)) persist(state)
             return
         }
         log.warn("Releasing unsellable dust on {} (volume={}) — the ticker is outside the list, so nothing can absorb it", ticker, held)
@@ -698,11 +789,15 @@ class PositionManager(
             // 서로 미뤄 유령 포지션이 남는다. 진입 메타는 남기고 재동기화에 넘겨, 락이 풀리면 다시 편입된다.
             val locked = account?.lockedDouble() ?: 0.0
             if (locked > 0.0) {
-                log.warn(
-                    "Sell aborted for {}: free balance 0 and locked={} is not ours (no pending sell) — releasing holdings, re-sync will re-adopt them if the lock clears",
-                    ticker, locked,
-                )
-                state.releaseHoldings()
+                // 장부는 둔다. 내리면 잠금이 풀린 뒤 그 코인을 소유자 것으로 본다. 재동기화가 장부로 되살린다.
+                if (!state.unattributableLockWarned) {
+                    log.warn(
+                        "Sell aborted for {}: free balance 0 and locked={} is not ours (no pending sell) — keeping the book, re-sync restores it when the lock clears",
+                        ticker, locked,
+                    )
+                    state.unattributableLockWarned = true
+                }
+                state.position = false
                 state.unsynced = true
             } else {
                 log.warn("Sell aborted for {}: no balance on exchange — clearing phantom position", ticker)
@@ -713,7 +808,7 @@ class PositionManager(
         }
 
         // 봇 장부보다 free 가 팔 수 있을 만큼 많으면 그 차이는 소유자가 산 코인이라 장부까지만 판다.
-        // 차이가 최소주문 미만이면 같이 판다 — 남기면 누구도 팔 수 없는 자투리가 된다. 장부 0 은 모름이라 free 를 판다.
+        // 차이가 최소주문 미만이면 같이 판다 — 남기면 누구도 팔 수 없는 자투리가 된다. 장부 0 은 장부를 저장하기 전 행의 첫 동기화 전에만 닿아 free 를 판다(position 이 켜진 장부는 0 보다 크다).
         val book = state.holdVolume
         val ownerCoinsLeft = book > VOLUME_EPSILON && sellable > book && !rules.isBelowMinOrder(sellable - book, currentPrice)
         // free 를 팔 때는 거래소가 준 잔고 문자열을 그대로 쓴다.
@@ -725,7 +820,8 @@ class PositionManager(
             // 장부보다 많은 잔고는 소유자 코인이라 장부를 늘리지 않는다. 줄이는 것은 잔고 합(free+locked)이 장부보다
             // 적을 때뿐이다 — 소유자 주문이 봇 코인을 잠근 동안 줄이면 풀린 뒤 그 코인을 소유자 것으로 본다.
             // 장부가 없으면 실측 수량을 쓴다.
-            state.holdVolume = if (book > VOLUME_EPSILON) minOf(book, account!!.totalBalance()) else heldVolume(account!!, ourSellLockCeiling(state))
+            val shrunk = if (book > VOLUME_EPSILON) minOf(book, account!!.totalBalance()) else heldVolume(account!!, ourSellLockCeiling(state))
+            if (state.shrinkBookTo(shrunk)) persist(state)
             if (ownerCoinsLeft) {
                 // 팔 수 있는 잔고를 두고 청산을 내지 않는다. 그 잔고가 실은 봇 것(낡은 장부)이면 손절이 빠진 것이다.
                 if (!state.heldBackSellAlerted) {
@@ -989,6 +1085,7 @@ class PositionManager(
                 // 부분 체결. 복원 때 잔고가 매도 주문에 잠겨 position 이 false 였을 수 있어 되살린다.
                 s.position = true
                 s.holdVolume = remaining
+                s.bookKnown = true
                 if (s.avgBuyPrice <= 0.0) s.avgBuyPrice = recoveredAvg
                 s.clearPendingSell()
             } else {
