@@ -56,6 +56,10 @@ data class TradingState(
     var peakPersistFailed: Boolean = false,
     // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 주문 전부터 있던 코인을 체결로 오판하지 않게 한다.
     var pendingBuyPriorVolume: Double? = null,
+    // 주문할 때의 봇 장부(비영속). 체결은 여기에 더한다 — 잔고 전체로 덮으면 봇이 사기 전부터 있던 소유자 코인이 장부에 든다.
+    // 재시작으로 비면 null 이고, 그때는 기동 동기화가 이미 잔고 전체를 장부로 잡았으므로 정산도 잔고 전체로 한다.
+    var pendingBuyBookVolume: Double? = null,
+    var pendingBuyBookAvg: Double? = null,
     // 매도를 결정한 tick 가격. 매도 기록의 price·pnl 기준이다.
     var pendingSellTriggerPrice: Double? = null,
     // 매도 주문 직전 free 보유량. 응답을 못 받은 매도의 체결 흔적 판정 기준이다.
@@ -87,6 +91,9 @@ data class TradingState(
         pendingBuyIdentifier = identifier
         pendingBuyStrategy = strategy
         pendingBuyPriorVolume = priorVolume
+        // dust 를 흡수하는 매수만 보유가 있다. 그 dust 가 봇 장부다. 그사이 소유자가 dust 를 옮겼으면 주문 전 잔고까지만.
+        pendingBuyBookVolume = if (position) minOf(holdVolume, priorVolume) else 0.0
+        pendingBuyBookAvg = if (position) avgBuyPrice else 0.0
     }
 
     /** 거래소 uuid 를 알게 되면 이후 확정은 uuid 로 한다. */
@@ -124,6 +131,8 @@ data class TradingState(
         pendingBuyIdentifier = null
         pendingBuyStrategy = null
         pendingBuyPriorVolume = null
+        pendingBuyBookVolume = null
+        pendingBuyBookAvg = null
         liftReviewIfSettled()
     }
 

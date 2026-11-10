@@ -66,6 +66,33 @@ class PositionManagerSellOwnBookTest {
 
     private suspend fun stopLoss(state: TradingState) = manager.sell("KRW-BTC", state, price, SellReason.STOP_LOSS)
 
+    // 봇이 사기 전부터 있던 소유자 코인: 봇 매수는 산 만큼만 장부에 넣고, 다음 손절은 그만큼만 판다.
+    @Test
+    fun `a stop-loss after a bot buy on top of the owner's coins sells only what the bot bought`() = runTest {
+        coEvery { upbit.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "1000000"), btc("0.05")), // 주문 전: 소유자 0.05
+            listOf(Account(currency = "KRW", balance = "900000"), btc("0.06")), // 손절 때
+        )
+        coEvery { upbit.placeOrder(any()) } coAnswers {
+            val request = firstArg<OrderRequest>()
+            sent += request
+            Order(uuid = if (request.side == "bid") "b-1" else "s-1")
+        }
+        coEvery { upbit.getOrder("b-1") } returns Order(
+            uuid = "b-1", state = "done", executedVolume = "0.01", paidFee = "0",
+            trades = listOf(OrderTrade(price = "10000000", volume = "0.01", funds = "100000")),
+        )
+        coEvery { upbit.getOrder("s-1") } returns filled("done", "0.01")
+        val state = TradingState("KRW-BTC")
+
+        manager.buy("KRW-BTC", state, price, "combined")
+        assertEquals(0.01, state.holdVolume, 1e-12)
+        stopLoss(state)
+
+        assertEquals(listOf("bid", "ask"), sent.map { it.side })
+        assertEquals("0.01", sent.last().volume)
+    }
+
     // 수량을 잘못 고르면 손절이 빠지거나 줄고 되돌릴 수 없다.
     @Test
     fun `a sellable balance always gets a stop-loss order even when the book is unknown`() = runTest {

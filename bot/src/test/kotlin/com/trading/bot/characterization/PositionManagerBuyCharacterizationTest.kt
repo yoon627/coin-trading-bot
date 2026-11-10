@@ -65,7 +65,7 @@ class PositionManagerBuyCharacterizationTest {
     fun `buy reads balance, records the identifier, sends a price order, polls the fill and commits in that order`() = runTest {
         coEvery { upbit.getAccounts() } returnsMany listOf(
             listOf(krw("523456.7")),
-            // 체결 응답(0.001, 현재가)과 다른 값이라야 수량·평단을 실잔고에서 읽는지 가른다.
+            // 체결 뒤에는 잔고를 읽지 않는다. 읽는다면 이 값(체결 응답과 다름)이 장부에 들어간다.
             listOf(krw("471111.7"), btc("0.0011", avg = "51000000")),
         )
         var durableAtSend: TradingState? = null
@@ -80,11 +80,11 @@ class PositionManagerBuyCharacterizationTest {
         val record = manager().buy("KRW-BTC", state, 52_000_000.0, "test")
 
         // 앞은 클라이언트 호출의 전체 집합을, 뒤는 그 호출과 저장·커밋 사이의 순서를 고정한다.
+        // 장부는 주문 때 장부 + 체결량이라 체결 뒤 잔고를 다시 읽지 않는다(소유자 코인이 장부에 들지 않게).
         coVerifySequence {
             upbit.getAccounts()
             upbit.placeOrder(any())
             upbit.getOrder("u-1")
-            upbit.getAccounts()
         }
         coVerifyOrder {
             upbit.getAccounts()
@@ -92,7 +92,6 @@ class PositionManagerBuyCharacterizationTest {
             upbit.placeOrder(any())
             stateService.upsert(1L, any())
             upbit.getOrder("u-1")
-            upbit.getAccounts()
             fills.commit(any())
         }
 
@@ -117,14 +116,14 @@ class PositionManagerBuyCharacterizationTest {
 
         assertEquals(TradeSide.BUY, record?.side)
         assertEquals("u-1", record?.exchangeOrderId)
-        assertEquals(51_000_000.0, record?.price)
-        assertEquals(0.0011, record?.volume)
+        assertEquals(52_345_000.0, record?.price) // 체결가 VWAP
+        assertEquals(0.001, record?.volume) // 이번 체결량
         assertEquals(FeeBasis.Measured(26.0), record?.fee)
         assertEquals(52_345.0, record?.orderAmount)
         assertEquals("test", record?.strategy)
         assertTrue(state.position)
-        assertEquals(51_000_000.0, state.avgBuyPrice)
-        assertEquals(0.0011, state.holdVolume)
+        assertEquals(52_345_000.0, state.avgBuyPrice)
+        assertEquals(0.001, state.holdVolume)
         assertFalse(state.hasPendingBuy())
     }
 
