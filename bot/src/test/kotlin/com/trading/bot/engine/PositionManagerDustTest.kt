@@ -176,16 +176,22 @@ class PositionManagerDustTest {
     }
 
     @Test
-    fun `a stale dust reading does not buy on top of a sellable holding`() = runTest {
-        // 기록상 dust 지만 그 사이 앱에서 더 사서 실제로는 10만원어치다. 여기서 사면 이중 포지션이 된다.
-        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.01", avg = "9500000"))
+    fun `a dust book next to the owner's sellable coins absorbs with a buy and books only the fill`() = runTest {
+        // 봇 장부는 dust 인데 그 사이 앱에서 더 사서 잔고는 10만원어치다. 그 차이는 소유자 코인이라 장부를 늘리지 않고,
+        // 흡수 매수의 체결만 dust 장부 위에 더한다.
+        coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0101", avg = "9500000"))
+        coEvery { upbit.placeOrder(any()) } returns Order(uuid = "b-1")
+        coEvery { upbit.getOrder("b-1") } returns Order(
+            uuid = "b-1", state = "done", executedVolume = "0.01", paidFee = "50",
+            trades = listOf(OrderTrade(price = "10000000", volume = "0.01", funds = "100000")),
+        )
         val state = dust()
 
-        assertNull(manager.buy("KRW-BTC", state, price, "combined"))
+        manager.buy("KRW-BTC", state, price, "combined")
 
-        coVerify(exactly = 0) { upbit.placeOrder(any()) }
-        assertEquals(0.01, state.holdVolume)
-        assertEquals(9_500_000.0, state.avgBuyPrice)
+        coVerify(exactly = 1) { upbit.placeOrder(any()) }
+        assertEquals(0.0101, state.holdVolume, 1e-12)
+        assertEquals((12_000_000.0 * 0.0001 + 10_000_000.0 * 0.01) / 0.0101, state.avgBuyPrice, 1e-6)
     }
 
     @Test

@@ -2,13 +2,18 @@ package com.trading.bot.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.TradeSide
+import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.entity.TradingStateEntity
 import io.mockk.every
 import io.mockk.slot
 import io.mockk.mockk
+import java.time.Instant
+import java.time.LocalDate
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -146,5 +151,95 @@ class TradingStateServiceTest {
 
         assertNull(restored.pendingSellSince)
         assertEquals(false, restored.pendingSellAlerted)
+    }
+
+    // --- 봇 장부(V34) ---
+
+    private val writtenAt = Instant.parse("2026-11-10T00:00:00Z")
+
+    private fun storedRow(book: Double?, bookWrittenAt: Instant? = writtenAt, updatedAt: Instant = writtenAt, pendingBuy: Boolean = false) =
+        TradingStateEntity(
+            id = 7L, userId = 1L, ticker = "KRW-BTC", bookVolume = book, bookAvgPrice = 50_000_000.0,
+            bookWrittenAt = bookWrittenAt, updatedAt = updatedAt, pendingBuyUuid = if (pendingBuy) "b-1" else null,
+        )
+
+    private fun savedOnUpsert(existing: TradingStateEntity?, state: TradingState): TradingStateEntity {
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.justOrEmpty(existing)
+        val saved = slot<TradingStateEntity>()
+        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        kotlinx.coroutines.runBlocking { service.upsert(1L, state) }
+        return saved.captured
+    }
+
+    @Test
+    fun `a known book is written with the same stamp as the row`() {
+        val row = savedOnUpsert(storedRow(0.01), TradingState("KRW-BTC", position = true, holdVolume = 0.02, avgBuyPrice = 1.0, bookKnown = true))
+
+        assertEquals(0.02, row.bookVolume)
+        assertEquals(1.0, row.bookAvgPrice)
+        assertEquals(row.updatedAt, row.bookWrittenAt)
+    }
+
+    // 로드 직후·동기화 실패 상태를 저장할 때 0 을 쓰면 봇 포지션이 관리 밖으로 빠진다. 옛 버전이 쓴 낡은 표시도 그대로 둔다.
+    @Test
+    fun `an unknown book keeps the row's book and its stamp`() {
+        val stale = storedRow(0.01, bookWrittenAt = writtenAt, updatedAt = writtenAt.plusSeconds(60))
+
+        val row = savedOnUpsert(stale, TradingState("KRW-BTC"))
+
+        assertEquals(0.01, row.bookVolume)
+        assertEquals(writtenAt, row.bookWrittenAt)
+        assertTrue(row.updatedAt != row.bookWrittenAt)
+    }
+
+    @Test
+    fun `a book last saved by an older version is not trusted, and a row without one reads as no book`() = runTest {
+        rows(
+            storedRow(0.01).copy(ticker = "KRW-BTC"),
+            storedRow(0.02, updatedAt = writtenAt.plusSeconds(60)).copy(id = 8L, ticker = "KRW-ETH"),
+            storedRow(null, bookWrittenAt = null).copy(id = 9L, ticker = "KRW-XRP"),
+        )
+
+        val states = service.loadStates(1L)
+
+        assertEquals(0.01, states.getValue("KRW-BTC").storedBook?.volume)
+        assertNull(states.getValue("KRW-ETH").storedBook)
+        assertNull(states.getValue("KRW-XRP").storedBook)
+    }
+
+    // 새 버전이 동기화 전에 저장해도 믿을 수 있던 장부는 계속 믿는다. 표시를 옮기지 않으면 옛 버전이 쓴 행과 구분이 안 된다.
+    @Test
+    fun `an unknown book carried from a valid row stays valid`() {
+        val row = savedOnUpsert(storedRow(0.01), TradingState("KRW-BTC"))
+
+        assertEquals(0.01, row.bookVolume)
+        assertEquals(row.updatedAt, row.bookWrittenAt)
+    }
+
+    // pending/clear 는 봇이 멈춘 채 행을 읽어 정리하고 다시 저장한다. 그 저장이 장부를 낡게 만들면 다음 기동이 잔고 전체를 편입한다.
+    @Test
+    fun `a pending clear saved before the first sync keeps the stored book for the next load`() = runTest {
+        val stored = storedRow(0.01).copy(pendingSellUuid = "s-1", pendingSellVolume = 0.01, pendingSellPriorVolume = 0.06)
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.just(stored)
+        val state = service.loadState(1L, "KRW-BTC")!!.apply { releasePending(TradeSide.SELL, LocalDate.of(2026, 11, 10)) }
+
+        val row = savedOnUpsert(stored, state)
+        rows(row)
+
+        val next = service.loadStates(1L).getValue("KRW-BTC")
+        assertEquals(0.01, next.storedBook?.volume)
+        assertEquals(0.06, next.sellClearPriorVolume)
+    }
+
+    // 재시작 전 걸어 둔 매수의 체결은 주문 때 장부 위에만 더한다. 그 값은 pending 과 함께 저장된다.
+    @Test
+    fun `the order-time book of a pending buy is saved and restored with the pending`() = runTest {
+        val row = savedOnUpsert(null, TradingState("KRW-BTC", pendingBuyUuid = "b-1", pendingBuyBookVolume = 0.0001, pendingBuyBookAvg = 4.0))
+        rows(row)
+
+        val restored = service.loadStates(1L).getValue("KRW-BTC")
+
+        assertEquals(0.0001, restored.pendingBuyBookVolume)
+        assertEquals(4.0, restored.pendingBuyBookAvg)
     }
 }

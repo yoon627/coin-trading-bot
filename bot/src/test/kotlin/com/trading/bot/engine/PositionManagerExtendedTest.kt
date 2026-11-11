@@ -47,7 +47,8 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.5", avgBuyPrice = "50000000")
         )
-        val state = TradingState("KRW-BTC")
+        // 장부를 저장하기 전의 행은 봇 흔적이 있을 때만 잔고를 편입한다.
+        val state = TradingState("KRW-BTC", entryStrategy = "combined")
 
         manager.syncPosition("KRW-BTC", state)
 
@@ -93,7 +94,7 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.5", avgBuyPrice = "50000000")
         )
-        val state = TradingState("KRW-BTC", unsynced = true)
+        val state = TradingState("KRW-BTC", unsynced = true, entryStrategy = "combined")
 
         manager.syncPosition("KRW-BTC", state)
 
@@ -1098,7 +1099,7 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0", locked = "0.001", avgBuyPrice = "50000000"),
         )
-        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001)
+        val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 50000000.0, holdVolume = 0.001, bookKnown = true)
 
         manager.syncPosition("KRW-BTC", state)
 
@@ -1170,13 +1171,13 @@ class PositionManagerExtendedTest {
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.0004", locked = "0.001", avgBuyPrice = "50000000"),
         )
-        val state = TradingState("KRW-BTC", unsynced = true)
+        val state = TradingState("KRW-BTC", unsynced = true, entryStrategy = "combined")
 
         manager.syncPosition("KRW-BTC", state)
 
         assertTrue(state.position)
         assertEquals(0.0004, state.holdVolume, 1e-9)
-        assertFalse(state.unsynced) // 팔 수 있는 보유가 있으니 정상 동기화
+        assertTrue(state.unsynced) // 장부를 정하지 않은 옛 행이라 잠금이 풀릴 때까지 새로 사지 않는다
     }
 
     @Test

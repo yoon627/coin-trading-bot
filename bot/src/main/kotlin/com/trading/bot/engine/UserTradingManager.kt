@@ -510,6 +510,10 @@ class UserTradingManager(
         // 지운 값의 유일한 기록이므로 저장 전에 남긴다. 체결된 주문이었다면 이 값으로 거래 기록을 맞춘다.
         log.warn("Clearing pending {} {} ({} {}) by hand for user {} — fields: {}", side, ticker, ref.by, ref.ref, userId, cleared)
         state.releasePending(side, TradingDay.of(LocalDateTime.now(TradingDay.KST)))
+        if (side == TradeSide.BUY && state.adoptBaselineVolume == null && state.currentBookVolume() != null) {
+            // 주문 전 보유를 모르면 그 주문이 산 코인을 소유자 코인과 가를 수 없어 편입하지 않는다.
+            log.error("{} 미해소 매수 정리: 주문 전 보유 기록이 없어 그 주문이 산 코인을 봇 장부에 넣지 않는다 — 거래소 잔고를 확인하라", ticker)
+        }
         persistOrFail(userId, PENDING_CLEAR_UNPERSISTED_MESSAGE) {
             withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { tradingStateService.upsert(userId, state) }
                 ?: throw IllegalStateException("trading_states 저장 시간 초과")

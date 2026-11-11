@@ -143,7 +143,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 1. Upbit 주문 내역을 확인하고, 미체결이면 Upbit에서 취소한다.
 2. 봇을 정지한 뒤 `POST /api/bot/pending/clear {"ticker": "KRW-BTC", "side": "buy"|"sell"}`로 기록을 지운다. 봇이 돌거나 복원 중이면 409, 메모리에만 남은 매도 기록이 있으면 503이니 잠시 후 다시 시도한다.
 3. 체결된 매도를 지우면 SELL 기록이 남지 않는다. 응답의 `cleared`(지운 필드 전부, 키는 `trading_states` 컬럼명)를 보고 거래 기록을 맞춘다.
-4. 다시 시작하면 기동 시 잔고 동기화가 매수로 들어온 코인을 보유로 편입한다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
+4. 다시 시작하면 첫 동기화가 정리한 주문의 결과를 한 번 반영한다. 매수는 주문 전 free 위로 늘어난 free 만 봇 장부에 넣고(평단은 거래소 평단 — 근사), 매도는 주문 전 free 에서 줄어든 만큼(주문 수량까지, 부분 체결 포함) 장부를 줄인다. 우리 것이 아닌 잠금(수동 주문)이 있으면 풀릴 때까지 미룬다. 정리와 재시작 사이에 앱에서 사고팔면 그 몫도 섞이므로 그 사이에는 거래하지 않는다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
 5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다. 주문 확인이 필요해 멈춘 종목(review)은 그 종목의 매수·매도 pending 이 모두 비기 전까지 halt/clear 가 409 다. pending 은 자동 확정되거나 2번의 pending/clear 로 비운다.
 
 ### 체결 알림
@@ -167,13 +167,14 @@ SELECT id, attempts, next_attempt_at, last_error FROM trade_notification_outbox 
 
 봇은 자기 장부 수량까지만 판다. 봇이 사면 이번에 산 만큼(주문 체결량)만 장부에 더하고 평단은 체결가로 잡아(체결 내역이 없으면 주문 전 보유가 없을 때는 계좌 평단, 있으면 그때 가격), 그 전부터 있던 코인은 장부에 들지 않는다. 봇이 보유 중인 종목을 앱에서 더 사도 다음 청산에서 그 코인은 팔지 않고 봇이 산 만큼만 판다(WARN 한 줄). 장부와 잔고의 차이가 최소 주문(5,000원) 미만이면 팔 수 없는 자투리를 남기지 않도록 같이 판다. 체결 뒤 남은 코인과 응답 없는 매도의 확정도 이번 주문 수량 기준이라, 남은 코인을 봇 포지션으로 다시 잡지 않는다.
 
-아직 구분하지 못하는 경우가 있다(다음 작업):
+봇 장부는 `trading_states` 에 저장된다(V34). 재시작·설정 저장(reload)·재동기화는 저장된 장부를 잔고 합(free+locked)만큼 줄이기만 하고 늘리지 않는다 — 앱에서 산 코인은 재시작 뒤에도 장부에 들지 않는다. 우리 것이 아닌 잠금(수동 주문·출금 대기)은 잔고 합에 들어가 장부를 줄이지 않는다. 팔 수 있는 잔고가 없으면 장부로 손절 평가를 계속하되 새로 사지 않는다.
 
-- 재시작·설정 저장(reload)·재동기화 뒤. 기동 동기화가 잔고 전체를 장부로 잡는다(봇은 장부를 저장하지 않는다). 매수 주문이 끝나기 전에 재시작하면 그 체결도 잔고 전체로 정한다.
-- 봇 장부가 dust 인데 잔고가 팔 수 있는 양일 때의 매수 신호. 지금처럼 그 잔고를 장부로 맞춘다.
-- 위 경우 평단도 거래소 평단(손으로 산 몫이 섞인 값)을 쓴다. 손절·익절 판정과 매도 기록이 그 평단 기준이다.
+장부를 저장하기 전에 쌓인 행(이 변경 이전)은 첫 동기화에서 한 번 정한다:
 
-그래서 봇이 다루는 종목은 앱에서 직접 사고팔지 않는 것이 안전하다. 이 변경 이전 버전으로 롤백할 때는 미해소 매도가 없을 때 한다 — 옛 코드는 남은 코인을 다시 봇 포지션으로 잡는다.
+- 봇이 산 흔적(진입 전략·매수일·미해소 주문)이 있으면 그 종목 잔고 전체를 봇 장부로 편입한다(WARN 한 줄). 우리 것이 아닌 잠금이 있으면 풀릴 때까지 미룬다. 그때 손으로 산 코인이 섞여 있었으면 나눌 수 없다. 미해소 매도가 있으면 그 주문 수량을 장부로 쓴다.
+- 흔적이 없으면 편입하지 않는다(팔 수 있는 잔고가 있으면 WARN 한 줄) — 손으로 산 코인으로 보고 봇이 손절·청산하지 않는다.
+
+그래도 봇이 산 코인 일부를 앱에서 팔면 장부가 그만큼 줄 뿐 기록(SELL)은 남지 않는다. 봇이 다루는 종목은 앱에서 직접 사고팔지 않는 것이 안전하다. V34 이전 버전으로 롤백할 때는 미해소 매도가 없을 때 하고, 롤백한 동안에는 옛 코드가 잔고 전체를 봇 포지션으로 잡는다.
 
 ## 리스크 관리
 
@@ -272,7 +273,7 @@ V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_
 
 - V31 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 다만 그 이미지는 중지 값을 읽지 않아 켜 둔 중지가 풀린 것처럼 매수가 나가므로, 롤백했으면 봇을 정지한다.
 - V32 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V32_down.sql` 은 필요 없다.
-- V31 이전으로 내려가야 하면 (V33 이 적용돼 있으면 `V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- V31 이전으로 내려가야 하면 (V34·V33 이 적용돼 있으면 `V34_down.sql`·`V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
 - 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V32_down.sql` 을 쓴다. 켜 둔 중지 값이 함께 사라진다. V32 가 마지막 적용 버전일 때만 돌고, 칼럼과 `flyway_schema_history` 의 V32 행을 한 트랜잭션으로 지운다. 백업 조건은 V31 down 과 같다.
   ```bash
   cd /opt/app
@@ -293,4 +294,18 @@ V33 은 `trade_notification_outbox` 테이블만 새로 만든다. 사전 점검
   docker compose stop app
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V33_down.sql
   APP_VERSION=<V33 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V34 (봇 장부)
+
+V34 는 `trading_states` 에 봇 장부 칼럼(`book_volume`·`book_avg_price`·`book_written_at`), 미해소 매수의 주문 때 장부(`pending_buy_book_*`)와 미해소 주문 정리 기준값(`adopt_baseline_volume`·`sell_clear_*`)을 더한다. 기존 행은 장부가 비어 첫 동기화가 위 규칙(흔적이 있으면 한 번 전량 편입)으로 정한다. 그래서 배포 첫 동기화가 되돌릴 수 없는 단계다 — 배포 전에 로컬 백업을 받고, `trading_states` 의 흔적 있는 행과 `GET /api/bot/status` 의 positions 를 남겨 편입·미편입 WARN 과 대조한다.
+
+- V33 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 장부 칼럼은 건드리지 않으므로 `V34_down.sql` 은 돌리지 않는다 — 돌리면 장부가 사라진다. 롤백한 동안 저장된 행은 `updated_at` 만 바뀌어, 다시 올리면 그 행의 장부는 낡은 것으로 보고 비운 채 위 첫 동기화 규칙을 다시 탄다.
+- V34 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다.
+- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V34_down.sql` 을 쓴다(V34 가 마지막 적용 버전일 때만 돈다).
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V34_down.sql
+  APP_VERSION=<V34 이전 SHA> docker compose up -d --pull missing
   ```

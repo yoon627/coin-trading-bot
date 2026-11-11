@@ -56,8 +56,8 @@ data class TradingState(
     var peakPersistFailed: Boolean = false,
     // 매수 주문 직전 거래소 보유량. getOrder 장애 시 잔고 복원이 주문 전부터 있던 코인을 체결로 오판하지 않게 한다.
     var pendingBuyPriorVolume: Double? = null,
-    // 주문할 때의 봇 장부(비영속). 체결은 여기에 더한다 — 잔고 전체로 덮으면 봇이 사기 전부터 있던 소유자 코인이 장부에 든다.
-    // 재시작으로 비면 null 이고, 그때는 기동 동기화가 이미 잔고 전체를 장부로 잡았으므로 정산도 잔고 전체로 한다.
+    // 주문할 때의 봇 장부(pending 과 함께 저장). 체결은 여기에 더한다 — 잔고 전체로 덮으면 봇이 사기 전부터 있던 소유자 코인이
+    // 장부에 든다. 장부를 저장하기 전 행이면 null 이고, 그때는 첫 동기화가 흔적으로 잔고 전체를 편입하므로 정산도 잔고 전체로 한다.
     var pendingBuyBookVolume: Double? = null,
     var pendingBuyBookAvg: Double? = null,
     // 매도를 결정한 tick 가격. 매도 기록의 price·pnl 기준이다.
@@ -76,8 +76,29 @@ data class TradingState(
     // 사람이 거래소에서 확인해야 하는 주문의 사유. 있는 동안 halt 해제를 거절한다. 방향을 담지 않으므로
     // 매수·매도 pending 이 모두 비었을 때만 지운다(자동 확정이든 사람의 pending 해제든).
     var reviewReason: String? = null,
+    // 저장된 봇 장부(로드 때만). 동기화의 입력일 뿐 저장의 출처가 아니다. null 이면 장부를 저장하기 전의 행이다.
+    val storedBook: StoredBook? = null,
+    // holdVolume·avgBuyPrice 가 봇 장부로 확정됐는지(비영속). 동기화 성공·체결·청산이 켜고 끄지 않는다.
+    // 꺼져 있으면 저장이 행의 기존 장부를 그대로 둔다 — 로드 직후 0 을 저장하면 봇 포지션이 관리 밖으로 빠진다.
+    var bookKnown: Boolean = false,
+    // 손으로 정리한 미해소 매수의 주문 전 free. 다음 동기화가 그 위로 늘어난 free 를 한 번 편입하고 비운다.
+    var adoptBaselineVolume: Double? = null,
+    // 손으로 정리한 미해소 매도의 주문 전 free·주문 수량. 다음 동기화가 체결된 만큼 장부를 한 번 줄이고 비운다.
+    var sellClearPriorVolume: Double? = null,
+    var sellClearVolume: Double? = null,
 ) {
     fun hasPendingBuy(): Boolean = pendingBuyUuid != null || pendingBuyIdentifier != null
+
+    /** 지금 봇 장부 수량. 동기화 전이면 저장된 장부, 장부를 저장하기 전 행이면 null 이다. */
+    fun currentBookVolume(): Double? = if (bookKnown) holdVolume else storedBook?.volume
+
+    /** 잔고에 맞춰 봇 장부를 줄인다. 늘리지 않는다. */
+    fun shrinkBookTo(volume: Double): Boolean {
+        if (volume >= holdVolume - BOOK_EPSILON) return false
+        holdVolume = volume.coerceAtLeast(0.0)
+        bookKnown = true
+        return true
+    }
 
     fun hasPendingSell(): Boolean = pendingSellUuid != null || pendingSellIdentifier != null
 
@@ -187,6 +208,7 @@ data class TradingState(
             entryStrategy = if (resuming) entryStrategy ?: strategy else strategy
             if (!resuming) exitParams = null // 진입 시점 스냅샷은 호출부가 다시 찍는다
         }
+        bookKnown = true
         // 당일 1회 진입 게이트. resetDaily 에서만 푼다.
         boughtToday = true
         boughtDate = tradingDate
@@ -211,6 +233,7 @@ data class TradingState(
         position = false
         avgBuyPrice = 0.0
         holdVolume = 0.0
+        bookKnown = true
         lastTradeTime = now
         clearPendingBuy()
         dustWarned = false
@@ -283,10 +306,14 @@ data class TradingState(
                 buyDate = buyDate ?: today
                 boughtToday = true
                 boughtDate = today
+                // 그 주문이 산 코인은 다음 동기화가 주문 전 free 위만 편입한다. 주문 전 free 를 모르는 옛 행은 편입하지 않는다.
+                adoptBaselineVolume = pendingBuyPriorVolume
                 clearPendingBuy()
             }
             TradeSide.SELL -> {
                 if (position && buyDate == null) buyDate = today
+                sellClearPriorVolume = pendingSellPriorVolume
+                sellClearVolume = pendingSellVolume
                 clearPendingSell()
             }
         }
@@ -302,3 +329,9 @@ data class TradingState(
 
 /** [by] 는 `uuid`(거래소가 아는 주문) 또는 `identifier`(응답을 못 받아 클라이언트 식별자만 아는 주문). */
 data class PendingRef(val by: String, val ref: String)
+
+/** 저장된 봇 장부. */
+data class StoredBook(val volume: Double, val avgPrice: Double)
+
+// 거래소 수량은 소수 8자리까지다.
+private const val BOOK_EPSILON = 1e-8
