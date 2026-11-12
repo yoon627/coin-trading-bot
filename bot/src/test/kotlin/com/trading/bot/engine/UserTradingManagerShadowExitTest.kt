@@ -16,6 +16,7 @@ class UserTradingManagerShadowExitTest {
         mockk(), mockk(), mockk(relaxed = true), mockk(relaxed = true), mockk(), TradingProperties(),
         mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true), mockk(relaxed = true),
         shadowExitProperties = shadow, shadowExitObservationRepository = repository,
+        manualInterventions = mockk(relaxed = true),
     )
 
     @Test

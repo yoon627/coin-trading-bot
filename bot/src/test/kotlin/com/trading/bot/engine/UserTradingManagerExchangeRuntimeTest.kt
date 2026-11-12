@@ -86,6 +86,7 @@ class UserTradingManagerExchangeRuntimeTest {
         strategy, TradingProperties(autoStart = true), mockk(relaxed = true),
         userSecretsService, mockk(relaxed = true), tradingStateService,
         runtime = runtime,
+        manualInterventions = savingInterventions(tradingStateService),
     )
 
     private val manager = spyk(newManager()).also { every { it.createEngine(any()) } returns engine }
@@ -246,6 +247,7 @@ class UserTradingManagerExchangeRuntimeTest {
             strategy, properties, mockk(relaxed = true),
             userSecretsService, marketDataStore, tradingStateService,
             dailyCandleCache = dailyCandleCache,
+            manualInterventions = savingInterventions(tradingStateService),
         )
 
         val engine = upbitManager.createEngine(user.copy(upbitAccessKey = "ak", upbitSecretKey = "sk"))

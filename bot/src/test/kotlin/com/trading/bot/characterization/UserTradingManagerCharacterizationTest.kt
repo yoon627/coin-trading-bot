@@ -9,6 +9,7 @@ import com.trading.bot.engine.PositionManager
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.engine.TradingEngine
 import com.trading.bot.engine.UserTradingManager
+import com.trading.bot.engine.savingInterventions
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
@@ -73,6 +74,7 @@ class UserTradingManagerCharacterizationTest {
         userRepository, botStateRepository, tradeExecutionService, mockk<DiscordNotifier>(relaxed = true),
         strategy, TradingProperties(autoStart = autoStart), webClient,
         userSecretsService, mockk<MarketDataStore>(relaxed = true), tradingStateService,
+        manualInterventions = savingInterventions(tradingStateService),
     )
 
     @BeforeEach

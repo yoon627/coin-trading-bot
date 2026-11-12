@@ -36,6 +36,7 @@ class UserTradingManagerReviewTest {
         mockk<UserRepository>(), botStateRepository, mockk(relaxed = true), mockk(relaxed = true),
         strategy, TradingProperties(), mockk(relaxed = true),
         mockk(relaxed = true), mockk(relaxed = true), tradingStateService,
+        manualInterventions = savingInterventions(tradingStateService),
     )
 
     private val review = "주문 확인 필요(SELL s-1): 체결 후보 2건"
@@ -59,7 +60,7 @@ class UserTradingManagerReviewTest {
         val result = manager.clearHalt(1L, "KRW-BTC")
 
         assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
-        coVerify(exactly = 0) { engine.clearHalt(any()) }
+        coVerify(exactly = 0) { engine.clearHalt(any(), any()) }
     }
 
     @Test

@@ -227,11 +227,14 @@ class TradingEngine(
     fun getHaltedTickers(): List<String> = states.filterValues { it.halted }.keys.toList()
 
     /**
-     * halt 를 수동으로 풀고 저장한다. 저장에 실패하면 메모리 상태도 되돌리고 예외를 던진다.
-     * 그러지 않으면 재시작 때 halt 가 되살아난다.
+     * halt 를 수동으로 풀고 [commit] 으로 저장한다. 저장에 실패하면 메모리 상태도 되돌리고 예외를 던진다.
+     * 그러지 않으면 재시작 때 halt 가 되살아난다. [commit] 은 루프와 겹치지 않게 잡은 해제 전 값을 함께 받는다.
      * 루프가 그 종목을 처리하는 동안은 기다리고, 시한 안에 끝나지 않으면 바꾸지 않고 [HaltClearBusyException] 을 던진다.
      */
-    suspend fun clearHalt(ticker: String): Boolean {
+    suspend fun clearHalt(
+        ticker: String,
+        commit: suspend (TradingState, HaltSnapshot) -> Unit = { state, _ -> positionManager.persistStateOrThrow(state) },
+    ): Boolean {
         val state = states[ticker] ?: return false
         if (!state.halted) return false
         // 확인이 필요한 주문은 pending 해제로만 푼다. 매니저가 먼저 409 로 거절한다.
@@ -245,20 +248,25 @@ class TradingEngine(
         }
         if (!acquired) throw HaltClearBusyException(ticker)
         try {
-            return clearHaltLocked(ticker, state)
+            return clearHaltLocked(ticker, state, commit)
         } finally {
             stateMutex.unlock()
         }
     }
 
-    private suspend fun clearHaltLocked(ticker: String, state: TradingState): Boolean {
+    private suspend fun clearHaltLocked(
+        ticker: String,
+        state: TradingState,
+        commit: suspend (TradingState, HaltSnapshot) -> Unit,
+    ): Boolean {
         // 잠금을 기다리는 사이 루프가 상태를 바꾸거나 그 종목을 뺐을 수 있다.
         if (states[ticker] !== state || !state.halted || state.reviewReason != null) return false
         val reason = state.haltReason
         val failureCount = state.reconcileFailureCount
         state.clearHalt()
         try {
-            positionManager.persistStateOrThrow(state)
+            commit(state, HaltSnapshot(reason, failureCount))
+            state.peakPersistFailed = false
         } catch (e: Exception) {
             state.halted = true
             state.haltReason = reason
@@ -630,3 +638,6 @@ class TradingEngine(
 
 /** 루프가 그 종목을 처리 중이라 halt 해제를 기다리지 못했다. 상태는 바뀌지 않았다. */
 class HaltClearBusyException(ticker: String) : RuntimeException("매매 루프가 $ticker 를 처리 중이라 halt 해제를 기다리지 못했다")
+
+/** halt 를 풀기 전 값. 수동 개입 기록에 남긴다. */
+data class HaltSnapshot(val haltReason: String?, val reconcileFailureCount: Int)

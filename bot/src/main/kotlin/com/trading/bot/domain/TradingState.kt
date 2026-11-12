@@ -281,6 +281,8 @@ data class TradingState(
             "pending_buy_identifier" to pendingBuyIdentifier,
             "pending_buy_strategy" to pendingBuyStrategy,
             "pending_buy_prior_volume" to pendingBuyPriorVolume,
+            "pending_buy_book_volume" to pendingBuyBookVolume,
+            "pending_buy_book_avg" to pendingBuyBookAvg,
         )
         TradeSide.SELL -> linkedMapOf(
             "pending_sell_uuid" to pendingSellUuid,

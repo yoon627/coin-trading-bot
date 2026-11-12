@@ -6,6 +6,7 @@ import com.trading.bot.kis.keys.KisKeyStore
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserBrokerKeyRepository
 import com.trading.bot.persistence.UserRepository
@@ -126,6 +127,7 @@ class TradingManagersTest {
         .withBean(UserSecretsService::class.java, { mockk<UserSecretsService>(relaxed = true) })
         .withBean(MarketDataStore::class.java, { mockk<MarketDataStore>(relaxed = true) })
         .withBean(TradingStateService::class.java, { mockk<TradingStateService>(relaxed = true) })
+        .withBean(ManualInterventionService::class.java, { mockk<ManualInterventionService>(relaxed = true) })
 
     @Test
     fun `실제 빈 배선에서 레지스트리는 Upbit 매니저 하나를 받는다`() {
