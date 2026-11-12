@@ -19,7 +19,10 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import io.mockk.verifyOrder
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -44,7 +47,14 @@ class MarketDataIngestionServiceTest {
     private val store = mockk<MarketDataStore>(relaxed = true)
     private val aggregator = mockk<CandleAggregator>(relaxed = true)
     private val watchlist = mockk<WatchlistProperties>(relaxed = true)
-    private val service = MarketDataIngestionService(feed, store, aggregator, watchlist, MarketDataWatchdogProperties())
+    private val clock = MutableClock(Instant.parse("2026-11-12T03:00:00Z"))
+    private val service = MarketDataIngestionService(feed, store, aggregator, watchlist, MarketDataWatchdogProperties(), clock)
+
+    private class MutableClock(var now: Instant) : Clock() {
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId?): Clock = this
+        override fun instant(): Instant = now
+    }
 
     private val ticker = NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = 50_000_000.0)
     private val candle = NormalizedCandle(
@@ -92,7 +102,7 @@ class MarketDataIngestionServiceTest {
     // 응답 순서가 아니라 openTime 으로 고르는지 보려고 mock 은 오래된 봉을 앞에 둔다.
     @Test
     fun `seedDailyCandles primes the aggregator with today's seeded candle only`() = runBlocking {
-        val today = Instant.now().truncatedTo(ChronoUnit.DAYS)
+        val today = clock.now.truncatedTo(ChronoUnit.DAYS)
         val todayCandle = candle.copy(openTime = today, closeTime = today.plusSeconds(86_400))
         val yesterday = candle.copy(openTime = today.minusSeconds(86_400), closeTime = today)
         coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(yesterday, todayCandle)
@@ -105,7 +115,7 @@ class MarketDataIngestionServiceTest {
 
     @Test
     fun `seedDailyCandles skips priming when today's candle is absent and still seeds the store`() = runBlocking {
-        val yesterday = candle.copy(openTime = Instant.now().truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
+        val yesterday = candle.copy(openTime = clock.now.truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
         coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(yesterday)
 
         service.seedDailyCandles(listOf("BTC/KRW"))
@@ -118,7 +128,7 @@ class MarketDataIngestionServiceTest {
     // 그래서 바닥은 prime 이 아니라 seed 시점에 항상 걸고, fetch 가 실패해도 건다.
     @Test
     fun `seedDailyCandles raises the aggregation floor even without today's row and even when the fetch fails`() = runBlocking {
-        val yesterday = candle.copy(openTime = Instant.now().truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
+        val yesterday = candle.copy(openTime = clock.now.truncatedTo(ChronoUnit.DAYS).minusSeconds(86_400))
         coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns listOf(yesterday)
         coEvery { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) } throws RuntimeException("rate limit")
 
@@ -138,6 +148,59 @@ class MarketDataIngestionServiceTest {
         service.seedDailyCandles(listOf("BTC/KRW", "ETH/KRW"))
 
         verify { store.addCandle(eth) }
+    }
+
+    // 기동 seed 가 실패한 마켓은 그대로 두면 재시작 전까지 D1 이 하루 하나씩만 쌓여 전략이 21개를 못 채운다.
+    @Test
+    fun `a failed seed is tried again after its backoff and stops once it succeeds`() = runBlocking {
+        val eth = candle.copy(market = "ETH/KRW")
+        coEvery { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) } throws RuntimeException("timeout") andThen listOf(eth)
+        service.seedDailyCandles(listOf("ETH/KRW"))
+
+        clock.now = clock.now.plusSeconds(30)
+        service.retryFailedSeeds()
+        coVerify(exactly = 1) { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) }
+
+        clock.now = clock.now.plusSeconds(30)
+        service.retryFailedSeeds()
+        verify { store.addCandle(eth) }
+
+        clock.now = clock.now.plusSeconds(3_600)
+        service.retryFailedSeeds()
+        coVerify(exactly = 2) { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) }
+    }
+
+    // 상장 폐지처럼 계속 실패하는 마켓이 매분 200개 요청과 WARN 을 보내지 않게 한다.
+    @Test
+    fun `a seed that keeps failing backs off up to thirty minutes and warns only once`() = runBlocking {
+        coEvery { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) } throws RuntimeException("404")
+        val warns = warnsDuring {
+            runBlocking {
+                service.seedDailyCandles(listOf("ETH/KRW"))
+                // 1·2·4·8·16·30·30 분 간격
+                for (minutes in listOf(1L, 2, 4, 8, 16, 30, 30)) {
+                    clock.now = clock.now.plusSeconds(minutes * 60 - 1)
+                    service.retryFailedSeeds()
+                    clock.now = clock.now.plusSeconds(1)
+                    service.retryFailedSeeds()
+                }
+            }
+        }
+
+        coVerify(exactly = 8) { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) }
+        assertEquals(1, warns.count { "ETH/KRW" in it }, "$warns")
+    }
+
+    private inline fun warnsDuring(block: () -> Unit): List<String> {
+        val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            block()
+        } finally {
+            logger.detachAppender(appender)
+        }
+        return appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
     }
 
     // Upbit candles 그룹은 초당 10회 제한이라 마켓을 지연 없이 연속 호출하면 429 가 난다.

@@ -34,6 +34,8 @@ import org.springframework.core.annotation.Order
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
+import java.time.Clock
+import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -48,6 +50,7 @@ class MarketDataIngestionService(
     private val candleAggregator: CandleAggregator,
     private val watchlistProperties: WatchlistProperties,
     private val watchdogProperties: MarketDataWatchdogProperties,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(
@@ -74,6 +77,10 @@ class MarketDataIngestionService(
     // 연속 tick 이 동시에 재시작해 WS 연결이 여러 개 생기지 않게 한다.
     private val restartMutex = Mutex()
 
+    // seed 가 실패한 마켓과 다음 시도 시각·간격. 수집 코루틴만 읽고 쓴다.
+    private data class SeedRetry(val nextAt: Instant, val backoff: Duration)
+    private val seedRetries = mutableMapOf<String, SeedRetry>()
+
     companion object {
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
         // Upbit /v1/candles/days 의 최대 개수.
@@ -87,6 +94,9 @@ class MarketDataIngestionService(
         internal const val M1_FETCH_COUNT = 5
 
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
+
+        private val SEED_RETRY_FIRST: Duration = Duration.ofMinutes(1)
+        private val SEED_RETRY_MAX: Duration = Duration.ofMinutes(30)
 
         // 이 시간 넘게 시세를 못 받으면 ERROR(Discord) 한 번. 재시작으로 금방 풀리는 끊김은 알리지 않는다.
         internal const val FEED_OUTAGE_ALERT_MS = 300_000L
@@ -153,6 +163,7 @@ class MarketDataIngestionService(
         seedDailyCandles(markets)
         while (true) {
             collectCandlesRound(markets)
+            retryFailedSeeds()
             delay(CANDLE_COLLECT_INTERVAL_MS)
         }
     }
@@ -276,21 +287,44 @@ class MarketDataIngestionService(
     internal suspend fun seedDailyCandles(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
             if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
-            // 첫 분봉 라운드가 어제 분봉을 실어 오면 어제 일봉이 부분봉으로 덮이므로 지금 이전 period 는 집계하지 않는다.
-            candleAggregator.startFrom(Exchange.UPBIT, market, Instant.now())
-            try {
-                val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
-                val fetchedAt = Instant.now()
-                candles.forEach { marketDataStore.addCandle(it) }
-                // 오늘(UTC) 봉은 이후 분봉이 이어서 집계하므로 집계기에 등록해야 첫 분봉이 seed 를 덮지 않는다.
-                val today = fetchedAt.truncatedTo(ChronoUnit.DAYS)
-                val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it, fetchedAt) } ?: false
-                log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                log.warn("D1 seed failed for {}: {}", market, e.message)
+            if (!seedMarket(market)) {
+                seedRetries[market] = SeedRetry(clock.instant().plus(SEED_RETRY_FIRST), SEED_RETRY_FIRST)
             }
+        }
+    }
+
+    /** 기동 seed 가 실패한 마켓을 간격을 두 배씩(최대 30분) 늘려 다시 seed 한다. 실패 WARN 은 처음 한 번만 남는다. */
+    internal suspend fun retryFailedSeeds() {
+        val due = seedRetries.filterValues { !clock.instant().isBefore(it.nextAt) }
+        for ((index, entry) in due.entries.withIndex()) {
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            val (market, retry) = entry
+            if (seedMarket(market, quiet = true)) {
+                seedRetries.remove(market)
+            } else {
+                val backoff = minOf(retry.backoff.multipliedBy(2), SEED_RETRY_MAX)
+                seedRetries[market] = SeedRetry(clock.instant().plus(backoff), backoff)
+            }
+        }
+    }
+
+    private suspend fun seedMarket(market: String, quiet: Boolean = false): Boolean {
+        // 첫 분봉 라운드가 어제 분봉을 실어 오면 어제 일봉이 부분봉으로 덮이므로 지금 이전 period 는 집계하지 않는다.
+        candleAggregator.startFrom(Exchange.UPBIT, market, clock.instant())
+        return try {
+            val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
+            val fetchedAt = clock.instant()
+            candles.forEach { marketDataStore.addCandle(it) }
+            // 오늘(UTC) 봉은 이후 분봉이 이어서 집계하므로 집계기에 등록해야 첫 분봉이 seed 를 덮지 않는다.
+            val today = fetchedAt.truncatedTo(ChronoUnit.DAYS)
+            val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it, fetchedAt) } ?: false
+            log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (quiet) log.debug("D1 seed retry failed for {}: {}", market, e.message) else log.warn("D1 seed failed for {}: {} — retrying with backoff", market, e.message)
+            false
         }
     }
 }
