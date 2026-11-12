@@ -4,6 +4,8 @@ import com.trading.bot.domain.Order
 import com.trading.bot.exchange.ExchangeClient
 import com.trading.bot.exchange.FillPollPolicy
 import com.trading.common.domain.Candle
+import java.net.ConnectException
+import java.net.UnknownHostException
 import java.util.UUID
 import kotlinx.coroutines.delay
 
@@ -51,6 +53,16 @@ private val ORDER_REJECTION_ERRORS = setOf(
  */
 fun Throwable.provesOrderNotPlaced(): Boolean =
     this is UpbitApiException && statusCode in 400..499 && errorName in ORDER_REJECTION_ERRORS
+
+/**
+ * 연결이 서기 전에 끝난 실패(연결 거부·연결 시한 초과·호스트 이름 해석 실패)면 true 다. 요청 바이트가 나가지 않았다.
+ * 연결 뒤의 끊김·응답 시한 초과는 업비트가 이미 받았을 수 있어 false 다.
+ */
+fun Throwable.provesOrderNotSent(): Boolean =
+    generateSequence(this) { it.cause.takeIf { cause -> cause !== it } }.take(MAX_CAUSE_DEPTH).any { it is ConnectException || it is UnknownHostException }
+
+// 원인 사슬이 고리를 이뤄도 끝나게 한다.
+private const val MAX_CAUSE_DEPTH = 16
 
 /** 최소주문 금액(5,000원) 미만 거절. 매도라면 그 수량은 지금 팔 수 없는 dust 다. */
 fun Throwable.isRejectedAsBelowMinimumOrder(): Boolean =

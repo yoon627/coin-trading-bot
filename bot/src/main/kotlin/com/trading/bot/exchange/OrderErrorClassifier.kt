@@ -10,6 +10,9 @@ enum class OrderFailure {
 
     /** 접수 여부를 모른다. pending 을 두고 identifier 로 확정해야 한다. */
     UNKNOWN_OUTCOME,
+
+    /** 연결이 서기 전에 실패해 요청이 거래소에 닿지 않았다. identifier 가 쓰이지 않아 같은 identifier 로 다시 보내도 주문은 하나다. */
+    NOT_SENT,
 }
 
 fun interface OrderErrorClassifier {
