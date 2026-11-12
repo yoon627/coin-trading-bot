@@ -34,8 +34,12 @@ import org.springframework.core.annotation.Order
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
+import java.time.Clock
+import java.time.Duration
 import java.time.Instant
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
+import kotlin.math.abs
 
 /**
  * Upbit ticker(WS)와 분봉(REST 폴링)을 받아 MarketDataStore 에 넣는다.
@@ -48,6 +52,7 @@ class MarketDataIngestionService(
     private val candleAggregator: CandleAggregator,
     private val watchlistProperties: WatchlistProperties,
     private val watchdogProperties: MarketDataWatchdogProperties,
+    private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(
@@ -74,6 +79,16 @@ class MarketDataIngestionService(
     // 연속 tick 이 동시에 재시작해 WS 연결이 여러 개 생기지 않게 한다.
     private val restartMutex = Mutex()
 
+    // seed 가 실패한 마켓과 다음 시도 시각·간격. 수집 코루틴만 읽고 쓴다.
+    private data class SeedRetry(val nextAt: Instant, val backoff: Duration)
+    private val seedRetries = mutableMapOf<String, SeedRetry>()
+
+    // 마켓별 전일 일봉 대조 상태. [pending] 은 store 와 달랐던 업비트 값으로, 다음 읽기가 같아야 바꾼다.
+    // 기동 seed 는 대조로 치지 않는다 — 경계 직후 seed 는 미확정 봉일 수 있다. 수집 코루틴만 읽고 쓴다.
+    private data class Reconcile(val day: Instant, val since: Instant, val done: Boolean = false, val pending: NormalizedCandle? = null)
+    private val reconciles = mutableMapOf<String, Reconcile>()
+    private var overdueAlertedFor: Instant? = null
+
     companion object {
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
         // Upbit /v1/candles/days 의 최대 개수.
@@ -87,6 +102,17 @@ class MarketDataIngestionService(
         internal const val M1_FETCH_COUNT = 5
 
         private const val RATE_LIMIT_RETRY_DELAY_MS = 1_000L
+
+        // 업비트가 전일 봉을 언제 확정하는지 문서에 없어 경계 직후는 건너뛰고, 다를 때는 한 번 더 읽어 확인한다.
+        private val RECONCILE_AFTER: Duration = Duration.ofMinutes(2)
+        // 처음 시도하고 이만큼 지나도 못 끝낸 마켓이 있으면 그날 대조가 막힌 것으로 보고 한 번 알린다(기동이 늦어도 같은 기준).
+        private val RECONCILE_OVERDUE: Duration = Duration.ofMinutes(30)
+        // 가격은 체결가라 정확히 같다. 거래량은 Double 누적이라 상대 오차를 둔다.
+        private const val VOLUME_TOLERANCE = 1e-6
+        private const val RECONCILE_FETCH_COUNT = 2
+
+        private val SEED_RETRY_FIRST: Duration = Duration.ofMinutes(1)
+        private val SEED_RETRY_MAX: Duration = Duration.ofMinutes(30)
 
         // 이 시간 넘게 시세를 못 받으면 ERROR(Discord) 한 번. 재시작으로 금방 풀리는 끊김은 알리지 않는다.
         internal const val FEED_OUTAGE_ALERT_MS = 300_000L
@@ -153,7 +179,21 @@ class MarketDataIngestionService(
         seedDailyCandles(markets)
         while (true) {
             collectCandlesRound(markets)
+            // 뒤 단계가 실패해도 분봉 수집 루프는 이어 간다.
+            guarded("D1 seed retry") { retryFailedSeeds() }
+            guarded("D1 reconcile") { reconcilePreviousDay(markets) }
             delay(CANDLE_COLLECT_INTERVAL_MS)
+        }
+    }
+
+    private suspend fun guarded(step: String, block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 계속 실패하면 대조가 꺼진 채로 지나가므로 Discord 로 간다. 같은 오류 반복은 알림 한도가 묶는다.
+            log.error("{} failed: {}", step, e.message, e)
         }
     }
 
@@ -276,21 +316,128 @@ class MarketDataIngestionService(
     internal suspend fun seedDailyCandles(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
             if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
-            // 첫 분봉 라운드가 어제 분봉을 실어 오면 어제 일봉이 부분봉으로 덮이므로 지금 이전 period 는 집계하지 않는다.
-            candleAggregator.startFrom(Exchange.UPBIT, market, Instant.now())
-            try {
-                val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
-                val fetchedAt = Instant.now()
-                candles.forEach { marketDataStore.addCandle(it) }
-                // 오늘(UTC) 봉은 이후 분봉이 이어서 집계하므로 집계기에 등록해야 첫 분봉이 seed 를 덮지 않는다.
-                val today = fetchedAt.truncatedTo(ChronoUnit.DAYS)
-                val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it, fetchedAt) } ?: false
-                log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)
+            if (!seedMarket(market)) {
+                seedRetries[market] = SeedRetry(clock.instant().plus(SEED_RETRY_FIRST), SEED_RETRY_FIRST)
+            }
+        }
+    }
+
+    /** 기동 seed 가 실패한 마켓을 간격을 두 배씩(최대 30분) 늘려 다시 seed 한다. 실패 WARN 은 처음 한 번만 남는다. */
+    internal suspend fun retryFailedSeeds() {
+        val due = seedRetries.filterValues { !clock.instant().isBefore(it.nextAt) }
+        for ((index, entry) in due.entries.withIndex()) {
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            val (market, retry) = entry
+            if (seedMarket(market, quiet = true)) {
+                seedRetries.remove(market)
+            } else {
+                val backoff = minOf(retry.backoff.multipliedBy(2), SEED_RETRY_MAX)
+                seedRetries[market] = SeedRetry(clock.instant().plus(backoff), backoff)
+            }
+        }
+    }
+
+    /**
+     * 분봉으로 만든 전일 D1 을 업비트 일봉과 날마다 한 번 대조한다. 같으면 끝, 다르면 다음 라운드에 다시 받아 같은 값일 때만
+     * store 와 집계기를 업비트 값으로 바꾼다(가격이 달랐으면 ERROR). store 에 전일 봉이 없을 때도 같은 값을 두 번 읽은 뒤 채운다.
+     * 집계기를 prime 하지 않으면 늦게 온 전일 분봉이 집계값으로 store 를 되덮는다.
+     */
+    internal suspend fun reconcilePreviousDay(markets: List<String>) {
+        val now = clock.instant()
+        val today = now.truncatedTo(ChronoUnit.DAYS)
+        if (now.isBefore(today.plus(RECONCILE_AFTER))) return
+        val target = today.minus(1, ChronoUnit.DAYS)
+        val replaced = mutableListOf<String>()
+        var requested = false
+        for (market in markets) {
+            val state = reconciles[market]?.takeIf { it.day == target } ?: run {
+                reconciles[market]?.takeIf { !it.done }?.let { log.warn("{} 전일 일봉({}) 대조를 끝내지 못한 채 날짜가 바뀌었다", market, it.day.atZone(ZoneOffset.UTC).toLocalDate()) }
+                Reconcile(target, since = now).also { reconciles[market] = it }
+            }
+            if (state.done) continue
+            if (requested) delay(CANDLE_REQUEST_SPACING_MS)
+            requested = true
+            val upbit = try {
+                upbitMarketFeed.getCandles(market, CandleInterval.D1, RECONCILE_FETCH_COUNT).firstOrNull { it.openTime == target }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log.warn("D1 seed failed for {}: {}", market, e.message)
+                log.debug("D1 reconcile fetch failed for {}: {}", market, e.message)
+                continue
             }
+            reconciles[market] = reconcileOne(market, state, upbit, now, replaced)
+        }
+        if (replaced.isNotEmpty()) {
+            // 원인은 집계 결함·수집 공백·경계 직후 seed 중 무엇인지 여기서 알 수 없다.
+            log.error("[DAILY CANDLE] store 의 전일 일봉이 업비트와 달라 업비트 값으로 바꿨다: {} — 마켓별 값은 WARN", replaced)
+        }
+        val unfinished = markets.filter {
+            reconciles[it]?.let { s -> s.day == target && !s.done && !now.isBefore(s.since.plus(RECONCILE_OVERDUE)) } == true
+        }
+        if (unfinished.isNotEmpty() && overdueAlertedFor != target) {
+            overdueAlertedFor = target
+            log.error("[DAILY CANDLE] {}분 넘게 전일 일봉 대조를 끝내지 못했다: {} — 업비트 일봉 조회를 확인하라", RECONCILE_OVERDUE.toMinutes(), unfinished)
+        }
+    }
+
+    private fun reconcileOne(market: String, state: Reconcile, upbit: NormalizedCandle?, now: Instant, replaced: MutableList<String>): Reconcile {
+        // 그날 거래가 없으면 업비트에도 봉이 없다.
+        upbit ?: return state.copy(done = true)
+        val stored = marketDataStore.getCandles(Exchange.UPBIT, market, CandleInterval.D1, RECONCILE_FETCH_COUNT + 1)
+            .firstOrNull { it.openTime == state.day }
+        if (stored != null && samePrices(stored, upbit) && sameVolume(stored, upbit)) return state.copy(done = true)
+        // 경계 직후 업비트 봉이 미확정일 수 있어 비었을 때도 같은 값을 두 번 읽은 뒤에만 쓴다.
+        if (state.pending == null || !samePrices(state.pending, upbit) || !sameVolume(state.pending, upbit)) {
+            return state.copy(pending = upbit)
+        }
+        replaceDaily(market, upbit, now)
+        if (stored == null) {
+            log.warn("{} 전일 일봉이 store 에 없어 업비트 값으로 채웠다", market)
+        } else if (!samePrices(stored, upbit)) {
+            replaced += market
+            log.warn(
+                "{} 전일 일봉 store(O {} H {} L {} C {}) ≠ 업비트(O {} H {} L {} C {})",
+                market, stored.openPrice, stored.highPrice, stored.lowPrice, stored.closePrice,
+                upbit.openPrice, upbit.highPrice, upbit.lowPrice, upbit.closePrice,
+            )
+        } else {
+            log.info("{} 전일 일봉 거래량만 달라 업비트 값으로 바꿨다: {} → {}", market, stored.volume, upbit.volume)
+        }
+        return state.copy(done = true, pending = null)
+    }
+
+    private fun replaceDaily(market: String, upbit: NormalizedCandle, now: Instant) {
+        marketDataStore.addCandle(upbit)
+        try {
+            candleAggregator.prime(upbit, now)
+        } catch (e: IllegalArgumentException) {
+            log.error("Failed to prime the reconciled D1 for {}: {}", market, e.message)
+        }
+    }
+
+    private fun samePrices(a: NormalizedCandle, b: NormalizedCandle) =
+        a.openPrice == b.openPrice && a.highPrice == b.highPrice && a.lowPrice == b.lowPrice && a.closePrice == b.closePrice
+
+    private fun sameVolume(a: NormalizedCandle, b: NormalizedCandle) =
+        abs(a.volume - b.volume) <= VOLUME_TOLERANCE * maxOf(abs(a.volume), abs(b.volume))
+
+    private suspend fun seedMarket(market: String, quiet: Boolean = false): Boolean {
+        // 첫 분봉 라운드가 어제 분봉을 실어 오면 어제 일봉이 부분봉으로 덮이므로 지금 이전 period 는 집계하지 않는다.
+        candleAggregator.startFrom(Exchange.UPBIT, market, clock.instant())
+        return try {
+            val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
+            val fetchedAt = clock.instant()
+            candles.forEach { marketDataStore.addCandle(it) }
+            // 오늘(UTC) 봉은 이후 분봉이 이어서 집계하므로 집계기에 등록해야 첫 분봉이 seed 를 덮지 않는다.
+            val today = fetchedAt.truncatedTo(ChronoUnit.DAYS)
+            val primed = candles.firstOrNull { it.openTime == today }?.let { primeTodayAggregate(market, it, fetchedAt) } ?: false
+            log.info("Seeded {} D1 candles into store for {} (primed today={})", candles.size, market, primed)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (quiet) log.debug("D1 seed retry failed for {}: {}", market, e.message) else log.warn("D1 seed failed for {}: {} — retrying with backoff", market, e.message)
+            false
         }
     }
 }
