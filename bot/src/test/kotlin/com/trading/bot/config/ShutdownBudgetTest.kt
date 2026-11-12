@@ -2,6 +2,7 @@ package com.trading.bot.config
 
 import com.trading.bot.ci.RepoFiles
 import com.trading.bot.engine.UpbitExchangeRuntime
+import com.trading.bot.notification.ErrorAlertOutbox
 import com.trading.common.config.TradingProperties
 import io.mockk.mockk
 import java.time.Duration
@@ -40,7 +41,7 @@ class ShutdownBudgetTest {
     fun `정지 시간 상한 합이 stop_grace_period 안에 든다`() {
         val grace = gracePeriod()
         val total = webDrain() + NETTY_DISPOSE_NOW + runtime.stopBudget +
-            Duration.ofSeconds(LoopResources.DEFAULT_SHUTDOWN_TIMEOUT) + MARGIN
+            Duration.ofSeconds(LoopResources.DEFAULT_SHUTDOWN_TIMEOUT) + ERROR_ALERT_FLUSH + MARGIN
 
         assertThat(total)
             .describedAs("정지 상한 합 ${total.seconds}s 가 stop_grace_period ${grace.seconds}s 를 넘으면 정지 저장 중에 SIGKILL 이 난다")
@@ -110,6 +111,9 @@ class ShutdownBudgetTest {
 
         /** reactor-netty 1.2.13 `DisposableChannel.disposeNow()` 의 기본 시한. 공개 상수가 없다. */
         val NETTY_DISPOSE_NOW: Duration = Duration.ofSeconds(3)
+
+        /** ERROR 알림 outbox 의 종료: 루프 멈춤 대기 + 남은 큐를 DB 에 넣는 상한. */
+        val ERROR_ALERT_FLUSH: Duration = ErrorAlertOutbox.Timings().let { it.stopWait + it.flush }
 
         /** 빈 정리(R2DBC 풀·@PreDestroy)와 JVM 종료. 실측 전 추정치다. */
         val MARGIN: Duration = Duration.ofSeconds(10)

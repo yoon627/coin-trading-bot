@@ -97,7 +97,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `KIS_TRADING_PAPER_MIN_REQUEST_INTERVAL_MS` / `KIS_TRADING_LIVE_MIN_REQUEST_INTERVAL_MS` | `667` / `60` | 모의·실전 KIS 요청 사이 최소 간격(ms) |
 | `KIS_TRADING_COMMISSION_RATE` / `KIS_TRADING_SELL_TAX_RATE` | `0.0002` / `0.002` | KIS 편도 수수료율(매수·매도 양쪽), 매도 증권거래세율. 퍼센트가 아니라 비율이고 허용 구간은 둘 다 `[0, 0.01)`. ETF 거래세 면제는 반영하지 않는다 |
 | `DISCORD_WEBHOOK_URL` | 없음 | 거래 알림 |
-| `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림. 스위치는 배포 preflight 가 소문자 `true`/`false` 만 받는다(오기면 새 컨테이너와 롤백이 함께 기동에 실패한다) |
+| `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림(`error_alert_outbox` 를 거쳐 보낸다 — 아래 ERROR 알림 절). 스위치는 배포 preflight 가 소문자 `true`/`false` 만 받는다(오기면 새 컨테이너와 롤백이 함께 기동에 실패한다) |
 | `APP_DOMAIN` | 없음 | 운영 CORS origin과 Caddy TLS 도메인 |
 
 ## API
@@ -163,6 +163,18 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 ```sql
 SELECT status, count(*) FROM trade_notification_outbox GROUP BY status;
 SELECT id, attempts, next_attempt_at, last_error FROM trade_notification_outbox WHERE status IN ('PENDING', 'FAILED') ORDER BY id DESC LIMIT 20;
+```
+
+### ERROR 알림
+
+서버 ERROR 로그 알림(분당 5건, 넘으면 60초 뒤 요약 1건)도 `error_alert_outbox` 에 한 행으로 남은 뒤 보낸다. 로그 쪽은 메모리 큐에 넣기만 하고 발송 루프가 DB 에 넣어 보낸 뒤 결과를 적는다. 발송 규칙(5초 주기·backoff·24시간·실패 시 회차 멈춤·한 번 더 갈 수 있음)은 체결 알림과 같다. 알림의 시각은 ERROR 가 난 시각이다.
+
+- DB 에 넣지 못하거나 5초 안에 끝나지 않으면, 또 발송 루프가 2분 넘게 돌지 않으면 그 알림은 예전처럼 바로 보낸다(DB 장애를 알리는 ERROR 도 간다).
+- 종료 때 남은 큐와 보류된 요약은 DB 에 넣고(최대 2초) 다음 기동에 보낸다. 그 안에 넣지 못한 것은 로그 파일에만 남는다.
+- `DISCORD_ERROR_ALERT_ENABLED=false` 면 남은 행은 `SKIPPED` 로 둔다. 끝난 행은 7일 뒤 지운다.
+
+```sql
+SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 ```
 
 ### 봇 종목을 앱에서 직접 사고팔 때
@@ -275,7 +287,7 @@ V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_
 
 - V31 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 다만 그 이미지는 중지 값을 읽지 않아 켜 둔 중지가 풀린 것처럼 매수가 나가므로, 롤백했으면 봇을 정지한다.
 - V32 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V32_down.sql` 은 필요 없다.
-- V31 이전으로 내려가야 하면 (V35·V34·V33 이 적용돼 있으면 `V35_down.sql`·`V34_down.sql`·`V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- V31 이전으로 내려가야 하면 (V36·V35·V34·V33 이 적용돼 있으면 `V36_down.sql`·`V35_down.sql`·`V34_down.sql`·`V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
 - 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V32_down.sql` 을 쓴다. 켜 둔 중지 값이 함께 사라진다. V32 가 마지막 적용 버전일 때만 돌고, 칼럼과 `flyway_schema_history` 의 V32 행을 한 트랜잭션으로 지운다. 백업 조건은 V31 down 과 같다.
   ```bash
   cd /opt/app
@@ -323,4 +335,17 @@ V35 는 `manual_interventions` 테이블을 더한다. pending 수동 해제·ha
   docker compose stop app
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V35_down.sql
   APP_VERSION=<V35 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V36 (ERROR 알림 outbox)
+
+V36 은 `error_alert_outbox` 테이블을 더한다(위 ERROR 알림 절).
+
+- V35 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 롤백한 동안 ERROR 알림은 예전처럼 바로 간다. 남은 `PENDING` 은 다시 올리면 보내므로, 오래된 알림을 보내지 않으려면 올리기 전에 `UPDATE error_alert_outbox SET status = 'SKIPPED' WHERE status = 'PENDING';` 를 돌린다.
+- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V36_down.sql` 을 쓴다(V36 이 마지막 적용 버전일 때만 돈다, 보내지 못한 알림이 사라진다). 앱을 멈춘 뒤 돌린다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V36_down.sql
+  APP_VERSION=<V36 이전 SHA> docker compose up -d --pull missing
   ```

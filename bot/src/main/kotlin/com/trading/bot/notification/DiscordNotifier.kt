@@ -16,6 +16,7 @@ import reactor.core.publisher.Mono
 import reactor.util.retry.Retry
 import java.net.URI
 import java.time.Duration
+import java.time.Instant
 
 /** 기다린 체결 알림 발송의 결과. 발송기가 다시 보낼지를 정한다. */
 sealed interface TradeDelivery {
@@ -107,7 +108,10 @@ class DiscordNotifier internal constructor(
         krwBalance: Double?,
         webhookUrl: String?,
         username: String?,
-    ): TradeDelivery {
+    ): TradeDelivery = deliverPayload(tradeEmbed(record, krwBalance, username), webhookUrl)
+
+    /** [payload] 를 보내고 응답까지 기다린다. [webhookUrl] 이 비면 전역 webhook 으로 보낸다. 둘 다 없으면 [TradeDelivery.Skipped]. */
+    suspend fun deliverPayload(payload: Map<String, Any>, webhookUrl: String?): TradeDelivery {
         val url = try {
             requestValidators.normalizeDiscordWebhookUrl(webhookUrl?.takeIf { it.isNotBlank() } ?: discordProperties.webhookUrl)
         } catch (e: Exception) {
@@ -117,7 +121,7 @@ class DiscordNotifier internal constructor(
         return try {
             discordWebClient.post()
                 .uri(url)
-                .bodyValue(tradeEmbed(record, krwBalance, username))
+                .bodyValue(payload)
                 .retrieve()
                 .bodyToMono<String>()
                 .retryWhen(Retry.from { signals ->
@@ -142,14 +146,19 @@ class DiscordNotifier internal constructor(
         }
     }
 
-    /** message 와 stackSummary 는 호출 측에서 마스킹해 넘긴다. */
+    /** message 와 stackSummary 는 호출 측에서 마스킹해 넘긴다. [at] 은 ERROR 가 난 시각이다 — outbox 로 늦게 가도 언제 났는지 보인다. */
     fun sendErrorAlert(
         loggerName: String,
         message: String,
         stackSummary: String?,
         suppressedSince: Int,
         webhookUrl: String,
+        at: Instant? = null,
     ) {
+        sendPayload(errorAlertPayload(loggerName, message, stackSummary, suppressedSince, at), webhookUrl)
+    }
+
+    internal fun errorAlertPayload(loggerName: String, message: String, stackSummary: String?, suppressedSince: Int, at: Instant?): Map<String, Any> {
         val fields = mutableListOf(
             mapOf("name" to "Logger", "value" to loggerName.truncateForDiscord(256), "inline" to false),
             // Discord embed field 는 1024자를 넘으면 400 으로 통째로 거부된다.
@@ -161,19 +170,24 @@ class DiscordNotifier internal constructor(
         if (suppressedSince > 0) {
             fields.add(mapOf("name" to "참고", "value" to "최근 5분간 동일 에러 ${suppressedSince}회 추가 발생", "inline" to false))
         }
-        val embed = mapOf<String, Any>(
+        val embed = mutableMapOf<String, Any>(
             "title" to "🚨 서버 에러",
             "color" to 0xEF4444,
             "fields" to fields,
         )
-        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
+        at?.let { embed["timestamp"] = it.toString() }
+        return mapOf("embeds" to listOf(embed))
     }
 
     /**
      * 분당 상한에 걸려 보내지 못한 ERROR 를 묶어 보낸다. 한 로거의 반복 오류가 줄을 다 채워 다른 로거의
      * 드문 알림이 묻히지 않도록 로거별로 번갈아 싣는다.
      */
-    fun sendErrorDigest(digest: ErrorAlertRateLimiter.Digest, webhookUrl: String) {
+    fun sendErrorDigest(digest: ErrorAlertRateLimiter.Digest, webhookUrl: String, at: Instant? = null) {
+        sendPayload(errorDigestPayload(digest, at), webhookUrl)
+    }
+
+    internal fun errorDigestPayload(digest: ErrorAlertRateLimiter.Digest, at: Instant?): Map<String, Any> {
         val lines = mutableListOf<String>()
         var used = 0
         val unlisted = LinkedHashMap<String, Int>()
@@ -193,14 +207,18 @@ class DiscordNotifier internal constructor(
             lines += "외 ${unlisted.values.sum()}건 — $byLogger".truncateForDiscord(DIGEST_TRAILER_MAX)
         }
         val total = digest.alerts.sumOf { it.occurrences } + digest.overflowByLogger.values.sum()
-        val embed = mapOf<String, Any>(
+        val embed = mutableMapOf<String, Any>(
             "title" to "📋 억제된 알림 ${total}건",
             "color" to 0xF59E0B,
             "description" to lines.joinToString("\n"),
             "footer" to mapOf("text" to "분당 알림 상한을 넘어 개별로 보내지 못한 ERROR 입니다. (×K)는 직전 알림 이후 발생 횟수, 전문·stack 은 로그 파일에 있습니다."),
         )
-        sendPayload(mapOf("embeds" to listOf(embed)), webhookUrl)
+        at?.let { embed["timestamp"] = it.toString() }
+        return mapOf("embeds" to listOf(embed))
     }
+
+    /** outbox 에 넣지 못한 알림을 바로(응답을 기다리지 않고) 보낸다. */
+    fun sendErrorPayload(payload: Map<String, Any>, webhookUrl: String) = sendPayload(payload, webhookUrl)
 
     private fun interleaveByLogger(alerts: List<ErrorAlertRateLimiter.HeldAlert>): List<ErrorAlertRateLimiter.HeldAlert> {
         val queues = alerts.groupByTo(LinkedHashMap()) { it.logger }.values.map { ArrayDeque(it) }

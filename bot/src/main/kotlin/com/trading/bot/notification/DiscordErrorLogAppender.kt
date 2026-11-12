@@ -7,6 +7,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy
 import ch.qos.logback.core.AppenderBase
 import com.trading.bot.config.ErrorAlertProperties
 import jakarta.annotation.PreDestroy
+import java.time.Instant
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -31,12 +32,14 @@ class DiscordErrorLogAppender internal constructor(
     private val props: ErrorAlertProperties,
     private val rateLimiter: ErrorAlertRateLimiter,
     private val digestExecutor: ScheduledExecutorService,
+    private val outbox: ErrorAlertOutbox? = null,
 ) : ApplicationListener<ApplicationReadyEvent> {
 
     // 공용 풀이 주입되면 종료 때 shutdownNow 가 다른 작업까지 멈추므로 executor 는 직접 만든다.
+    // outbox 에 의존해 Spring 이 이 빈을 먼저 정리한다 — appender 를 뗀 뒤 outbox 가 남은 큐를 DB 에 넣는다.
     @Autowired
-    constructor(discordNotifier: DiscordNotifier, props: ErrorAlertProperties) :
-        this(discordNotifier, props, ErrorAlertRateLimiter(), newDigestExecutor())
+    constructor(discordNotifier: DiscordNotifier, props: ErrorAlertProperties, outbox: ErrorAlertOutbox) :
+        this(discordNotifier, props, ErrorAlertRateLimiter(), newDigestExecutor(), outbox)
 
     private val reentry = ThreadLocal.withInitial { false }
     @Volatile private var attached = false
@@ -64,9 +67,9 @@ class DiscordErrorLogAppender internal constructor(
             rootLogger().detachAppender(appender)
             appender.stop()
             attached = false
+            // appender 를 먼저 뗐으므로 그 사이 새 보류가 생기지 않는다. 남은 보류는 outbox 에 맡겨 종료 때 DB 에 넣는다.
+            rateLimiter.drainHeld(System.currentTimeMillis())?.let { dispatch(ErrorAlert.Digest(it, Instant.now())) }
         } finally {
-            // 종료 중 전송은 도달을 보장할 수 없고 로그 파일에 이미 있으므로 남은 보류는 버린다.
-            // appender 를 먼저 뗐으므로 그 사이 새 보류가 거부되지 않는다.
             digestExecutor.shutdownNow()
         }
     }
@@ -75,7 +78,7 @@ class DiscordErrorLogAppender internal constructor(
     internal fun flushDigest() {
         val digest = rateLimiter.drainHeld(System.currentTimeMillis()) ?: return
         try {
-            discordNotifier.sendErrorDigest(digest, props.webhookUrl)
+            dispatch(ErrorAlert.Digest(digest, Instant.now()))
         } catch (e: Exception) {
             // notification 로거라 이 WARN 은 알림으로 되돌아오지 않는다.
             log.warn(
@@ -117,11 +120,20 @@ class DiscordErrorLogAppender internal constructor(
             if (!decision.allow) return
             val message = LogMessageSanitizer.sanitize(event.formattedMessage ?: "")
             val stack = event.throwableProxy?.let { LogMessageSanitizer.sanitize(renderStack(it)) }
-            discordNotifier.sendErrorAlert(event.loggerName, message, stack, decision.suppressedSince, props.webhookUrl)
+            dispatch(ErrorAlert.Single(event.loggerName, message, stack, decision.suppressedSince, Instant.ofEpochMilli(event.timeStamp)))
         } catch (e: Exception) {
             appender.addError("Discord error alert dispatch failed", e)
         } finally {
             reentry.remove()
+        }
+    }
+
+    // outbox 루프가 살아 있으면 큐에 넣기만 하고, 아니면(시작 전·멈춤·가득 참) 지금처럼 바로 보낸다.
+    private fun dispatch(alert: ErrorAlert) {
+        if (outbox?.offer(alert) == true) return
+        when (alert) {
+            is ErrorAlert.Single -> discordNotifier.sendErrorAlert(alert.logger, alert.message, alert.stack, alert.suppressedSince, props.webhookUrl, alert.at)
+            is ErrorAlert.Digest -> discordNotifier.sendErrorDigest(alert.digest, props.webhookUrl, alert.at)
         }
     }
 
