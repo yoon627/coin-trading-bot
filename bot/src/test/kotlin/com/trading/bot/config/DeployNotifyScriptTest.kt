@@ -36,38 +36,33 @@ class DeployNotifyScriptTest {
     private class Run(val exit: Int, val output: String)
 
     @Test
-    fun `성공은 일반 webhook 으로 보내고 URL 은 표준입력으로만 넘긴다`() {
-        val result = notify("success", "배포 성공", general = GENERAL, error = ERROR)
+    fun `배포 결과는 배포 webhook 으로 보내고 URL 은 표준입력으로만 넘긴다`() {
+        for (level in listOf("success", "rollback", "failure")) {
+            val result = notify(level, "배포 $level", general = GENERAL, error = ERROR, deploy = DEPLOY)
 
-        assertThat(result.exit).isEqualTo(0)
-        assertThat(curlStdin.readText()).isEqualTo("url = \"$GENERAL\"\n")
-        assertThat(curlArgs.readText()).doesNotContain("example.test")
-        assertThat(result.output).contains("HTTP 204").doesNotContain("example.test")
+            assertThat(result.exit).isEqualTo(0)
+            assertThat(curlStdin.readText()).describedAs(level).isEqualTo("url = \"$DEPLOY\"\n")
+            assertThat(curlArgs.readText()).doesNotContain("example.test")
+            assertThat(result.output).contains("HTTP 204").doesNotContain("example.test")
+        }
     }
 
+    // 거래 webhook(채널)에는 체결 알림만 남긴다.
     @Test
-    fun `롤백과 실패는 에러 webhook 으로, 없으면 일반 webhook 으로 보낸다`() {
-        notify("failure", "배포 실패", general = GENERAL, error = ERROR)
-        val withError = curlStdin.readText()
-        notify("rollback", "자동 롤백", general = GENERAL, error = "")
-        val withoutError = curlStdin.readText()
+    fun `배포 webhook 이 없으면 롤백과 실패만 에러 webhook 으로 가고 거래 webhook 으로는 가지 않는다`() {
+        notify("failure", "배포 실패", general = GENERAL, error = ERROR, deploy = "")
+        assertThat(curlStdin.readText()).isEqualTo("url = \"$ERROR\"\n")
 
-        assertThat(withError).contains(ERROR)
-        assertThat(withoutError).contains(GENERAL)
-    }
-
-    @Test
-    fun `webhook 이 없으면 curl 을 부르지 않고 건너뛴다고 남긴다`() {
-        val result = notify("failure", "배포 실패", general = "", error = "")
-
-        assertThat(result.exit).isEqualTo(0)
-        assertThat(curlArgs).doesNotExist()
-        assertThat(result.output).contains("건너뜀")
+        for ((level, error) in listOf("success" to ERROR, "rollback" to "", "failure" to "")) {
+            val result = notify(level, "배포", general = GENERAL, error = error, deploy = "")
+            assertThat(curlArgs).describedAs(level).doesNotExist()
+            assertThat(result.output).describedAs(level).contains("건너뜀")
+        }
     }
 
     @Test
     fun `curl 이 실패해도 0 으로 끝나고 실패를 남긴다`() {
-        val result = notify("success", "배포 성공", general = GENERAL, error = "", curlExit = 7)
+        val result = notify("success", "배포 성공", general = GENERAL, error = "", deploy = DEPLOY, curlExit = 7)
 
         assertThat(result.exit).isEqualTo(0)
         assertThat(result.output).contains("실패").contains("7")
@@ -75,7 +70,7 @@ class DeployNotifyScriptTest {
 
     @Test
     fun `메시지의 따옴표와 줄바꿈은 JSON 으로 이스케이프하고 멘션은 막는다`() {
-        notify("success", "a \"b\"\nc\\d", general = GENERAL, error = "")
+        notify("success", "a \"b\"\nc\\d", general = GENERAL, error = "", deploy = DEPLOY)
 
         assertThat(curlArgs.readLines()).contains("""{"content":"a \"b\"\nc\\d","allowed_mentions":{"parse":[]}}""")
     }
@@ -84,13 +79,13 @@ class DeployNotifyScriptTest {
     fun `deploy 는 원격 결과마다 알맞은 webhook 으로 알리고 종료 코드를 지킨다`() {
         val repo = deployRepo()
         val cases = mapOf(
-            0 to Triple(0, GENERAL, listOf("성공")),
-            2 to Triple(2, ERROR, listOf("자동 롤백")),
-            1 to Triple(1, ERROR, listOf("수동 개입")),
-            4 to Triple(1, ERROR, listOf("Caddyfile")),
-            3 to Triple(1, ERROR, listOf("앱 중단")),
+            0 to Triple(0, DEPLOY, listOf("성공")),
+            2 to Triple(2, DEPLOY, listOf("자동 롤백")),
+            1 to Triple(1, DEPLOY, listOf("수동 개입")),
+            4 to Triple(1, DEPLOY, listOf("Caddyfile")),
+            3 to Triple(1, DEPLOY, listOf("앱 중단")),
             // ssh 자체의 실패(연결 끊김). 원격 배포는 서버에서 계속 돌 수 있어 결과는 서버 로그로 본다.
-            255 to Triple(1, ERROR, listOf("결과 불명", REMOTE_LOG)),
+            255 to Triple(1, DEPLOY, listOf("결과 불명", REMOTE_LOG)),
         )
 
         for ((remoteRc, expected) in cases) {
@@ -325,11 +320,11 @@ class DeployNotifyScriptTest {
         return log.readText().trimEnd()
     }
 
-    private fun notify(level: String, message: String, general: String, error: String, curlExit: Int = 0): Run {
+    private fun notify(level: String, message: String, general: String, error: String, deploy: String, curlExit: Int = 0): Run {
         fakeCurl(curlExit)
         return exec(
             listOf("bash", RepoFiles.file(NOTIFY).path, level, message),
-            mapOf("DISCORD_WEBHOOK_URL" to general, "DISCORD_ERROR_WEBHOOK_URL" to error),
+            mapOf("DISCORD_WEBHOOK_URL" to general, "DISCORD_ERROR_WEBHOOK_URL" to error, "DISCORD_DEPLOY_WEBHOOK_URL" to deploy),
         )
     }
 
@@ -378,6 +373,7 @@ class DeployNotifyScriptTest {
             |APP_VERSION=$target
             |DISCORD_WEBHOOK_URL=$GENERAL
             |DISCORD_ERROR_WEBHOOK_URL=$ERROR
+            |DISCORD_DEPLOY_WEBHOOK_URL=$DEPLOY
             """.trimMargin() + "\n",
         )
         File(vultr, ".state").writeText("PUBLIC_IP=203.0.113.10\nLAST_GOOD_SHA=$lastGood\n")
@@ -443,5 +439,6 @@ class DeployNotifyScriptTest {
         const val REMOTE_LOG = "/opt/app/.deploy-last.log"
         const val GENERAL = "https://discord.example.test/api/webhooks/1/general"
         const val ERROR = "https://discord.example.test/api/webhooks/2/error"
+        const val DEPLOY = "https://discord.example.test/api/webhooks/3/deploy"
     }
 }

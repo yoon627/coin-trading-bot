@@ -711,7 +711,7 @@ deploy_failure_message() {
 
 # .env 를 source 한 셸 변수라 export 되지 않으므로 알림 스크립트에 명시해 넘긴다. 알림 실패가 배포 결과를 바꾸지 않는다.
 notify_deploy() {
-    DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}" DISCORD_ERROR_WEBHOOK_URL="${DISCORD_ERROR_WEBHOOK_URL:-}" \
+    DISCORD_DEPLOY_WEBHOOK_URL="${DISCORD_DEPLOY_WEBHOOK_URL:-}" DISCORD_ERROR_WEBHOOK_URL="${DISCORD_ERROR_WEBHOOK_URL:-}" \
         bash "$SCRIPT_DIR/notify_deploy.sh" "$@" || true
 }
 

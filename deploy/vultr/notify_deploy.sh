@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 배포 결과를 Discord 로 알린다. 배포 종료 코드를 바꾸지 않도록 언제나 0 으로 끝낸다.
-# 사용: DISCORD_WEBHOOK_URL=… DISCORD_ERROR_WEBHOOK_URL=… notify_deploy.sh <success|rollback|failure> <메시지>
-#   성공은 일반 webhook, 롤백·실패는 에러 webhook(없으면 일반 webhook)으로 보낸다.
+# 사용: DISCORD_DEPLOY_WEBHOOK_URL=… DISCORD_ERROR_WEBHOOK_URL=… notify_deploy.sh <success|rollback|failure> <메시지>
+#   모든 결과는 배포 webhook 으로 보낸다. 배포 webhook 이 없으면 롤백·실패만 에러 webhook 으로 보내고 성공은 보내지 않는다.
+#   거래 webhook(DISCORD_WEBHOOK_URL)은 체결 알림 전용이라 쓰지 않는다.
 # 배포 로그는 공개 repo 의 CI 로그라, webhook URL 은 env 로만 받고 curl 에도 표준입력 설정으로만 넘기며 curl 의 오류
 # 문구(URL 이 들어갈 수 있다)는 버린다.
 set -uo pipefail
@@ -10,8 +11,8 @@ level="${1:-}"
 message="${2:-}"
 
 case "$level" in
-    success) url="${DISCORD_WEBHOOK_URL:-}" ;;
-    rollback|failure) url="${DISCORD_ERROR_WEBHOOK_URL:-}"; [[ -n "$url" ]] || url="${DISCORD_WEBHOOK_URL:-}" ;;
+    success) url="${DISCORD_DEPLOY_WEBHOOK_URL:-}" ;;
+    rollback|failure) url="${DISCORD_DEPLOY_WEBHOOK_URL:-}"; [[ -n "$url" ]] || url="${DISCORD_ERROR_WEBHOOK_URL:-}" ;;
     *) echo "배포 알림: 알 수 없는 결과 '$level' — 보내지 않는다"; exit 0 ;;
 esac
 if [[ -z "$url" ]]; then
