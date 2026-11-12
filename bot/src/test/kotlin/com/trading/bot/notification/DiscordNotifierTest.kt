@@ -168,6 +168,18 @@ class DiscordNotifierTest {
         listOf(gone, limited, down).forEach { assertFalse(it.toString().contains("secret-token"), it.toString()) }
     }
 
+    // outbox 로 늦게 가도 Discord 가 보내는 시각이 아니라 ERROR 가 난 시각을 보이게 한다.
+    @Test
+    fun `error alert and digest payloads carry the time they happened`() {
+        val at = java.time.Instant.parse("2026-11-12T03:04:05Z")
+        val alert = notifier.errorAlertPayload("logger", "boom", null, 0, at)
+        val digest = notifier.errorDigestPayload(ErrorAlertRateLimiter.Digest(emptyList(), mapOf("x" to 1)), at)
+
+        for (payload in listOf(alert, digest)) {
+            assertEquals("2026-11-12T03:04:05Z", ((payload["embeds"] as List<*>).single() as Map<*, *>)["timestamp"])
+        }
+    }
+
     @Test
     fun `sendErrorAlert sends red error embed to given webhook`() {
         notifier.sendErrorAlert(

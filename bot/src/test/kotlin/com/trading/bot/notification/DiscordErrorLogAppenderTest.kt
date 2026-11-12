@@ -8,6 +8,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import java.time.Instant
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -52,14 +53,14 @@ class DiscordErrorLogAppenderTest {
         appender.handle(error("[HALT] KRW-XRP pending reconcile failed 5 times"))
         appender.handle(error("봇 미복원: 1개 유저 복원 실패", logger = "com.trading.bot.engine.UserTradingManager"))
 
-        verify(exactly = 5) { notifier.sendErrorAlert(any(), any(), any(), any(), any()) }
+        verify(exactly = 5) { notifier.sendErrorAlert(any(), any(), any(), any(), any(), any()) }
         assertEquals(listOf(60_000L), scheduled.map { it.second }) // 같은 창의 두 번째 보류는 다시 예약하지 않는다
-        verify(exactly = 0) { notifier.sendErrorDigest(any(), any()) }
+        verify(exactly = 0) { notifier.sendErrorDigest(any(), any(), any()) }
 
         scheduled.single().first.run()
 
         val digest = slot<ErrorAlertRateLimiter.Digest>()
-        verify(exactly = 1) { notifier.sendErrorDigest(capture(digest), props.webhookUrl) }
+        verify(exactly = 1) { notifier.sendErrorDigest(capture(digest), props.webhookUrl, any()) }
         assertEquals(
             listOf("[HALT] KRW-XRP pending reconcile failed 5 times", "봇 미복원: 1개 유저 복원 실패"),
             digest.captured.alerts.map { it.summary },
@@ -77,7 +78,7 @@ class DiscordErrorLogAppenderTest {
 
         scheduled.last().first.run()
         appender.flushDigest() // 보류 없음
-        verify(exactly = 2) { notifier.sendErrorDigest(any(), any()) }
+        verify(exactly = 2) { notifier.sendErrorDigest(any(), any(), any()) }
     }
 
     @Test
@@ -95,7 +96,7 @@ class DiscordErrorLogAppenderTest {
         scheduled.single().first.run()
 
         val digest = slot<ErrorAlertRateLimiter.Digest>()
-        verify(exactly = 1) { notifier.sendErrorDigest(capture(digest), any()) }
+        verify(exactly = 1) { notifier.sendErrorDigest(capture(digest), any(), any()) }
         assertEquals(listOf("b", "c", "d"), digest.captured.alerts.map { it.summary })
     }
 
@@ -112,7 +113,7 @@ class DiscordErrorLogAppenderTest {
         scheduled.single().first.run()
 
         val digest = slot<ErrorAlertRateLimiter.Digest>()
-        verify { notifier.sendErrorDigest(capture(digest), any()) }
+        verify { notifier.sendErrorDigest(capture(digest), any(), any()) }
         assertEquals(
             listOf("Upbit auth failed: Bearer *** [IllegalStateException]", "y".repeat(199) + "…"),
             digest.captured.alerts.map { it.summary },
@@ -128,14 +129,49 @@ class DiscordErrorLogAppenderTest {
         appender.detach() // ApplicationReadyEvent 전이라 attach 된 적 없다
 
         verify { executor.shutdownNow() }
-        verify(exactly = 0) { notifier.sendErrorDigest(any(), any()) }
+        verify(exactly = 0) { notifier.sendErrorDigest(any(), any(), any()) }
+    }
+
+    // outbox 루프가 살아 있으면 큐에만 넣는다. 살아 있지 않으면 지금처럼 바로 보낸다.
+    @Test
+    fun `an alert goes to the outbox while its loop is alive and is sent directly otherwise`() {
+        val outbox = mockk<ErrorAlertOutbox>()
+        val offered = mutableListOf<ErrorAlert>()
+        every { outbox.offer(capture(offered)) } returns true andThen false
+        val appender = DiscordErrorLogAppender(notifier, props, ErrorAlertRateLimiter(), executor, outbox)
+
+        appender.handle(error("a").apply { timeStamp = 1_700_000_000_000 })
+        appender.handle(error("b"))
+
+        assertEquals(Instant.ofEpochMilli(1_700_000_000_000), offered.first().at)
+        verify(exactly = 1) { notifier.sendErrorAlert(any(), "b", any(), any(), any(), any()) }
+    }
+
+    // 종료 때 보류된 요약도 outbox 에 맡겨 DB 에 남긴다 — 버리면 한 번만 찍힌 ERROR 가 사라진다.
+    @Test
+    fun `detaching hands the held digest to the outbox`() {
+        val outbox = mockk<ErrorAlertOutbox>()
+        val offered = mutableListOf<ErrorAlert>()
+        every { outbox.offer(capture(offered)) } returns true
+        val appender = DiscordErrorLogAppender(notifier, props, ErrorAlertRateLimiter(globalPerMinute = 1), executor, outbox)
+        appender.onApplicationEvent(mockk(relaxed = true))
+        try {
+            appender.handle(error("a"))
+            appender.handle(error("b"))
+        } finally {
+            appender.detach()
+        }
+
+        assertEquals(listOf("b"), (offered.last() as ErrorAlert.Digest).digest.alerts.map { it.summary })
+        verify(exactly = 0) { notifier.sendErrorDigest(any(), any(), any()) }
     }
 
     @Test
-    fun `Spring 은 빈 두 개만 받는 생성자로 appender 를 만든다`() {
+    fun `Spring 은 빈 세 개를 받는 생성자로 appender 를 만든다`() {
         AnnotationConfigApplicationContext().use { ctx ->
             ctx.registerBean(DiscordNotifier::class.java, Supplier { notifier })
             ctx.registerBean(ErrorAlertProperties::class.java, Supplier { props })
+            ctx.registerBean(ErrorAlertOutbox::class.java, Supplier { mockk<ErrorAlertOutbox>(relaxed = true) })
             ctx.register(DiscordErrorLogAppender::class.java)
             ctx.refresh()
             assertNotNull(ctx.getBean(DiscordErrorLogAppender::class.java))
