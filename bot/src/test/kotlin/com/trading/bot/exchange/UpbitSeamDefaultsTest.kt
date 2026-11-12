@@ -10,7 +10,12 @@ import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
+import io.netty.channel.ConnectTimeoutException
+import io.netty.handler.timeout.ReadTimeoutException
 import java.io.IOException
+import java.net.ConnectException
+import java.net.URI
+import java.net.UnknownHostException
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -22,6 +27,9 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpMethod
+import org.springframework.web.reactive.function.client.WebClientRequestException
 
 /** Upbit 기본 seam 이 옮기기 전 식·상수와 같은 값을 내는지 경계값으로 고정한다. */
 class UpbitSeamDefaultsTest {
@@ -109,6 +117,19 @@ class UpbitSeamDefaultsTest {
         assertEquals(OrderFailure.REJECTED_BELOW_MIN_ORDER, UpbitOrderErrorClassifier.classify(errors[3]))
         assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(errors[5]))
         assertEquals(OrderFailure.REJECTED, UpbitOrderErrorClassifier.classify(errors[0]))
+    }
+
+    // 연결이 서기 전에 끝난 요청은 업비트에 닿지 않아 identifier 가 쓰이지 않았다. 연결 뒤의 끊김·시한 초과는 닿았을 수 있다.
+    @Test
+    fun `only failures before the connection is made count as not sent`() {
+        fun request(cause: Throwable) = WebClientRequestException(cause, HttpMethod.POST, URI("https://api.upbit.com/v1/orders"), HttpHeaders())
+
+        assertEquals(OrderFailure.NOT_SENT, UpbitOrderErrorClassifier.classify(request(ConnectException("Connection refused"))))
+        assertEquals(OrderFailure.NOT_SENT, UpbitOrderErrorClassifier.classify(request(ConnectTimeoutException("connection timed out"))))
+        assertEquals(OrderFailure.NOT_SENT, UpbitOrderErrorClassifier.classify(request(UnknownHostException("api.upbit.com"))))
+        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(request(ReadTimeoutException.INSTANCE)))
+        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(request(IOException("Connection reset by peer"))))
+        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(UpbitApiException(429, null, null, "")))
     }
 
     @Test
