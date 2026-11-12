@@ -26,7 +26,12 @@ class TradingStateService(
     private val log = LoggerFactory.getLogger(javaClass)
 
     suspend fun upsert(userId: Long, state: TradingState) {
-        val existing = if (state.exchange == Exchange.UPBIT) {
+        tradingStateRepository.save(state.toEntity(userId, findRow(userId, state))).awaitSingle()
+    }
+
+    /** [state] 가 저장될 행. 아직 없으면 null 이다. */
+    suspend fun findRow(userId: Long, state: TradingState): TradingStateEntity? =
+        if (state.exchange == Exchange.UPBIT) {
             tradingStateRepository.findByUserIdAndTicker(userId, state.ticker).awaitSingleOrNull()?.also {
                 // 다른 거래소 행의 id 로 저장하면 그 행을 Upbit 상태로 덮어쓴다.
                 check(it.exchange == state.exchange.name) {
@@ -36,8 +41,6 @@ class TradingStateService(
         } else {
             tradingStateRepository.findByUserIdAndExchangeAndTicker(userId, state.exchange.name, state.ticker).awaitSingleOrNull()
         }
-        tradingStateRepository.save(state.toEntity(userId, existing)).awaitSingle()
-    }
 
     /**
      * [exchange] 의 행만 돌려준다. 손상된 필드는 그 필드만 버린다. 행을 통째로 건너뛰면 pending 주문 uuid 까지 사라져

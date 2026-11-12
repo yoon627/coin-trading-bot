@@ -309,8 +309,9 @@ class TradingStateTest {
     @Test
     fun `the cleared fields are listed in full by column name so a release can be undone by hand`() {
         val buy = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined").pendingFields(TradeSide.BUY)
-        assertEquals(4, buy.size)
+        assertEquals(6, buy.size)
         assertEquals("ctb-1", buy["pending_buy_identifier"])
+        assertTrue(buy.containsKey("pending_buy_book_volume") && buy.containsKey("pending_buy_book_avg"))
         assertEquals("combined", buy["pending_buy_strategy"])
         assertEquals(9, TradingState("KRW-BTC").pendingFields(TradeSide.SELL).size)
     }

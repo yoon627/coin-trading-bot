@@ -308,6 +308,32 @@ class TradingEngineTest {
         }
     }
 
+    // 해제 전 값은 루프와 겹치지 않는 잠금 안에서만 읽힌다. 기록에 실패하면 메모리 halt 를 되돌린다.
+    @Test
+    fun `halt 해제는 잠금 안에서 잡은 해제 전 값을 저장 함수에 넘기고, 실패하면 halt 를 되돌린다`(): Unit = runBlocking {
+        val halted = TradingState("KRW-BTC").apply { halted = true; haltReason = "reconcile failures"; reconcileFailureCount = 3 }
+        val engine = createEngine()
+        engine.start(listOf("KRW-BTC"), mapOf("KRW-BTC" to halted))
+        try {
+            val seen = mutableListOf<HaltSnapshot>()
+            assertThrows<IllegalStateException> {
+                runBlocking { engine.clearHalt("KRW-BTC") { _, before -> seen += before; throw IllegalStateException("insert failed") } }
+            }
+            assertEquals(listOf(HaltSnapshot("reconcile failures", 3)), seen)
+            val state = engine.getStates().getValue("KRW-BTC")
+            assertTrue(state.halted)
+            assertEquals("reconcile failures", state.haltReason)
+            assertEquals(3, state.reconcileFailureCount)
+
+            assertTrue(engine.clearHalt("KRW-BTC") { s, _ -> assertFalse(s.halted) })
+            assertFalse(state.halted)
+            // 이미 풀린 종목은 바꾸지 않으니 기록도 남기지 않는다.
+            assertFalse(engine.clearHalt("KRW-BTC") { _, _ -> error("nothing changed, nothing to record") })
+        } finally {
+            engine.stop()
+        }
+    }
+
     /** 시한이 지나면 바꾸지 않고 돌려주고, 잠금은 남지 않아 루프와 다음 해제가 그대로 돈다. */
     @Test
     fun `halt 해제가 시한 안에 잠금을 얻지 못하면 바꾸지 않고 잠금도 남기지 않는다`(): Unit = runBlocking {

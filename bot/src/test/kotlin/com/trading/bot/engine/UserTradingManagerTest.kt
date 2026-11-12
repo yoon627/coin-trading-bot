@@ -14,12 +14,14 @@ import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
+import com.trading.bot.persistence.entity.ManualInterventionEntity
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.bot.persistence.entity.TradeRecordEntity
@@ -75,6 +77,7 @@ class UserTradingManagerTest {
     private lateinit var userSecretsService: UserSecretsService
     private lateinit var marketDataStore: MarketDataStore
     private lateinit var tradingStateService: TradingStateService
+    private lateinit var interventions: ManualInterventionService
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
@@ -89,12 +92,15 @@ class UserTradingManagerTest {
         userSecretsService = mockk(relaxed = true)
         marketDataStore = mockk(relaxed = true)
         tradingStateService = mockk(relaxed = true)
+        // 기록 서비스는 상태 저장을 실제로 부르게 둔다 — 아니면 해제 시험의 저장 단언이 헛돈다.
+        interventions = savingInterventions(tradingStateService)
         upbitWebClient = mockk(relaxed = true)
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, tradeExecutionService, discordNotifier,
                 strategy, TradingProperties(autoStart = true), upbitWebClient,
                 userSecretsService, marketDataStore, tradingStateService,
+                manualInterventions = interventions,
             ),
         )
         // engine.start 의 실코루틴 기동을 피하고 restore 오케스트레이션만 검증하기 위한 seam.
@@ -495,6 +501,7 @@ class UserTradingManagerTest {
                 userRepository, botStateRepository, actualTradeExecutionService, auditNotifier,
                 strategy, TradingProperties(autoStart = true), upbitWebClient,
                 userSecretsService, marketDataStore, tradingStateService,
+                manualInterventions = interventions,
             ),
         )
         every { manager.createEngine(any()) } answers { callOriginal() }
@@ -654,7 +661,7 @@ class UserTradingManagerTest {
     @Test
     fun `clearHalt answers conflict when the trading loop is busy with that ticker`() = runTest {
         engines()[1L] = mockEngine
-        coEvery { mockEngine.clearHalt("KRW-BTC") } throws HaltClearBusyException("KRW-BTC")
+        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } throws HaltClearBusyException("KRW-BTC")
 
         val result = manager.clearHalt(1L, "KRW-BTC")
 
@@ -668,7 +675,7 @@ class UserTradingManagerTest {
         val waiting = TradingState("KRW-BTC").apply { halted = true }
         val reviewed = TradingState("KRW-BTC").apply { halted = true; reviewReason = "traced" }
         every { mockEngine.getStates() } returnsMany listOf(mapOf("KRW-BTC" to waiting), mapOf("KRW-BTC" to reviewed))
-        coEvery { mockEngine.clearHalt("KRW-BTC") } returns false
+        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } returns false
 
         val result = manager.clearHalt(1L, "KRW-BTC")
 
@@ -860,7 +867,7 @@ class UserTradingManagerTest {
     @Test
     fun `halt clear that cannot persist is reported as a failure`() = runTest {
         engines()[1L] = mockEngine
-        coEvery { mockEngine.clearHalt("KRW-BTC") } throws RuntimeException("db down")
+        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } throws RuntimeException("db down")
 
         val thrown = assertThrows(BotControlPersistFailedException::class.java) {
             runBlocking { manager.clearHalt(1L, "KRW-BTC") }
@@ -1677,6 +1684,69 @@ class UserTradingManagerTest {
         }
 
         assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
+    }
+
+    // 지운 pending 은 상태 저장과 같은 트랜잭션의 기록으로 남는다 — 로그는 배포 때 컨테이너와 함께 사라진다.
+    @Test
+    fun `a pending clear is saved together with a record of what it cleared`() = runTest {
+        stoppedRow()
+        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyBookVolume = 0.002, pendingBuyBookAvg = 4.0))
+        val detail = slot<Map<String, Any?>>()
+        coEvery { interventions.saveWithRecord(1L, any(), ManualInterventionEntity.PENDING_CLEAR, capture(detail)) } just Runs
+
+        manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
+
+        assertEquals("BUY", detail.captured["side"])
+        assertEquals("identifier:ctb-1", detail.captured["ref"])
+        val cleared = detail.captured["cleared"] as Map<*, *>
+        assertEquals("ctb-1", cleared["pending_buy_identifier"])
+        assertEquals(0.002, cleared["pending_buy_book_volume"])
+    }
+
+    @Test
+    fun `a pending clear whose record cannot be saved is a 503 and the engine stays dropped`() = runTest {
+        stoppedRow()
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns false
+        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"))
+        coEvery { interventions.saveWithRecord(any(), any(), any(), any()) } throws RuntimeException("insert failed")
+
+        val ex = assertThrows(BotControlPersistFailedException::class.java) {
+            runBlocking { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }
+        }
+
+        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
+        assertNull(engines()[1L]) // 미기록분을 이미 저장했다 — 다음 시작은 DB 행으로 돈다
+    }
+
+    // 시간 제한은 상태 저장만이 아니라 기록 삽입·커밋까지 감싼다.
+    @Test
+    fun `a pending clear whose save and record run past the time limit is a 503`() = runTest {
+        stoppedRow()
+        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"))
+        coEvery { interventions.saveWithRecord(any(), any(), any(), any()) } coAnswers { delay(60_000) }
+
+        val ex = runCatching { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }.exceptionOrNull()
+
+        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, (ex as? BotControlPersistFailedException)?.message, "$ex")
+    }
+
+    @Test
+    fun `a halt clear is saved with the halt reason and failure count the engine read under its lock`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.getStates() } returns emptyMap()
+        val state = TradingState("KRW-BTC")
+        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } coAnswers {
+            secondArg<suspend (TradingState, HaltSnapshot) -> Unit>()(state, HaltSnapshot("reconcile failures", 3))
+            true
+        }
+        val detail = slot<Map<String, Any?>>()
+        coEvery { interventions.saveWithRecord(1L, state, ManualInterventionEntity.HALT_CLEAR, capture(detail)) } just Runs
+
+        assertEquals("cleared", manager.clearHalt(1L, "KRW-BTC")["status"])
+
+        assertEquals("reconcile failures", detail.captured["halt_reason"])
+        assertEquals(3, detail.captured["reconcile_failure_count"])
     }
 
     @Test

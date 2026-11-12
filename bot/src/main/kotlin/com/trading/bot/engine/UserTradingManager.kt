@@ -8,9 +8,11 @@ import com.trading.bot.exchange.ExchangeClient
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
+import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
+import com.trading.bot.persistence.entity.ManualInterventionEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.bot.config.ExitParamsDeclarationCheck
@@ -66,6 +68,7 @@ class UserTradingManager(
     private val shadowExitObservationRepository: ShadowExitObservationRepository? = null,
     private val exitParamsDeclarationCheck: ExitParamsDeclarationCheck? = null,
     runtime: ExchangeRuntime? = null,
+    private val manualInterventions: ManualInterventionService,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
@@ -507,7 +510,7 @@ class UserTradingManager(
         val ref = state?.pendingRef(side) ?: return@withLock mapOf("status" to "not_pending")
         if (engine != null) engines.remove(userId, engine)
         val cleared = state.pendingFields(side)
-        // 지운 값의 유일한 기록이므로 저장 전에 남긴다. 체결된 주문이었다면 이 값으로 거래 기록을 맞춘다.
+        // 체결된 주문이었다면 이 값으로 거래 기록을 맞춘다. 표에도 남지만 저장이 실패해도 보이도록 먼저 로그에 남긴다.
         log.warn("Clearing pending {} {} ({} {}) by hand for user {} — fields: {}", side, ticker, ref.by, ref.ref, userId, cleared)
         state.releasePending(side, TradingDay.of(LocalDateTime.now(TradingDay.KST)))
         if (side == TradeSide.BUY && state.adoptBaselineVolume == null && state.currentBookVolume() != null) {
@@ -515,8 +518,10 @@ class UserTradingManager(
             log.error("{} 미해소 매수 정리: 주문 전 보유 기록이 없어 그 주문이 산 코인을 봇 장부에 넣지 않는다 — 거래소 잔고를 확인하라", ticker)
         }
         persistOrFail(userId, PENDING_CLEAR_UNPERSISTED_MESSAGE) {
-            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { tradingStateService.upsert(userId, state) }
-                ?: throw IllegalStateException("trading_states 저장 시간 초과")
+            saveWithRecord(
+                userId, state, ManualInterventionEntity.PENDING_CLEAR,
+                mapOf("side" to side.name, "ref" to "${ref.by}:${ref.ref}", "cleared" to cleared),
+            )
         }
         log.info("Pending {} {} cleared for user {}", side, ticker, userId)
         mapOf("status" to "cleared", "ticker" to ticker, "side" to side.name.lowercase(), "cleared" to cleared)
@@ -534,7 +539,12 @@ class UserTradingManager(
         // 바쁜 루프는 저장 실패가 아니라 ERROR 알림 없이 다시 시도하라고 돌려준다(null).
         val cleared = persistOrFail(userId, HALT_CLEAR_UNPERSISTED_MESSAGE) {
             try {
-                engine.clearHalt(ticker)
+                engine.clearHalt(ticker) { state, before ->
+                    saveWithRecord(
+                        userId, state, ManualInterventionEntity.HALT_CLEAR,
+                        mapOf("halt_reason" to before.haltReason, "reconcile_failure_count" to before.reconcileFailureCount),
+                    )
+                }
             } catch (busy: HaltClearBusyException) {
                 log.warn("halt clear for user {} timed out waiting for the trading loop: {}", userId, busy.message)
                 null
@@ -766,6 +776,13 @@ class UserTradingManager(
         val existing = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull() ?: return
         if (!existing.running) return
         botStateRepository.save(existing.copy(running = false, updatedAt = LocalDateTime.now())).awaitSingle()
+    }
+
+    /** 상태 저장과 수동 개입 기록을 한 트랜잭션으로, 시간 제한 안에 끝낸다. */
+    private suspend fun saveWithRecord(userId: Long, state: TradingState, action: String, detail: Map<String, Any?>) {
+        withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) {
+            manualInterventions.saveWithRecord(userId, state, action, detail)
+        } ?: throw IllegalStateException("trading_states 저장 시간 초과")
     }
 
     private inline fun <T> persistOrFail(userId: Long, userMessage: String, block: () -> T): T =
