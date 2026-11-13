@@ -9,6 +9,8 @@ import com.trading.common.domain.Candle
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.time.Instant
+import java.time.OffsetDateTime
 import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatusCode
@@ -112,6 +114,41 @@ class UpbitClientImpl(
 
     private fun isOrderNotFound(e: UpbitApiException) = e.statusCode == 404 && e.errorName == "order_not_found"
 
+    /**
+     * 커서가 없어 시간으로 이어 받는다. 시작 시각이 포함이라 경계의 주문은 겹치고 uuid 로 지운다. 새 주문이 없는 가득 찬 쪽이나
+     * 쪽 수 상한에서 멈춘다. 배열 파라미터·시간대 표기의 해시·인코딩 차이를 피하려고 state 하나와 epoch ms 만 쓰고,
+     * 한 쿼리 문자열을 서명과 요청에 함께 쓴다.
+     */
+    override suspend fun getClosedOrders(state: String, start: Instant, end: Instant): List<Order> {
+        require(!end.isBefore(start) && Duration.between(start, end) <= MAX_CLOSED_WINDOW) { "종료 주문 창은 7일 이하다: $start..$end" }
+        val seen = LinkedHashMap<String, Order>()
+        var from = start.toEpochMilli()
+        repeat(MAX_CLOSED_PAGES) {
+            val query = "state=$state&start_time=$from&end_time=${end.toEpochMilli()}&limit=$CLOSED_PAGE_SIZE&order_by=asc"
+            val page = Mono.defer {
+                upbitWebClient.get()
+                    .uri("/v1/orders/closed?$query")
+                    .header("Authorization", authProvider!!.authorizationHeader(query))
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError) { handleError(it, expected = ::isAuthFailure) }
+                    .bodyToMono<List<Order>>()
+            }.retryOnRateLimit().awaitSingle()
+            val fresh = page.count { seen.putIfAbsent(it.uuid, it) == null }
+            if (page.size < CLOSED_PAGE_SIZE) return seen.values.toList()
+            val next = page.last().createdAt?.let { OffsetDateTime.parse(it).toInstant().toEpochMilli() }
+            if (fresh == 0 || next == null) {
+                log.warn("Closed orders ({}) stopped paging: a full page brought nothing new from {}", state, Instant.ofEpochMilli(from))
+                return seen.values.toList()
+            }
+            from = next
+        }
+        log.warn("Closed orders ({}) stopped after {} pages — later orders in the window were not read", state, MAX_CLOSED_PAGES)
+        return seen.values.toList()
+    }
+
+    // 키 상태(만료·잘못된 키·허용 IP·권한) 오류만 예상한 것으로 본다. 서명 오류(invalid_query_payload·jwt_verification)는 우리 버그라 ERROR 다.
+    private fun isAuthFailure(e: UpbitApiException) = (e.statusCode == 401 || e.statusCode == 403) && e.errorName in KEY_STATE_ERRORS
+
     override suspend fun cancelOrder(uuid: String): Order {
         val queryString = "uuid=$uuid"
         return Mono.defer {
@@ -164,5 +201,9 @@ class UpbitClientImpl(
 
     companion object {
         private val ERROR_BODY_MAPPER = ObjectMapper()
+        private val MAX_CLOSED_WINDOW: Duration = Duration.ofDays(7)
+        internal const val CLOSED_PAGE_SIZE = 100
+        private val KEY_STATE_ERRORS = setOf("expired_access_key", "invalid_access_key", "no_authorization_ip", "out_of_scope")
+        private const val MAX_CLOSED_PAGES = 10
     }
 }

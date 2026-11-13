@@ -6,6 +6,7 @@ import com.trading.bot.exchange.FillPollPolicy
 import com.trading.common.domain.Candle
 import java.net.ConnectException
 import java.net.UnknownHostException
+import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.delay
 
@@ -13,6 +14,9 @@ import kotlinx.coroutines.delay
 interface UpbitClient : ExchangeClient {
     suspend fun getMinuteCandles(market: String, unit: Int = 1, count: Int = 200): List<Candle>
     suspend fun cancelOrder(uuid: String): Order
+
+    /** [state](done·cancel) 인 종료 주문 중 [start]..[end] 에 만든 것. 창은 7일 이하다. 401·403 은 ERROR 로 남기지 않는다. */
+    suspend fun getClosedOrders(state: String, start: Instant, end: Instant): List<Order>
 }
 
 const val FILL_POLL_ATTEMPTS = 10

@@ -25,6 +25,10 @@ data class Order(
     val paidFee: String? = null,
     /** 체결 내역. Upbit 개별 주문 조회에만 있고 체결금액 합계 필드가 없어 실체결 단가는 여기서 계산한다. */
     val trades: List<OrderTrade> = emptyList(),
+    /** 주문 때 넣은 identifier. 2024-10-18 이전 주문과 앱에서 낸 주문은 없다. */
+    val identifier: String? = null,
+    @JsonProperty("created_at")
+    val createdAt: String? = null,
 ) {
     /**
      * 실제 체결 단가(`Σfunds / Σvolume`). 얻을 수 없으면 추정하지 않고 null 이다.

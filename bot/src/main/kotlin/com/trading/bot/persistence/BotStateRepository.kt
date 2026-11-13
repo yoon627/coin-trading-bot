@@ -8,4 +8,5 @@ import reactor.core.publisher.Mono
 interface BotStateRepository : R2dbcRepository<BotStateEntity, Long> {
     fun findByUserIdAndExchange(userId: Long, exchange: String): Mono<BotStateEntity>
     fun findByRunningTrueAndExchange(exchange: String): Flux<BotStateEntity>
+    fun findByExchange(exchange: String): Flux<BotStateEntity>
 }
