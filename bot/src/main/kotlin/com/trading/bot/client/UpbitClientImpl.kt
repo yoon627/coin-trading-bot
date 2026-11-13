@@ -82,6 +82,7 @@ class UpbitClientImpl(
             .onStatus(HttpStatusCode::isError) { handleError(it) }
             .bodyToMono<Order>()
             .awaitSingle()
+            .requireUuid()
     }
 
     override suspend fun getOrder(uuid: String): Order {
@@ -109,8 +110,12 @@ class UpbitClientImpl(
             }.retryOnRateLimit().awaitSingle()
         } catch (e: UpbitApiException) {
             if (isOrderNotFound(e)) null else throw e
-        }
+        }?.requireUuid()
     }
+
+    // 호출부 로그가 identifier 를 이미 남기므로 메시지에는 넣지 않는다.
+    private fun Order.requireUuid(): Order =
+        if (uuid.isBlank()) throw UpbitMalformedResponseException("order response without a uuid") else this
 
     private fun isOrderNotFound(e: UpbitApiException) = e.statusCode == 404 && e.errorName == "order_not_found"
 

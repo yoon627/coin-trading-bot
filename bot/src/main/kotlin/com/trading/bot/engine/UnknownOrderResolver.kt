@@ -113,15 +113,7 @@ internal class UnknownOrderResolver(
 
     private suspend fun lookupByIdentifier(ticker: String, identifier: String): IdentifierLookup =
         try {
-            val order = upbitClient.getOrderByIdentifier(identifier)
-            when {
-                order == null -> IdentifierLookup.NotFound
-                order.uuid.isBlank() -> {
-                    log.warn("identifier lookup for {} order {} returned no uuid", ticker, identifier)
-                    IdentifierLookup.Unknown
-                }
-                else -> IdentifierLookup.Found(order)
-            }
+            upbitClient.getOrderByIdentifier(identifier)?.let { IdentifierLookup.Found(it) } ?: IdentifierLookup.NotFound
         } catch (e: CancellationException) {
             throw e
         } catch (e: OrderLookupException.NotYetVisible) {

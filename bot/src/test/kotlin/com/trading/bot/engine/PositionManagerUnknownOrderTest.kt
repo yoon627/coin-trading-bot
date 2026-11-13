@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitApiException
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitMalformedResponseException
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
@@ -252,9 +253,9 @@ class PositionManagerUnknownOrderTest {
 
     @Test
     fun `an order answered without a uuid is kept pending by identifier`() = runTest {
-        // 역직렬화된 빈 응답은 uuid 가 "" 다. 그걸 쓰면 체결 확인이 null 이 되어 주문이 무산으로 풀린다.
+        // client 는 uuid 없는 응답을 형식 오류로 던진다. 접수됐을 수 있으니 무산으로 풀지 않는다.
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.001"))
-        placeOrderAnswers { Order() }
+        placeOrderAnswers { throw UpbitMalformedResponseException("no uuid") }
         val buying = TradingState("KRW-BTC")
         val selling = held()
 

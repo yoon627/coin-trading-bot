@@ -34,6 +34,12 @@ suspend fun ExchangeClient.awaitFill(uuid: String, policy: FillPollPolicy = Fill
     return last
 }
 
+/**
+ * 2xx 인데 주문 응답에 uuid 가 없다. 접수 여부를 알 수 없으므로 [provesOrderNotPlaced] 와 [provesOrderNotSent] 가 모두 false 여야 한다
+ * — 연결 계열 cause 를 붙이면 매도가 같은 identifier 로 다시 나간다.
+ */
+class UpbitMalformedResponseException(message: String) : RuntimeException(message)
+
 class UpbitApiException(
     val statusCode: Int,
     val errorName: String?,
