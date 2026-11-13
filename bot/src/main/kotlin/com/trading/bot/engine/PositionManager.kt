@@ -1141,7 +1141,10 @@ class PositionManager(
         )
     }
 
+    // 시장가 매수 수수료는 주문 금액 위에 더해 잔액에서 묶이는 것으로 본다(실주문으로는 확인하지 않음).
+    // 잔액 전부를 주문하면 수수료 몫이 모자라 거절될 수 있어 매수 한쪽 수수료만큼 남긴다.
     private fun calculateInvestAmount(krwBalance: Double): Double {
-        return minOf(krwBalance * tradingProperties.investRatio, tradingProperties.maxInvestAmount)
+        val affordable = krwBalance / (1 + tradingProperties.roundTripFeeRate / 2)
+        return minOf(krwBalance * tradingProperties.investRatio, tradingProperties.maxInvestAmount, affordable)
     }
 }
