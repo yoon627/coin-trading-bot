@@ -219,6 +219,24 @@ class PositionManagerExtendedTest {
     }
 
     @Test
+    fun `buy leaves room for the buy fee when investRatio spends the whole balance`() = runTest {
+        val fullRatio = PositionManager(upbitClient, properties.copy(investRatio = 1.0, roundTripFeeRate = 0.002), tradingStateService, 1L)
+        coEvery { upbitClient.getAccounts() } returnsMany listOf(
+            listOf(Account(currency = "KRW", balance = "50000")),
+            listOf(Account(currency = "BTC", balance = "0.00096", avgBuyPrice = "52000000")),
+        )
+        val orderSlot = slot<OrderRequest>()
+        coEvery { upbitClient.placeOrder(capture(orderSlot)) } returns Order(uuid = "buy-fee")
+        coEvery { upbitClient.getOrder("buy-fee") } returns
+            Order(uuid = "buy-fee", state = "done", executedVolume = "0.00096")
+
+        fullRatio.buy("KRW-BTC", TradingState("KRW-BTC"), 52000000.0, "test")
+
+        // 50,000 / (1 + 0.002 / 2) = 49,950.05 — 주문 금액 + 매수 수수료가 잔액을 넘지 않는다.
+        assertEquals("49950", orderSlot.captured.price)
+    }
+
+    @Test
     fun `buy returns null and keeps state when order not filled`() = runTest {
         coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "200000"))
         coEvery { upbitClient.placeOrder(any()) } returns Order(uuid = "buy-x")

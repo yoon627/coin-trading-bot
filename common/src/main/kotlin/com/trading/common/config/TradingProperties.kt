@@ -17,7 +17,7 @@ data class TradingProperties(
     val trailingArmPct: Double = 3.0,
     // 매수 후 이 거래일 수(KST 09:00 경계)가 지나면 강제 청산한다.
     val maxHoldDays: Int = 1,
-    // 기록용 pnlPercent 에서만 뺀다. 청산 판정은 수수료 전 수익률로 한다.
+    // 기록용 pnlPercent 에서 빼고, 절반(매수 한쪽)은 매수 주문 금액에서 남긴다. 청산 판정은 수수료 전 수익률로 한다.
     val roundTripFeeRate: Double = 0.001,
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
