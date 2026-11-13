@@ -33,5 +33,11 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
+        // CI 로그에 실패 원인(SQL 오류 문구 등)까지 남긴다. 기본은 예외 클래스 이름뿐이라 결과 XML 이 없는 CI 에서 원인을 볼 수 없다.
+        testLogging {
+            events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            showCauses = true
+        }
     }
 }
