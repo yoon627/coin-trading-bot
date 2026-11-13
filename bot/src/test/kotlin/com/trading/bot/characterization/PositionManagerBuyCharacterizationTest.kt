@@ -1,6 +1,7 @@
 package com.trading.bot.characterization
 
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitMalformedResponseException
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
@@ -54,6 +55,11 @@ class PositionManagerBuyCharacterizationTest {
 
     private fun placeOrderReturns(order: Order) {
         coEvery { upbit.placeOrder(any()) } coAnswers { sent += firstArg<OrderRequest>(); order }
+    }
+
+    // 주문 금액만 보는 시험이다. 접수 뒤 응답 해석이 실패한 것으로 두어 체결 확인으로 넘어가지 않게 한다.
+    private fun placeOrderThrowsAfterSend() {
+        coEvery { upbit.placeOrder(any()) } coAnswers { sent += firstArg<OrderRequest>(); throw UpbitMalformedResponseException("no uuid") }
     }
 
     private fun doneOrder(executed: String = "0.001") = Order(
@@ -181,7 +187,7 @@ class PositionManagerBuyCharacterizationTest {
     @Test
     fun `the invest amount is capped at 100,000 KRW`() = runTest {
         coEvery { upbit.getAccounts() } returns listOf(krw("5000000")) // × 0.1 = 500,000
-        placeOrderReturns(Order(uuid = "", state = "wait"))
+        placeOrderThrowsAfterSend()
 
         manager().buy("KRW-BTC", TradingState("KRW-BTC"), 50_000_000.0, "test")
 
@@ -204,7 +210,7 @@ class PositionManagerBuyCharacterizationTest {
 
     @Test
     fun `a buy that would fall below 5,000 KRW at the 5 percent stop-loss is skipped, one won more is sent`() = runTest {
-        placeOrderReturns(Order(uuid = "", state = "wait"))
+        placeOrderThrowsAfterSend()
 
         coEvery { upbit.getAccounts() } returns listOf(krw("52630")) // 5,263 × 0.95 < 5,000
         assertNull(manager().buy("KRW-BTC", TradingState("KRW-BTC"), 50_000_000.0, "test"))

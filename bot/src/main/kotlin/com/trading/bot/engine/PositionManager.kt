@@ -384,10 +384,6 @@ class PositionManager(
                 }
                 return@withContext null
             }
-            if (order.uuid.isBlank()) {
-                log.error("Buy order {} for {} was answered without a uuid — kept pending, confirming by identifier", identifier, ticker)
-                return@withContext null
-            }
             // 이후 체결 확인이 실패해도 다음 tick reconcile 이 이 uuid 로 이어받아 중복 매수를 막는다.
             state.adoptBuyOrder(order.uuid)
             persistPending(state)
@@ -907,10 +903,6 @@ class PositionManager(
                 } else {
                     log.error("Sell order {} for {} has an unknown outcome — kept pending, confirming by identifier: {}", identifier, ticker, e.message, e)
                 }
-                return@withContext null
-            }
-            if (order.uuid.isBlank()) {
-                log.error("Sell order {} for {} was answered without a uuid — kept pending, confirming by identifier", identifier, ticker)
                 return@withContext null
             }
             // 이후 체결 확인이 실패해도 다음 tick reconcile 이 이 uuid 로 이어받아 이중 매도와 기록 누락을 막는다.

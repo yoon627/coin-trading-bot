@@ -1,6 +1,7 @@
 package com.trading.bot.characterization
 
 import com.trading.bot.client.UpbitClient
+import com.trading.bot.client.UpbitMalformedResponseException
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
@@ -136,7 +137,7 @@ class PositionManagerSellCharacterizationTest {
 
     @Test
     fun `a holding worth less than 5,000 KRW is not sent, exactly 5,000 KRW is`() = runTest {
-        coEvery { upbit.placeOrder(any()) } coAnswers { sent += firstArg<OrderRequest>(); Order(uuid = "", state = "wait") }
+        coEvery { upbit.placeOrder(any()) } coAnswers { sent += firstArg<OrderRequest>(); throw UpbitMalformedResponseException("no uuid") }
 
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.00009")) // 4,500원
         val dust = holding()

@@ -218,6 +218,17 @@ class UpbitClientTest {
     }
 
     @Test
+    fun `an order answer without a uuid is a malformed response, not an order`() = runTest {
+        // 2xx 라도 uuid 가 없으면 접수 여부를 알 수 없다. 빈 uuid 의 Order 로 넘기면 호출부마다 다시 판정해야 한다.
+        repeat(2) { mockServer.enqueue(MockResponse().setBody("""{"state":"wait"}""").addHeader("Content-Type", "application/json")) }
+
+        assertThrows<UpbitMalformedResponseException> {
+            client.placeOrder(OrderRequest(market = "KRW-BTC", side = "bid", ordType = "price", price = "10000", identifier = "ctb-abc"))
+        }
+        assertThrows<UpbitMalformedResponseException> { client.getOrderByIdentifier("ctb-abc") }
+    }
+
+    @Test
     fun `getOrderByIdentifier returns null only when the exchange says the order does not exist`() = runTest {
         mockServer.enqueue(
             MockResponse().setResponseCode(404)

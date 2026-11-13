@@ -17,6 +17,7 @@ interface ExchangeClient {
     suspend fun getAccounts(): List<Account>
     suspend fun getDayCandles(market: String, count: Int = 30): List<Candle>
     suspend fun getTicker(markets: String): List<Ticker>
+    /** 돌려주는 주문의 uuid 는 비어 있지 않다. 응답에 uuid 가 없으면 접수 여부를 모르는 실패로 예외를 던진다. */
     suspend fun placeOrder(request: OrderRequest): Order
     suspend fun getOrder(uuid: String): Order
 
@@ -24,6 +25,7 @@ interface ExchangeClient {
      * null 은 거래소가 그 identifier 를 모른다는 답이고, 모르면 예외를 던진다. 둘을 섞으면 조회 실패를 미접수로 잘못 확정한다.
      * null 을 미접수 확정으로 쓸지는 [UnknownOrderPolicy.supportsClientOrderId] 가 정하고, false 면 엔진은 사람 확인으로 넘긴다.
      * 확정 근거를 스스로 영속하는 구현도 있다. 아직 보이지 않거나 사람이 봐야 하면 [OrderLookupException] 을 던진다.
+     * 돌려주는 주문의 uuid 는 비어 있지 않다 — 응답에 없으면 예외를 던진다.
      */
     suspend fun getOrderByIdentifier(identifier: String): Order?
 }
