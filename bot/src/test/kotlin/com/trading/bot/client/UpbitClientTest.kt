@@ -133,6 +133,74 @@ class UpbitClientTest {
         assertEquals(sha512("market=KRW-BTC&side=ask&ord_type=market&volume=0.1"), queryHashOf(request))
     }
 
+    private fun closed(uuid: String, createdAt: String) =
+        """{"uuid":"$uuid","identifier":"ctb-$uuid","side":"ask","market":"KRW-BTC","state":"done","executed_volume":"0.1","created_at":"$createdAt"}"""
+
+    // 배열 파라미터(states[])·'+' 시간대는 해시·인코딩이 어긋날 수 있어 state 하나와 epoch ms 만 쓴다. 해시와 URI 는 같은 문자열이다.
+    @Test
+    fun `closed orders are asked for one state at a time with epoch millis, and signed with the same query`() = runTest {
+        mockServer.enqueue(MockResponse().setBody("[${closed("o-1", "2026-11-12T10:00:00+09:00")}]").addHeader("Content-Type", "application/json"))
+        val start = java.time.Instant.parse("2026-11-11T00:00:00Z")
+        val end = java.time.Instant.parse("2026-11-12T23:00:00Z")
+
+        val orders = client.getClosedOrders("done", start, end)
+
+        assertEquals(listOf("o-1"), orders.map { it.uuid })
+        assertEquals("ctb-o-1", orders.single().identifier)
+        val query = "state=done&start_time=${start.toEpochMilli()}&end_time=${end.toEpochMilli()}&limit=100&order_by=asc"
+        val request = mockServer.takeRequest()
+        assertEquals("/v1/orders/closed?$query", request.path)
+        assertEquals(sha512(query), queryHashOf(request))
+    }
+
+    // 커서가 없어 시간으로 이어 받는다. 시작 시각은 포함이라 경계의 주문이 겹치고, 새 주문이 없으면 끝없이 돌 수 있다.
+    @Test
+    fun `a full page continues from its last order time, overlaps are dropped, and a page with nothing new stops`() = runTest {
+        val full = (1..100).joinToString(",", "[", "]") { closed("a-$it", "2026-11-12T00:%02d:00+09:00".format(it % 60)) }
+        mockServer.enqueue(MockResponse().setBody(full).addHeader("Content-Type", "application/json"))
+        val overlapAndNew = "[${closed("a-100", "2026-11-12T00:40:00+09:00")},${closed("b-1", "2026-11-12T01:00:00+09:00")}]"
+        mockServer.enqueue(MockResponse().setBody(overlapAndNew).addHeader("Content-Type", "application/json"))
+
+        val orders = client.getClosedOrders("done", java.time.Instant.parse("2026-11-11T00:00:00Z"), java.time.Instant.parse("2026-11-12T23:00:00Z"))
+
+        assertEquals(101, orders.size)
+        mockServer.takeRequest()
+        val second = mockServer.takeRequest()
+        assertTrue(second.path!!.contains("start_time=${java.time.OffsetDateTime.parse("2026-11-12T00:40:00+09:00").toInstant().toEpochMilli()}"), second.path)
+
+        mockServer.enqueue(MockResponse().setBody(full).addHeader("Content-Type", "application/json"))
+        mockServer.enqueue(MockResponse().setBody(full).addHeader("Content-Type", "application/json"))
+        assertEquals(100, client.getClosedOrders("done", java.time.Instant.parse("2026-11-11T00:00:00Z"), java.time.Instant.parse("2026-11-12T23:00:00Z")).size)
+        assertEquals(4, mockServer.requestCount, "새 주문이 없는 가득 찬 쪽에서 멈춘다")
+    }
+
+    // 만료된 키는 그 사용자를 건너뛸 일이라 ERROR(Discord)가 아니다. 서명 오류는 우리 버그라 ERROR 다.
+    @Test
+    fun `an expired key on closed orders is not logged as an error, a signing error is`() = runTest {
+        val logger = org.slf4j.LoggerFactory.getLogger(UpbitClientImpl::class.java) as ch.qos.logback.classic.Logger
+        val logs = ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>().apply { start() }
+        logger.addAppender(logs)
+        try {
+            val start = java.time.Instant.parse("2026-11-11T00:00:00Z")
+            mockServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"name":"expired_access_key","message":"x"}}""").addHeader("Content-Type", "application/json"))
+            assertThrows<UpbitApiException> { client.getClosedOrders("done", start, start.plusSeconds(60)) }
+            assertEquals(0, logs.list.count { it.level == ch.qos.logback.classic.Level.ERROR })
+
+            mockServer.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"name":"invalid_query_payload","message":"x"}}""").addHeader("Content-Type", "application/json"))
+            assertThrows<UpbitApiException> { client.getClosedOrders("done", start, start.plusSeconds(60)) }
+            assertEquals(1, logs.list.count { it.level == ch.qos.logback.classic.Level.ERROR })
+        } finally {
+            logger.detachAppender(logs)
+        }
+    }
+
+    @Test
+    fun `closed orders refuse a window longer than seven days`() = runTest {
+        val start = java.time.Instant.parse("2026-11-01T00:00:00Z")
+        assertThrows<IllegalArgumentException> { client.getClosedOrders("done", start, start.plus(java.time.Duration.ofDays(8))) }
+        assertEquals(0, mockServer.requestCount)
+    }
+
     @Test
     fun `getOrderByIdentifier returns the order the exchange knows by that identifier`() = runTest {
         mockServer.enqueue(
