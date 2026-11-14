@@ -210,17 +210,21 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 어느 시점에도 거래를 켠 인스턴스는 하나뿐이어야 한다. 같은 Upbit 계정에 봇이 둘 붙으면 주문과 청산이 이중으로
 나간다. 같은 키를 쓰는 로컬 실행도 한 인스턴스로 센다.
 
-옛 호스트를 살려 둔 채 새 호스트로 옮기는 절차는 스크립트가 지원하지 않는다. 이전이 필요하면 절차를 먼저 만들어
-리허설한다. 아래는 그때 지킬 제약이다.
+옛 호스트를 살려 둔 채 새 호스트로 옮기는 절차를 하나로 묶은 명령은 없다. 이전이 필요하면 아래 제약으로 절차를
+먼저 만들어 리허설한다.
 
-`deploy.sh` 는 체크아웃 하나에서 호스트 하나만 다룬다:
+`deploy.sh` 는 한 번에 `.env` 하나와 `.state` 하나가 가리키는 호스트를 다룬다:
 
-- `ssh`·`stop`·`deploy`·`destroy` 는 `deploy/vultr/.state` 의 호스트에 작동하고, `destroy` 는 그 인스턴스와 방화벽
-  그룹을 지운다.
-- `setup` 은 `.state` 의 인스턴스를, 없으면 label 이 `APP_NAME` 인 인스턴스를 다시 쓴다. 같은 체크아웃에서 새 호스트를
-  만들려 하면 운영 호스트에 배포된다.
-- 스크립트가 `.env` 를 먼저 읽으므로 `.env` 의 값이 명령줄 환경변수보다 우선한다. label·SSH 키(`<APP_NAME>-key.pem`)·
-  방화벽 그룹 이름이 `APP_NAME` 을 따르므로 두 호스트를 함께 다루려면 별도 체크아웃과 다른 `APP_NAME` 이 필요하다.
+- `ssh`·`stop`·`deploy`·`destroy` 는 `.state`(기본 `deploy/vultr/.state`)의 호스트에 작동하고, `destroy` 는 그
+  인스턴스와 방화벽 그룹을 지운다. `destroy` 는 대상 IP(IP 가 없으면 인스턴스 ID)를 그대로 다시 입력해야 진행한다.
+- 새 호스트는 다른 `APP_NAME` 을 적은 별도 env 와 빈 state 파일로 다룬다:
+  `DEPLOY_ENV_FILE=deploy/vultr/new.env DEPLOY_STATE_FILE=deploy/vultr/new.state ./deploy/vultr/deploy.sh setup`.
+  스크립트가 env 파일을 먼저 읽으므로 그 안의 값이 명령줄 환경변수보다 우선한다(`DEPLOY_ENV_FILE`·`DEPLOY_STATE_FILE`
+  은 env 파일보다 먼저 읽으므로 명령줄로만 지정한다). label·SSH 키(`<APP_NAME>-key.pem`)·
+  방화벽 그룹 이름이 `APP_NAME` 을 따르므로 두 호스트의 `APP_NAME` 은 달라야 한다.
+- `setup` 은 `.state` 의 인스턴스를 다시 쓴다. `.state` 에 없는데 label 이 `APP_NAME` 인 인스턴스가 있으면 운영
+  호스트일 수 있어 멈춘다. 직전 `setup` 의 응답이 끊겨 만들어진 인스턴스가 맞을 때만 `SETUP_REUSE_INSTANCE=<id>` 로
+  다시 실행해 쓴다.
 - Actions 배포 대상은 `.state` 가 아니라 secret `VULTR_PUBLIC_IP`·`VULTR_SSH_PRIVATE_KEY` 와 `deploy/vultr/known_hosts` 다.
 
 빠뜨리면 안 되는 항목:
@@ -236,13 +240,14 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 - 3절로 복원·검증하고, Upbit API 키에 허용 IP 를 쓰면 새 호스트 IP 를 등록한 뒤 UI 에서 직접 거래를 켠다.
 - 백업 cron: 스크립트는 cron 을 등록하지 않는다. 옛 호스트의 cron 을 끄고(두면 멈춘 옛 DB 가 S3 의 최신 객체가 된다)
   새 호스트에 6절 cron 을 등록한 뒤 `./backup.sh` 를 한 번 돌려 확인한다. 옛 호스트 `destroy` 는
-  `BACKUP_S3_BUCKET` 이 있으면 최종 백업을 한 번 더 올리므로 옛 체크아웃 `.env` 의 `BACKUP_S3_BUCKET` 을 비운다.
+  `BACKUP_S3_BUCKET` 이 있으면 최종 백업을 한 번 더 올리므로 옛 호스트 env 파일의 `BACKUP_S3_BUCKET` 을 비운다.
 - Actions 대상 전환: 새 호스트에 2절 SSH hardening 을 적용·확인하고 새 방화벽 그룹에 `ctb-ssh-github-actions` 규칙을
   넣은 뒤, secret `VULTR_PUBLIC_IP`·`VULTR_SSH_PRIVATE_KEY` 와 `deploy/vultr/known_hosts` 를 바꾸고 배포를 다시 켠다.
 - 도메인: `APP_DOMAIN` 이 비어 있으면 주소가 새 IP 의 sslip.io 도메인으로 바뀐다. 보유 도메인을 쓰면 검증 동안은
   비워 두고, 끝나면 DNS A 레코드를 새 IP 로 바꾼 뒤 다시 넣고 `deploy` 한다.
-- 옛 호스트 정리: 옛 앱이 멈춰 있는지 확인하고 옛 호스트의 `.state` 로 `destroy` 한다. 새 호스트의 무시 파일
-  (`.env`·`.state`·SSH 키)은 평소 쓰는 체크아웃으로 옮기고 오프사이트에도 보관한다.
+- 옛 호스트 정리: 옛 앱이 멈춰 있는지 확인하고 옛 호스트의 `.state` 로 `destroy` 한다. 그 뒤 새 호스트의 env·state 를
+  `.env`·`.state` 로 바꿔 두고(또는 계속 `DEPLOY_ENV_FILE`·`DEPLOY_STATE_FILE` 로 가리키고), 새 `<APP_NAME>-key.pem`
+  과 함께 오프사이트에도 보관한다.
 
 ## 5. 장애 복구
 
@@ -252,7 +257,8 @@ grep '^APP_ENCRYPTION_SECRET=' .env | cut -d= -f2- | tr -d '\n' | shasum -a 256
 
 옛 인스턴스가 Vultr 에 남아 있지 않으면(콘솔·API 에서 label 이 `APP_NAME` 인 인스턴스가 없음을 확인) 낡은 `.state`
 를 다른 이름으로 옮겨 두고, 같은 체크아웃에서 4절의 "거래 없이 먼저" 조건으로 `setup` → `deploy` 한 뒤 3절로
-복원한다(덤프는 3절 1 b). 응답만 없는 인스턴스가 남아 있으면 `setup` 이 그것을 다시 쓰므로 4절 제약을 따른다.
+복원한다(덤프는 3절 1 b). 응답만 없는 인스턴스가 남아 있으면 `setup` 이 멈춘다 — 그 인스턴스를 다시 쓰지 말고
+4절처럼 다른 `APP_NAME` 의 env 로 새 호스트를 만든다.
 백업 cron·Actions 대상·도메인은 4절과 같다.
 
 ## 6. DB 백업

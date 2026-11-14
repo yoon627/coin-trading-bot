@@ -34,7 +34,7 @@ class DeploySecretsScriptTest {
         return File(dir, ".env")
     }
 
-    private fun run(command: String, path: String? = null): Run {
+    private fun run(command: String, path: String? = null, env: Map<String, String> = emptyMap()): Run {
         val out = File(dir, "out.txt")
         val process = ProcessBuilder("bash", File(dir, "deploy.sh").path, command)
             .directory(dir)
@@ -43,6 +43,7 @@ class DeploySecretsScriptTest {
             .apply {
                 environment().keys.retainAll(setOf("PATH", "HOME"))
                 path?.let { environment()["PATH"] = "$it:${environment()["PATH"]}" }
+                environment().putAll(env)
             }
             .start()
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
@@ -99,14 +100,14 @@ class DeploySecretsScriptTest {
 
     @Test
     fun `setup 은 같은 label 의 인스턴스를 찾아 다시 쓸 때도 비어 있는 DB_PASSWORD 를 만들지 않는다`() {
-        // .state 를 잃은 체크아웃에서 setup 을 다시 돌리는 경우다 — 운영 인스턴스를 label 로 찾아 다시 쓴다.
+        // .state 를 잃은 체크아웃에서 setup 을 다시 돌리는 경우다 — 운영 인스턴스를 label 로 찾아 명시적으로 다시 쓴다.
         val env = prepare(
             withMissing("DB_PASSWORD", mapOf("VULTR_API_KEY" to "k", "SSH_ALLOW_CIDR" to "198.51.100.1/32")),
             state = "FIREWALL_ID=fw-1\nSSHKEY_ID=key-1\n",
         )
         val before = env.readText()
 
-        val result = run("setup", fakeVultr("""[{"id":"old-2","label":"coin-trading-bot"}]"""))
+        val result = run("setup", fakeVultr("""[{"id":"old-2","label":"coin-trading-bot"}]"""), mapOf("SETUP_REUSE_INSTANCE" to "old-2"))
 
         assertNotEquals(0, result.exit, result.output)
         assertTrue(result.output.contains("재사용: old-2"), result.output)

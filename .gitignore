@@ -50,6 +50,10 @@ docker-compose.override.yml
 ### Environment ###
 .env
 deploy/vultr/.state
+# DEPLOY_ENV_FILE·DEPLOY_STATE_FILE 로 쓰는 다른 호스트의 env·state 도 시크릿이다.
+deploy/vultr/*.env
+deploy/vultr/*.state
+deploy/vultr/*.state.tmp
 deploy/vultr/*.pem
 deploy/vultr/*.pub
 

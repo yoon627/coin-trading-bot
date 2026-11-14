@@ -10,15 +10,17 @@ export MSYS_NO_PATHCONV=1
 #   ./deploy/vultr/deploy.sh deploy   # GHCR 이미지 pull + compose 기동
 #   ./deploy/vultr/deploy.sh ssh|status|logs|mem|stop|start
 #   ./deploy/vultr/deploy.sh destroy
+#
+# 다른 호스트(이전 대상)는 DEPLOY_ENV_FILE·DEPLOY_STATE_FILE 로 다른 .env(다른 APP_NAME)·.state 를 가리켜 다룬다.
 
 # .env·.state·임시 env 는 모두 시크릿을 담는다.
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_FILE="$SCRIPT_DIR/.state"
+STATE_FILE="${DEPLOY_STATE_FILE:-$SCRIPT_DIR/.state}"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.prod.yml"
 
-ENV_FILE="$SCRIPT_DIR/.env"
+ENV_FILE="${DEPLOY_ENV_FILE:-$SCRIPT_DIR/.env}"
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "ERROR: $ENV_FILE not found. Copy .env.example and fill in values:"
     echo "  install -m 600 $SCRIPT_DIR/.env.example $ENV_FILE"
@@ -373,9 +375,23 @@ launch_instance() {
 
     # 응답이 유실돼 이미 만들어졌을 수 있으니 label 로 먼저 찾는다.
     api GET "/instances?per_page=500"
-    local existing
-    existing="$(printf '%s' "$API_BODY" | jq -r --arg l "$APP_NAME" '.instances[]? | select(.label==$l) | .id' | head -1)"
+    local matches existing
+    matches="$(printf '%s' "$API_BODY" | jq -r --arg l "$APP_NAME" '.instances[]? | select(.label==$l) | "\(.id) \(.main_ip // "?")"')"
+    existing="$(printf '%s\n' "$matches" | awk 'NF {print $1}' | head -1)"
     if [[ -n "$existing" ]]; then
+        # .state 없이 label 만 맞는 인스턴스는 운영 호스트일 수 있다. 응답 유실 뒤 다시 실행한 경우에만 명시해 쓴다.
+        if [[ "$(printf '%s\n' "$matches" | awk 'NF' | wc -l)" -gt 1 ]]; then
+            echo "ERROR: label '$APP_NAME' 인 인스턴스가 여럿입니다 — 어느 것이 운영 호스트인지 Vultr 콘솔에서 정리한 뒤 다시 실행하세요."
+            printf '  %s\n' "$matches"
+            exit 1
+        fi
+        if [[ "${SETUP_REUSE_INSTANCE:-}" != "$existing" ]]; then
+            echo "ERROR: label '$APP_NAME' 인 인스턴스 $matches 가 이미 있고 $STATE_FILE 에는 없습니다."
+            echo "  새 호스트라면 다른 APP_NAME 의 env 를 DEPLOY_ENV_FILE·DEPLOY_STATE_FILE 로 지정하세요."
+            echo "  직전 setup 의 응답이 끊겨 만들어진 인스턴스가 맞다면:"
+            echo "    ${DEPLOY_ENV_FILE:+DEPLOY_ENV_FILE=$DEPLOY_ENV_FILE }${DEPLOY_STATE_FILE:+DEPLOY_STATE_FILE=$DEPLOY_STATE_FILE }SETUP_REUSE_INSTANCE=$existing $0 setup"
+            exit 1
+        fi
         echo "  같은 label 의 기존 인스턴스 재사용: $existing"
         INSTANCE_ID="$existing"; save_state INSTANCE_ID "$INSTANCE_ID"; return
     fi
@@ -735,7 +751,12 @@ do_destroy() {
     echo ""
     echo "⚠️  거래 이력과 (암호화된) Upbit 키가 이 인스턴스 디스크에 있습니다."
     echo "    Vultr 인스턴스 삭제는 디스크까지 즉시 소멸시킵니다 — 백업을 먼저 확보하세요."
-    read -rp "'yes' 입력: " confirm; [[ "$confirm" != "yes" ]] && { echo "취소"; exit 0; }
+    echo "    대상: $STATE_FILE"
+    # 'yes' 는 어느 .state 를 가리키든 통과한다. 대상을 다시 적게 해 잘못 가리킨 .state 로 운영 호스트를 지우지 않게 한다.
+    local target="${PUBLIC_IP:-${INSTANCE_ID:-}}"
+    local what="인스턴스 ID"; [[ -n "${PUBLIC_IP:-}" ]] && what="IP"
+    read -rp "지울 대상($what)을 그대로 입력: " confirm
+    [[ -z "$target" || "$confirm" != "$target" ]] && { echo "취소"; exit 0; }
 
     # 인스턴스를 지우면 디스크도 사라지므로 최종 백업이 실패하면 멈춘다.
     if [[ -n "${PUBLIC_IP:-}" && -n "${BACKUP_S3_BUCKET:-}" ]]; then
