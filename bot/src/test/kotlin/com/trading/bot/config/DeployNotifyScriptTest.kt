@@ -278,6 +278,26 @@ class DeployNotifyScriptTest {
         assertThat(curlArgs.readText()).contains("https://github.com/owner/app/actions/runs/42")
     }
 
+    /** 덤프는 스키마가 바뀔 수 있는 배포에서만 받는다. 매번 받으면 보존 5개가 마이그레이션 직전 덤프를 밀어낸다. */
+    @Test
+    fun `마이그레이션이 바뀐 배포에만 마이그레이션 전 덤프를 넘긴다`() {
+        deploy(deployRepo(migration = true), remoteRc = 0)
+        assertThat(sshRemote.readText()).contains("PRE_MIGRATION_DUMP='1'")
+
+        sshRemote.delete()
+        File(dir, "repo").deleteRecursively()
+        deploy(deployRepo(), remoteRc = 0)
+        assertThat(sshRemote.readText()).contains("PRE_MIGRATION_DUMP='0'")
+
+        // 직전 정상 배포를 모르면 마이그레이션이 바뀌었는지 알 수 없어 덤프한다.
+        sshRemote.delete()
+        File(dir, "repo").deleteRecursively()
+        val unknown = deployRepo()
+        File(unknown, "deploy/vultr/.state").writeText("PUBLIC_IP=203.0.113.10\n")
+        deploy(unknown, remoteRc = 0)
+        assertThat(sshRemote.readText()).contains("PRE_MIGRATION_DUMP='1'")
+    }
+
     /** 같은 커밋이면 compose 가 컨테이너를 다시 만들지 않아, 롤백 제외 사유를 마이그레이션과 따로 알린다. */
     @Test
     fun `마지막 정상 배포와 같은 커밋을 배포하면 same-sha 로 넘긴다`() {
@@ -349,7 +369,7 @@ class DeployNotifyScriptTest {
      * deploy.sh 가 `git rev-parse --show-toplevel` 로 저장소를 찾으므로 배포 파일을 임시 git 저장소에 둔다. 서버는 가짜 ssh 가
      * 대신한다 — 원격 배포 스크립트(`bash -s`)는 받은 결과 코드로 끝나고 나머지 명령은 성공한다.
      */
-    private fun deployRepo(sameAsLastGood: Boolean = false): File {
+    private fun deployRepo(sameAsLastGood: Boolean = false, migration: Boolean = false): File {
         val repo = File(dir, "repo").apply { mkdirs() }
         val vultr = File(repo, "deploy/vultr").apply { mkdirs() }
         for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "apply_caddyfile.sh", "backup.sh")) {
@@ -361,6 +381,10 @@ class DeployNotifyScriptTest {
         val lastGood = git(repo, "rev-parse", "HEAD").trim()
         File(repo, "README").writeText("target\n")
         git(repo, "add", "README")
+        if (migration) {
+            File(repo, "bot/src/main/resources/db/migration").apply { mkdirs() }.resolve("V99__new.sql").writeText("SELECT 1;\n")
+            git(repo, "add", "bot")
+        }
         commit(repo, "target")
         val target = if (sameAsLastGood) lastGood else git(repo, "rev-parse", "HEAD").trim()
         File(vultr, ".env").writeText(

@@ -167,7 +167,7 @@ job 동작:
 `.state` 가 가리키는 호스트에 접속한다.
 
 ```bash
-# 1) 복원할 호스트의 /tmp/trading.sql.gz 에 덤프를 둔다 (a 또는 b)
+# 1) 복원할 호스트의 /tmp/trading.sql.gz 에 덤프를 둔다 (a·b·c 중 하나)
 ./deploy/vultr/deploy.sh ssh
   cd /opt/app
   # a. 현재 DB 에서 뜬다. 앱이 쓰지 않을 때만(호스트 이전이면 옛 앱을 멈춘 뒤 옛 호스트에서)
@@ -175,6 +175,8 @@ job 동작:
   # b. 6절의 S3 백업을 받는다. 목록은 같은 방식으로 s3 ls
   (set -a; . ./.env; set +a; aws ${BACKUP_S3_ENDPOINT:+--endpoint-url "$BACKUP_S3_ENDPOINT"} \
     s3 cp "s3://$BACKUP_S3_BUCKET/${BACKUP_S3_PREFIX:-db-backups}/trading-<TS>.sql.gz" /tmp/trading.sql.gz)
+  # c. 마이그레이션이 낀 배포가 새 이미지를 받기 전에 남긴 덤프(최근 5개, 루트 README "스키마 변경 규칙")
+  ls -1t backups/pre-deploy-*.sql.gz && cp backups/pre-deploy-<SHA>-<TS>.sql.gz /tmp/trading.sql.gz
 
 # 2) 앱을 멈추고 DB 를 새로 만든 뒤 넣고, 봇을 멈춘 상태로 바꾼 다음 앱을 띄운다
 ./deploy/vultr/deploy.sh ssh
@@ -185,6 +187,11 @@ job 동작:
   docker compose start app
 ```
 
+- c 로 되돌릴 때는 2) 의 마지막 `docker compose start app` 대신 서버 `.env` 의 이미지를 직전 정상 SHA 로 고정하고 띄운다.
+  떠 있던 새 이미지를 다시 시작하면 같은 마이그레이션이 다시 돈다. `.env` 를 고치지 않으면 나중의 `docker compose up -d`·
+  `deploy.sh start` 가 새 이미지로 돌아간다:
+  `sed -i "s|^APP_VERSION=.*|APP_VERSION=<직전 정상 SHA>|" .env && docker compose up -d --pull missing`. 덤프 뒤 체결은 DB 에 없으므로
+  Upbit 체결 내역과 대조한다.
 - `UPDATE bot_state SET running = false` 를 빼면 `TRADING_AUTO_START=true` 인 환경에서 앱이 백업 시점의 봇을
   검증 전에 다시 켠다. 아래 검증을 통과한 뒤 UI 에서 봇을 켠다.
 - 앱이 한 번이라도 뜬 DB 에는 Flyway 스키마가 있어 DB 를 새로 만들지 않고 넣으면 `already exists` 로 멈춘다.
