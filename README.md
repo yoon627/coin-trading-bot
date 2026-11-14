@@ -221,7 +221,7 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 - 이 방식을 되돌릴 때는 커밋을 revert 하지 말고 고쳐서 나간다. revert 하면 push 배포가 되살아나 그 revert push 가 곧바로 main 최신을 배포한다.
 - 헬스체크(`/actuator/health`)는 웹·DB 와 함께 실행 중이던 봇의 복원이 끝났는지 본다. 복원 중이면 503(OUT_OF_SERVICE), 재시도를 다 쓰고 복원하지 못한 봇이 있으면 503(DOWN)이다. 그 봇을 손으로 시작하거나 멈추면 다시 200 이 된다. bot state 조회 자체가 끝까지 실패했으면 재시작 전까지 503 이고, `TRADING_AUTO_START=false` 면 복원하지 않으므로 언제나 200 이다.
 - 배포 결과(성공·자동 롤백·실패)를 Discord 로 알린다. 모두 `DISCORD_DEPLOY_WEBHOOK_URL`(배포 webhook, `VULTR_DEPLOY_ENV` 시크릿에 넣는다)로 간다. 배포 webhook 이 없으면 롤백·실패만 `DISCORD_ERROR_WEBHOOK_URL` 로 가고 성공은 보내지 않는다. 거래 webhook(`DISCORD_WEBHOOK_URL`)은 체결 알림 전용이라 배포 알림을 보내지 않는다. 원격 배포 전에 멈춘 실패(설정 검사·preflight·업로드, Actions 의 준비 스텝)는 알리지 않는다 — 운영 컨테이너를 건드리기 전이고 Actions 실패로 보인다.
-- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다(대신 새 이미지를 받기 전에 DB 를 덤프한다 — 아래 "스키마 변경 규칙"). 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
+- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌지 못할 수 있어 자동 롤백하지 않는다. 다만 롤백 호환 검사(아래 "스키마 변경 규칙")를 통과하면 자동 롤백한다. 어느 쪽이든 새 앱을 띄우기 전에 DB 를 덤프한다. 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
@@ -246,6 +246,8 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
 - **migrate**: 새 코드가 새 칼럼을 읽고 쓴다. 옛 이미지가 잘못 읽을 새 데이터(예: 다른 거래소의 행)는 기능 플래그를 켜기 전까지 만들지 않는다.
 - **contract**: 옛 칼럼·제약을 지우는 마이그레이션은 직전 이미지로 돌아갈 일이 없을 만큼 지난 뒤 따로 낸다. 이 배포만 되돌릴 수 없고, 바뀌는 동작이 없어야 한다.
 - 한 마이그레이션에서 더하고 지우는 것을 함께 하지 않는다(V30 이 그렇게 했고, V30 이전 이미지로는 롤백하지 않는다).
+
+롤백 호환 검사: Actions 배포는 마이그레이션이 바뀌었으면 runner 의 임시 Postgres(운영과 같은 이미지)에 새 이미지를 띄워 마이그레이션한 뒤, 직전 정상 이미지를 그 스키마 위에 띄워 기동과 봇 복원 조회(`bot_state`)가 healthy 로 끝나는지 본다(`deploy/vultr/rollback_compat.sh`, 더미 시크릿·빈 DB·자동 시작 켬 — 복원할 봇이 없어 주문은 나가지 않는다). 통과하면 그 배포도 헬스체크 실패 때 직전 이미지로 자동 롤백하고, 실패하거나 검사하지 못하면 경고만 남기고 자동 롤백 없이 배포한다. 빈 DB 라 쓰기 경로(체결·주문 기록 INSERT)와 옛 코드가 새 데이터를 잘못 읽는 비호환은 잡지 못하므로 위 규칙이 먼저다 — 특히 기본값 없는 NOT NULL 칼럼 추가는 검사를 통과해도 롤백한 옛 코드의 쓰기를 깬다. V30 이전 이미지로는 검사와 상관없이 자동 롤백하지 않는다. 수동 실행의 `rollback_check` 를 켜면 마이그레이션이 없어도 검사만 돌려 볼 수 있다.
 
 `deploy.sh` 는 직전 정상 배포와 비교해 `db/migration/` 이 바뀌었거나 비교할 수 없으면, 새 이미지를 받은 뒤 새 앱을 띄우기 직전에 서버에서 DB 를 `/opt/app/backups/pre-deploy-<SHA 12자리>-<UTC 시각>.sql.gz` 로 덤프한다(배포 계정 전용, 최근 5개 보존). 멈춰 있는 postgres 는 먼저 띄운다. postgres 를 띄우지 못하거나 덤프가 완전하지 않으면 앱 컨테이너를 바꾸지 않고 배포를 멈춘다(postgres 정의가 바뀐 배포면 postgres 는 이미 새로 만들어졌을 수 있다) — 이때 서버의 `.env`·compose 파일은 이미 새 배포 것이라 `docker compose up` 을 손으로 돌리면 덤프 없이 마이그레이션된다. 같은 디스크라 호스트 유실에는 쓸모가 없다 — 오프사이트 백업은 따로 둔다.
 

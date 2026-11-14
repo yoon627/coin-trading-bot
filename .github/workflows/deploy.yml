@@ -17,6 +17,10 @@ on:
         description: 마지막 정상 배포 이후 운영에 들어가는 파일 변경이 없어도 배포한다(secret 만 바꾼 경우 등)
         type: boolean
         default: false
+      rollback_check:
+        description: 마이그레이션이 없어도 롤백 호환 검사(직전 정상 이미지를 새 스키마에 띄우기)를 돌린다
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -143,7 +147,7 @@ jobs:
     needs: [test, build-and-push]
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     concurrency:
       group: vultr-production
       cancel-in-progress: false
@@ -255,10 +259,40 @@ jobs:
             echo "::notice::마지막 정상 배포 $LAST_GOOD_SHA 이후 운영에 들어가는 파일 변경이 없어 배포하지 않았다. secret 처럼 파일 밖 변경을 반영하려면 force 로 다시 실행한다."
           fi
 
+      # 마이그레이션이 바뀐 배포는 직전 정상 이미지가 새 스키마에서 뜨는지 runner 에서 본다. 통과하면 deploy.sh 가 자동
+      # 롤백을 허용한다. 검사가 실패하거나 시한에 걸려도 배포는 진행하고 자동 롤백만 빠진다(지금까지와 같다).
+      - name: Rollback compatibility check
+        id: compat
+        if: steps.changes.outputs.deploy == 'true' || inputs.rollback_check
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          LAST_GOOD_SHA: ${{ steps.prepare.outputs.last_good_sha }}
+          ROLLBACK_CHECK: ${{ inputs.rollback_check }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 치환을 [[ ]] 밖에서 해야 git diff 실패(직전 SHA 없음)가 set -e 로 멈춘다.
+          changed="$(git diff --name-only "$LAST_GOOD_SHA" "$GITHUB_SHA" -- bot/src/main/resources/db/migration/)"
+          if [[ "$ROLLBACK_CHECK" != true && -z "$changed" ]]; then
+            echo "마이그레이션 변경이 없어 검사하지 않는다(자동 롤백은 원래 허용된다)"
+            exit 0
+          fi
+          printf '%s' "$GHCR_TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+          rc=0
+          bash ./deploy/vultr/rollback_compat.sh "$REGISTRY/$IMAGE_NAME" "$LAST_GOOD_SHA" "$GITHUB_SHA" || rc=$?
+          case "$rc" in
+            0) echo "compat=$LAST_GOOD_SHA..$GITHUB_SHA" >> "$GITHUB_OUTPUT" ;;
+            1) echo "::warning::롤백 비호환 — ${LAST_GOOD_SHA:0:12} 가 새 스키마에서 뜨지 않는다. 이 배포는 자동 롤백하지 않는다" ;;
+            *) echo "::warning::롤백 호환 검사 불가(rc=$rc) — 이 배포는 자동 롤백하지 않는다" ;;
+          esac
+
       - name: Deploy to Vultr
         if: steps.changes.outputs.deploy == 'true'
         env:
           SSH_KNOWN_HOSTS: ${{ github.workspace }}/deploy/vultr/known_hosts
+          ROLLBACK_COMPAT: ${{ steps.compat.outputs.compat }}
         run: ./deploy/vultr/deploy.sh deploy
 
       - name: Remove Vultr deploy files

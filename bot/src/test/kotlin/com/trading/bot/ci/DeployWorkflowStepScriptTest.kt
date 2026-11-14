@@ -108,6 +108,74 @@ class DeployWorkflowStepScriptTest {
         assertThat(result.output).contains("manifest unknown")
     }
 
+    @Test
+    fun `롤백 호환 검사는 마이그레이션이 바뀌지 않았으면 이미지를 받지 않고 넘어간다`() {
+        val head = initRepo(withScript = false)
+        write("bot/src/main/kotlin/App.kt", "v2")
+        commitAll("app only")
+        val target = git("rev-parse", "HEAD").trim()
+
+        val result = runStep("deploy-vultr", "compat", repo, compatEnv(head, target, check = "false"), compatFakes(scriptExit = 0))
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+        assertThat(result.githubOutput).isEmpty()
+        assertThat(File(work, "docker.calls")).doesNotExist()
+    }
+
+    @Test
+    fun `롤백 호환 검사가 통과한 두 커밋만 deploy 에 넘기고 실패는 경고로 남긴다`() {
+        val head = initRepo(withScript = false)
+        write("bot/src/main/resources/db/migration/V99__x.sql", "SELECT 1;")
+        commitAll("migration")
+        val target = git("rev-parse", "HEAD").trim()
+
+        val ok = runStep("deploy-vultr", "compat", repo, compatEnv(head, target, check = "false"), compatFakes(scriptExit = 0))
+        assertThat(ok.exit).describedAs(ok.output).isEqualTo(0)
+        assertThat(ok.githubOutput).isEqualTo("compat=$head..$target\n")
+
+        for (rc in listOf(1, 2)) {
+            val failed = runStep("deploy-vultr", "compat", repo, compatEnv(head, target, check = "false"), compatFakes(scriptExit = rc))
+            assertThat(failed.exit).describedAs(failed.output).isEqualTo(0)
+            assertThat(failed.githubOutput).isEmpty()
+            assertThat(failed.output).contains("::warning::")
+        }
+
+        val forced = runStep("deploy-vultr", "compat", repo, compatEnv(target, target, check = "true"), compatFakes(scriptExit = 0))
+        assertThat(forced.githubOutput).isEqualTo("compat=$target..$target\n")
+    }
+
+    @Test
+    fun `롤백 호환 검사의 실패와 시한은 배포를 막지 않고 결과는 deploy 에 넘어간다`() {
+        val compat = step("deploy-vultr", "compat")
+        val deploy = steps("deploy-vultr").first { it["name"] == "Deploy to Vultr" }
+
+        assertThat(compat["continue-on-error"]).isEqualTo(true)
+        assertThat(compat["if"]).isEqualTo("steps.changes.outputs.deploy == 'true' || inputs.rollback_check")
+        assertThat((deploy["env"] as Map<*, *>)["ROLLBACK_COMPAT"]).isEqualTo("\${{ steps.compat.outputs.compat }}")
+    }
+
+    private fun compatEnv(lastGood: String, target: String, check: String) = mapOf(
+        "LAST_GOOD_SHA" to lastGood,
+        "GITHUB_SHA" to target,
+        "ROLLBACK_CHECK" to check,
+        "GHCR_TOKEN" to "t",
+        "GITHUB_ACTOR" to "a",
+        "REGISTRY" to "ghcr.io",
+        "IMAGE_NAME" to "owner/app",
+    )
+
+    /** docker login 과 rollback_compat.sh 를 대신한다 — 검사 스크립트 자체는 DeployRollbackCompatScriptTest 가 본다. */
+    private fun compatFakes(scriptExit: Int): File {
+        File(repo, "deploy/vultr").mkdirs()
+        File(repo, "deploy/vultr/rollback_compat.sh").writeText("exit $scriptExit\n")
+        val bin = File(work, "bin").apply { mkdirs() }
+        File(bin, "docker").apply {
+            writeText("#!/usr/bin/env bash\necho \"${'$'}*\" >> '${File(work, "docker.calls").path}'\ncat > /dev/null\n")
+            setExecutable(true)
+        }
+        return bin
+    }
+
     private fun judgeEnv(force: String, lastGood: String, target: String) = mapOf(
         "FORCE" to force,
         "LAST_GOOD_SHA" to lastGood,
@@ -197,10 +265,12 @@ class DeployWorkflowStepScriptTest {
 
     private fun stepScript(job: String, id: String): String = step(job, id)["run"] as String
 
-    private fun step(job: String, id: String): Map<*, *> {
+    private fun step(job: String, id: String): Map<*, *> =
+        steps(job).firstOrNull { it["id"] == id } ?: error("$job 에 id=$id 스텝이 없다")
+
+    private fun steps(job: String): List<Map<*, *>> {
         val workflow: Map<*, *> = Yaml().load(RepoFiles.file(WORKFLOW).readText())
-        val steps = ((workflow["jobs"] as Map<*, *>)[job] as Map<*, *>)["steps"] as List<*>
-        return steps.filterIsInstance<Map<*, *>>().firstOrNull { it["id"] == id } ?: error("$job 에 id=$id 스텝이 없다")
+        return (((workflow["jobs"] as Map<*, *>)[job] as Map<*, *>)["steps"] as List<*>).filterIsInstance<Map<*, *>>()
     }
 
     private fun exec(command: List<String>, cwd: File, env: Map<String, String>, bin: File?): Run {
