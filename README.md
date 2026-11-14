@@ -221,7 +221,7 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 - 이 방식을 되돌릴 때는 커밋을 revert 하지 말고 고쳐서 나간다. revert 하면 push 배포가 되살아나 그 revert push 가 곧바로 main 최신을 배포한다.
 - 헬스체크(`/actuator/health`)는 웹·DB 와 함께 실행 중이던 봇의 복원이 끝났는지 본다. 복원 중이면 503(OUT_OF_SERVICE), 재시도를 다 쓰고 복원하지 못한 봇이 있으면 503(DOWN)이다. 그 봇을 손으로 시작하거나 멈추면 다시 200 이 된다. bot state 조회 자체가 끝까지 실패했으면 재시작 전까지 503 이고, `TRADING_AUTO_START=false` 면 복원하지 않으므로 언제나 200 이다.
 - 배포 결과(성공·자동 롤백·실패)를 Discord 로 알린다. 모두 `DISCORD_DEPLOY_WEBHOOK_URL`(배포 webhook, `VULTR_DEPLOY_ENV` 시크릿에 넣는다)로 간다. 배포 webhook 이 없으면 롤백·실패만 `DISCORD_ERROR_WEBHOOK_URL` 로 가고 성공은 보내지 않는다. 거래 webhook(`DISCORD_WEBHOOK_URL`)은 체결 알림 전용이라 배포 알림을 보내지 않는다. 원격 배포 전에 멈춘 실패(설정 검사·preflight·업로드, Actions 의 준비 스텝)는 알리지 않는다 — 운영 컨테이너를 건드리기 전이고 Actions 실패로 보인다.
-- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다. 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
+- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌 수 있어 자동 롤백하지 않는다(대신 새 이미지를 받기 전에 DB 를 덤프한다 — 아래 "스키마 변경 규칙"). 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
@@ -238,6 +238,17 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
 
 `APP_ENCRYPTION_SECRET`은 자동 생성하지 않는다. 운영 중인 값을 그대로 쓰고 DB 백업과 따로 보관한다. 인스턴스 재구축, 백업 복원, 방화벽 설정, 호스트 이전(같은 계정으로 봇 두 대가 돌면 주문이 이중으로 나간다)은 [`deploy/vultr/README.md`](deploy/vultr/README.md)를 본다.
 
+### 스키마 변경 규칙 (expand/contract)
+
+새 마이그레이션은 직전 이미지가 그 스키마 위에서도 돌게 만든다. 그래야 배포가 실패했을 때 직전 이미지로 되돌릴 수 있다.
+
+- **expand**: 테이블·칼럼·인덱스·제약을 더하기만 한다. 새 칼럼은 기본값이나 NULL 을 받아 옛 코드의 insert 가 깨지지 않게 하고, 기존 행에 걸 CHECK 는 `NOT VALID` 로 건 뒤 다음 배포에서 `VALIDATE CONSTRAINT` 한다.
+- **migrate**: 새 코드가 새 칼럼을 읽고 쓴다. 옛 이미지가 잘못 읽을 새 데이터(예: 다른 거래소의 행)는 기능 플래그를 켜기 전까지 만들지 않는다.
+- **contract**: 옛 칼럼·제약을 지우는 마이그레이션은 직전 이미지로 돌아갈 일이 없을 만큼 지난 뒤 따로 낸다. 이 배포만 되돌릴 수 없고, 바뀌는 동작이 없어야 한다.
+- 한 마이그레이션에서 더하고 지우는 것을 함께 하지 않는다(V30 이 그렇게 했고, V30 이전 이미지로는 롤백하지 않는다).
+
+`deploy.sh` 는 직전 정상 배포와 비교해 `db/migration/` 이 바뀌었거나 비교할 수 없으면, 새 이미지를 받은 뒤 새 앱을 띄우기 직전에 서버에서 DB 를 `/opt/app/backups/pre-deploy-<SHA 12자리>-<UTC 시각>.sql.gz` 로 덤프한다(배포 계정 전용, 최근 5개 보존). 멈춰 있는 postgres 는 먼저 띄운다. postgres 를 띄우지 못하거나 덤프가 완전하지 않으면 앱 컨테이너를 바꾸지 않고 배포를 멈춘다(postgres 정의가 바뀐 배포면 postgres 는 이미 새로 만들어졌을 수 있다) — 이때 서버의 `.env`·compose 파일은 이미 새 배포 것이라 `docker compose up` 을 손으로 돌리면 덤프 없이 마이그레이션된다. 같은 디스크라 호스트 유실에는 쓸모가 없다 — 오프사이트 백업은 따로 둔다.
+
 ### 스키마를 바꾸는 배포 (V30 같은)
 
 실거래 테이블의 제약을 바꾸는 마이그레이션은 단독 릴리스로 거래가 적은 시간에 낸다.
@@ -250,7 +261,7 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
    SELECT max(version::int) FROM flyway_schema_history WHERE success;
    ```
    첫 쿼리가 0 이 아니면 Upbit 에 없는 `KRX-` 마켓을 시작 목록에 넣었던 흔적이다. 봇을 멈추고 그 `trading_states` 행과 `bot_state.tickers` 의 해당 티커를 지운 뒤 배포한다.
-2. 서버 `/opt/app` 에서 `./backup.sh` 를 손으로 한 번 돌려 백업이 올라갔는지 확인한다. 백업 cron 을 등록해 두었다면(`deploy/vultr/README.md` 6절, KST 03:00) 배포 시각이 그와 겹치지 않게 한다. `pg_dump` 가 잡은 잠금을 V30 의 `ALTER TABLE` 이 기다리는 동안 헬스체크 시간이 지나간다.
+2. 배포가 마이그레이션 전 덤프를 서버 디스크에 남긴다(위 절). 오프사이트 사본이 필요하면 서버 `/opt/app` 에서 `./backup.sh` 를 손으로 한 번 돌린다. 백업 cron 을 등록해 두었다면(`deploy/vultr/README.md` 6절, KST 03:00) 배포 시각이 그와 겹치지 않게 한다. `pg_dump` 가 잡은 잠금을 V30 의 `ALTER TABLE` 이 기다리는 동안 헬스체크 시간이 지나간다.
 3. 되돌리기 SQL(`deploy/vultr/sql/V30_down.sql`)을 미리 읽어 둔다. Flyway 는 이 파일을 쓰지 않는다.
 4. 기동이 실패하면 자동 롤백되지 않는다. `docker compose logs app` 로 원인을 보고 V30 이 적용됐는지 확인한다.
    ```bash
@@ -271,7 +282,7 @@ COMMIT;
 
 ### V31 (KIS 키 테이블)
 
-V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 전 `./backup.sh` 는 다른 스키마 배포와 같이 돌리고, 실패하면(버킷 접근에 실패하면 덤프를 남기지 않는다) 같은 `pg_dump` 를 서버 디스크에 먼저 남긴 뒤 배포한다. main 머지는 배포하지 않으므로 백업은 배포(main 수동 실행) 직전에 한다.
+V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 직전 백업은 배포가 서버 디스크에 남기는 마이그레이션 전 덤프(위 "스키마 변경 규칙")로 한다.
 
 - V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 `deploy.sh` 의 자동 롤백 하한은 V30 그대로다.
 - 다만 V31 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 V31 적용 여부와 관계없이 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백해도 되고, `V31_down.sql` 은 필요 없다.

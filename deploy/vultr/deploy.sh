@@ -528,7 +528,15 @@ do_deploy() {
     elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
         migration_gate="blocked"
     fi
-    log "대상 SHA=${target_sha:0:12}  LAST_GOOD=${last_good:0:12}  자동롤백=$migration_gate"
+    # 스키마가 바뀔 수 있으면(마이그레이션 변경이 있거나 직전 정상 커밋과 비교할 수 없으면) 새 앱이 뜨기 전에 서버에서 덤프한다.
+    local pre_migration_dump=1
+    if [[ -n "$last_good" ]] \
+      && git -C "$repo_root" cat-file -e "${last_good}^{commit}" 2>/dev/null \
+      && git -C "$repo_root" cat-file -e "${target_sha}^{commit}" 2>/dev/null \
+      && [[ -z "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
+        pre_migration_dump=0
+    fi
+    log "대상 SHA=${target_sha:0:12}  LAST_GOOD=${last_good:0:12}  자동롤백=$migration_gate  마이그레이션전덤프=$pre_migration_dump"
 
     preflight_domain
     wait_for_docker
@@ -558,7 +566,7 @@ do_deploy() {
 
     log "컨테이너 배포 (GHCR pull, SHA=${target_sha:0:12})"
     local deploy_rc=0
-    ssh_inst "APP_DOMAIN='$domain' GHCR_IMAGE='$GHCR_IMAGE' TARGET_SHA='$target_sha' LAST_GOOD_SHA='$last_good' MIGRATION_GATE='$migration_gate' bash -s" <<'REMOTE' || deploy_rc=$?
+    ssh_inst "APP_DOMAIN='$domain' GHCR_IMAGE='$GHCR_IMAGE' TARGET_SHA='$target_sha' LAST_GOOD_SHA='$last_good' MIGRATION_GATE='$migration_gate' PRE_MIGRATION_DUMP='$pre_migration_dump' bash -s" <<'REMOTE' || deploy_rc=$?
 set -e
 # 원격 명령이 set -e 로 멈추면 그 명령의 종료 코드가 나가 2(자동 롤백)·3(롤백 실패)과 섞인다. 실패는 1 로 모은다.
 trap 'exit 1' ERR
@@ -603,8 +611,37 @@ caddy_verdict() {
     return 4
 }
 
+# 새 앱의 Flyway 가 스키마를 바꾸기 전에 DB 를 서버 디스크에 덤프한다. 실패하면 컨테이너를 바꾸기 전에 멈춘다.
+# 멈춰 있는 postgres 는 먼저 띄운다 — 건너뛰면 다음 up 이 기존 볼륨 위에서 덤프 없이 마이그레이션한다.
+# 덤프에는 암호화된 거래소 키가 있어 배포 계정 전용으로 두고 최근 5개만 남긴다.
+# `pre_migration_dump || exit 1` 로 불려 set -e·ERR trap 이 듣지 않는다 — 실패는 모두 return 1 로 낸다.
+pre_migration_dump() {
+    timeout -k 5 120 docker compose up -d --wait postgres </dev/null \
+        || { echo "ERROR: 마이그레이션 전 덤프를 위해 postgres 를 띄우지 못했다 — 배포를 멈춘다(postgres 정의가 바뀐 배포면 postgres 가 이미 새로 만들어졌을 수 있다)"; return 1; }
+    install -d -m 700 backups || return 1
+    local out tmp
+    out="backups/pre-deploy-${TARGET_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+    tmp="$out.partial"
+    # 바깥 timeout 은 docker CLI 만 죽이므로 컨테이너 안의 pg_dump 에도 시한을 건다(남으면 Flyway DDL 이 그 잠금을 기다린다).
+    (umask 077; timeout -k 5 300 docker compose exec -T postgres timeout 290 pg_dump -U trading -d trading --no-owner </dev/null | gzip -9 > "$tmp") || true
+    # pg_dump 는 정상 종료할 때만 끝 근처에 이 줄을 쓴다(17.x 는 그 뒤에 \unrestrict 줄이 붙는다).
+    if ! gzip -t "$tmp" 2>/dev/null \
+       || ! gzip -dc "$tmp" | tail -n 20 | grep -q 'PostgreSQL database dump complete' \
+       || ! mv "$tmp" "$out"; then
+        rm -f "$tmp"
+        echo "ERROR: 마이그레이션 전 덤프 실패 — 배포를 멈춘다(앱 컨테이너는 그대로, 설정 파일은 이미 올라갔다)"
+        return 1
+    fi
+    echo "마이그레이션 전 덤프: /opt/app/$out ($(du -h "$out" | cut -f1))"
+    ls -1t backups/pre-deploy-*.sql.gz | tail -n +6 | xargs -r rm -f --
+}
+
 echo "배포: SHA=$TARGET_SHA"
 docker compose pull
+# 덤프와 up 사이에 옛 앱이 쓰는 기록이 덤프에서 빠지므로 pull 뒤 up 바로 앞에서 받는다.
+if [ "${PRE_MIGRATION_DUMP:-1}" = 1 ]; then
+    pre_migration_dump || exit 1
+fi
 docker compose up -d --remove-orphans
 echo "헬스체크 대기 (~180s)..."
 if health_ok; then
