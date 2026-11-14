@@ -526,7 +526,12 @@ do_deploy() {
         migration_gate="below-floor"
         log "자동 롤백 제외: 직전 정상 SHA(${last_good:0:12}) 트리에 ${ROLLBACK_FLOOR_MIGRATION##*/} 가 없다 — V30 이전 이미지로는 롤백하지 않는다"
     elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
-        migration_gate="blocked"
+        # rollback_compat.sh 가 이 두 이미지로 통과시켰으면(Actions 가 ROLLBACK_COMPAT 로 넘긴다) 옛 이미지가 새 스키마에서 뜬다.
+        if [[ "${ROLLBACK_COMPAT:-}" == "${last_good}..${target_sha}" ]]; then
+            log "롤백 호환 검사 통과(${last_good:0:12} → ${target_sha:0:12}) — 마이그레이션이 있어도 자동 롤백한다"
+        else
+            migration_gate="blocked"
+        fi
     fi
     # 스키마가 바뀔 수 있으면(마이그레이션 변경이 있거나 직전 정상 커밋과 비교할 수 없으면) 새 앱이 뜨기 전에 서버에서 덤프한다.
     local pre_migration_dump=1

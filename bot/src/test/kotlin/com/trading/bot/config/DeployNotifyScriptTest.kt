@@ -298,6 +298,39 @@ class DeployNotifyScriptTest {
         assertThat(sshRemote.readText()).contains("PRE_MIGRATION_DUMP='1'")
     }
 
+    /** 롤백 호환 검사가 이 두 커밋으로 통과했을 때만 마이그레이션 배포에도 자동 롤백을 허용한다. */
+    @Test
+    fun `롤백 호환 검사를 통과한 마이그레이션 배포만 자동 롤백 대상이다`() {
+        val repo = deployRepo(migration = true, floor = true)
+        val state = File(repo, "deploy/vultr/.state")
+        val initialState = state.readText()
+        val lastGood = state.readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
+        val target = git(repo, "rev-parse", "HEAD").trim()
+        // 성공한 배포는 .state 의 LAST_GOOD_SHA 를 대상으로 바꾸므로 매번 되돌린다.
+        fun gateWith(compat: String?): String {
+            state.writeText(initialState)
+            sshRemote.delete()
+            deploy(repo, remoteRc = 0, compat?.let { mapOf("ROLLBACK_COMPAT" to it) }.orEmpty())
+            return sshRemote.readText()
+        }
+
+        assertThat(gateWith(null)).contains("MIGRATION_GATE='blocked'")
+        assertThat(gateWith("$lastGood..$target")).contains("MIGRATION_GATE='rollback-ok'")
+        assertThat(gateWith("$target..$target")).contains("MIGRATION_GATE='blocked'")
+    }
+
+    /** 검사를 통과해도 V30 이전 이미지로는 자동 롤백하지 않는다 — 하한이 호환 검사보다 먼저다. */
+    @Test
+    fun `롤백 호환 검사를 통과해도 V30 하한 아래로는 자동 롤백하지 않는다`() {
+        val repo = deployRepo(migration = true)
+        val lastGood = File(repo, "deploy/vultr/.state").readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
+        val target = git(repo, "rev-parse", "HEAD").trim()
+
+        deploy(repo, remoteRc = 0, mapOf("ROLLBACK_COMPAT" to "$lastGood..$target"))
+
+        assertThat(sshRemote.readText()).contains("MIGRATION_GATE='below-floor'")
+    }
+
     /** 같은 커밋이면 compose 가 컨테이너를 다시 만들지 않아, 롤백 제외 사유를 마이그레이션과 따로 알린다. */
     @Test
     fun `마지막 정상 배포와 같은 커밋을 배포하면 same-sha 로 넘긴다`() {
@@ -369,13 +402,17 @@ class DeployNotifyScriptTest {
      * deploy.sh 가 `git rev-parse --show-toplevel` 로 저장소를 찾으므로 배포 파일을 임시 git 저장소에 둔다. 서버는 가짜 ssh 가
      * 대신한다 — 원격 배포 스크립트(`bash -s`)는 받은 결과 코드로 끝나고 나머지 명령은 성공한다.
      */
-    private fun deployRepo(sameAsLastGood: Boolean = false, migration: Boolean = false): File {
+    private fun deployRepo(sameAsLastGood: Boolean = false, migration: Boolean = false, floor: Boolean = false): File {
         val repo = File(dir, "repo").apply { mkdirs() }
         val vultr = File(repo, "deploy/vultr").apply { mkdirs() }
         for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "apply_caddyfile.sh", "backup.sh")) {
             RepoFiles.file("deploy/vultr/$name").copyTo(File(vultr, name))
         }
         git(repo, "init", "-q")
+        if (floor) {
+            File(repo, "bot/src/main/resources/db/migration").apply { mkdirs() }.resolve("V30__exchange_dimension.sql").writeText("SELECT 1;\n")
+            git(repo, "add", "bot")
+        }
         git(repo, "add", "deploy")
         commit(repo, "last good")
         val lastGood = git(repo, "rev-parse", "HEAD").trim()
