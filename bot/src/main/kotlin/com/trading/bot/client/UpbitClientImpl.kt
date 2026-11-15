@@ -73,7 +73,7 @@ class UpbitClientImpl(
         val queryString = params.entries.joinToString("&") {
             "${URLEncoder.encode(it.key, StandardCharsets.UTF_8)}=${URLEncoder.encode(it.value, StandardCharsets.UTF_8)}"
         }
-        // 주문 생성은 멱등이 아니라 재시도하면 중복 주문이 날 수 있다. 접수 여부는 호출부가 identifier 로 확인한다.
+        // 여기서는 재시도하지 않는다. 다시 보낼지와 접수 여부 확인은 호출부가 identifier 로 정한다.
         return upbitWebClient.post()
             .uri("/v1/orders")
             .header("Authorization", authProvider!!.authorizationHeader(queryString))

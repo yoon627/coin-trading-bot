@@ -40,17 +40,17 @@
 - **현재 상태**
   - ✅ 주문 ID 선기록: 매수·매도 모두 `PositionManager.placeBuy`·`sell` 이 `newOrderIdentifier()`(`ctb-<UUID>`, `client/UpbitClient.kt`)를 만들어 `TradingState.beginBuyOrder`/`beginSellOrder` 로 DB(`trading_states.pending_*_identifier`, V28)에 쓴 뒤 주문을 보낸다. 기록부터 체결 반영까지는 `withContext(NonCancellable)` 라 정지·재설정이 중간에 끊지 못한다.
   - ✅ 선기록 실패: 매수는 기록에 실패하면 보내지 않는다. 매도는 손절을 막지 않으려고 기록이 실패해도 보내고, `pendingPersistFailed` 로 신규 진입을 막고 매 tick 다시 기록한다(`retryPendingPersistIfNeeded`). 정지·재설정 때 `flushUnpersisted`, 그래도 못 남기면 `alertDroppedSells` 가 ERROR 로 알린다.
-  - ✅ 주문 POST 는 재시도하지 않는다(`UpbitClientImpl.placeOrder` 에만 `retryOnRateLimit` 없음, KIS `placeCashOrder` 도 재시도 없음).
-  - ✅ 실패 분류: `provesOrderNotPlaced()` 가 "4xx + 거절 목록의 오류 이름"일 때만 미접수로 확정한다. 429·5xx·타임아웃·연결 끊김·응답 해석 실패는 모두 결과 모름이다(`UpbitOrderErrorClassifier`). `duplicated_identifier` 는 "주문이 있다"로 본다.
+  - ✅ 주문 POST 는 클라이언트에서 재시도하지 않는다(`UpbitClientImpl.placeOrder` 에만 `retryOnRateLimit` 없음, KIS `placeCashOrder` 도 재시도 없음). 매도만 `PositionManager.placeSellResending` 이 같은 identifier 로 1초·2초 뒤 최대 2번 다시 보낸다(#340): 연결이 서기 전의 실패는 항상, 닿았을 수 있는 일시 장애(응답 시한 초과·연결 끊김·5xx·429)는 잔고 전부를 파는 매도만. 매수는 다시 보내지 않는다.
+  - ✅ 실패 분류: `provesOrderNotPlaced()` 가 "4xx + 거절 목록의 오류 이름"일 때만 미접수로 확정한다. 429·5xx·타임아웃·연결 끊김·응답 해석 실패는 모두 결과 모름이다(`UpbitOrderErrorClassifier`). 그 가운데 429·5xx 와 응답 헤더를 받기 전의 전송 실패는 다시 보낼 수 있는 일시 장애(`UNKNOWN_TRANSIENT`)로 따로 나눈다. `duplicated_identifier` 는 "주문이 있다"(`DUPLICATE_IDENTIFIER`)로 본다 — 매도 재전송에서 나오면 그 주문을 조회해 이어받는다.
   - ✅ 결과 모름 해소: 매 tick(장외에도) `TradingEngine.processTicker` 가 `reconcilePendingBuy`/`Sell` 을 먼저 부르고, uuid 가 없으면 `UnknownOrderResolver` 가 identifier 로 조회한다. 404 가 2번이고 60초가 지났고 잔고 흔적이 없을 때만 미접수로 풀고(`UnknownOrderPolicy.UPBIT`), 흔적이 있으면 사람 확인(review)으로 멈춘다. 조회가 연속 20번 실패하면 그 종목을 halt 한다.
-  - 토스 방식과 다른 점: 토스는 "같은 멱등키로 재전송"이지만 이 코드는 "재전송하지 않고 조회로 확정"한다. 업비트 identifier 는 계정 안에서 영구히 고유해 재사용하면 400 `duplicated_identifier` 라(공식 문서 ✅, #340 댓글) 같은 키 재전송도 두 번째 주문을 만들 수는 없다. 두 방식 모두 "내부 주문 1건 = 거래소 주문 1건"을 지킨다.
+  - 토스 방식과 다른 점: 토스는 "같은 멱등키로 재전송"이다. 이 코드는 전량 매도만 같은 identifier 로 다시 보내고, 매수와 소유자 코인이 남는 매도는 "재전송하지 않고 조회로 확정"한다. 업비트 identifier 는 계정 안에서 영구히 고유해 재사용하면 400 `duplicated_identifier` 라(공식 문서 ✅, #340 댓글) 같은 키 재전송은 두 번째 주문을 만들지 않는다. 첫 요청이 처리 중일 때 겹친 재전송도 막히는지는 문서에 없다(⚠️) — 전량 매도는 접수된 첫 주문이 잔고를 잠가 두 번째가 체결될 수 없다는 데 기대고, 잔고가 남는 매도는 그래서 다시 보내지 않는다.
   - KIS: 주문 API 에 클라이언트 주문 ID 가 없다 ✅. 계획(P5)은 송신 전에 `broker_order_attempts` 행을 커밋하고, 결과 모름은 일별 주문 조회로 맞추는 것이다 ✅(KIS 계획). 아직 엔진에 연결되지 않았다.
 - **빈틈과 사고 시나리오**
   1. ⚠️ 매도 선기록 실패 직후 비정상 종료: DB 가 잠깐 끊긴 사이 손절 매도를 보냈는데(기록 실패) 프로세스가 OOM·SIGKILL 로 죽으면, 재시작 뒤 pending 이 없다. 잔고로 포지션은 맞춰지지만 그 매도의 거래 기록·손익이 영구히 빠지고, 비정상 종료라 알림도 없다.
-  2. ⚠️ 응답 없는 매도의 손절 지연: 실제로는 주문이 안 만들어진 실패(연결 단계 실패 등)여도 미접수 확정까지 약 80초 동안 다시 팔지 않는다(#340).
+  2. ✅ 해소(#340) — 응답 없는 매도의 손절 지연: 실제로는 주문이 안 만들어진 실패여도 미접수 확정까지 약 80초 동안 다시 팔지 않던 것을, 같은 identifier 재전송으로 줄였다. 남는 것: 소유자 코인이 남는 매도와 전송 3번이 모두 실패한 매도는 여전히 미접수 확정을 기다린다. 업비트가 응답하지 않는 동안 매도 한 건이 보통 33초(최악 60~78초) 걸려 뒤 종목 판단이 그만큼 늦는다.
 - **제안**
   1. 기동 복원 때 "진입 메타는 있는데 잔고 0, pending 없음"이면 ERROR 로 알리고, 가능하면 업비트 끝난 주문(`ctb-` identifier)으로 SELL 기록을 백필한다(A4 의 대사와 같은 작업).
-  2. #340: 결과 모름 매도를 먼저 identifier 로 조회하고, 없으면 같은 identifier 로 한 번 재전송한다(중복 불가는 문서로 확인됨).
+  2. #340(적용됨): 일시 장애로 끝난 전량 매도를 같은 identifier 로 1초·2초 뒤 최대 2번 다시 보낸다. 조회는 재전송이 `duplicated_identifier` 일 때만 한다 — 먼저 조회하는 안은 처리 중 경합을 없애지 못하고 접수되지 않은 흔한 경우에 호출이 하나 늘어 기각했다.
   3. KIS: 계획대로 `broker_order_attempts` 선기록을 엔진 연결 전에 넣는다.
 - **작업량**: 1 M(대사와 묶으면 줄어듦), 2 M, 3 M~L(계획 P5)
 - **우선순위**: 1·2 중간, 3 KIS 실거래 전 필수
@@ -254,7 +254,7 @@
 | 6 | D1-1 판단 경로 Clock 주입 | 돈과 직결되는 09:00 경계를 시험으로 묶음 | S | 새 이슈 |
 | 7 | C2 일봉 재동기화 | 전략 입력 정확성 | S~M | 새 이슈 |
 | 8 | A4-2 하루 한 번 대사 | 기록 누락을 찾는 마지막 안전망 | M | #341 |
-| 9 | A1-2 응답 없는 매도 재전송 | 손절 지연 약 80초 단축 | M | #340 |
+| 9 | A1-2 응답 없는 매도 재전송(적용됨) | 손절 지연 약 80초 단축 | M | #340 |
 | 10 | B1-2 418 차단 처리 / B2 거래소 상태 | KIS 연결 전에 함께 | S~M / M~L | 새 이슈 |
 
 "충분함"으로 둔 것: A2(KIS 키 문제 제외), A3, C1(BCrypt 제외), C3, 알림 중복 억제(D3), 청산 파라미터의 배포 경로(D2).
