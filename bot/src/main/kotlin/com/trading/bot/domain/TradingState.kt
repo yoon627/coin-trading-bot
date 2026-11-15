@@ -86,7 +86,13 @@ data class TradingState(
     // 손으로 정리한 미해소 매도의 주문 전 free·주문 수량. 다음 동기화가 체결된 만큼 장부를 한 번 줄이고 비운다.
     var sellClearPriorVolume: Double? = null,
     var sellClearVolume: Double? = null,
+    // 이 상태가 마지막으로 읽거나 저장한 행의 버전. 저장은 이 값으로만 된다 — 그사이 다른 쓰기가 있으면 충돌이다.
+    // 저장이 커밋된 뒤에만 바꾼다. null 이면 아직 행이 없다. 체결 커밋이 저장하는 사본에도 실려야 해서 생성자에 둔다.
+    var rowVersion: Long? = null,
 ) {
+    // 저장이 버전 충돌로 실패했다(비영속). 메모리가 DB 보다 뒤처져 다시 써도 실패하므로 더 쓰지 않고, 정지 뒤 시작이 다시 읽는다.
+    var versionConflict: Boolean = false
+
     fun hasPendingBuy(): Boolean = pendingBuyUuid != null || pendingBuyIdentifier != null
 
     /** 지금 봇 장부 수량. 동기화 전이면 저장된 장부, 장부를 저장하기 전 행이면 null 이다. */

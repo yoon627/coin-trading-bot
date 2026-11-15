@@ -281,7 +281,7 @@ class UserTradingManagerCharacterizationTest {
         coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns
             TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined")
         val written = slot<TradingState>()
-        coEvery { tradingStateService.upsert(1L, capture(written)) } returns Unit
+        coEvery { tradingStateService.upsert(1L, capture(written)) } returns 0L
 
         val before = TradingDay.of(LocalDateTime.now(TradingDay.KST))
         val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)

@@ -108,7 +108,8 @@ class ManualInterventionRoundTripTest {
         stateService.upsert(userId, TradingState("KRW-BTC", pendingSellIdentifier = "ctb-s", reviewReason = "unknown order"))
         val service = ManualInterventionService(interventions, stateService, transactionalOperator, mapper)
 
-        service.saveWithRecord(userId, TradingState("KRW-BTC"), ManualInterventionEntity.PENDING_CLEAR, mapOf("side" to "SELL"))
+        // 처음 저장한 행의 버전(0)을 들고 와야 덮어쓸 수 있다.
+        service.saveWithRecord(userId, TradingState("KRW-BTC", rowVersion = 0L), ManualInterventionEntity.PENDING_CLEAR, mapOf("side" to "SELL"))
 
         assertThat(stateService.loadState(userId, "KRW-BTC")!!.pendingSellIdentifier).isNull()
         val row = interventions.findAll().collectList().awaitSingle().single { it.userId == userId }
@@ -127,7 +128,7 @@ class ManualInterventionRoundTripTest {
 
         assertThatThrownBy {
             kotlinx.coroutines.runBlocking {
-                service.saveWithRecord(userId, TradingState("KRW-BTC"), ManualInterventionEntity.PENDING_CLEAR, emptyMap())
+                service.saveWithRecord(userId, TradingState("KRW-BTC", rowVersion = 0L), ManualInterventionEntity.PENDING_CLEAR, emptyMap())
             }
         }.hasMessageContaining("insert failed")
 

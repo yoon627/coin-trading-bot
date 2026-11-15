@@ -1,6 +1,7 @@
 package com.trading.bot.persistence.entity
 
 import org.springframework.data.annotation.Id
+import org.springframework.data.annotation.Version
 import org.springframework.data.relational.core.mapping.Table
 import java.time.LocalDate
 import java.time.Instant
@@ -50,4 +51,6 @@ data class TradingStateEntity(
     val pendingBuyBookAvg: Double? = null,
     val sellClearPriorVolume: Double? = null,
     val sellClearVolume: Double? = null,
+    // 저장은 이 값이 그대로일 때만 되고 1 씩 오른다(V37). null 이면 새 행이라 INSERT 한다.
+    @Version val version: Long? = null,
 )

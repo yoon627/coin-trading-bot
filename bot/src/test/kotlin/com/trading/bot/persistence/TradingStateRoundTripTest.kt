@@ -1,9 +1,12 @@
 package com.trading.bot.persistence
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
+import java.sql.Connection
+import java.sql.DriverManager
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
@@ -19,6 +22,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
 import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
@@ -50,6 +54,7 @@ class TradingStateRoundTripTest {
         private val required = System.getenv("DB_TESTS_REQUIRED")?.toBoolean() ?: false
 
         private val available = host != null
+        private val jdbcUrl = "jdbc:postgresql://$host:$port/$name"
 
         @JvmStatic
         @BeforeAll
@@ -165,17 +170,53 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
-    /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. */
+    /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. 두 번째 저장은 첫 저장의 버전을 들고 온다. */
     @Test
     fun `upsert updates in place instead of violating the user ticker unique constraint`() = runTest {
         val userId = insertUser("upsert")
+        val state = fullyPopulated("KRW-ETH")
 
-        service.upsert(userId, fullyPopulated("KRW-ETH"))
-        service.upsert(userId, fullyPopulated("KRW-ETH").apply { peakPrice = 99_999.0 })
+        state.rowVersion = service.upsert(userId, state)
+        state.peakPrice = 99_999.0
+        state.rowVersion = service.upsert(userId, state)
 
         val rows = repository.findByUserId(userId).collectList().awaitSingle()
         assertThat(rows).hasSize(1)
         assertThat(rows.single().peakPrice).isEqualTo(99_999.0)
+        assertThat(rows.single().version).isEqualTo(1L)
+    }
+
+    // 메모리가 마지막으로 읽거나 저장한 뒤 다른 쓰기가 들어온 행은 덮지 않는다(#365).
+    @Test
+    fun `a save with a version the row no longer has changes nothing`() = runTest {
+        val userId = insertUser("version")
+        assertThat(service.upsert(userId, TradingState("KRW-BTC", peakPrice = 1.0))).isEqualTo(0L)
+        val mine = service.loadState(userId, "KRW-BTC")!!
+        val other = service.loadState(userId, "KRW-BTC")!!
+        assertThat(mine.rowVersion).isEqualTo(0L)
+
+        other.peakPrice = 2.0
+        other.rowVersion = service.upsert(userId, other)
+        mine.peakPrice = 3.0
+
+        assertThatThrownBy { kotlinx.coroutines.runBlocking { service.upsert(userId, mine) } }
+            .isInstanceOf(TradingStateConflictException::class.java)
+        assertThatThrownBy { kotlinx.coroutines.runBlocking { service.upsert(userId, TradingState("KRW-BTC", peakPrice = 4.0)) } }
+            .isInstanceOf(TradingStateConflictException::class.java)
+        val row = repository.findByUserIdAndTicker(userId, "KRW-BTC").awaitSingle()
+        assertThat(row.peakPrice).isEqualTo(2.0)
+        assertThat(row.version).isEqualTo(1L)
+
+        // 읽은 뒤 저장 사이에 들어온 쓰기는 사전 비교를 지나므로, Spring Data 의 조건부 UPDATE 가 0행으로 막아야 한다.
+        databaseClient.sql("UPDATE trading_states SET version = version + 1 WHERE id = :id").bind("id", row.id!!)
+            .fetch().rowsUpdated().awaitSingle()
+        assertThatThrownBy { kotlinx.coroutines.runBlocking { repository.save(row.copy(peakPrice = 5.0)).awaitSingle() } }
+            .isInstanceOf(OptimisticLockingFailureException::class.java)
+        assertThat(repository.findByUserIdAndTicker(userId, "KRW-BTC").awaitSingle().peakPrice).isEqualTo(2.0)
+
+        databaseClient.sql("DELETE FROM trading_states WHERE id = :id").bind("id", row.id!!).fetch().rowsUpdated().awaitSingle()
+        assertThatThrownBy { kotlinx.coroutines.runBlocking { service.upsert(userId, other) } }
+            .isInstanceOf(TradingStateConflictException::class.java)
     }
 
     /**
@@ -210,5 +251,68 @@ class TradingStateRoundTripTest {
         ).bind("u", userId)
             .let { spec -> if (orderId == null) spec.bindNull("o", String::class.java) else spec.bind("o", orderId) }
             .fetch().rowsUpdated().awaitSingle()
+    }
+
+    // --- V36 → V37 경로와 되돌리기 SQL. 실행마다 만든 스키마에서 JDBC 로 돈다 — 공유 스키마에서 돌리면 다른 시험의 칼럼이 사라진다. ---
+
+    @Test
+    fun `existing rows get version zero, and the down sql refuses unless V37 is last, then drops the column`() = withScratchSchema("v37down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V37_down.sql").readText()
+        migrate(schema, "36")
+        inSchema(schema) { conn ->
+            conn.update("INSERT INTO users (username, password) VALUES ('it-v37-$runId', 'x')")
+            conn.update("INSERT INTO trading_states (user_id, ticker) SELECT id, 'KRW-BTC' FROM users WHERE username = 'it-v37-$runId'")
+        }
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V37 이 적용돼 있지 않다")
+
+        migrate(schema, "37")
+        inSchema(schema) { conn ->
+            assertThat(conn.strings("SELECT version::text FROM trading_states")).containsExactly("0")
+            conn.update(downSql)
+            assertThat(conn.versionColumn(schema)).isEmpty()
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '37'")).isEmpty()
+        }
+
+        migrate(schema, "37")
+        inSchema(schema) { conn -> assertThat(conn.versionColumn(schema)).containsExactly("version") }
+    }
+
+    private fun migrate(schema: String, target: String) {
+        Flyway.configure()
+            .dataSource(jdbcUrl, user, password)
+            .schemas(schema)
+            .defaultSchema(schema)
+            .createSchemas(true)
+            .locations("classpath:db/migration")
+            .target(target)
+            .load()
+            .migrate()
+    }
+
+    private fun <T> inSchema(schema: String, block: (Connection) -> T): T =
+        DriverManager.getConnection(jdbcUrl, user, password).use { conn ->
+            conn.createStatement().use { it.execute("SET search_path TO $schema") }
+            block(conn)
+        }
+
+    private fun Connection.update(sql: String) {
+        createStatement().use { it.execute(sql) }
+    }
+
+    private fun Connection.strings(sql: String): List<String> =
+        createStatement().use { st -> st.executeQuery(sql).use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } } }
+
+    private fun Connection.versionColumn(schema: String): List<String> = strings(
+        "SELECT column_name FROM information_schema.columns " +
+            "WHERE table_schema = '$schema' AND table_name = 'trading_states' AND column_name = 'version'",
+    )
+
+    private fun withScratchSchema(label: String, block: (String) -> Unit) {
+        val schema = "it_${label}_$runId".replace('-', '_')
+        try {
+            block(schema)
+        } finally {
+            DriverManager.getConnection(jdbcUrl, user, password).use { it.update("DROP SCHEMA IF EXISTS $schema CASCADE") }
+        }
     }
 }

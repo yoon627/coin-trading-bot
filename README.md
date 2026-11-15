@@ -157,6 +157,15 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 4. 다시 시작하면 첫 동기화가 정리한 주문의 결과를 한 번 반영한다. 매수는 주문 전 free 위로 늘어난 free 만 봇 장부에 넣고(평단은 거래소 평단 — 근사), 매도는 주문 전 free 에서 줄어든 만큼(주문 수량까지, 부분 체결 포함) 장부를 줄인다. 우리 것이 아닌 잠금(수동 주문)이 있으면 풀릴 때까지 미룬다. 정리와 재시작 사이에 앱에서 사고팔면 그 몫도 섞이므로 그 사이에는 거래하지 않는다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
 5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다(푼 halt 사유·실패 횟수도 `manual_interventions` 에 남는다). 주문 확인이 필요해 멈춘 종목(review)은 그 종목의 매수·매도 pending 이 모두 비기 전까지 halt/clear 가 409 다. pending 은 자동 확정되거나 2번의 pending/clear 로 비운다.
 
+### 상태 저장 충돌
+
+`trading_states` 는 엔진이 마지막으로 읽거나 저장한 버전 그대로일 때만 저장된다(V37). 그사이 다른 쓰기(실수로 두 번 뜬 컨테이너, 잠금을 잡지 않은 경로)가 행을 바꿨으면 그 행을 덮지 않는다. 한 프로세스 안에서는 종목 잠금이 저장을 차례로 세우므로 평소에는 일어나지 않는다.
+
+- 충돌한 종목은 `[CONFLICT]` ERROR 를 한 번 낸다. 그 뒤로는 그 종목을 더 저장하지 않고, halt(`state version conflict`, 이미 halt 였으면 그 사유를 둔다)로 신규 매수를 막는다. 손절 매도는 기록이 막혀도 나간다.
+- 미해소 주문이 걸려 있으면 그 체결을 기록할 수 없어, 그 종목은 다시 시작할 때까지 확정에서 멈춘다(미해소 매수면 손절 판단도 멈춘다).
+- 복구: 봇을 정지한 뒤 다시 시작한다. 정지가 DB 에 없을 수 있는 매도를 ERROR 로 알리고, 시작이 DB 의 행을 다시 읽는다. 그 매도는 Upbit 주문 내역과 대조해 위 미해소 주문 정리로 맞춘다. 봇이 도는 동안 충돌한 매도가 남아 있으면 설정 저장(reload)은 실패한다. 충돌한 종목의 halt 해제는 409 로 정지 뒤 시작을 안내한다.
+- 프로세스가 둘이면 늦은 쪽의 저장은 막히지만 그쪽 주문은 거래소로 나간다 — 이중 주문은 막지 못한다(#328).
+
 ### 체결 기록 대조
 
 하루 한 번(기동 10분 뒤부터 24시간마다) 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `trade_executions` 에 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
@@ -317,7 +326,7 @@ V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_
 
 - V31 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 다만 그 이미지는 중지 값을 읽지 않아 켜 둔 중지가 풀린 것처럼 매수가 나가므로, 롤백했으면 봇을 정지한다.
 - V32 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V32_down.sql` 은 필요 없다.
-- V31 이전으로 내려가야 하면 (V36·V35·V34·V33 이 적용돼 있으면 `V36_down.sql`·`V35_down.sql`·`V34_down.sql`·`V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
+- V31 이전으로 내려가야 하면 (V37·V36·V35·V34·V33 이 적용돼 있으면 `V37_down.sql`·`V36_down.sql`·`V35_down.sql`·`V34_down.sql`·`V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
 - 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V32_down.sql` 을 쓴다. 켜 둔 중지 값이 함께 사라진다. V32 가 마지막 적용 버전일 때만 돌고, 칼럼과 `flyway_schema_history` 의 V32 행을 한 트랜잭션으로 지운다. 백업 조건은 V31 down 과 같다.
   ```bash
   cd /opt/app
@@ -378,4 +387,17 @@ V36 은 `error_alert_outbox` 테이블을 더한다(위 ERROR 알림 절).
   docker compose stop app
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V36_down.sql
   APP_VERSION=<V36 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V37 (상태 저장 버전)
+
+V37 은 `trading_states.version`(기존 행 0)을 더한다(위 상태 저장 충돌 절).
+
+- V36 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`, 칼럼 기본값). 롤백한 동안은 버전을 올리지 않아 덮어쓰기 방지가 없다(V37 이전과 같다). 다시 올리면 시작이 행의 버전을 읽으므로 거짓 충돌은 없다.
+- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V37_down.sql` 을 쓴다(V37 이 마지막 적용 버전일 때만 돈다). V37 이미지가 떠 있는 동안 돌리면 상태 저장이 모두 실패하므로 앱을 멈춘 뒤 돌린다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V37_down.sql
+  APP_VERSION=<V37 이전 SHA> docker compose up -d --pull missing
   ```

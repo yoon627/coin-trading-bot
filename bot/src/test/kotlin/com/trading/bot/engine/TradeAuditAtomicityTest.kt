@@ -57,7 +57,7 @@ class TradeAuditAtomicityTest {
         stagedStates.clear()
         committedRecords.clear()
         // persistState 가 트랜잭션에 싣는 사본을 잡는다.
-        coEvery { stateService.upsert(any(), capture(stagedStates)) } returns Unit
+        coEvery { stateService.upsert(any(), capture(stagedStates)) } returns 0L
         logger.addAppender(logs)
     }
 

@@ -26,7 +26,7 @@ class TradingStateServiceExchangeTest {
     private val upbitRow = TradingStateEntity(id = 1L, userId = 1L, ticker = "KRW-BTC", pendingBuyUuid = "u-1")
     private val kisRow = TradingStateEntity(
         id = 2L, userId = 1L, exchange = "KIS_PAPER", ticker = "KRX-005930", pendingSellUuid = "KIS_PAPER:20261020:0001",
-        reviewReason = "주문 확인 필요(SELL KIS_PAPER:20261020:0001): 후보 2건",
+        reviewReason = "주문 확인 필요(SELL KIS_PAPER:20261020:0001): 후보 2건", version = 0L,
     )
 
     @Test
@@ -100,9 +100,9 @@ class TradingStateServiceExchangeTest {
     fun `a KIS upsert looks up its own row and saves the exchange and review reason`() = runTest {
         every { repository.findByUserIdAndExchangeAndTicker(1L, "KIS_PAPER", "KRX-005930") } returns Mono.just(kisRow)
         val saved = slot<TradingStateEntity>()
-        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured.copy(version = 1L)) }
 
-        service.upsert(1L, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, reviewReason = "후보 2건"))
+        service.upsert(1L, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, reviewReason = "후보 2건", rowVersion = kisRow.version))
 
         verifySequence {
             repository.findByUserIdAndExchangeAndTicker(1L, "KIS_PAPER", "KRX-005930")

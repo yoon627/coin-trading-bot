@@ -9,6 +9,7 @@ import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
 import com.trading.bot.persistence.ManualInterventionService
+import com.trading.bot.persistence.TradingStateConflictException
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
@@ -529,6 +530,9 @@ class UserTradingManager(
 
     suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
         val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
+        // 버전이 충돌한 종목은 메모리가 DB 보다 뒤처져 저장이 늘 실패한다. 다시 시도가 아니라 정지 뒤 시작으로 안내한다.
+        // 주문 확인 안내보다 먼저다 — pending 해제도 정지 뒤 시작으로 DB 를 다시 읽어야 할 수 있다.
+        if (engine.getStates()[ticker]?.versionConflict == true) return@withLock versionConflictRefusal(ticker)
         // 거래소 확인이 필요한 주문은 halt 만 풀면 그 주문이 확정되지 않은 채 매수가 다시 열린다.
         engine.getStates()[ticker]?.reviewReason?.let { reason ->
             return@withLock mapOf(
@@ -548,6 +552,10 @@ class UserTradingManager(
             } catch (busy: HaltClearBusyException) {
                 log.warn("halt clear for user {} timed out waiting for the trading loop: {}", userId, busy.message)
                 null
+            } catch (conflict: TradingStateConflictException) {
+                // 엔진이 충돌을 표시하고 한 번 알렸다. 저장 실패 ERROR 로 다시 알리지 않는다.
+                log.warn("halt clear for user {} refused — {}", userId, conflict.message)
+                return@withLock versionConflictRefusal(ticker)
             }
         } ?: return@withLock mapOf("error" to "매매 루프가 $ticker 를 처리 중이다 — 잠시 후 다시 시도한다", "code" to CONFLICT_CODE)
         // 기다리는 사이 주문 확인이 필요해졌으면 위와 같이 pending 해제로 안내한다.
@@ -777,6 +785,11 @@ class UserTradingManager(
         if (!existing.running) return
         botStateRepository.save(existing.copy(running = false, updatedAt = LocalDateTime.now())).awaitSingle()
     }
+
+    private fun versionConflictRefusal(ticker: String): Map<String, Any> = mapOf(
+        "error" to "$ticker 상태를 다른 쓰기가 먼저 바꿔 이 봇은 더 저장하지 못한다 — 봇을 정지한 뒤 다시 시작한다",
+        "code" to CONFLICT_CODE,
+    )
 
     /** 상태 저장과 수동 개입 기록을 한 트랜잭션으로, 시간 제한 안에 끝낸다. */
     private suspend fun saveWithRecord(userId: Long, state: TradingState, action: String, detail: Map<String, Any?>) {
