@@ -47,8 +47,8 @@ import org.slf4j.LoggerFactory
 /** trading_states.halt_reason·review_reason 컬럼 길이. */
 private const val HALT_REASON_MAX_LENGTH = 200
 
-// 닿지 않은 매도를 다시 보내기 전 대기(ms). 길이가 재전송 횟수다.
-private val UNSENT_SELL_RESENDS = listOf(1_000L, 2_000L)
+// 매도를 다시 보내기 전 대기(ms). 길이가 재전송 횟수다.
+private val SELL_RESEND_DELAYS_MS = listOf(1_000L, 2_000L)
 
 class PositionManager(
     private val upbitClient: ExchangeClient,
@@ -214,25 +214,53 @@ class PositionManager(
     }
 
     /**
-     * 연결이 서기 전에 실패한 매도만 같은 identifier 로 1초·2초 뒤 다시 보낸다 — 거래소에 닿지 않아 주문이 하나뿐이다.
-     * 닿았을 수 있는 실패는 바로 던져 identifier 로 확정하게 한다(#340). 손절이 미접수 확정(약 60초)까지 밀리지 않게 한다.
+     * 실패한 매도를 같은 identifier 로 1초·2초 뒤 다시 보낸다(#340). 손절이 미접수 확정까지 밀리지 않게 한다.
+     * 연결이 서기 전의 실패는 항상, 닿았을 수 있는 일시 장애는 [resendUnknown] 일 때만 다시 보낸다 — 거래소가 identifier 중복을
+     * 거절하므로 주문은 하나다. 중복 거절은 앞서 보낸 요청이 접수됐다는 뜻이라 그 주문을 조회해 돌려준다.
+     * 닿았을 수 있는 실패가 있었으면 그 뒤의 거절은 앞 요청이 접수돼 잔고가 잠긴 것과 구분되지 않는다. 그때는 그 첫 실패를 던져
+     * 호출부가 pending 을 남기게 한다.
      * 기다리는 사이 봇 정지가 요청되면([stillWanted] false) 더 보내지 않는다 — pending 은 identifier 로 확정된다.
      */
-    private suspend fun placeSellResendingUnsent(ticker: String, request: OrderRequest, stillWanted: () -> Boolean): Order {
-        var attempt = 0
+    private suspend fun placeSellResending(ticker: String, request: OrderRequest, resendUnknown: Boolean, stillWanted: () -> Boolean): Order {
+        var mayHaveReached: Exception? = null
+        var resends = 0
         while (true) {
-            try {
+            val error = try {
                 return upbitClient.placeOrder(request)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (attempt >= UNSENT_SELL_RESENDS.size || errorClassifier.classify(e) != OrderFailure.NOT_SENT) throw e
-                log.warn("Sell order {} for {} did not reach the exchange ({}) — sending it again in {}ms", request.identifier, ticker, e.message, UNSENT_SELL_RESENDS[attempt])
-                delay(UNSENT_SELL_RESENDS[attempt])
-                if (!stillWanted()) throw e
-                attempt++
+                e
             }
+            val failure = errorClassifier.classify(error)
+            if (failure == OrderFailure.DUPLICATE_IDENTIFIER) return findSellByIdentifier(ticker, request.identifier) ?: throw error
+            if (failure == OrderFailure.UNKNOWN_TRANSIENT && mayHaveReached == null) mayHaveReached = error
+            val resendable = failure == OrderFailure.NOT_SENT || (failure == OrderFailure.UNKNOWN_TRANSIENT && resendUnknown)
+            if (!resendable || resends >= SELL_RESEND_DELAYS_MS.size) {
+                val reached = mayHaveReached ?: throw error
+                if (reached !== error) {
+                    log.warn(
+                        "Sell order {} for {} then failed with {} — an earlier send may have reached the exchange, so this is not read as a rejection",
+                        request.identifier, ticker, error.message,
+                    )
+                }
+                throw reached
+            }
+            log.warn("Sell order {} for {} failed ({}: {}) — sending it again in {}ms", request.identifier, ticker, failure, error.message, SELL_RESEND_DELAYS_MS[resends])
+            delay(SELL_RESEND_DELAYS_MS[resends])
+            if (!stillWanted()) throw mayHaveReached ?: error
+            resends++
         }
+    }
+
+    /** 못 찾거나 조회가 실패하면 null 이다. pending 이 남아 다음 tick 의 미해소 주문 확정이 이어받는다. */
+    private suspend fun findSellByIdentifier(ticker: String, identifier: String?): Order? = try {
+        identifier?.let { upbitClient.getOrderByIdentifier(it) }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.warn("Sell order {} for {} was refused as a duplicate but could not be looked up: {}", identifier, ticker, e.message)
+        null
     }
 
     private fun skipWhileEntriesPaused(ticker: String): Boolean {
@@ -374,7 +402,7 @@ class PositionManager(
                 throw e // 전송 여부는 모르지만 identifier 가 남아 있어 reconcile 이 확정한다.
             } catch (e: Exception) {
                 // 매수는 닿지 않은 실패도 결과 불명과 같이 identifier 로 확정한다(다시 보내지 않는다).
-                if (errorClassifier.classify(e).let { it != OrderFailure.UNKNOWN_OUTCOME && it != OrderFailure.NOT_SENT }) {
+                if (errorClassifier.classify(e).isRejection) {
                     log.error("Failed to place buy order {}: {}", ticker, e.message, e)
                     orderGate.onDefinitiveRejection(ticker, TradeSide.BUY, clock.instant())
                     state.clearPendingBuy()
@@ -881,16 +909,18 @@ class PositionManager(
             // 이중 매도는 메모리의 identifier 가 막고, 크래시 창은 pendingPersistFailed(진입 차단·매 tick 재기록)가 좁힌다.
             persistPending(state)
             val order = try {
-                placeSellResendingUnsent(
+                placeSellResending(
                     ticker,
                     OrderRequest(market = ticker, side = "ask", ordType = "market", volume = orderVolume, identifier = identifier),
+                    // 소유자 코인이 남는 매도는 중복 방지가 새면 그 코인까지 팔리므로 닿았을 수 있는 실패를 다시 보내지 않는다.
+                    resendUnknown = !ownerCoinsLeft,
                     stillWanted = { caller?.isActive != false },
                 )
             } catch (e: CancellationException) {
                 throw e // 전송 여부는 모르지만 identifier 가 남아 있어 reconcile 이 확정한다.
             } catch (e: Exception) {
                 val failure = errorClassifier.classify(e)
-                if (failure != OrderFailure.UNKNOWN_OUTCOME && failure != OrderFailure.NOT_SENT) {
+                if (failure.isRejection) {
                     if (failure == OrderFailure.REJECTED_BELOW_MIN_ORDER) {
                         // tick 가격으로는 통과했지만 거래소 기준으로는 최소주문 미만이다. 거래소 판정을 따른다.
                         warnDustOnce(ticker, state, "rejected by the exchange as below the minimum order")

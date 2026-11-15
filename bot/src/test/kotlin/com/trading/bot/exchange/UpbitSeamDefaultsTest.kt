@@ -3,8 +3,8 @@ package com.trading.bot.exchange
 import com.trading.bot.client.FILL_POLL_ATTEMPTS
 import com.trading.bot.client.FILL_POLL_DELAY_MS
 import com.trading.bot.client.UpbitApiException
+import com.trading.bot.client.UpbitMalformedResponseException
 import com.trading.bot.client.UpbitOrderErrorClassifier
-import com.trading.bot.client.isRejectedAsBelowMinimumOrder
 import com.trading.bot.client.provesOrderNotPlaced
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.TradeSide
@@ -92,44 +92,46 @@ class UpbitSeamDefaultsTest {
     }
 
     @Test
-    fun `upbit error classifier agrees with the rejection helpers`() {
-        val errors = listOf(
-            UpbitApiException(400, "insufficient_funds_bid", null, ""),
-            UpbitApiException(400, "validation_error", null, ""),
-            UpbitApiException(403, "market_offline", null, ""),
-            UpbitApiException(400, "under_min_total_bid", null, ""),
-            UpbitApiException(400, "under_min_total_ask", null, ""),
-            UpbitApiException(500, "under_min_total_ask", null, ""),
-            UpbitApiException(399, "insufficient_funds_bid", null, ""),
-            UpbitApiException(499, "create_ask_error", null, ""),
-            UpbitApiException(400, "duplicated_identifier", null, ""),
-            UpbitApiException(429, null, null, ""),
-            IOException("connection reset"),
-        )
-        errors.forEach { e ->
-            val expected = when {
-                !e.provesOrderNotPlaced() -> OrderFailure.UNKNOWN_OUTCOME
-                e.isRejectedAsBelowMinimumOrder() -> OrderFailure.REJECTED_BELOW_MIN_ORDER
-                else -> OrderFailure.REJECTED
-            }
-            assertEquals(expected, UpbitOrderErrorClassifier.classify(e), e.toString())
-        }
-        assertEquals(OrderFailure.REJECTED_BELOW_MIN_ORDER, UpbitOrderErrorClassifier.classify(errors[3]))
-        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(errors[5]))
-        assertEquals(OrderFailure.REJECTED, UpbitOrderErrorClassifier.classify(errors[0]))
-    }
-
-    // 연결이 서기 전에 끝난 요청은 업비트에 닿지 않아 identifier 가 쓰이지 않았다. 연결 뒤의 끊김·시한 초과는 닿았을 수 있다.
-    @Test
-    fun `only failures before the connection is made count as not sent`() {
+    fun `upbit error classifier names each order failure`() {
+        fun api(status: Int, name: String?) = UpbitApiException(status, name, null, "")
         fun request(cause: Throwable) = WebClientRequestException(cause, HttpMethod.POST, URI("https://api.upbit.com/v1/orders"), HttpHeaders())
 
-        assertEquals(OrderFailure.NOT_SENT, UpbitOrderErrorClassifier.classify(request(ConnectException("Connection refused"))))
-        assertEquals(OrderFailure.NOT_SENT, UpbitOrderErrorClassifier.classify(request(ConnectTimeoutException("connection timed out"))))
-        assertEquals(OrderFailure.NOT_SENT, UpbitOrderErrorClassifier.classify(request(UnknownHostException("api.upbit.com"))))
-        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(request(ReadTimeoutException.INSTANCE)))
-        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(request(IOException("Connection reset by peer"))))
-        assertEquals(OrderFailure.UNKNOWN_OUTCOME, UpbitOrderErrorClassifier.classify(UpbitApiException(429, null, null, "")))
+        val expected = listOf(
+            api(400, "insufficient_funds_bid") to OrderFailure.REJECTED,
+            api(400, "validation_error") to OrderFailure.REJECTED,
+            api(403, "market_offline") to OrderFailure.REJECTED,
+            api(499, "create_ask_error") to OrderFailure.REJECTED,
+            api(400, "under_min_total_bid") to OrderFailure.REJECTED_BELOW_MIN_ORDER,
+            api(400, "under_min_total_ask") to OrderFailure.REJECTED_BELOW_MIN_ORDER,
+            api(400, "duplicated_identifier") to OrderFailure.DUPLICATE_IDENTIFIER,
+            // 연결이 서기 전에 끝난 요청은 업비트에 닿지 않아 identifier 가 쓰이지 않았다.
+            request(ConnectException("Connection refused")) to OrderFailure.NOT_SENT,
+            request(ConnectTimeoutException("connection timed out")) to OrderFailure.NOT_SENT,
+            request(UnknownHostException("api.upbit.com")) to OrderFailure.NOT_SENT,
+            // 연결 뒤의 끊김·시한 초과와 5xx·429 는 닿았을 수 있지만 같은 identifier 로 다시 보낼 수 있다.
+            request(ReadTimeoutException.INSTANCE) to OrderFailure.UNKNOWN_TRANSIENT,
+            request(IOException("Connection reset by peer")) to OrderFailure.UNKNOWN_TRANSIENT,
+            api(500, "under_min_total_ask") to OrderFailure.UNKNOWN_TRANSIENT,
+            api(502, null) to OrderFailure.UNKNOWN_TRANSIENT,
+            api(429, null) to OrderFailure.UNKNOWN_TRANSIENT,
+            // 인증 실패·차단·이름 없는 4xx·해석할 수 없는 응답은 다시 보내지 않는다.
+            api(401, "jwt_verification") to OrderFailure.UNKNOWN_OUTCOME,
+            api(403, "out_of_scope") to OrderFailure.UNKNOWN_OUTCOME,
+            api(418, null) to OrderFailure.UNKNOWN_OUTCOME,
+            api(400, null) to OrderFailure.UNKNOWN_OUTCOME,
+            api(399, "insufficient_funds_bid") to OrderFailure.UNKNOWN_OUTCOME,
+            UpbitMalformedResponseException("order response without a uuid") to OrderFailure.UNKNOWN_OUTCOME,
+            IOException("connection reset") to OrderFailure.UNKNOWN_OUTCOME,
+        )
+        expected.forEach { (error, failure) ->
+            assertEquals(failure, UpbitOrderErrorClassifier.classify(error), error.toString())
+            assertEquals(error.provesOrderNotPlaced(), failure.isRejection, error.toString())
+        }
+    }
+
+    @Test
+    fun `only confirmed rejections count as a rejection`() {
+        assertEquals(listOf(OrderFailure.REJECTED, OrderFailure.REJECTED_BELOW_MIN_ORDER), OrderFailure.entries.filter { it.isRejection })
     }
 
     @Test
