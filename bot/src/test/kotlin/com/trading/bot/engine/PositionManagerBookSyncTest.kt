@@ -38,7 +38,7 @@ class PositionManagerBookSyncTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy() }
+        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy(); 0L }
         logger.addAppender(logs)
     }
 

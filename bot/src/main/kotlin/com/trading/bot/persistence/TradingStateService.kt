@@ -12,6 +12,7 @@ import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.slf4j.LoggerFactory
+import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Service
 
 /**
@@ -25,8 +26,22 @@ class TradingStateService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    suspend fun upsert(userId: Long, state: TradingState) {
-        tradingStateRepository.save(state.toEntity(userId, findRow(userId, state))).awaitSingle()
+    /**
+     * [state] 가 들고 있는 버전으로 저장하고 새 버전을 돌려준다. 그 버전이 행과 다르면 행을 두고 [TradingStateConflictException] 을 던진다.
+     * [state] 는 바꾸지 않는다 — 호출부가 저장이 커밋된 뒤 [TradingState.rowVersion] 에 넣는다. 트랜잭션이 롤백됐는데 넣으면
+     * 그 뒤 저장이 모두 충돌한다.
+     */
+    suspend fun upsert(userId: Long, state: TradingState): Long {
+        val existing = findRow(userId, state)
+        if (existing?.version != state.rowVersion) {
+            throw TradingStateConflictException(state.ticker, "row version ${existing?.version}, state version ${state.rowVersion}")
+        }
+        val saved = try {
+            tradingStateRepository.save(state.toEntity(userId, existing)).awaitSingle()
+        } catch (e: OptimisticLockingFailureException) {
+            throw TradingStateConflictException(state.ticker, "row changed after it was read (state version ${state.rowVersion})", e)
+        }
+        return checkNotNull(saved.version) { "trading_state 저장이 버전 없이 돌아왔다: ${state.ticker}" }
     }
 
     /** [state] 가 저장될 행. 아직 없으면 null 이다. */
@@ -112,6 +127,7 @@ class TradingStateService(
             adoptBaselineVolume = adoptBaselineVolume,
             sellClearPriorVolume = sellClearPriorVolume,
             sellClearVolume = sellClearVolume,
+            version = rowVersion,
         )
     }
 
@@ -159,6 +175,7 @@ class TradingStateService(
             pendingSellPriorVolume = pendingSellPriorVolume,
             pendingBuyIdentifier = pendingBuyIdentifier,
             pendingSellIdentifier = pendingSellIdentifier,
+            rowVersion = version,
         )
     }
 

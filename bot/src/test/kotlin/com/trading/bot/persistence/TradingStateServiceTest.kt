@@ -6,6 +6,7 @@ import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.entity.TradingStateEntity
 import io.mockk.every
+import io.mockk.verify
 import io.mockk.slot
 import io.mockk.mockk
 import java.time.Instant
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import org.springframework.dao.OptimisticLockingFailureException
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
@@ -102,7 +105,7 @@ class TradingStateServiceTest {
         )
         val saved = slot<TradingStateEntity>()
         every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns reactor.core.publisher.Mono.empty()
-        every { repository.save(capture(saved)) } answers { reactor.core.publisher.Mono.just(saved.captured) }
+        every { repository.save(capture(saved)) } answers { savedLikeSpring(saved.captured) }
 
         service.upsert(1L, domain)
         rows(saved.captured)
@@ -127,9 +130,7 @@ class TradingStateServiceTest {
         // 저장 방향: upsert 가 만드는 엔티티에 두 필드가 실려야 한다.
         val saved = slot<TradingStateEntity>()
         every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns reactor.core.publisher.Mono.empty()
-        every { repository.save(capture(saved)) } answers {
-            reactor.core.publisher.Mono.just(saved.captured)
-        }
+        every { repository.save(capture(saved)) } answers { savedLikeSpring(saved.captured) }
         service.upsert(1L, domain)
         assertEquals(since, saved.captured.pendingSellSince)
         assertEquals(true, saved.captured.pendingSellAlerted)
@@ -160,13 +161,14 @@ class TradingStateServiceTest {
     private fun storedRow(book: Double?, bookWrittenAt: Instant? = writtenAt, updatedAt: Instant = writtenAt, pendingBuy: Boolean = false) =
         TradingStateEntity(
             id = 7L, userId = 1L, ticker = "KRW-BTC", bookVolume = book, bookAvgPrice = 50_000_000.0,
-            bookWrittenAt = bookWrittenAt, updatedAt = updatedAt, pendingBuyUuid = if (pendingBuy) "b-1" else null,
+            bookWrittenAt = bookWrittenAt, updatedAt = updatedAt, pendingBuyUuid = if (pendingBuy) "b-1" else null, version = 0L,
         )
 
     private fun savedOnUpsert(existing: TradingStateEntity?, state: TradingState): TradingStateEntity {
         every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.justOrEmpty(existing)
         val saved = slot<TradingStateEntity>()
-        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        every { repository.save(capture(saved)) } answers { savedLikeSpring(saved.captured) }
+        state.rowVersion = existing?.version
         kotlinx.coroutines.runBlocking { service.upsert(1L, state) }
         return saved.captured
     }
@@ -242,4 +244,61 @@ class TradingStateServiceTest {
         assertEquals(0.0001, restored.pendingBuyBookVolume)
         assertEquals(4.0, restored.pendingBuyBookAvg)
     }
+
+    // 버전은 메모리가 마지막으로 읽거나 저장한 값이다. 저장 직전에 다시 읽은 행의 버전을 쓰면 늘 최신이라 덮어쓰기를 막지 못한다.
+    @Test
+    fun `a save carries the version the state holds and returns the new one without changing the state`() = runTest {
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.just(storedRow(null).copy(version = 3L))
+        val saved = slot<TradingStateEntity>()
+        every { repository.save(capture(saved)) } answers { savedLikeSpring(saved.captured) }
+        val state = TradingState("KRW-BTC", rowVersion = 3L)
+
+        val next = service.upsert(1L, state)
+
+        assertEquals(3L, saved.captured.version)
+        assertEquals(4L, next)
+        assertEquals(3L, state.rowVersion, "트랜잭션이 커밋된 뒤 호출부가 넣는다")
+    }
+
+    @Test
+    fun `a new row is inserted without a version and a loaded row carries its version`() = runTest {
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.empty()
+        val saved = slot<TradingStateEntity>()
+        every { repository.save(capture(saved)) } answers { savedLikeSpring(saved.captured) }
+
+        assertEquals(0L, service.upsert(1L, TradingState("KRW-BTC")))
+        assertNull(saved.captured.version)
+
+        rows(storedRow(null).copy(version = 7L))
+        assertEquals(7L, service.loadStates(1L).getValue("KRW-BTC").rowVersion)
+    }
+
+    @Test
+    fun `a state that does not match its row is a conflict and nothing is written`() = runTest {
+        val cases = listOf(
+            "오래된 버전" to (storedRow(null).copy(version = 5L) to 4L),
+            "버전 없는 상태인데 행이 있음" to (storedRow(null).copy(version = 0L) to null),
+            "버전이 있는데 행이 없음" to (null to 2L),
+        )
+        cases.forEach { (name, case) ->
+            val (row, version) = case
+            every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.justOrEmpty(row)
+            every { repository.save(any()) } answers { savedLikeSpring(firstArg()) }
+
+            assertThrows<TradingStateConflictException>(name) { service.upsert(1L, TradingState("KRW-BTC", rowVersion = version)) }
+            verify(exactly = 0) { repository.save(any()) }
+        }
+    }
+
+    // 읽은 뒤 저장 사이에 다른 쓰기가 들어오면 Spring Data 의 조건부 UPDATE 가 0행으로 실패한다.
+    @Test
+    fun `a save that loses the version race is a conflict`() = runTest {
+        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.just(storedRow(null).copy(version = 5L))
+        every { repository.save(any()) } returns Mono.error(OptimisticLockingFailureException("version 5"))
+
+        assertThrows<TradingStateConflictException> { service.upsert(1L, TradingState("KRW-BTC", rowVersion = 5L)) }
+    }
+
+    private fun savedLikeSpring(entity: TradingStateEntity): Mono<TradingStateEntity> =
+        Mono.just(entity.copy(version = entity.version?.plus(1) ?: 0L))
 }

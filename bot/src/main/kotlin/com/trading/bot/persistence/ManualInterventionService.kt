@@ -20,7 +20,7 @@ class ManualInterventionService(
 ) {
     /**
      * [state] 를 저장하고 [action] 한 행을 남긴다. detail 에는 [detail] 과 바꾸기 전 저장 행 전체(`before`)를 담는다.
-     * 실패하면 둘 다 커밋되지 않고 예외를 던진다.
+     * 실패하면 둘 다 커밋되지 않고 예외를 던진다. [state] 는 커밋된 뒤에만 새 버전을 받는다.
      */
     suspend fun saveWithRecord(userId: Long, state: TradingState, action: String, detail: Map<String, Any?>) {
         // 직렬화를 트랜잭션 밖에서 끝내 트랜잭션 안의 실패 경로를 저장 두 번으로 줄인다.
@@ -33,11 +33,13 @@ class ManualInterventionService(
             detail = objectMapper.writeValueAsString(detail + ("before" to before)),
             createdAt = clock.instant(),
         )
+        var saved: Long? = null
         transactionalOperator.transactional(
             mono {
-                tradingStateService.upsert(userId, state)
+                saved = tradingStateService.upsert(userId, state)
                 repository.save(row).awaitSingle()
             }
         ).awaitSingle()
+        state.rowVersion = saved
     }
 }

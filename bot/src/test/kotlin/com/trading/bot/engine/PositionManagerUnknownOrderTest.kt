@@ -68,7 +68,7 @@ class PositionManagerUnknownOrderTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy() }
+        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy(); 0L }
         logger.addAppender(logs)
     }
 
@@ -335,6 +335,7 @@ class PositionManagerUnknownOrderTest {
         var upserts = 0
         coEvery { stateService.upsert(any(), any()) } coAnswers {
             if (upserts++ == 0) saved += secondArg<TradingState>().copy() else throw RuntimeException("db down")
+            0L
         }
         coEvery { upbit.getOrder("u-12") } throws RuntimeException("api down")
         manager.buy("KRW-BTC", TradingState("KRW-BTC"), 50_000_000.0, "test")
@@ -342,7 +343,7 @@ class PositionManagerUnknownOrderTest {
         assertNull(durable.pendingBuyUuid)
         val identifier = durable.pendingBuyIdentifier!!
 
-        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy() }
+        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy(); 0L }
         coEvery { upbit.getOrderByIdentifier(identifier) } returns filled("u-12", "0.002")
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.002"))
         val restarted = PositionManager(upbit, TradingProperties(), stateService, 1L, clock = clock)

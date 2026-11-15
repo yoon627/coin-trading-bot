@@ -40,7 +40,7 @@ class PositionManagerSellCharacterizationTest {
 
     @BeforeEach
     fun setup() {
-        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy() }
+        coEvery { stateService.upsert(any(), any()) } coAnswers { saved += secondArg<TradingState>().copy(); 0L }
     }
 
     private fun holding() = TradingState("KRW-BTC", position = true, avgBuyPrice = 50_000_000.0, holdVolume = 0.002)

@@ -9,6 +9,7 @@ import com.trading.bot.exchange.TradingCalendar
 import com.trading.bot.exchange.UpbitMarketRules
 import com.trading.bot.exchange.UpbitTradingCalendar
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.persistence.TradingStateConflictException
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
@@ -260,7 +261,9 @@ class TradingEngine(
         commit: suspend (TradingState, HaltSnapshot) -> Unit,
     ): Boolean {
         // 잠금을 기다리는 사이 루프가 상태를 바꾸거나 그 종목을 뺐을 수 있다.
-        if (states[ticker] !== state || !state.halted || state.reviewReason != null) return false
+        if (states[ticker] !== state || !state.halted) return false
+        if (state.versionConflict) throw TradingStateConflictException(ticker, "an earlier save conflicted")
+        if (state.reviewReason != null) return false
         val reason = state.haltReason
         val failureCount = state.reconcileFailureCount
         state.clearHalt()
@@ -271,6 +274,7 @@ class TradingEngine(
             state.halted = true
             state.haltReason = reason
             state.reconcileFailureCount = failureCount
+            if (e is TradingStateConflictException) positionManager.markVersionConflict(state, e)
             throw e
         }
         log.info("Halt cleared for {} ({})", ticker, username)
@@ -304,9 +308,10 @@ class TradingEngine(
 
     /**
      * DB 에 없을 수 있는 매도 pending. 매수는 선기록이 성공해야 주문을 보내지만 매도는 선기록이 실패해도 보낸다.
+     * 버전이 충돌한 종목의 매도도 넣는다 — 그 뒤로 기록하지 못했고, DB 의 행은 다른 쓰기가 바꿨다.
      */
     internal fun unpersistedSells(): List<TradingState> =
-        states.values.filter { it.pendingPersistFailed && it.hasPendingSell() }
+        states.values.filter { (it.pendingPersistFailed || it.versionConflict) && it.hasPendingSell() }
 
     private suspend fun runLoop() {
         activeTickers.forEach { ticker ->
@@ -514,7 +519,12 @@ class TradingEngine(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
+            // 충돌한 종목은 체결을 기록할 수 없어 reconcile 이 tick 마다 같은 실패를 올린다. 첫 충돌에 이미 알렸다.
+            if (state.alreadyConflicted(e)) {
+                log.debug("Processing {} (user {}) stopped at the state version conflict", ticker, userId)
+            } else {
+                log.error("Error processing {} (user {}): {}", ticker, userId, e.message, e)
+            }
         }
     }
 

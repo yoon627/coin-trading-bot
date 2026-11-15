@@ -28,6 +28,7 @@ import com.trading.bot.exchange.TradingCalendar
 import com.trading.bot.exchange.UnknownOrderPolicy
 import com.trading.bot.exchange.UpbitMarketRules
 import com.trading.bot.exchange.UpbitTradingCalendar
+import com.trading.bot.persistence.TradingStateConflictException
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.ExitGates
@@ -46,6 +47,11 @@ import org.slf4j.LoggerFactory
 
 /** trading_states.halt_reason·review_reason 컬럼 길이. */
 private const val HALT_REASON_MAX_LENGTH = 200
+
+internal const val VERSION_CONFLICT_HALT_REASON = "state version conflict"
+
+/** 이미 알린 버전 충돌이다. 그 뒤의 저장 실패는 매 tick 되풀이되므로 ERROR 로 다시 알리지 않는다. */
+internal fun TradingState.alreadyConflicted(e: Throwable): Boolean = versionConflict && e is TradingStateConflictException
 
 // 매도를 다시 보내기 전 대기(ms). 길이가 재전송 횟수다.
 private val SELL_RESEND_DELAYS_MS = listOf(1_000L, 2_000L)
@@ -421,7 +427,11 @@ class PositionManager(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log.error("Buy post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+                if (state.alreadyConflicted(e)) {
+                    log.debug("Buy post-order processing for {} stopped at the state version conflict: {}", ticker, e.message)
+                } else {
+                    log.error("Buy post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+                }
                 null
             }
         }
@@ -594,11 +604,19 @@ class PositionManager(
         record: TradeRecord,
         applyTransition: (TradingState) -> Unit,
     ) {
-        commitFill(
-            { tradingStateService.upsert(userId, state.copy().also(applyTransition)) },
-            record,
-        )
+        if (state.versionConflict) throw TradingStateConflictException(state.ticker, "an earlier save conflicted")
+        // 사본을 저장하므로 새 버전은 커밋이 끝난 뒤 원본에 넣는다. 롤백되면 넣지 않는다.
+        var saved: Long? = null
+        withContext(NonCancellable) {
+            try {
+                commitFill({ saved = tradingStateService.upsert(userId, state.copy().also(applyTransition)) }, record)
+            } catch (e: TradingStateConflictException) {
+                markVersionConflict(state, e)
+                throw e
+            }
+        }
         applyTransition(state)
+        saved?.let { state.rowVersion = it }
         // 이 커밋에도 peakPrice 가 들어가므로 peak 재기록 표시를 지운다. 매도 뒤에는 달리 지울 경로가 없다.
         state.peakPersistFailed = false
     }
@@ -635,10 +653,40 @@ class PositionManager(
         )
     }
 
-    /** 모든 저장이 이 함수를 거친다. 저장 스냅샷에 peakPrice 가 들어 있어 peak 재기록 표시도 여기서 지운다. */
+    /**
+     * 모든 저장이 이 함수를 거친다(체결 커밋은 [commitFillAndApply]). 저장 스냅샷에 peakPrice 가 들어 있어 peak 재기록 표시도 여기서 지운다.
+     * 한 번 충돌한 종목은 DB 를 부르지 않고 실패한다 — 메모리가 뒤처져 있어 다시 써도 실패한다.
+     */
     private suspend fun upsertState(state: TradingState) {
-        tradingStateService.upsert(userId, state)
+        if (state.versionConflict) throw TradingStateConflictException(state.ticker, "an earlier save conflicted")
+        // 저장이 커밋된 뒤 취소되면 메모리 버전이 뒤처져 다음 저장이 거짓 충돌한다. 저장과 반영을 한 단계로 묶는다.
+        state.rowVersion = withContext(NonCancellable) {
+            try {
+                tradingStateService.upsert(userId, state)
+            } catch (e: TradingStateConflictException) {
+                markVersionConflict(state, e)
+                throw e
+            }
+        }
         state.peakPersistFailed = false
+    }
+
+    /**
+     * 다른 쓰기가 이 종목의 행을 먼저 바꿨다. 그 행을 덮지 않고 이 종목은 더 저장하지 않으며, 신규 매수를 halt 로 막고 ERROR 로 한 번 알린다.
+     * 매도는 기록이 막혀도 나간다(기록 장애가 손절을 막으면 안 된다). 정지 뒤 시작이 DB 에서 다시 읽어 바로잡는다.
+     */
+    internal fun markVersionConflict(state: TradingState, cause: TradingStateConflictException) {
+        if (state.versionConflict) return
+        state.versionConflict = true
+        if (!state.halted) {
+            state.halted = true
+            state.haltReason = VERSION_CONFLICT_HALT_REASON
+        }
+        log.error(
+            "[CONFLICT] {} 상태를 다른 쓰기가 먼저 바꿔 저장하지 않았습니다 — 이 종목은 신규 매수를 멈추고 더 저장하지 않습니다. " +
+                "봇을 정지한 뒤 다시 시작하세요: {}",
+            state.ticker, cause.message,
+        )
     }
 
     private suspend fun persist(state: TradingState) {
@@ -647,7 +695,11 @@ class PositionManager(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.warn("trading_state persist failed for {} — retry on next transition: {}", state.ticker, e.message)
+            if (state.alreadyConflicted(e)) {
+                log.debug("trading_state persist skipped for {} after a version conflict", state.ticker)
+            } else {
+                log.warn("trading_state persist failed for {} — retry on next transition: {}", state.ticker, e.message)
+            }
         }
     }
 
@@ -660,7 +712,11 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             state.pendingPersistFailed = true
-            log.error("pending persist failed for {} — blocking new entries until it is recorded: {}", state.ticker, e.message, e)
+            if (state.alreadyConflicted(e)) {
+                log.debug("pending persist skipped for {} after a version conflict", state.ticker)
+            } else {
+                log.error("pending persist failed for {} — blocking new entries until it is recorded: {}", state.ticker, e.message, e)
+            }
         }
     }
 
@@ -712,22 +768,25 @@ class PositionManager(
      * 다음 tick 이나 [TradingEngine.flushUnpersisted] 가 다시 쓰게 한다.
      */
     internal suspend fun persistPeak(state: TradingState) {
+        if (state.versionConflict) return
         try {
             upsertState(state)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             state.peakPersistFailed = true
-            log.warn("peak persist failed for {} — the stored peak lags until a later write succeeds: {}", state.ticker, e.message)
+            if (!state.alreadyConflicted(e)) {
+                log.warn("peak persist failed for {} — the stored peak lags until a later write succeeds: {}", state.ticker, e.message)
+            }
         }
     }
 
     /** halt 해제처럼 사용자 응답이 걸린 경로라 실패를 호출자에게 올린다. */
     internal suspend fun persistStateOrThrow(state: TradingState) = upsertState(state)
 
-    /** pending 기록 실패로 막힌 진입은 이 재기록이 성공해야 풀린다. */
+    /** pending 기록 실패로 막힌 진입은 이 재기록이 성공해야 풀린다. 버전이 충돌한 종목은 다시 써도 실패하므로 하지 않는다. */
     internal suspend fun retryPendingPersistIfNeeded(state: TradingState) {
-        if (state.pendingPersistFailed) persistPending(state)
+        if (state.pendingPersistFailed && !state.versionConflict) persistPending(state)
     }
 
     /**
@@ -748,7 +807,11 @@ class PositionManager(
         } catch (e: Exception) {
             // 조회 실패는 각 단계가 처리하므로 여기 오는 것은 기록 단계의 실패다.
             // 주문 결과가 있는데 잔고 추정으로 넘기면 실제 체결을 추정치로 기록하게 된다.
-            log.warn("reconcile sell for {} was resolved but could not be recorded ({}) — pending kept", ticker, e.message, e)
+            if (state.alreadyConflicted(e)) {
+                log.debug("reconcile sell for {} was resolved but stays pending after the state version conflict", ticker)
+            } else {
+                log.warn("reconcile sell for {} was resolved but could not be recorded ({}) — pending kept", ticker, e.message, e)
+            }
             null
         }
         // pending 매도가 남아 있으면 그 티커는 손절도 평가하지 못하므로, 오래 끌면 ERROR 로 사람을 부른다.
@@ -959,7 +1022,11 @@ class PositionManager(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log.error("Sell post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+                if (state.alreadyConflicted(e)) {
+                    log.debug("Sell post-order processing for {} stopped at the state version conflict: {}", ticker, e.message)
+                } else {
+                    log.error("Sell post-order processing failed for {} (pending kept for reconcile): {}", ticker, e.message, e)
+                }
                 null
             }
         }

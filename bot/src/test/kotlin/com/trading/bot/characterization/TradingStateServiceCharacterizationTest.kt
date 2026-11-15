@@ -23,7 +23,7 @@ class TradingStateServiceCharacterizationTest {
     private val repository = mockk<TradingStateRepository>()
     private val service = TradingStateService(repository, mockk<ObjectMapper>())
 
-    private val row = TradingStateEntity(id = 7L, userId = 1L, ticker = "KRW-BTC", pendingBuyIdentifier = "ctb-1")
+    private val row = TradingStateEntity(id = 7L, userId = 1L, ticker = "KRW-BTC", pendingBuyIdentifier = "ctb-1", version = 2L)
 
     @Test
     fun `loadStates reads every row of the user by findByUserId only`() = runTest {
@@ -40,9 +40,9 @@ class TradingStateServiceCharacterizationTest {
     fun `upsert looks the row up by user and ticker and saves over its id`() = runTest {
         every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.just(row)
         val saved = slot<TradingStateEntity>()
-        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured) }
+        every { repository.save(capture(saved)) } answers { Mono.just(saved.captured.copy(version = 3L)) }
 
-        service.upsert(1L, TradingState("KRW-BTC", pendingBuyUuid = "u-1"))
+        assertEquals(3L, service.upsert(1L, TradingState("KRW-BTC", pendingBuyUuid = "u-1", rowVersion = 2L)))
 
         verifySequence {
             repository.findByUserIdAndTicker(1L, "KRW-BTC")
@@ -51,6 +51,7 @@ class TradingStateServiceCharacterizationTest {
         assertEquals(7L, saved.captured.id)
         assertEquals(1L, saved.captured.userId)
         assertEquals("u-1", saved.captured.pendingBuyUuid)
+        assertEquals(2L, saved.captured.version, "들고 온 버전으로 저장한다")
     }
 
     @Test

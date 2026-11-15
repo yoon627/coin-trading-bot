@@ -18,6 +18,7 @@ import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
+import com.trading.bot.persistence.TradingStateConflictException
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
@@ -479,7 +480,7 @@ class UserTradingManagerTest {
             totalAmount = 510_000.0,
             userId = 1L,
         )
-        coEvery { tradingStateService.upsert(1L, any()) } returns Unit
+        coEvery { tradingStateService.upsert(1L, any()) } returns 0L
         coEvery { client.getOrder("fill-1") } returns Order(
             uuid = "fill-1",
             state = "done",
@@ -876,6 +877,39 @@ class UserTradingManagerTest {
         assertEquals(HALT_CLEAR_UNPERSISTED_MESSAGE, thrown.message)
     }
 
+    // 충돌한 종목은 메모리가 DB 보다 뒤처져 저장이 늘 실패한다. 다시 시도하라는 대신 정지 뒤 시작을 안내한다.
+    @Test
+    fun `halt clear on a ticker whose state conflicted asks for a stop and start without an error alert`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.getStates() } returns mapOf(
+            "KRW-BTC" to TradingState("KRW-BTC", halted = true, haltReason = "state version conflict").apply { versionConflict = true },
+        )
+
+        val errors = errorsDuring {
+            val result = manager.clearHalt(1L, "KRW-BTC")
+            assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
+            assertTrue(result["error"].toString().contains("정지한 뒤 다시 시작"), "$result")
+        }
+
+        assertTrue(errors.isEmpty(), "$errors")
+        coVerify(exactly = 0) { mockEngine.clearHalt(any(), any()) }
+    }
+
+    @Test
+    fun `halt clear whose save conflicts is refused the same way instead of failing as a persistence error`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.getStates() } returns emptyMap()
+        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } throws TradingStateConflictException("KRW-BTC", "stale version")
+
+        val errors = errorsDuring {
+            val result = manager.clearHalt(1L, "KRW-BTC")
+            assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
+            assertTrue(result["error"].toString().contains("정지한 뒤 다시 시작"), "$result")
+        }
+
+        assertTrue(errors.none { it.contains("봇 제어 상태 저장 실패") }, "$errors")
+    }
+
     @Test
     fun `stop with a running engine lowers the running flag and forgets the engine`() = runTest {
         engines()[1L] = mockEngine
@@ -889,6 +923,20 @@ class UserTradingManagerTest {
         assertFalse(saved.captured.running)
         assertNull(engines()[1L])
         assertFalse(1L in unpersistedStops())
+    }
+
+    // 버전이 충돌한 종목의 매도도 이 목록에 든다. 정지 뒤 시작이 복구 절차라 정지가 그 매도를 알려야 한다.
+    @Test
+    fun `stop reports a sell the engine could not record before it forgets the engine`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.unpersistedSells() } returns listOf(unrecordedSell())
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        every { botStateRepository.save(any()) } answers { Mono.just(firstArg()) }
+
+        val errors = errorsDuring { manager.stopBot(1L) }
+
+        assertTrue(errors.any { it.contains("KRW-BTC") && it.contains("ctb-sell-1") }, "남기지 못한 매도를 알려야 한다: $errors")
+        assertNull(engines()[1L])
     }
 
     @Test
@@ -1547,7 +1595,7 @@ class UserTradingManagerTest {
     private fun pendingRow(state: TradingState): CapturingSlot<TradingState> {
         coEvery { tradingStateService.loadState(1L, state.ticker) } returns state
         val saved = slot<TradingState>()
-        coEvery { tradingStateService.upsert(1L, capture(saved)) } just Runs
+        coEvery { tradingStateService.upsert(1L, capture(saved)) } returns 0L
         return saved
     }
 
@@ -1644,7 +1692,7 @@ class UserTradingManagerTest {
         every { mockEngine.isRunning() } returns false
         coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
         val engineGoneAtSave = mutableListOf<Boolean>()
-        coEvery { tradingStateService.upsert(1L, any()) } coAnswers { engineGoneAtSave += engines()[1L] == null }
+        coEvery { tradingStateService.upsert(1L, any()) } coAnswers { engineGoneAtSave += engines()[1L] == null; 0L }
 
         manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
 

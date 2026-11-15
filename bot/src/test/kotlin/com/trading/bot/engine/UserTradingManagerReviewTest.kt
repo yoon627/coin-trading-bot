@@ -69,7 +69,7 @@ class UserTradingManagerReviewTest {
         val state = TradingState("KRW-BTC", halted = true, haltReason = review, reviewReason = review, pendingSellUuid = "s-1")
         coEvery { tradingStateService.loadState(1L, "KRW-BTC", Exchange.UPBIT) } returns state
         val saved = slot<TradingState>()
-        coEvery { tradingStateService.upsert(1L, capture(saved)) } just Runs
+        coEvery { tradingStateService.upsert(1L, capture(saved)) } returns 0L
 
         val result = manager.clearPending(1L, "KRW-BTC", TradeSide.SELL)
 

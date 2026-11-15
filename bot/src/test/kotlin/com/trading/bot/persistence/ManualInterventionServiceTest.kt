@@ -6,8 +6,6 @@ import com.trading.bot.persistence.entity.TradingStateEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
-import io.mockk.Runs
 import io.mockk.mockk
 import io.mockk.slot
 import java.time.Clock
@@ -15,6 +13,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.springframework.transaction.reactive.TransactionalOperator
@@ -36,7 +35,7 @@ class ManualInterventionServiceTest {
                 id = 7L, userId = 1L, ticker = "KRW-BTC", reviewReason = "unknown order", pendingSellIdentifier = "ctb-s",
                 reconcileFailureCount = 2, pendingBuyBookVolume = 0.002, buyDate = java.time.LocalDate.of(2026, 11, 12),
             )
-        coEvery { tradingStateService.upsert(1L, state) } just Runs
+        coEvery { tradingStateService.upsert(1L, state) } returns 1L
         val row = slot<ManualInterventionEntity>()
         every { repository.save(capture(row)) } answers { Mono.just(firstArg()) }
 
@@ -53,16 +52,18 @@ class ManualInterventionServiceTest {
         assertEquals(0.002, before["pending_buy_book_volume"].asDouble())
         assertEquals("2026-11-12", before["buy_date"].asText())
         coVerify(exactly = 1) { operator.transactional(any<Mono<Any>>()) }
+        assertEquals(1L, state.rowVersion, "커밋된 뒤 새 버전을 받는다")
     }
 
     @Test
     fun `a record that cannot be saved fails the whole save`() = runTest {
         coEvery { tradingStateService.findRow(1L, state) } returns null
-        coEvery { tradingStateService.upsert(1L, state) } just Runs
+        coEvery { tradingStateService.upsert(1L, state) } returns 1L
         every { repository.save(any()) } returns Mono.error(IllegalStateException("insert failed"))
 
         assertThrows(IllegalStateException::class.java) {
             kotlinx.coroutines.runBlocking { service.saveWithRecord(1L, state, ManualInterventionEntity.HALT_CLEAR, emptyMap()) }
         }
+        assertNull(state.rowVersion, "롤백된 저장의 버전은 받지 않는다")
     }
 }
