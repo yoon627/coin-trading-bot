@@ -44,5 +44,4 @@ class MarketDataStore {
         val buffer = candleBuffers[key] ?: return emptyList()
         return buffer.descendingMap().values.take(count)
     }
-
 }

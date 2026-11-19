@@ -306,6 +306,7 @@ class DeployNotifyScriptTest {
         val initialState = state.readText()
         val lastGood = state.readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
         val target = git(repo, "rev-parse", "HEAD").trim()
+
         // 성공한 배포는 .state 의 LAST_GOOD_SHA 를 대상으로 바꾸므로 매번 되돌린다.
         fun gateWith(compat: String?): String {
             state.writeText(initialState)

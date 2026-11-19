@@ -18,6 +18,7 @@ interface ExchangeClient {
     suspend fun getAccounts(): List<Account>
     suspend fun getDayCandles(market: String, count: Int = 30): List<Candle>
     suspend fun getTicker(markets: String): List<Ticker>
+
     /** 돌려주는 주문의 uuid 는 비어 있지 않다. 응답에 uuid 가 없으면 접수 여부를 모르는 실패로 예외를 던진다. */
     suspend fun placeOrder(request: OrderRequest): Order
     suspend fun getOrder(uuid: String): Order

@@ -284,6 +284,7 @@ class UserTradingManagerExchangeRuntimeTest {
     @Test
     fun `an engine built before the switch reads it on every buy`() = runTest {
         val plain = newManager()
+
         @Suppress("UNCHECKED_CAST")
         val entriesPaused = field(field(plain.createEngine(user), "positionManager")!!, "entriesPaused") as () -> Boolean
         storedRow(row("KIS_PAPER", running = true))

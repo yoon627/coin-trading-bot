@@ -24,6 +24,7 @@ class EngineLivenessMonitorTest {
     private val engine = mockk<TradingEngine>()
     private val engines = mutableMapOf(4L to engine)
     private var stalled = true
+
     // TradingManagers 가 만들 때 manager.exchange 를 읽으므로 setup 뒤에 만든다.
     private val monitor by lazy { EngineLivenessMonitor(TradingManagers(listOf(manager)), Clock.fixed(now, ZoneOffset.UTC)) }
 

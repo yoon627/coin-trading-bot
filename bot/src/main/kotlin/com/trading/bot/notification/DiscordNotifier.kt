@@ -311,8 +311,10 @@ class DiscordNotifier internal constructor(
         const val DIGEST_TRAILER_MAX = 500
         val DEFAULT_RETRY_BACKOFF: Duration = Duration.ofSeconds(1)
         const val MAX_RETRIES = 2L
+
         // outbox last_error 에 남기는 길이.
         const val MAX_ERROR_LENGTH = 500
+
         // 더 오래 기다리면 쌓인 알림이 한꺼번에 몰려 다시 429 가 난다.
         val MAX_RETRY_AFTER: Duration = Duration.ofSeconds(30)
     }

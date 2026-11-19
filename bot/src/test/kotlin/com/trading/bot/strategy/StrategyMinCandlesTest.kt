@@ -64,5 +64,4 @@ class StrategyMinCandlesTest {
 
         assertEquals(expected, actual, "전략의 minCandles 선언이 합의된 계약과 다르다")
     }
-
 }

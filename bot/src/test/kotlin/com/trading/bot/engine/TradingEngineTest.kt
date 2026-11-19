@@ -1121,7 +1121,6 @@ class TradingEngineTest {
         timestamp = Instant.now().minusSeconds(ageSeconds),
     )
 
-
     @Test
     fun `getRealtimePrice uses fresh store ticker`() {
         val engine = createEngine()

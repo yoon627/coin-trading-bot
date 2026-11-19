@@ -126,4 +126,5 @@ data class AuthRequest(
     val upbitAccessKey: String? = null,
     val upbitSecretKey: String? = null,
 )
+
 data class AuthResponse(val token: String, val username: String)

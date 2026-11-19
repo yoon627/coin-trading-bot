@@ -1516,6 +1516,7 @@ class UserTradingManagerTest {
         )
 
         val status = manager.getStatus(1L)
+
         @Suppress("UNCHECKED_CAST")
         val positions = (status["positions"] as List<Map<String, Any?>>).associateBy { it["ticker"] }
 

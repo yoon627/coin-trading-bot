@@ -19,10 +19,12 @@ class RateLimitFilter(
     private class Window(val minute: Long) {
         val hits = ConcurrentHashMap<String, Long>()
     }
+
     private val window = AtomicReference(Window(-1))
 
     companion object {
         private const val MAX_REQUESTS_PER_MINUTE = 60
+
         // 클라이언트 IP 별 무차별 대입 상한이다.
         private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30
     }
