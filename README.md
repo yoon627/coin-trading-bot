@@ -183,7 +183,7 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 ### 체결 기록 대조
 
-하루 한 번(기동 10분 뒤부터 24시간마다) 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `trade_executions` 에 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
+매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `trade_executions` 에 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
 
 - 보정할 때는 그 체결의 거래 기록 행을 `exchange_order_id = <uuid>` 로 넣는다. 그래야 다음 대조에서 빠진다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
 - 거짓 경보가 나는 경우: 같은 업비트 키를 다른 환경(로컬 실행 등)이 써서 그쪽 DB 에 기록된 주문, 같은 키를 두 사용자가 등록한 경우.
