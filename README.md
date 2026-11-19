@@ -67,6 +67,17 @@ DB_PORT=5432 ./gradlew :bot:bootRun
 
 DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI는 `DB_TESTS_REQUIRED=true`로 돌리므로 건너뛰면 실패한다.
 
+### 포맷
+
+Kotlin 포맷 기준은 ktlint(Spotless)이고, 규칙은 루트 `.editorconfig`에 있다. VSCode의 JetBrains Kotlin 확장도 같은 `.editorconfig`를 읽어, 저장 시 포맷(`editor.formatOnSave`)이 ktlint와 같은 결과를 내도록 맞춰 두었다(지금 코드 전체에서 확인). 처음 보는 코드 모양에서 드물게 다르면 CI의 `spotlessCheck`가 알려 주고, `./gradlew spotlessApply`로 맞춘다.
+
+```bash
+./gradlew spotlessApply    # 포맷
+./gradlew spotlessCheck    # 검사만 (CI가 돌린다)
+```
+
+`.editorconfig`를 바꾼 뒤에는 `./gradlew --stop`으로 Gradle daemon을 내리고 `build/spotless-clean`을 지운 다음 돌린다. 그러지 않으면 바꾸기 전 설정으로 포맷한다.
+
 ## 설정
 
 기본값은 `TradingProperties.kt`, `KisTradingProperties.kt`, `AppConfig.kt`, `application.yml`에 있다.

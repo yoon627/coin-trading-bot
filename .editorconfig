@@ -1,0 +1,37 @@
+root = true
+
+# VSCode 의 JetBrains Kotlin 확장(IntelliJ 포맷터)과 ktlint 가 같은 결과를 내도록 맞춘다.
+# ij_kotlin_* 는 IntelliJ 포맷터가 기존 줄바꿈을 건드리지 않게 하고, 끈 ktlint 규칙은 IntelliJ 포맷터가 하지 않는 재작성이다.
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = off
+ktlint_code_style = intellij_idea
+ij_kotlin_continuation_indent_size = 4
+ij_kotlin_line_break_after_multiline_when_entry = false
+ij_kotlin_call_parameters_wrap = off
+ij_kotlin_call_parameters_new_line_after_left_paren = false
+ij_kotlin_call_parameters_right_paren_on_new_line = false
+ij_kotlin_method_parameters_wrap = off
+ij_kotlin_method_parameters_new_line_after_left_paren = false
+ij_kotlin_method_parameters_right_paren_on_new_line = false
+ij_kotlin_class_annotation_wrap = off
+ij_kotlin_method_annotation_wrap = off
+ij_kotlin_field_annotation_wrap = off
+ij_kotlin_keep_blank_lines_before_right_brace = 0
+ktlint_standard_argument-list-wrapping = disabled
+ktlint_standard_blank-line-before-declaration = disabled
+ktlint_standard_blank-line-between-when-conditions = disabled
+ktlint_standard_class-signature = disabled
+ktlint_standard_enum-wrapping = disabled
+ktlint_standard_function-expression-body = disabled
+ktlint_standard_function-signature = disabled
+ktlint_standard_if-else-wrapping = disabled
+ktlint_standard_import-ordering = disabled
+ktlint_standard_multiline-if-else = disabled
+ktlint_standard_no-multi-spaces = disabled
+ktlint_standard_spacing-between-declarations-with-annotations = disabled
+ktlint_standard_statement-wrapping = disabled
+ktlint_standard_trailing-comma-on-call-site = disabled
+ktlint_standard_trailing-comma-on-declaration-site = disabled
+ktlint_standard_wrapping = disabled
