@@ -120,7 +120,8 @@ class TradingStateRoundTripTest {
         pendingSellAvgPrice = 70_000.25,
         pendingSellSince = Instant.parse("2026-08-26T01:02:03Z"),
         pendingSellAlerted = true,
-        reconcileFailureCount = 3,
+        pendingBuySince = Instant.parse("2026-08-26T00:59:00Z"),
+        pendingBuyAlerted = true,
         pendingBuyPriorVolume = 0.00098765,
         pendingSellTriggerPrice = 71_000.0,
         pendingSellPriorVolume = 0.00456789,
@@ -157,7 +158,8 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellAvgPrice).isEqualTo(original.pendingSellAvgPrice)
         assertThat(restored.pendingSellSince).isEqualTo(original.pendingSellSince)
         assertThat(restored.pendingSellAlerted).isEqualTo(original.pendingSellAlerted)
-        assertThat(restored.reconcileFailureCount).isEqualTo(original.reconcileFailureCount)
+        assertThat(restored.pendingBuySince).isEqualTo(original.pendingBuySince)
+        assertThat(restored.pendingBuyAlerted).isEqualTo(original.pendingBuyAlerted)
         assertThat(restored.exitParams).isEqualTo(original.exitParams)
         assertThat(restored.pendingBuyPriorVolume).isEqualTo(original.pendingBuyPriorVolume)
         assertThat(restored.pendingSellTriggerPrice).isEqualTo(original.pendingSellTriggerPrice)
@@ -169,7 +171,7 @@ class TradingStateRoundTripTest {
     /** 앱이 읽고 쓰지 않는 칼럼(halt·확인 필요 사유·pending 해제 기준값). */
     private suspend fun retiredColumns(userId: Long, ticker: String): List<Any?> =
         databaseClient.sql(
-            "SELECT halted, halt_reason, review_reason, adopt_baseline_volume, sell_clear_prior_volume, sell_clear_volume " +
+            "SELECT halted, halt_reason, review_reason, adopt_baseline_volume, sell_clear_prior_volume, sell_clear_volume, reconcile_failure_count " +
                 "FROM trading_states WHERE user_id = :u AND ticker = :t",
         )
             .bind("u", userId).bind("t", ticker)
@@ -181,6 +183,7 @@ class TradingStateRoundTripTest {
                     row.get("adopt_baseline_volume", java.lang.Double::class.java)?.toDouble(),
                     row.get("sell_clear_prior_volume", java.lang.Double::class.java)?.toDouble(),
                     row.get("sell_clear_volume", java.lang.Double::class.java)?.toDouble(),
+                    row.get("reconcile_failure_count", Integer::class.java)?.toInt(),
                 )
             }
             .one().awaitSingle()
@@ -190,10 +193,11 @@ class TradingStateRoundTripTest {
     fun `a save leaves the retired columns of an existing row as they were and a new row gets the defaults`() = runTest {
         val userId = insertUser("retired-cols")
         service.upsert(userId, TradingState("KRW-BTC", peakPrice = 1.0))
-        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(false, null, null, null, null, null)
+        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(false, null, null, null, null, null, 0)
         databaseClient.sql(
             "UPDATE trading_states SET halted = TRUE, halt_reason = 'old halt', review_reason = 'old review', " +
-                "adopt_baseline_volume = 0.1, sell_clear_prior_volume = 0.2, sell_clear_volume = 0.3 WHERE user_id = :u AND ticker = 'KRW-BTC'",
+                "adopt_baseline_volume = 0.1, sell_clear_prior_volume = 0.2, sell_clear_volume = 0.3, reconcile_failure_count = 7 " +
+                "WHERE user_id = :u AND ticker = 'KRW-BTC'",
         )
             .bind("u", userId).fetch().rowsUpdated().awaitSingle()
 
@@ -201,7 +205,7 @@ class TradingStateRoundTripTest {
         loaded.peakPrice = 2.0
         service.upsert(userId, loaded)
 
-        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(true, "old halt", "old review", 0.1, 0.2, 0.3)
+        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(true, "old halt", "old review", 0.1, 0.2, 0.3, 7)
         assertThat(service.loadState(userId, "KRW-BTC")!!.peakPrice).isEqualTo(2.0)
     }
 
@@ -312,6 +316,29 @@ class TradingStateRoundTripTest {
         inSchema(schema) { conn -> assertThat(conn.versionColumn(schema)).containsExactly("version") }
     }
 
+    @Test
+    fun `existing rows get no buy start time, and the down sql refuses unless V38 is last, then drops the columns`() = withScratchSchema("v38down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V38_down.sql").readText()
+        migrate(schema, "37")
+        inSchema(schema) { conn ->
+            conn.update("INSERT INTO users (username, password) VALUES ('it-v38-$runId', 'x')")
+            conn.update("INSERT INTO trading_states (user_id, ticker) SELECT id, 'KRW-BTC' FROM users WHERE username = 'it-v38-$runId'")
+        }
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V38 이 적용돼 있지 않다")
+
+        migrate(schema, "38")
+        inSchema(schema) { conn ->
+            assertThat(conn.strings("SELECT coalesce(pending_buy_since::text, 'null') || ',' || pending_buy_alerted::text FROM trading_states"))
+                .containsExactly("null,false")
+            conn.update(downSql)
+            assertThat(conn.buyStuckColumns(schema)).isEmpty()
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '38'")).isEmpty()
+        }
+
+        migrate(schema, "38")
+        inSchema(schema) { conn -> assertThat(conn.buyStuckColumns(schema)).containsExactlyInAnyOrder("pending_buy_since", "pending_buy_alerted") }
+    }
+
     private fun migrate(schema: String, target: String) {
         Flyway.configure()
             .dataSource(jdbcUrl, user, password)
@@ -340,6 +367,11 @@ class TradingStateRoundTripTest {
     private fun Connection.versionColumn(schema: String): List<String> = strings(
         "SELECT column_name FROM information_schema.columns " +
             "WHERE table_schema = '$schema' AND table_name = 'trading_states' AND column_name = 'version'",
+    )
+
+    private fun Connection.buyStuckColumns(schema: String): List<String> = strings(
+        "SELECT column_name FROM information_schema.columns " +
+            "WHERE table_schema = '$schema' AND table_name = 'trading_states' AND column_name IN ('pending_buy_since', 'pending_buy_alerted')",
     )
 
     private fun withScratchSchema(label: String, block: (String) -> Unit) {

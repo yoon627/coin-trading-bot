@@ -50,7 +50,7 @@ class BalanceFillAccountingTest {
     /** 주문할 때 봇 장부가 [book]@[bookAvg] 였고 거래소 잔고는 [prior] 였던 매수. */
     private fun pendingBuy(book: Double, bookAvg: Double, prior: Double) =
         TradingState("KRW-BTC", position = book > 0.0, holdVolume = book, avgBuyPrice = bookAvg).apply {
-            beginBuyOrder("ctb-b", "combined", prior)
+            beginBuyOrder("ctb-b", "combined", prior, java.time.Instant.now())
         }
 
     private fun filledOrder(volume: String, vwap: Double?) = Order(
@@ -121,7 +121,7 @@ class BalanceFillAccountingTest {
     @Test
     fun `a dust book larger than the balance before the order is clamped to it`() {
         val state = TradingState("KRW-BTC", position = true, holdVolume = 0.0003, avgBuyPrice = 40_000_000.0).apply {
-            beginBuyOrder("ctb-b", "combined", priorVolume = 0.0001)
+            beginBuyOrder("ctb-b", "combined", priorVolume = 0.0001, java.time.Instant.now())
         }
 
         assertEquals(0.0001, state.pendingBuyBookVolume)

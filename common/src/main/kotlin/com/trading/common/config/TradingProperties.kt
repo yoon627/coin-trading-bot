@@ -21,7 +21,7 @@ data class TradingProperties(
     val roundTripFeeRate: Double = 0.001,
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
-    // reconcilePendingBuy 의 주문·잔고 조회가 연속으로 이 횟수만큼 실패하면 ERROR 로 한 번 알린다. 막힌 매도 알림의 시간 기준(× intervalSeconds)이기도 하다.
+    // 미해소 주문(매수·매도)이 이 값 × intervalSeconds 초 넘게 확정되지 않으면 ERROR 로 한 번 알린다.
     val reconcileAlertThreshold: Int = 20,
 ) {
     init {

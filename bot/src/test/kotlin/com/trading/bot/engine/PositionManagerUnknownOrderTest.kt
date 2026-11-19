@@ -212,7 +212,7 @@ class PositionManagerUnknownOrderTest {
         advance(70)
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("order lookup down")
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
-        assertEquals(1, state.reconcileFailureCount)
+        assertEquals(1, state.lookupFailures)
         advance(10)
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
@@ -226,13 +226,12 @@ class PositionManagerUnknownOrderTest {
         coEvery { upbit.getAccounts() } returns listOf(krw())
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertEquals(identifier, state.pendingBuyIdentifier)
-        // 간헐 장애는 404 사이에서도 실패 횟수에 쌓인다. 되돌리면 알림 없이 매매가 멈춘다.
-        assertEquals(2, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures) // 거래소가 답한 조회는 간격을 되돌린다. 막힘 알림은 경과 시간으로 잰다
 
         advance(70)
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertFalse(state.hasPendingBuy())
-        assertEquals(0, state.reconcileFailureCount) // 확정되면 다음 주문으로 넘기지 않는다
+        assertEquals(0, state.lookupFailures) // 확정되면 다음 주문으로 넘기지 않는다
     }
 
     @Test
@@ -497,8 +496,7 @@ class PositionManagerUnknownOrderTest {
     }
 
     @Test
-    fun `an unknown sell never counts toward the reconcile failure alert`() = runTest {
-        // 매도는 경과시간 알림으로 사람을 부른다. 실패 횟수는 매수 확인에만 센다.
+    fun `an unknown sell backs off after a failed order lookup and after an unseen balance`() = runTest {
         coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
         placeOrderAnswers { throw RuntimeException("connection reset") }
         val state = held()
@@ -507,23 +505,25 @@ class PositionManagerUnknownOrderTest {
 
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("order lookup down")
         manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
+        assertEquals(1, state.lookupFailures)
+        advance(10)
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
         manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
 
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(2, state.lookupFailures)
     }
 
     @Test
     fun `finding a buy by identifier clears the failure count even before it fills`() = runTest {
         val (state, identifier) = unknownBuy()
-        state.reconcileFailureCount = 3
+        state.lookupFailures = 3
         coEvery { upbit.getOrderByIdentifier(identifier) } returns Order(uuid = "u-wait", state = "wait", executedVolume = "0")
 
         assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
 
         assertEquals("u-wait", state.pendingBuyUuid) // 아직 체결 전. 이어받은 uuid 로 다음 tick 에 확정한다
-        assertEquals(0, state.reconcileFailureCount) // 주문 상태를 봤으니 조회 장애 카운트는 끊긴다
+        assertEquals(0, state.lookupFailures) // 주문 상태를 봤으니 조회 장애 카운트는 끊긴다
     }
 
     @Test
@@ -566,6 +566,7 @@ class PositionManagerUnknownOrderTest {
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         coVerify(exactly = 0) { upbit.getAccounts() } // 조회가 실패하면 흔적을 보지 않는다
 
+        advance(10)
         clearMocks(upbit, answers = false)
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
@@ -595,11 +596,11 @@ class PositionManagerUnknownOrderTest {
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.002")) // 주문 전엔 없던 코인
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
 
         coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
-        assertEquals(1, state.reconcileFailureCount)
+        assertEquals(1, state.lookupFailures)
     }
 
     @Test
@@ -720,13 +721,13 @@ class PositionManagerUnknownOrderTest {
 
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertEquals(identifier, state.pendingBuyIdentifier)
-        assertEquals(1, state.reconcileFailureCount)
+        assertEquals(1, state.lookupFailures)
 
         coEvery { upbit.getClosedOrders(any(), any(), any(), any(), any()) } returns emptyList()
         advance(10)
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertFalse(state.hasPendingBuy())
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
     }
 
     @Test

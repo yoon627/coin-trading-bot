@@ -1508,10 +1508,13 @@ class UserTradingManagerTest {
 
     // 손으로 API 를 부르는 사람이 매수가 막힌 이유를 본다.
     @Test
-    fun `status shows each position's version conflict and reconcile failure count without halt fields`() {
+    fun `status shows each position's version conflict and lookup backoff without halt fields`() {
         engines()[1L] = mockEngine
         every { mockEngine.getStates() } returns mapOf(
-            "KRW-BTC" to TradingState("KRW-BTC", pendingBuyUuid = "b-1", reconcileFailureCount = 4),
+            "KRW-BTC" to TradingState(
+                "KRW-BTC", pendingBuyUuid = "b-1", pendingBuySince = java.time.Instant.parse("2026-11-19T00:00:00Z"),
+                lookupFailures = 4, nextLookupAt = java.time.Instant.parse("2026-11-19T00:05:00Z"),
+            ),
             "KRW-ETH" to TradingState("KRW-ETH").apply { versionConflict = true },
         )
 
@@ -1521,9 +1524,12 @@ class UserTradingManagerTest {
         val positions = (status["positions"] as List<Map<String, Any?>>).associateBy { it["ticker"] }
 
         assertEquals(false, positions["KRW-BTC"]!!["version_conflict"])
-        assertEquals(4, positions["KRW-BTC"]!!["reconcile_failure_count"])
+        assertEquals(4, positions["KRW-BTC"]!!["lookup_failures"])
+        assertEquals("2026-11-19T00:05:00Z", positions["KRW-BTC"]!!["next_lookup_at"])
+        assertEquals(mapOf("by" to "uuid", "ref" to "b-1", "since" to "2026-11-19T00:00:00Z"), positions["KRW-BTC"]!!["pending_buy"])
         assertEquals(true, positions["KRW-ETH"]!!["version_conflict"])
-        assertEquals(0, positions["KRW-ETH"]!!["reconcile_failure_count"])
+        assertEquals(0, positions["KRW-ETH"]!!["lookup_failures"])
+        assertNull(positions["KRW-ETH"]!!["next_lookup_at"])
         assertFalse("halted" in positions["KRW-BTC"]!!)
         assertFalse("halted_tickers" in status)
     }
@@ -1542,7 +1548,7 @@ class UserTradingManagerTest {
         @Suppress("UNCHECKED_CAST")
         val positions = (manager.getStatus(1L)["positions"] as List<Map<String, Any?>>).associateBy { it["ticker"] }
 
-        assertEquals(mapOf("by" to "identifier", "ref" to "ctb-1"), positions["KRW-BTC"]!!["pending_buy"])
+        assertEquals(mapOf("by" to "identifier", "ref" to "ctb-1", "since" to null), positions["KRW-BTC"]!!["pending_buy"])
         assertNull(positions["KRW-BTC"]!!["pending_sell"])
         val sell = positions["KRW-ETH"]!!["pending_sell"] as Map<*, *>
         assertEquals("uuid", sell["by"])

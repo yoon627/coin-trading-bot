@@ -461,9 +461,13 @@ class UserTradingManager(
                     "unsynced" to state.unsynced,
                     // 버전 충돌은 정지 뒤 시작으로만 풀린다. 그때까지 신규 매수를 막는다.
                     "version_conflict" to state.versionConflict,
-                    "reconcile_failure_count" to state.reconcileFailureCount,
+                    // 확인 조회가 연속으로 실패한 횟수와 다음 조회 시각. 실패할수록 간격이 늘고(상한 5분) 조회가 성공하면 풀린다.
+                    "lookup_failures" to state.lookupFailures,
+                    "next_lookup_at" to state.nextLookupAt?.toString(),
                     // 미해소 주문이 있으면 그 티커는 매매를 평가하지 않는다. 대사로 확정되면 풀린다.
-                    "pending_buy" to state.pendingRef(TradeSide.BUY)?.let { mapOf("by" to it.by, "ref" to it.ref) },
+                    "pending_buy" to state.pendingRef(TradeSide.BUY)?.let {
+                        mapOf("by" to it.by, "ref" to it.ref, "since" to state.pendingBuySince?.toString())
+                    },
                     "pending_sell" to state.pendingRef(TradeSide.SELL)?.let {
                         mapOf("by" to it.by, "ref" to it.ref, "since" to state.pendingSellSince?.toString())
                     },

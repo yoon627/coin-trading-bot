@@ -154,14 +154,14 @@ class PositionManagerSeamTest {
     fun `a buy the accounting cannot recover without the order stays pending and counts toward the failure alert`() = runTest {
         coEvery { upbit.getOrder("u-1") } throws RuntimeException("getOrder down")
         val state = TradingState("KRW-BTC").apply {
-            beginBuyOrder("ctb-1", "test", priorVolume = 0.0)
+            beginBuyOrder("ctb-1", "test", priorVolume = 0.0, java.time.Instant.now())
             adoptBuyOrder("u-1")
         }
 
         assertNull(manager(fillAccounting = OrderOnlyAccounting).reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
 
         assertEquals("u-1", state.pendingBuyUuid)
-        assertEquals(1, state.reconcileFailureCount)
+        assertEquals(1, state.lookupFailures)
         assertTrue(committed.isEmpty())
         coVerify(exactly = 0) { upbit.getAccounts() }
     }

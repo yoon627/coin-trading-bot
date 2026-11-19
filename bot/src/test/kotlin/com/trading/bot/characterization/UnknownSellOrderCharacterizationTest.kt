@@ -10,6 +10,7 @@ import com.trading.bot.engine.PositionManager
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
@@ -89,15 +90,16 @@ class UnknownSellOrderCharacterizationTest {
     }
 
     @Test
-    fun `undecided sell lookups are not counted toward the alert threshold`() = runTest {
-        val manager = manager(TradingProperties(reconcileAlertThreshold = 2))
+    fun `a failed sell lookup by identifier is not retried until the backoff passes`() = runTest {
+        val manager = manager()
         val state = holding()
         val identifier = lostSell(manager, state)
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("503")
 
         repeat(3) { manager.reconcilePendingSell("KRW-BTC", state, 50_000_000.0) }
 
-        assertEquals(0, state.reconcileFailureCount)
+        coVerify(exactly = 1) { upbit.getOrderByIdentifier(identifier) }
+        assertEquals(1, state.lookupFailures)
         assertEquals(identifier, state.pendingSellIdentifier)
     }
 

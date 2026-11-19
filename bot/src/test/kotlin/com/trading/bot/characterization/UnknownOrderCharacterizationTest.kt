@@ -75,7 +75,7 @@ class UnknownOrderCharacterizationTest {
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
 
         assertFalse(state.hasPendingBuy())
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
     }
 
     @Test
@@ -90,21 +90,21 @@ class UnknownOrderCharacterizationTest {
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
 
         assertEquals(identifier, state.pendingBuyIdentifier)
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
     }
 
     @Test
-    fun `a not-found lookup without a balance change neither raises nor resets the failure count`() = runTest {
+    fun `a not-found lookup without a balance change is an answered lookup and resets the backoff`() = runTest {
         val manager = manager()
         val state = TradingState("KRW-BTC")
         val identifier = lostBuy(manager, state)!!
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
-        state.reconcileFailureCount = 3
+        state.lookupFailures = 3
 
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
 
         assertEquals(identifier, state.pendingBuyIdentifier)
-        assertEquals(3, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
     }
 
     @Test
@@ -144,7 +144,7 @@ class UnknownOrderCharacterizationTest {
 
         assertEquals(identifier, state.pendingBuyIdentifier)
         assertFalse(state.position)
-        assertEquals(0, state.reconcileFailureCount) // 흔적 판정은 실패 횟수에 세지 않는다
+        assertEquals(0, state.lookupFailures) // 흔적 판정은 실패 횟수에 세지 않는다
     }
 
     @ParameterizedTest
@@ -193,20 +193,21 @@ class UnknownOrderCharacterizationTest {
     }
 
     @Test
-    fun `failed identifier lookups and unreadable balances count toward the alert threshold`() = runTest {
-        val manager = manager(TradingProperties(reconcileAlertThreshold = 2))
+    fun `failed identifier lookups and unreadable balances count as failed lookups`() = runTest {
+        val manager = manager()
         val state = TradingState("KRW-BTC")
         val identifier = lostBuy(manager, state)!!
 
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("503")
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
-        assertEquals(1, state.reconcileFailureCount)
+        assertEquals(1, state.lookupFailures)
 
+        clock.advance(10)
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
 
-        assertEquals(2, state.reconcileFailureCount)
+        assertEquals(2, state.lookupFailures)
         assertEquals(identifier, state.pendingBuyIdentifier)
         assertNull(manager.buy("KRW-BTC", state, 50_000_000.0, "test"), "미해소 매수가 신규 매수를 막는다")
     }

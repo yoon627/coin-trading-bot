@@ -18,8 +18,12 @@ import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -39,7 +43,14 @@ class PositionManagerDustTest {
 
     private val upbit = mockk<UpbitClient>(relaxed = true)
     private val stateService = mockk<TradingStateService>(relaxed = true)
-    private val manager = PositionManager(upbit, TradingProperties(maxInvestAmount = 100_000.0), stateService, 1L)
+    private class MutableClock(var now: Instant) : Clock() {
+        override fun instant(): Instant = now
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId?): Clock = this
+    }
+
+    private val clock = MutableClock(Instant.parse("2026-09-28T00:00:00Z"))
+    private val manager = PositionManager(upbit, TradingProperties(maxInvestAmount = 100_000.0), stateService, 1L, clock = clock)
     private val saved = mutableListOf<TradingState>()
 
     private val logger = LoggerFactory.getLogger(PositionManager::class.java) as Logger
@@ -165,7 +176,8 @@ class PositionManagerDustTest {
         assertNull(manager.reconcilePendingBuy("KRW-BTC", state, price))
         assertEquals("b-rec", state.pendingBuyUuid)
 
-        // 잔고가 늘었으면 그 증분만 이 주문의 체결이다.
+        // 잔고가 늘었으면 그 증분만 이 주문의 체결이다. 조회가 실패했으므로 한 바퀴 뒤에 다시 본다.
+        clock.now = clock.now.plusSeconds(10)
         coEvery { upbit.getAccounts() } returns listOf(krw(), btc("0.0101", avg = "10019802"))
         val record = manager.reconcilePendingBuy("KRW-BTC", state, price)
 
