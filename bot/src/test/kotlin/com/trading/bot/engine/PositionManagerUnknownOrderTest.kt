@@ -222,7 +222,7 @@ class PositionManagerUnknownOrderTest {
         coEvery { upbit.getAccounts() } returns listOf(krw())
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertEquals(identifier, state.pendingBuyIdentifier)
-        // 간헐 장애는 404 사이에서도 halt 카운터에 쌓인다. 되돌리면 해제도 halt 도 없이 매매가 멈춘다.
+        // 간헐 장애는 404 사이에서도 실패 횟수에 쌓인다. 되돌리면 알림 없이 매매가 멈춘다.
         assertEquals(2, state.reconcileFailureCount)
 
         advance(70)
@@ -493,8 +493,8 @@ class PositionManagerUnknownOrderTest {
     }
 
     @Test
-    fun `an unknown sell never counts toward the halt`() = runTest {
-        // 매도는 경과시간 알림으로 사람을 부른다. halt 는 신규 매수만 막는 플래그라 매도 판정은 세지 않는다.
+    fun `an unknown sell never counts toward the reconcile failure alert`() = runTest {
+        // 매도는 경과시간 알림으로 사람을 부른다. 실패 횟수는 매수 확인에만 센다.
         coEvery { upbit.getAccounts() } returns listOf(btc("0.001"))
         placeOrderAnswers { throw RuntimeException("connection reset") }
         val state = held()
@@ -508,11 +508,10 @@ class PositionManagerUnknownOrderTest {
         manager.reconcilePendingSell("KRW-BTC", state, 52_000_000.0)
 
         assertEquals(0, state.reconcileFailureCount)
-        assertFalse(state.halted)
     }
 
     @Test
-    fun `finding a buy by identifier clears the halt counter even before it fills`() = runTest {
+    fun `finding a buy by identifier clears the failure count even before it fills`() = runTest {
         val (state, identifier) = unknownBuy()
         state.reconcileFailureCount = 3
         coEvery { upbit.getOrderByIdentifier(identifier) } returns Order(uuid = "u-wait", state = "wait", executedVolume = "0")
@@ -586,7 +585,7 @@ class PositionManagerUnknownOrderTest {
     }
 
     @Test
-    fun `an unseen balance counts toward the halt even after a trace was seen`() = runTest {
+    fun `an unseen balance counts toward the failure alert even after a trace was seen`() = runTest {
         // 흔적을 봤어도 이번에 잔고를 못 봤으면 주문 상태를 확인할 수단이 없으니 조회 장애로 센다.
         val (state, identifier) = unknownBuy()
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null

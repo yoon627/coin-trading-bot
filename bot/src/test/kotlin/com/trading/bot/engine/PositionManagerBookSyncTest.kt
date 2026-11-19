@@ -166,7 +166,7 @@ class PositionManagerBookSyncTest {
         assertEquals(0.0, saved.single().holdVolume)
     }
 
-    // 동기화가 실패한 상태는 장부를 모르므로, 이어지는 저장(일일 리셋·clearHalt 등)이 저장된 장부를 덮지 않아야 한다.
+    // 동기화가 실패한 상태는 장부를 모르므로, 이어지는 저장(일일 리셋 등)이 저장된 장부를 덮지 않아야 한다.
     @Test
     fun `a failed sync leaves the book unknown so later saves keep the stored book`() = runTest {
         coEvery { upbit.getAccounts() } throws IllegalStateException("upbit down")

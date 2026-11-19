@@ -18,7 +18,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
@@ -27,8 +26,8 @@ import org.junit.jupiter.params.provider.ValueSource
 /**
  * 응답을 못 받은 Upbit 주문의 확정 규칙을 고정한다. identifier 조회가 연속 2회 null 이고 첫 null 뒤 60초가 지났으며
  * 잔고 흔적이 없을 때만 미접수로 풀고, 흔적이 보이면 이 엔진 안에서는 풀지 않는다. 조회 실패는 연속 횟수와 60초 타이머를 끊는다.
- * 거절 오류 이름 목록만 pending 을 즉시 지우고 다음 매수는 기다림 없이 다시 보낸다. 조회 실패는 halt 카운터에 세고,
- * 흔적 없는 404 는 카운터를 올리지도 리셋하지도 않는다.
+ * 거절 오류 이름 목록만 pending 을 즉시 지우고 다음 매수는 기다림 없이 다시 보낸다. 조회 실패는 체결 확인 실패 횟수에 세고,
+ * 흔적 없는 404 는 횟수를 올리지도 리셋하지도 않는다.
  */
 class UnknownOrderCharacterizationTest {
 
@@ -95,7 +94,7 @@ class UnknownOrderCharacterizationTest {
     }
 
     @Test
-    fun `a not-found lookup without a balance change neither raises nor resets the halt counter`() = runTest {
+    fun `a not-found lookup without a balance change neither raises nor resets the failure count`() = runTest {
         val manager = manager()
         val state = TradingState("KRW-BTC")
         val identifier = lostBuy(manager, state)!!
@@ -145,7 +144,7 @@ class UnknownOrderCharacterizationTest {
 
         assertEquals(identifier, state.pendingBuyIdentifier)
         assertFalse(state.position)
-        assertEquals(0, state.reconcileFailureCount) // 흔적 판정은 halt 카운터에 세지 않는다
+        assertEquals(0, state.reconcileFailureCount) // 흔적 판정은 실패 횟수에 세지 않는다
     }
 
     @ParameterizedTest
@@ -194,7 +193,7 @@ class UnknownOrderCharacterizationTest {
     }
 
     @Test
-    fun `failed identifier lookups and unreadable balances count toward the halt threshold`() = runTest {
+    fun `failed identifier lookups and unreadable balances count toward the alert threshold`() = runTest {
         val manager = manager(TradingProperties(reconcileHaltThreshold = 2))
         val state = TradingState("KRW-BTC")
         val identifier = lostBuy(manager, state)!!
@@ -202,15 +201,14 @@ class UnknownOrderCharacterizationTest {
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("503")
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
         assertEquals(1, state.reconcileFailureCount)
-        assertFalse(state.halted)
 
         coEvery { upbit.getOrderByIdentifier(identifier) } returns null
         coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
         manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0)
 
         assertEquals(2, state.reconcileFailureCount)
-        assertTrue(state.halted)
         assertEquals(identifier, state.pendingBuyIdentifier)
+        assertNull(manager.buy("KRW-BTC", state, 50_000_000.0, "test"), "미해소 매수가 신규 매수를 막는다")
     }
 
     @Test

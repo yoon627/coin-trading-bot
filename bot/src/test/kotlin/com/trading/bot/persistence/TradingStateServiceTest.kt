@@ -49,8 +49,7 @@ class TradingStateServiceTest {
                 ticker = "KRW-BTC",
                 pendingBuyUuid = "pending-1",
                 pendingBuyStrategy = "volatility_breakout",
-                halted = true,
-                haltReason = "reconcile 실패",
+                reconcileFailureCount = 3,
                 exitParamsJson = "{not valid json",
             ),
         )
@@ -60,7 +59,7 @@ class TradingStateServiceTest {
         val state = states["KRW-BTC"]!!
         assertEquals("pending-1", state.pendingBuyUuid)
         assertEquals("volatility_breakout", state.pendingBuyStrategy)
-        assertEquals(true, state.halted)
+        assertEquals(3, state.reconcileFailureCount)
         assertNull(state.exitParams) // 스냅샷만 버리고 전역 청산값으로 폴백한다
     }
 

@@ -25,7 +25,6 @@ import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -102,19 +101,18 @@ class UnknownOrderSeamTest {
     }
 
     @Test
-    fun `an order not yet visible waits without counting toward the halt`() = runTest {
+    fun `an order not yet visible waits without counting toward the failure alert`() = runTest {
         val state = pendingBuyByIdentifier()
         coEvery { upbit.getOrderByIdentifier(any()) } throws OrderLookupException.NotYetVisible()
 
         repeat(TradingProperties().reconcileHaltThreshold + 1) { manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0) }
 
         assertEquals(0, state.reconcileFailureCount)
-        assertFalse(state.halted)
         assertTrue(state.hasPendingBuy())
     }
 
     @Test
-    fun `an order that needs review halts the ticker with one error and keeps the pending`() = runTest {
+    fun `an order that needs review alerts once and keeps the pending that blocks new buys`() = runTest {
         val state = pendingBuyByIdentifier()
         coEvery { upbit.getOrderByIdentifier(any()) } throws OrderLookupException.NeedsReview("두 건이 맞는다")
 
@@ -123,14 +121,14 @@ class UnknownOrderSeamTest {
             logs.list.filter { it.level == Level.ERROR && "[REVIEW]" in it.formattedMessage }
         }
 
-        assertTrue(state.halted)
-        assertTrue("두 건이 맞는다" in state.haltReason.orEmpty(), state.haltReason)
+        assertTrue("두 건이 맞는다" in state.reviewReason.orEmpty(), state.reviewReason)
         assertEquals(1, errors.size, errors.toString())
         assertTrue(state.hasPendingBuy())
+        assertEquals(null, manager.buy("KRW-BTC", state, 50_000_000.0, "test"))
     }
 
     @Test
-    fun `review reasons that change per lookup alert once and fit the stored halt reason`() = runTest {
+    fun `review reasons that change per lookup alert once and fit the stored review reason`() = runTest {
         val state = pendingBuyByIdentifier()
         var lookup = 0
         coEvery { upbit.getOrderByIdentifier(any()) } answers {
@@ -144,12 +142,12 @@ class UnknownOrderSeamTest {
         }
 
         assertEquals(1, errors.size, errors.toString())
-        assertTrue(state.haltReason.orEmpty().length <= 200, state.haltReason)
-        assertTrue("후보 1 건" in state.haltReason.orEmpty(), state.haltReason)
+        assertTrue(state.reviewReason.orEmpty().length <= 200, state.reviewReason)
+        assertTrue("후보 1 건" in state.reviewReason.orEmpty(), state.reviewReason)
     }
 
     @Test
-    fun `a sell that needs review halts new entries but keeps the pending sell`() = runTest {
+    fun `a sell that needs review keeps the pending sell that blocks new entries`() = runTest {
         val state = TradingState("KRW-BTC", position = true, holdVolume = 0.001, avgBuyPrice = 50_000_000.0).apply {
             beginSellOrder("ctb-s", SellReason.STOP_LOSS, clock.instant(), 0.001, 49_000_000.0, 0.001)
         }
@@ -157,7 +155,7 @@ class UnknownOrderSeamTest {
 
         manager.reconcilePendingSell("KRW-BTC", state, 49_000_000.0)
 
-        assertTrue(state.halted)
+        assertTrue(state.reviewReason != null)
         assertEquals("ctb-s", state.pendingSellIdentifier)
     }
 }

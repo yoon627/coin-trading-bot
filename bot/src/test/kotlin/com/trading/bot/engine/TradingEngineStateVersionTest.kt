@@ -4,7 +4,6 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderTrade
@@ -13,9 +12,7 @@ import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
-import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradingStateService
-import com.trading.bot.persistence.entity.ManualInterventionEntity
 import com.trading.common.strategy.TradingStrategy
 import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
@@ -27,8 +24,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
-import org.springframework.transaction.reactive.TransactionalOperator
-import reactor.core.publisher.Mono
 
 /** 한 번 충돌한 종목을 tick 마다 돌려도 ERROR 는 한 번이고, 정지 때 재기록도 하지 않는다(#365). */
 class TradingEngineStateVersionTest {
@@ -94,31 +89,5 @@ class TradingEngineStateVersionTest {
         } finally {
             logger.detachAppender(appender)
         }
-    }
-
-    // 수동 개입 기록은 다른 테이블과 한 트랜잭션이다. 커밋 뒤 받은 버전이 엔진 상태에 들어가야 다음 tick 의 저장이 성공한다.
-    @Test
-    fun `a halt clear through the real intervention save leaves the version the next save needs`(): Unit = runBlocking {
-        val interventions = ManualInterventionService(
-            mockk { every { save(any()) } answers { Mono.just(firstArg()) } },
-            stateService,
-            mockk<TransactionalOperator> { every { transactional(any<Mono<Any>>()) } answers { firstArg() } },
-            jacksonObjectMapper(),
-        )
-        coEvery { stateService.findRow(any(), any()) } returns null
-        val state = TradingState("KRW-BTC", halted = true, haltReason = "reconcile failures", rowVersion = 5L)
-        store.versions["KRW-BTC"] = 5L
-        engine.start(listOf("KRW-BTC"), linkedMapOf("KRW-BTC" to state))
-        engine.stop()
-
-        val cleared = engine.clearHalt("KRW-BTC") { s, before ->
-            interventions.saveWithRecord(1L, s, ManualInterventionEntity.HALT_CLEAR, mapOf("halt_reason" to before.haltReason))
-        }
-        manager.persistState(state)
-
-        assertTrue(cleared)
-        assertFalse(state.halted)
-        assertFalse(state.versionConflict)
-        assertEquals(store.versions["KRW-BTC"], state.rowVersion)
     }
 }

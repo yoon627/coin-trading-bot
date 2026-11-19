@@ -42,7 +42,7 @@
   - ✅ 선기록 실패: 매수는 기록에 실패하면 보내지 않는다. 매도는 손절을 막지 않으려고 기록이 실패해도 보내고, `pendingPersistFailed` 로 신규 진입을 막고 매 tick 다시 기록한다(`retryPendingPersistIfNeeded`). 정지·재설정 때 `flushUnpersisted`, 그래도 못 남기면 `alertDroppedSells` 가 ERROR 로 알린다.
   - ✅ 주문 POST 는 클라이언트에서 재시도하지 않는다(`UpbitClientImpl.placeOrder` 에만 `retryOnRateLimit` 없음, KIS `placeCashOrder` 도 재시도 없음). 매도만 `PositionManager.placeSellResending` 이 같은 identifier 로 1초·2초 뒤 최대 2번 다시 보낸다(#340): 연결이 서기 전의 실패는 항상, 닿았을 수 있는 일시 장애(응답 시한 초과·연결 끊김·5xx·429)는 잔고 전부를 파는 매도만. 매수는 다시 보내지 않는다.
   - ✅ 실패 분류: `provesOrderNotPlaced()` 가 "4xx + 거절 목록의 오류 이름"일 때만 미접수로 확정한다. 429·5xx·타임아웃·연결 끊김·응답 해석 실패는 모두 결과 모름이다(`UpbitOrderErrorClassifier`). 그 가운데 429·5xx 와 응답 헤더를 받기 전의 전송 실패는 다시 보낼 수 있는 일시 장애(`UNKNOWN_TRANSIENT`)로 따로 나눈다. `duplicated_identifier` 는 "주문이 있다"(`DUPLICATE_IDENTIFIER`)로 본다 — 매도 재전송에서 나오면 그 주문을 조회해 이어받는다.
-  - ✅ 결과 모름 해소: 매 tick(장외에도) `TradingEngine.processTicker` 가 `reconcilePendingBuy`/`Sell` 을 먼저 부르고, uuid 가 없으면 `UnknownOrderResolver` 가 identifier 로 조회한다. 404 가 2번이고 60초가 지났고 잔고 흔적이 없을 때만 미접수로 풀고(`UnknownOrderPolicy.UPBIT`), 흔적이 있으면 사람 확인(review)으로 멈춘다. 조회가 연속 20번 실패하면 그 종목을 halt 한다.
+  - ✅ 결과 모름 해소: 매 tick(장외에도) `TradingEngine.processTicker` 가 `reconcilePendingBuy`/`Sell` 을 먼저 부르고, uuid 가 없으면 `UnknownOrderResolver` 가 identifier 로 조회한다. 404 가 2번이고 60초가 지났고 잔고 흔적이 없을 때만 미접수로 풀고(`UnknownOrderPolicy.UPBIT`), 흔적이 있으면 사람 확인(review)으로 멈춘다. 조회가 연속 20번 실패하면 ERROR 로 한 번 알리고, 그동안 pending 이 그 종목의 매매를 막는다.
   - 토스 방식과 다른 점: 토스는 "같은 멱등키로 재전송"이다. 이 코드는 전량 매도만 같은 identifier 로 다시 보내고, 매수와 소유자 코인이 남는 매도는 "재전송하지 않고 조회로 확정"한다. 업비트 identifier 는 계정 안에서 영구히 고유해 재사용하면 400 `duplicated_identifier` 라(공식 문서 ✅, #340 댓글) 같은 키 재전송은 두 번째 주문을 만들지 않는다. 첫 요청이 처리 중일 때 겹친 재전송도 막히는지는 문서에 없다(⚠️) — 전량 매도는 접수된 첫 주문이 잔고를 잠가 두 번째가 체결될 수 없다는 데 기대고, 잔고가 남는 매도는 그래서 다시 보내지 않는다.
   - KIS: 주문 API 에 클라이언트 주문 ID 가 없다 ✅. 계획(P5)은 송신 전에 `broker_order_attempts` 행을 커밋하고, 결과 모름은 일별 주문 조회로 맞추는 것이다 ✅(KIS 계획). 아직 엔진에 연결되지 않았다.
 - **빈틈과 사고 시나리오**
@@ -73,8 +73,8 @@
 
 - **현재 상태 — 충분함**
   - ✅ 사용자 × 거래소마다 엔진 하나, 그 루프가 종목을 하나씩 처리한다(`TradingEngine.runLoop`). 종목 처리는 `stateMutex` 안에서 돌고(#343), 체결 확인(`awaitFill`)까지 그 안에서 끝난다. 같은 종목 신호 둘이 동시에 평가될 수 없다.
-  - ✅ 이중 진입 가드: `PositionManager.entryBlocked`(보유·pending·unsynced·pendingPersistFailed·halt), pending 이 있는 tick 에는 매매를 평가하지 않는다. 매수 직전에 거래소 잔고를 다시 조회한다.
-  - ✅ 엔진 중복 방지: `UserTradingManager` 의 사용자별 Mutex 가 시작·정지·재설정·복원·해제를 직렬화하고, `stop()` 은 루프가 끝날 때까지 기다린다. 다른 writer(halt 해제는 `stateMutex`, pending 해제는 정지 상태에서만, flush 는 정지 뒤)도 모두 직렬화돼 있어 `@Version` 없는 find-then-save 로도 갱신 손실이 없다.
+  - ✅ 이중 진입 가드: `PositionManager.entryBlocked`(보유·pending·unsynced·pendingPersistFailed·versionConflict), pending 이 있는 tick 에는 매매를 평가하지 않는다. 매수 직전에 거래소 잔고를 다시 조회한다.
+  - ✅ 엔진 중복 방지: `UserTradingManager` 의 사용자별 Mutex 가 시작·정지·재설정·복원·해제를 직렬화하고, `stop()` 은 루프가 끝날 때까지 기다린다. 다른 writer(pending 해제는 정지 상태에서만, flush 는 정지 뒤)도 모두 직렬화돼 있고, 저장은 `@Version` 으로 다른 쓰기가 바꾼 행을 덮지 않는다(V37).
   - ✅ 배포 창: compose 서비스 하나(replicas 없음), 옛 컨테이너를 멈춘 뒤 새 컨테이너를 띄운다. 옛·새 프로세스가 함께 매매하지 않는다(⚠️ compose 표준 동작 기준, 실측은 하지 않음).
 - **빈틈과 사고 시나리오**
   - ⚠️ 프로세스 밖 동시 실행만 무방비다: 운영 DB 에 로컬 앱을 붙이거나 수동 `docker compose run app` 으로 두 번째 프로세스가 돌면, 서로의 메모리 가드를 몰라 같은 신호에 이중 매수가 나가고 상대의 pending uuid 를 덮을 수 있다. 정상 배포 경로에서는 일어나지 않는다.
@@ -87,7 +87,7 @@
 
 - **현재 상태**
   - ✅ 대조 대상이 사실상 미해소 주문뿐이다: 매 tick `reconcilePendingBuy`/`Sell`. 보유 동기화(`syncPosition`)는 루프 시작 때와 `unsynced` 일 때만 돈다. tick 마다 보유 수량과 실잔고를 비교하지 않는다. 거래소 체결 이력(끝난 주문)과 거래 기록을 대조하는 코드는 없다.
-  - ✅ 불일치 처리는 종목 단위다: `unsynced`(매수 차단), `halted`(매수 차단, 매도·reconcile 은 계속), `reviewReason`(사람 확인), 오래 막힌 매도 ERROR 1회. 사용자·거래소·전역 단위 킬스위치는 없다(D2).
+  - ✅ 불일치 처리는 종목 단위다: `unsynced`(매수 차단), `versionConflict`(매수 차단, 매도는 계속), `reviewReason`(사람 확인), 오래 막힌 매도 ERROR 1회. 사용자·거래소·전역 단위 킬스위치는 없다(D2).
   - ✅ 기록 방식: `trade_records`·`trade_executions` 는 추가 전용이다. `trading_states` 는 덮어쓰는 스냅샷이고, 기록 없이 상태만 바꾸는 보정(유령 포지션 `markSold`, `releaseDust`, `syncPosition` 덮어쓰기, 수동 pending 해제)은 DB 감사 기록이 없다(#342).
 - **빈틈과 사고 시나리오**
   1. ✅ **매도가 실잔고 전량을 판다.** `PositionManager.sell` 은 주문 수량으로 `state.holdVolume` 이 아니라 거래소 free 잔고(`account.balanceDouble()`)를 쓴다(코드 주석에 명시). 봇이 BTC 를 들고 있는 동안 사용자가 업비트 앱에서 BTC 를 더 사면, 다음 청산 신호에 **사용자가 산 BTC 까지 시장가로 팔리고**, 기록은 봇의 평단 기준으로 남아 손익도 틀어진다. README 에 이 제약을 알리는 문장이 없다 ✅.
@@ -141,10 +141,10 @@
 - **현재 상태**
   - ✅ HTTP: Upbit(`WebClientConfig.upbitWebClient`, 연결 5초·응답 10초)와 KIS(`KisClientRegistry`, 환경별 WebClient)가 각자 WebClient 를 쓰고 reactor-netty 기본 풀·이벤트 루프를 공유한다. 연결 풀은 원격 주소별로 나뉘고, 호출은 모두 suspend 라 한쪽이 느려도 스레드를 잡지 않는다 ⚠️(라이브러리 기본 동작 기준).
   - ✅ 엔진은 사용자 × 거래소마다 따로 돌아 한 거래소의 느린 응답이 다른 거래소 엔진의 루프를 막지 않는다.
-  - ✅ 이미 있는 감시: 종목별 reconcile 20회 실패 halt, 시세 WS 워치독(60초 무수신 재연결), 엔진 멈춤 감시(#339), 기동 복원 health.
+  - ✅ 이미 있는 감시: 종목별 reconcile 20회 연속 실패 ERROR 1회, 시세 WS 워치독(60초 무수신 재연결), 엔진 멈춤 감시(#339), 기동 복원 health.
   - ✅ 거래소 단위 상태(정상/주의/위험)와 신규 진입 자동 중단은 없다.
 - **빈틈과 사고 시나리오**
-  - ⚠️ 업비트 점검(503)·418 차단 중에는 모든 종목이 매 tick 실패하고, 종목마다 20회 뒤 halt 가 쌓이며, 그 사이 신규 진입 판단은 실패한 잔고·낡은 시세 위에서 계속 돈다.
+  - ⚠️ 업비트 점검(503)·418 차단 중에는 모든 종목이 매 tick 실패하고, 종목마다 20회 뒤 ERROR 가 한 번씩 나가며, 그 사이 신규 진입 판단은 실패한 잔고·낡은 시세 위에서 계속 돈다.
   - 다른 거래소로 자동 전환은 포지션이 달라 부적절하다(요청 전제에 동의). 반대로 장애 중 청산까지 멈추면 손실이 커지므로 "진입만 중단"이 맞다.
 - **제안**: 거래소마다 `ExchangeHealth`(정상/주의/위험)를 두고 최근 오류율(5xx·타임아웃·429)·418·시세 신선도로 판정한다. 주의·위험이면 BUY 만 막고(D2 의 BUY 전용 `OrderGate` 와 같은 자리), 청산·손절은 계속하며, 상태가 바뀔 때만 알린다. 복귀는 연속 성공 기준(히스테리시스). 거래소 전용 `ConnectionProvider` 는 관측을 분리하는 정도의 이득이라 우선순위가 낮다.
 - **작업량**: M~L
@@ -218,9 +218,9 @@
 ### D2. 배포 없는 설정 변경
 
 - **현재 상태**
-  - ✅ 런타임에 바꿀 수 있는 것: 사용자별 봇 시작·정지(`/api/bot/start|stop`, `bot_state` 에 저장), 종목 halt 해제, 정지 상태의 pending 해제, 웹훅·키 저장 뒤 엔진 재설정.
+  - ✅ 런타임에 바꿀 수 있는 것: 사용자별 봇 시작·정지(`/api/bot/start|stop`, `bot_state` 에 저장), 정지 상태의 pending 해제, 웹훅·키 저장 뒤 엔진 재설정.
   - ✅ 배포가 필요한 것: 청산·주문 파라미터 `TRADING_*`, 섀도·watchlist·워치독·KIS 설정. 전략은 `CombinedStrategy` 하나라 고를 개념이 없다.
-  - ✅ **전역 킬스위치가 없다.** 모든 사용자의 신규 진입만 막는 수단이 없고, halt 를 손으로 거는 API 도 없다(해제만 있음). `/bot/stop` 은 손절 평가까지 멈춘다.
+  - ✅ **전역 킬스위치가 없다.** 모든 사용자의 신규 진입만 막는 수단이 없고, 종목 단위로 손으로 막는 API 도 없다. `/bot/stop` 은 손절 평가까지 멈춘다.
   - ✅ 끼울 자리는 있다: `exchange/OrderGate.mayPlace(ticker, side, now)` 가 매수·매도 주문 직전에 불리고, 업비트는 지금 `OrderGate.OPEN`(항상 허용)이다.
 - **빈틈과 사고 시나리오**: 상장폐지 공지·급락장·업비트 장애 직후처럼 "전 사용자 신규 매수만 즉시 중지, 보유분 손절·청산은 계속"이 필요할 때 수단이 없다. 지금은 각 사용자가 봇을 멈추거나(손절도 멈춤) env 를 바꿔 배포해야 하고(수 분, 재기동 중 손절 공백), 재기동하면 `running=true` 인 봇이 복원된다.
 - **제안**: DB 기반 진입 차단 플래그 — `runtime_flags`(범위: 전역·거래소·종목, `entries_enabled`, 사유, 바꾼 사람·시각) 테이블과 5~10초 TTL 로컬 캐시, **BUY 만 막는** `OrderGate` 구현(SELL 은 통과해 손절이 계속 돈다), DB 조회 실패 시 마지막 값 유지 + ERROR, 관리자 엔드포인트로 변경 + 변경 알림. Redis 없이 PostgreSQL 과 메모리 캐시면 된다. A4·B2 의 자동 차단도 이 플래그를 켜는 방식으로 연결한다. 청산 파라미터·rate limit·전략을 런타임 변경으로 옮기는 것은 진입 시점 스냅샷과 preflight 검증을 우회하게 되어 권하지 않는다 — 배포 경로 유지가 맞다(충분함).
@@ -231,7 +231,7 @@
 
 - **현재 상태**
   - ✅ 구간 지연 지표가 없다: Micrometer 커스텀 지표 없음, actuator 노출은 health·info 뿐. 측정되는 것은 시세 나이(30초 신선도 판정에만 쓰고 기록하지 않음)와 엔진 멈춤(#339, 5분 임계)뿐이다. 매도는 판단 시각(`pendingSellSince`)을 저장하지만, 주문 전송·접수·체결 시각은 거래 기록에 없다(`TradeRecord.createdAt` 은 커밋 시각).
-  - ✅ 알림 중복 억제는 충분함: `ErrorAlertRateLimiter`(같은 지문 5분 1회, 분당 5건 상한, 넘친 것은 60초 digest), `DiscordNotifier` 의 429 Retry-After 처리, 감시기마다 에피소드당 1회(엔진 멈춤, `[HALT]`, `[REVIEW]`, 막힌 매도, 보유 상한 초과, dust).
+  - ✅ 알림 중복 억제는 충분함: `ErrorAlertRateLimiter`(같은 지문 5분 1회, 분당 5건 상한, 넘친 것은 60초 digest), `DiscordNotifier` 의 429 Retry-After 처리, 감시기마다 에피소드당 1회(엔진 멈춤, `[RECONCILE]`, `[REVIEW]`, 막힌 매도, 보유 상한 초과, dust).
 - **빈틈과 사고 시나리오**
   - ✅ 시세 피드가 끊겨도 Discord 가 조용하다: WS 무수신 재연결, 낡은 시세, 일봉 미갱신이 모두 WARN 이라 Discord 로 가지 않는다. 엔진은 REST 대체로 계속 매매하지만 종목당 REST 호출이 늘고, REST 까지 실패해 ERROR 가 처음 나올 때는 원인이 몇 시간 지난 뒤다.
   - 종목이 늘거나 업비트가 느려 tick 한 바퀴가 길어져도 5분 멈춤 임계 전까지는 아무 신호가 없다.

@@ -151,7 +151,7 @@ class PositionManagerSeamTest {
     }
 
     @Test
-    fun `a buy the accounting cannot recover without the order stays pending and counts toward the halt`() = runTest {
+    fun `a buy the accounting cannot recover without the order stays pending and counts toward the failure alert`() = runTest {
         coEvery { upbit.getOrder("u-1") } throws RuntimeException("getOrder down")
         val state = TradingState("KRW-BTC").apply {
             beginBuyOrder("ctb-1", "test", priorVolume = 0.0)

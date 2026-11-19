@@ -88,7 +88,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `TRADING_MAX_HOLD_DAYS` | `1` | 보유 상한(거래일, KST 09:00 경계) |
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
 | `TRADING_INTERVAL_SECONDS` | `10` | 매매 루프 주기(초). 허용 `[1, 60]` — 손절·익절·트레일링 평가가 이 주기로만 돈다 |
-| `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 그 종목의 신규 매수를 멈춘다(매도는 계속). 막힌 매도 알림은 이 값 × 매매 주기 뒤에 나간다. 허용 `[1, 100]` |
+| `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 ERROR 로 한 번 알린다(횟수는 저장돼 재시작해도 같은 일을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 막힌 매도 알림은 이 값 × 매매 주기 뒤에 나간다. 허용 `[1, 100]` |
 | `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상. 형식은 `TRADING_TICKERS`와 같고 배포 preflight 가 막는다. 앱은 형식이 틀린 항목을 구독에서 빼고 기동 뒤 ERROR 로 알린다 |
 | `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |
@@ -111,9 +111,8 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | GET | `/api/user/me` | 내 정보 |
 | POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
 | POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`) |
-| GET | `/api/bot/status` | 봇 상태, 매매 루프 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션, 미해소 주문 (`exchange`) |
+| GET | `/api/bot/status` | 봇 상태, 매매 루프 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 체결 확인 연속 실패 `reconcile_failure_count` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
-| POST | `/api/bot/halt/clear` | 종목 halt 해제 (`exchange`) |
 | POST | `/api/bot/pending/clear` | 미해소 주문 기록 삭제(봇 정지 상태에서만) (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
 | GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`) |
@@ -155,15 +154,14 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 2. 봇을 정지한 뒤 `POST /api/bot/pending/clear {"ticker": "KRW-BTC", "side": "buy"|"sell"}`로 기록을 지운다. 봇이 돌거나 복원 중이면 409, 메모리에만 남은 매도 기록이 있으면 503이니 잠시 후 다시 시도한다.
 3. 체결된 매도를 지우면 SELL 기록이 남지 않는다. 응답의 `cleared`(지운 pending 필드, 키는 `trading_states` 컬럼명)를 보고 거래 기록을 맞춘다. 같은 값과 해제 전 행 전체(`before`)가 상태 저장과 같은 트랜잭션으로 `manual_interventions` 에 남아 배포 뒤에도 찾을 수 있다(`SELECT created_at, ticker, action, detail FROM manual_interventions WHERE user_id = <id> ORDER BY created_at DESC;` — detail 의 키는 칼럼명(snake_case), 예: `detail::jsonb->'before'->>'review_reason'`). 저장이 시간 초과로 503 이어도 실제로는 커밋됐을 수 있다 — 다시 요청해 `not_pending` 이면 이미 지워진 것이다.
 4. 다시 시작하면 첫 동기화가 정리한 주문의 결과를 한 번 반영한다. 매수는 주문 전 free 위로 늘어난 free 만 봇 장부에 넣고(평단은 거래소 평단 — 근사), 매도는 주문 전 free 에서 줄어든 만큼(주문 수량까지, 부분 체결 포함) 장부를 줄인다. 우리 것이 아닌 잠금(수동 주문)이 있으면 풀릴 때까지 미룬다. 정리와 재시작 사이에 앱에서 사고팔면 그 몫도 섞이므로 그 사이에는 거래하지 않는다. 보유일은 해제일부터, 청산 파라미터는 현재 설정, 트레일링 고점은 시작 뒤 첫 가격부터 다시 잡는다.
-5. 그 종목이 halt 상태였다면 시작한 뒤 `POST /api/bot/halt/clear`로 푼다(푼 halt 사유·실패 횟수도 `manual_interventions` 에 남는다). 주문 확인이 필요해 멈춘 종목(review)은 그 종목의 매수·매도 pending 이 모두 비기 전까지 halt/clear 가 409 다. pending 은 자동 확정되거나 2번의 pending/clear 로 비운다.
 
 ### 상태 저장 충돌
 
 `trading_states` 는 엔진이 마지막으로 읽거나 저장한 버전 그대로일 때만 저장된다(V37). 그사이 다른 쓰기(실수로 두 번 뜬 컨테이너, 잠금을 잡지 않은 경로)가 행을 바꿨으면 그 행을 덮지 않는다. 한 프로세스 안에서는 종목 잠금이 저장을 차례로 세우므로 평소에는 일어나지 않는다.
 
-- 충돌한 종목은 `[CONFLICT]` ERROR 를 한 번 낸다. 그 뒤로는 그 종목을 더 저장하지 않고, halt(`state version conflict`, 이미 halt 였으면 그 사유를 둔다)로 신규 매수를 막는다. 손절 매도는 기록이 막혀도 나간다.
+- 충돌한 종목은 `[CONFLICT]` ERROR 를 한 번 낸다. 그 뒤로는 그 종목을 더 저장하지 않고, 매수 진입 검사가 그 종목의 신규 매수를 막는다(`GET /api/bot/status` 의 `positions[].version_conflict`). 손절 매도는 기록이 막혀도 나간다.
 - 미해소 주문이 걸려 있으면 그 체결을 기록할 수 없어, 그 종목은 다시 시작할 때까지 확정에서 멈춘다(미해소 매수면 손절 판단도 멈춘다).
-- 복구: 봇을 정지한 뒤 다시 시작한다. 정지가 DB 에 없을 수 있는 매도를 ERROR 로 알리고, 시작이 DB 의 행을 다시 읽는다. 그 매도는 Upbit 주문 내역과 대조해 위 미해소 주문 정리로 맞춘다. 봇이 도는 동안 충돌한 매도가 남아 있으면 설정 저장(reload)은 실패한다. 충돌한 종목의 halt 해제는 409 로 정지 뒤 시작을 안내한다.
+- 복구: 봇을 정지한 뒤 다시 시작한다. 정지가 DB 에 없을 수 있는 매도를 ERROR 로 알리고, 시작이 DB 의 행을 다시 읽는다. 그 매도는 Upbit 주문 내역과 대조해 위 미해소 주문 정리로 맞춘다. 봇이 도는 동안 충돌한 매도가 남아 있으면 설정 저장(reload)은 실패한다.
 - 프로세스가 둘이면 늦은 쪽의 저장은 막히지만 그쪽 주문은 거래소로 나간다 — 이중 주문은 막지 못한다(#328).
 
 ### 체결 기록 대조
@@ -221,7 +219,7 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 - 익절은 트레일링 폭과 활성 수익률보다 커야 한다. 작으면 익절이 항상 먼저 걸려 트레일링이 동작하지 않는다.
 - 엔진을 시작할 때 설정 조합을 알린다. 익절이 트레일링 폭·활성 수익률 이하이거나 왕복 수수료 이하면 WARN 이다. 1회 매수 상한이 최소 주문에 못 미치거나 손절가에서 팔 때 최소 주문 미만이 돼 모든 매수가 건너뛰어지는 조합이면 ERROR(Discord)다.
 - 매도 기록의 `pnl_percent`는 수수료를 뺀 값이고, 청산 판정은 수수료 전 수익률로 한다.
-- 청산·주문·주기 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀리거나, 주기 `10`초를 ms 로 `10000`처럼 단위·자릿수를 틀려 적는 실수를 거른다. 익절·arm 상한 100, 돌파 계수 상한 2, 주기 상한 60초, 미확인 주문 halt 임계 상한 100 은 판정식이 아니라 이런 오기를 거르는 경계다.
+- 청산·주문·주기 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀리거나, 주기 `10`초를 ms 로 `10000`처럼 단위·자릿수를 틀려 적는 실수를 거른다. 익절·arm 상한 100, 돌파 계수 상한 2, 주기 상한 60초, 미확인 주문 알림 임계 상한 100 은 판정식이 아니라 이런 오기를 거르는 경계다.
 - `deploy/vultr/preflight_exit_params.sh`가 배포 전에 형식과 구간을 검사한다. `TRADING_AUTO_START`가 켜져 있으면 청산 키 5개(`TAKE_PROFIT_PCT`, `MAX_LOSS_PCT`, `TRAILING_STOP_PCT`, `TRAILING_ARM_PCT`, `MAX_HOLD_DAYS`)를 `.env`에 명시하지 않은 배포도 막는다. `KIS_TRADING_*` 청산 키는 같은 구간으로, 비용 요율 키 2개는 `[0, 0.01)`로 검사하지만 선언은 요구하지 않는다. 앱은 KIS 값을 기동 로그에 남기지 않고, `KIS_TRADING_ENABLED=true` 일 때만 구간 위반을 ERROR 로 알린다.
 - 앱은 기동 시 실효값을 로그로 남기고, 미선언이거나 구간 밖이면 ERROR로 알린다. 보유 포지션의 손절이 멈추지 않도록 거래는 막지 않는다.
 
@@ -365,7 +363,9 @@ V34 는 `trading_states` 에 봇 장부 칼럼(`book_volume`·`book_avg_price`·
 
 ### V35 (수동 개입 기록)
 
-V35 는 `manual_interventions` 테이블을 더한다. pending 수동 해제·halt 해제가 상태 저장과 같은 트랜잭션에 한 행(사용자·거래소·종목·action·해제 전 값 JSON)을 남긴다. 기록을 남기지 못하면 해제도 커밋되지 않고 503 이다. 추가 전용이고 지우지 않는다.
+V35 는 `manual_interventions` 테이블을 더한다. pending 수동 해제가 상태 저장과 같은 트랜잭션에 한 행(사용자·거래소·종목·action·해제 전 값 JSON)을 남긴다. 기록을 남기지 못하면 해제도 커밋되지 않고 503 이다. 추가 전용이고 지우지 않는다.
+
+종목별 halt 와 halt 해제 API 는 없앴다. 앱은 `trading_states.halted`·`halt_reason` 을 읽고 쓰지 않고, 칼럼은 직전 이미지로의 롤백을 위해 그대로 둔다(그 이미지는 칼럼 값을 다시 읽는다). 예전 halt 해제가 남긴 `HALT_CLEAR` 행도 그대로다.
 
 - V34 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 롤백한 동안의 해제는 기록되지 않는다. 테이블은 그대로 둔다.
 - 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V35_down.sql` 을 쓴다(V35 가 마지막 적용 버전일 때만 돈다, 기록이 사라진다). V35 이미지가 떠 있는 동안 돌리면 해제가 모두 503 이 되므로 앱을 멈춘 뒤 돌린다.

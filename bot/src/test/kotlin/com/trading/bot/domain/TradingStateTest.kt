@@ -244,20 +244,6 @@ class TradingStateTest {
         assertFalse(pending().apply { clearPendingSell() }.hasPendingSell())
     }
 
-    @Test
-    fun `clearHalt resets halt state`() {
-        val state = TradingState(
-            "KRW-BTC",
-            halted = true,
-            haltReason = "reconcile failures exceeded",
-            reconcileFailureCount = 5,
-        )
-        state.clearHalt()
-        assertFalse(state.halted)
-        assertNull(state.haltReason)
-        assertEquals(0, state.reconcileFailureCount)
-    }
-
     // 사람이 거래소를 확인하고 막힌 pending 을 지운다.
 
     private val today = LocalDate.of(2026, 10, 8)

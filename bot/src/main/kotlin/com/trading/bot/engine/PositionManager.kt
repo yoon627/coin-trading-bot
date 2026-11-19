@@ -46,10 +46,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
-/** trading_states.halt_reason·review_reason 컬럼 길이. */
-private const val HALT_REASON_MAX_LENGTH = 200
-
-internal const val VERSION_CONFLICT_HALT_REASON = "state version conflict"
+/** trading_states.review_reason 컬럼 길이. */
+private const val REVIEW_REASON_MAX_LENGTH = 200
 
 /** 이미 알린 버전 충돌이다. 그 뒤의 저장 실패는 매 tick 되풀이되므로 ERROR 로 다시 알리지 않는다. */
 internal fun TradingState.alreadyConflicted(e: Throwable): Boolean = versionConflict && e is TradingStateConflictException
@@ -304,9 +302,9 @@ class PositionManager(
             log.warn("Skip buy for {}: pending persistence unhealthy — avoiding unrecoverable entry", ticker)
             return true
         }
-        if (state.halted) {
-            // halt 는 신규 진입만 막는다. 매도와 reconcile 은 계속 돌아야 포지션이 청산되지 못한 채 갇히지 않는다.
-            log.warn("Skip buy for {}: halted ({})", ticker, state.haltReason)
+        if (state.versionConflict) {
+            // 저장이 늘 실패해 체결을 기록할 수 없다. 잔고 조회·선기록 전에 막는다.
+            log.debug("Skip buy for {}: state version conflict — waiting for a stop and start", ticker)
             return true
         }
         return false
@@ -453,16 +451,16 @@ class PositionManager(
             log.warn("reconcile getOrder failed for {} ({}): falling back to balance", ticker, e.message)
             return when (val recovery = fillAccounting.recoverBuyWithoutOrder(ticker, state, currentPrice)) {
                 // 주문 응답이 없어 수수료와 주문 금액을 알 수 없으므로 추정하지 않고 미기록으로 둔다.
-                // 커밋 실패는 조회 장애가 아니라서 halt 카운터에 세지 않고 호출부로 올린다.
+                // 커밋 실패는 조회 장애가 아니라서 실패 횟수에 세지 않고 호출부로 올린다.
                 is BuyRecovery.Filled -> completeBuy(ticker, state, recovery.fill, FeeBasis.Unrecorded, orderAmount = null)
-                // 아직 체결되지 않았음을 확인한 정상 판정이라 halt 카운터를 리셋한다.
+                // 아직 체결되지 않았음을 확인한 정상 판정이라 실패 횟수를 리셋한다.
                 BuyRecovery.NoChange -> {
                     log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
                     state.reconcileFailureCount = 0
-                    persist(state) // 재시작 뒤 옛 카운터로 halt 되지 않게 저장한다
+                    persist(state) // 재시작 뒤 옛 횟수로 새 일을 알리지 못하는 일이 없게 저장한다
                     null
                 }
-                // getOrder 와 잔고 조회가 모두 실패하면 상태를 볼 수 없으므로 halt 카운터를 올린다.
+                // getOrder 와 잔고 조회가 모두 실패하면 상태를 볼 수 없으므로 실패 횟수를 올린다.
                 is BuyRecovery.LookupFailed -> {
                     log.warn("reconcile balance recovery failed for {} ({}) — pending kept", ticker, recovery.message)
                     recordReconcileFailure(state)
@@ -502,9 +500,9 @@ class PositionManager(
             }
             is UnknownOrderVerdict.NeedsReview -> markNeedsReview(ticker, state, TradeSide.BUY, verdict.reason)
             is UnknownOrderVerdict.Undecided -> when (verdict.reason) {
-                // 주문 상태를 볼 수단이 없으면 halt 카운터로 사람을 부른다.
+                // 주문 상태를 볼 수단이 없으면 실패 횟수가 임계를 넘을 때 알린다.
                 UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED, UnknownOrderVerdict.Reason.BALANCE_UNSEEN -> recordReconcileFailure(state)
-                // 카운터는 확정됐을 때만 리셋한다. 404 마다 리셋하면 간헐 장애가 halt 를 계속 미뤄
+                // 횟수는 확정됐을 때만 리셋한다. 404 마다 리셋하면 간헐 장애가 알림을 계속 미뤄
                 // 매매가 멈춘 채 알림이 나가지 않는다.
                 UnknownOrderVerdict.Reason.TRACED, UnknownOrderVerdict.Reason.AWAITING_CONFIRMATION,
                 UnknownOrderVerdict.Reason.NOT_YET_VISIBLE -> Unit
@@ -622,32 +620,33 @@ class PositionManager(
         state.peakPersistFailed = false
     }
 
+    /**
+     * 횟수가 임계를 처음 넘는 순간(직전 < 임계 ≤ 지금) ERROR 로 한 번 알린다. 횟수는 저장되므로 재시작해도 같은 일을 다시 알리지 않고,
+     * 확정으로 리셋된 뒤 새 일에 다시 알린다. 그동안 미해소 주문이 그 종목의 매매를 막는다.
+     */
     private fun recordReconcileFailure(state: TradingState) {
-        state.reconcileFailureCount++
-        if (!state.halted && state.reconcileFailureCount >= tradingProperties.reconcileHaltThreshold) {
-            state.halted = true
-            state.haltReason = "pending reconcile ${state.reconcileFailureCount}회 연속 실패 (getOrder·잔고조회 장애)"
+        val threshold = tradingProperties.reconcileHaltThreshold
+        val before = state.reconcileFailureCount++
+        if (before < threshold && state.reconcileFailureCount >= threshold) {
             // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
             log.error(
-                "[HALT] {} pending reconcile failed {} times — auto-trading stopped, manual clear required",
+                "[RECONCILE] {} 체결 확인 {}번 연속 실패(주문·잔고 조회 장애) — 주문 상태를 확인할 수 없다. 확정될 때까지 이 종목은 매수·매도하지 않는다",
                 state.ticker, state.reconcileFailureCount,
             )
         }
     }
 
     /**
-     * 자동으로 확정할 수 없는 주문이 있어 그 종목의 신규 진입을 halt 로 막고 ERROR 로 한 번 알린다. pending 은 그대로 두고 저장은 호출부가 한다.
+     * 자동으로 확정할 수 없는 주문을 ERROR 로 한 번 알린다. pending 은 그대로 두어 그 종목의 매매를 막고 저장은 호출부가 한다.
      * ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다. 같은 주문이면 [reason] 이 바뀌어도 다시 알리지 않는다.
-     * [TradingState.reviewReason] 이 있는 동안 halt 해제는 거절된다. 그 사유는 pending 이 모두 비면(자동 확정 또는 pending 해제) 사라진다.
+     * [TradingState.reviewReason] 은 pending 이 모두 비면(자동 확정 또는 pending 해제) 사라진다.
      */
     internal fun markNeedsReview(ticker: String, state: TradingState, side: TradeSide, reason: String) {
         val ref = state.pendingRef(side)?.ref
-        val alertKey = "주문 확인 필요(${side.name} $ref)".take(HALT_REASON_MAX_LENGTH)
-        if (state.halted && state.haltReason?.startsWith(alertKey) == true) return
-        state.halted = true
+        val alertKey = "주문 확인 필요(${side.name} $ref)".take(REVIEW_REASON_MAX_LENGTH)
+        if (state.reviewReason?.startsWith(alertKey) == true) return
         // 원문은 아래 ERROR 로그에만 남긴다. 길이를 넘기면 저장이 매번 실패해 체결 확정까지 커밋되지 못한다.
-        state.haltReason = "$alertKey: $reason".take(HALT_REASON_MAX_LENGTH)
-        state.reviewReason = state.haltReason
+        state.reviewReason = "$alertKey: $reason".take(REVIEW_REASON_MAX_LENGTH)
         log.error(
             "[REVIEW] {} {} 주문 {} 을 자동으로 확정할 수 없습니다 — 신규 진입을 멈춥니다. {} 주문 내역을 확인하세요: {}",
             ticker, side.name, ref, displayName, reason,
@@ -673,16 +672,12 @@ class PositionManager(
     }
 
     /**
-     * 다른 쓰기가 이 종목의 행을 먼저 바꿨다. 그 행을 덮지 않고 이 종목은 더 저장하지 않으며, 신규 매수를 halt 로 막고 ERROR 로 한 번 알린다.
+     * 다른 쓰기가 이 종목의 행을 먼저 바꿨다. 그 행을 덮지 않고 이 종목은 더 저장하지 않으며, 진입 검사가 신규 매수를 막는다. ERROR 로 한 번 알린다.
      * 매도는 기록이 막혀도 나간다(기록 장애가 손절을 막으면 안 된다). 정지 뒤 시작이 DB 에서 다시 읽어 바로잡는다.
      */
     internal fun markVersionConflict(state: TradingState, cause: TradingStateConflictException) {
         if (state.versionConflict) return
         state.versionConflict = true
-        if (!state.halted) {
-            state.halted = true
-            state.haltReason = VERSION_CONFLICT_HALT_REASON
-        }
         log.error(
             "[CONFLICT] {} 상태를 다른 쓰기가 먼저 바꿔 저장하지 않았습니다 — 이 종목은 신규 매수를 멈추고 더 저장하지 않습니다. " +
                 "봇을 정지한 뒤 다시 시작하세요: {}",
@@ -782,9 +777,6 @@ class PositionManager(
         }
     }
 
-    /** halt 해제처럼 사용자 응답이 걸린 경로라 실패를 호출자에게 올린다. */
-    internal suspend fun persistStateOrThrow(state: TradingState) = upsertState(state)
-
     /** pending 기록 실패로 막힌 진입은 이 재기록이 성공해야 풀린다. 버전이 충돌한 종목은 다시 써도 실패하므로 하지 않는다. */
     internal suspend fun retryPendingPersistIfNeeded(state: TradingState) {
         if (state.pendingPersistFailed && !state.versionConflict) persistPending(state)
@@ -853,7 +845,7 @@ class PositionManager(
                 markNeedsReview(ticker, state, TradeSide.SELL, verdict.reason)
                 null
             }
-            // halt 는 신규 매수만 막으므로 매도는 세지 않는다. 경과 시간 알림이 사람을 부른다.
+            // 매도는 실패 횟수에 세지 않는다. 경과 시간 알림이 사람을 부른다.
             is UnknownOrderVerdict.Undecided -> null
         }
 
@@ -1097,7 +1089,7 @@ class PositionManager(
                 log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, recovery.total)
                 return null
             }
-            // halt 는 신규 매수만 막으므로 매도는 세지 않는다. 경과 시간 알림이 사람을 부른다.
+            // 매도는 실패 횟수에 세지 않는다. 경과 시간 알림이 사람을 부른다.
             SellRecovery.Unsupported -> return null
             SellRecovery.Cleared -> Unit
         }

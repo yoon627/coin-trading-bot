@@ -27,8 +27,6 @@ data class TradingStateEntity(
     val boughtDate: LocalDate? = null,
     val peakPrice: Double = 0.0,
     val exitParamsJson: String? = null,
-    val halted: Boolean = false,
-    val haltReason: String? = null,
     val reconcileFailureCount: Int = 0,
     val pendingSellSince: java.time.Instant? = null,
     val pendingSellAlerted: Boolean = false,

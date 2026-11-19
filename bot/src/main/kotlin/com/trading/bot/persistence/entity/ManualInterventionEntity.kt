@@ -17,6 +17,5 @@ data class ManualInterventionEntity(
 ) {
     companion object {
         const val PENDING_CLEAR = "PENDING_CLEAR"
-        const val HALT_CLEAR = "HALT_CLEAR"
     }
 }

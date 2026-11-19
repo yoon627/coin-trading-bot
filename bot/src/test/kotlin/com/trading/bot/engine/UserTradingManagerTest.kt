@@ -18,7 +18,6 @@ import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.bot.persistence.TradingStateConflictException
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
@@ -658,32 +657,6 @@ class UserTradingManagerTest {
         assertEquals(mapOf("alive" to true, "last_progress_at" to "2026-11-04T03:00:00Z"), manager.getStatus(1L)["loop"])
     }
 
-    /** 바쁜 루프는 저장 실패가 아니다 — 503·ERROR 알림 대신 다시 시도하라는 409 다. */
-    @Test
-    fun `clearHalt answers conflict when the trading loop is busy with that ticker`() = runTest {
-        engines()[1L] = mockEngine
-        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } throws HaltClearBusyException("KRW-BTC")
-
-        val result = manager.clearHalt(1L, "KRW-BTC")
-
-        assertEquals("conflict", result["code"])
-        assertTrue((result["error"] as String).contains("다시 시도"))
-    }
-
-    @Test
-    fun `clearHalt points to pending clear when a review appeared while it waited`() = runTest {
-        engines()[1L] = mockEngine
-        val waiting = TradingState("KRW-BTC").apply { halted = true }
-        val reviewed = TradingState("KRW-BTC").apply { halted = true; reviewReason = "traced" }
-        every { mockEngine.getStates() } returnsMany listOf(mapOf("KRW-BTC" to waiting), mapOf("KRW-BTC" to reviewed))
-        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } returns false
-
-        val result = manager.clearHalt(1L, "KRW-BTC")
-
-        assertEquals("conflict", result["code"])
-        assertTrue((result["error"] as String).contains("pending/clear"))
-    }
-
     @Test
     fun `status reports the injected strategy with or without an engine`() {
         // 전략은 주입된 하나뿐이다. 정지로 엔진이 사라진 뒤 상태가 다른 이름을 보이면 화면과 실제 매매 전략이 어긋난다.
@@ -863,51 +836,6 @@ class UserTradingManagerTest {
 
         assertEquals("already_running", result["status"])
         verify(exactly = 0) { botStateRepository.save(any()) }
-    }
-
-    @Test
-    fun `halt clear that cannot persist is reported as a failure`() = runTest {
-        engines()[1L] = mockEngine
-        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } throws RuntimeException("db down")
-
-        val thrown = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.clearHalt(1L, "KRW-BTC") }
-        }
-
-        assertEquals(HALT_CLEAR_UNPERSISTED_MESSAGE, thrown.message)
-    }
-
-    // 충돌한 종목은 메모리가 DB 보다 뒤처져 저장이 늘 실패한다. 다시 시도하라는 대신 정지 뒤 시작을 안내한다.
-    @Test
-    fun `halt clear on a ticker whose state conflicted asks for a stop and start without an error alert`() = runTest {
-        engines()[1L] = mockEngine
-        every { mockEngine.getStates() } returns mapOf(
-            "KRW-BTC" to TradingState("KRW-BTC", halted = true, haltReason = "state version conflict").apply { versionConflict = true },
-        )
-
-        val errors = errorsDuring {
-            val result = manager.clearHalt(1L, "KRW-BTC")
-            assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
-            assertTrue(result["error"].toString().contains("정지한 뒤 다시 시작"), "$result")
-        }
-
-        assertTrue(errors.isEmpty(), "$errors")
-        coVerify(exactly = 0) { mockEngine.clearHalt(any(), any()) }
-    }
-
-    @Test
-    fun `halt clear whose save conflicts is refused the same way instead of failing as a persistence error`() = runTest {
-        engines()[1L] = mockEngine
-        every { mockEngine.getStates() } returns emptyMap()
-        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } throws TradingStateConflictException("KRW-BTC", "stale version")
-
-        val errors = errorsDuring {
-            val result = manager.clearHalt(1L, "KRW-BTC")
-            assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
-            assertTrue(result["error"].toString().contains("정지한 뒤 다시 시작"), "$result")
-        }
-
-        assertTrue(errors.none { it.contains("봇 제어 상태 저장 실패") }, "$errors")
     }
 
     @Test
@@ -1780,30 +1708,33 @@ class UserTradingManagerTest {
     }
 
     @Test
-    fun `a halt clear is saved with the halt reason and failure count the engine read under its lock`() = runTest {
-        engines()[1L] = mockEngine
-        every { mockEngine.getStates() } returns emptyMap()
-        val state = TradingState("KRW-BTC")
-        coEvery { mockEngine.clearHalt("KRW-BTC", any()) } coAnswers {
-            secondArg<suspend (TradingState, HaltSnapshot) -> Unit>()(state, HaltSnapshot("reconcile failures", 3))
-            true
-        }
-        val detail = slot<Map<String, Any?>>()
-        coEvery { interventions.saveWithRecord(1L, state, ManualInterventionEntity.HALT_CLEAR, capture(detail)) } just Runs
-
-        assertEquals("cleared", manager.clearHalt(1L, "KRW-BTC")["status"])
-
-        assertEquals("reconcile failures", detail.captured["halt_reason"])
-        assertEquals(3, detail.captured["reconcile_failure_count"])
-    }
-
-    @Test
     fun `clearing is refused while shutting down`() = runTest {
         stoppedRow()
         markShuttingDown()
 
         assertEquals("Service is shutting down", manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)["error"])
         coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
+    }
+
+    // 손으로 API 를 부르는 사람이 매수가 막힌 이유를 본다.
+    @Test
+    fun `status shows each position's version conflict and reconcile failure count without halt fields`() {
+        engines()[1L] = mockEngine
+        every { mockEngine.getStates() } returns mapOf(
+            "KRW-BTC" to TradingState("KRW-BTC", pendingBuyUuid = "b-1", reconcileFailureCount = 4),
+            "KRW-ETH" to TradingState("KRW-ETH").apply { versionConflict = true },
+        )
+
+        val status = manager.getStatus(1L)
+        @Suppress("UNCHECKED_CAST")
+        val positions = (status["positions"] as List<Map<String, Any?>>).associateBy { it["ticker"] }
+
+        assertEquals(false, positions["KRW-BTC"]!!["version_conflict"])
+        assertEquals(4, positions["KRW-BTC"]!!["reconcile_failure_count"])
+        assertEquals(true, positions["KRW-ETH"]!!["version_conflict"])
+        assertEquals(0, positions["KRW-ETH"]!!["reconcile_failure_count"])
+        assertFalse("halted" in positions["KRW-BTC"]!!)
+        assertFalse("halted_tickers" in status)
     }
 
     @Test

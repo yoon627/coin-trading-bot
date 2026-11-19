@@ -125,7 +125,7 @@ class BotBookRoundTripTest {
 
         val loaded = service.loadState(userId, "KRW-BTC")!!
         assertThat(loaded.storedBook).isNull()
-        // 새 버전이 동기화 전에 저장해도(일일 리셋·clearHalt 등) 낡은 표시를 지우지 않는다.
+        // 새 버전이 동기화 전에 저장해도(일일 리셋 등) 낡은 표시를 지우지 않는다.
         service.upsert(userId, loaded)
         assertThat(service.loadState(userId, "KRW-BTC")!!.storedBook).isNull()
     }

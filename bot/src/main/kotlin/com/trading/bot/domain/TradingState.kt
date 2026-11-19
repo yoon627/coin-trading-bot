@@ -34,9 +34,7 @@ data class TradingState(
     // 보유 여부가 불확실해 신규 매수를 막는다. 잔고 조회가 실패했거나 우리 주문으로 설명되지 않는 locked 잔고가 있을 때다.
     // 그 위에 진입하면 이중 포지션이 된다.
     var unsynced: Boolean = false,
-    // pending reconcile 이 계속 실패하면 켠다. 신규 매수만 막는다. 매도·reconcile 까지 막으면 포지션을 청산할 수 없다.
-    var halted: Boolean = false,
-    var haltReason: String? = null,
+    // 미해소 매수의 체결 확인이 연속으로 실패한 횟수. 영속이라 재시작해도 같은 일을 다시 알리지 않는다.
     var reconcileFailureCount: Int = 0,
     // 재시작 횟수와 무관하게 미해소 기간을 재려고 카운터가 아니라 시각으로 남긴다.
     var pendingSellSince: Instant? = null,
@@ -73,7 +71,7 @@ data class TradingState(
     var pendingSellIdentifier: String? = null,
     // 이 행을 가진 거래소. 엔진은 다른 거래소의 행을 쓰지 않는다.
     val exchange: Exchange = Exchange.UPBIT,
-    // 사람이 거래소에서 확인해야 하는 주문의 사유. 있는 동안 halt 해제를 거절한다. 방향을 담지 않으므로
+    // 사람이 거래소에서 확인해야 하는 주문의 사유. 방향을 담지 않으므로
     // 매수·매도 pending 이 모두 비었을 때만 지운다(자동 확정이든 사람의 pending 해제든).
     var reviewReason: String? = null,
     // 저장된 봇 장부(로드 때만). 동기화의 입력일 뿐 저장의 출처가 아니다. null 이면 장부를 저장하기 전의 행이다.
@@ -325,12 +323,6 @@ data class TradingState(
                 clearPendingSell()
             }
         }
-        reconcileFailureCount = 0
-    }
-
-    fun clearHalt() {
-        halted = false
-        haltReason = null
         reconcileFailureCount = 0
     }
 }

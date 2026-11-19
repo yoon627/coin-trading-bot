@@ -129,12 +129,6 @@ class TradingControllerTest {
         assertServiceUnavailable { controller.startBot(null) }
     }
 
-    @Test
-    fun `clearHalt persistence failure is 503 with the manager's message`() {
-        coEvery { manager.clearHalt(userId, "KRW-BTC") } throws persistFailure
-        assertServiceUnavailable { controller.clearHalt(ClearHaltRequest("KRW-BTC")) }
-    }
-
     // 설정 저장(Discord webhook)
 
     private val webhook = "https://discord.com/api/webhooks/1/token"

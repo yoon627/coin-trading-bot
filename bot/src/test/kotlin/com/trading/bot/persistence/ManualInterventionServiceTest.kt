@@ -62,7 +62,7 @@ class ManualInterventionServiceTest {
         every { repository.save(any()) } returns Mono.error(IllegalStateException("insert failed"))
 
         assertThrows(IllegalStateException::class.java) {
-            kotlinx.coroutines.runBlocking { service.saveWithRecord(1L, state, ManualInterventionEntity.HALT_CLEAR, emptyMap()) }
+            kotlinx.coroutines.runBlocking { service.saveWithRecord(1L, state, ManualInterventionEntity.PENDING_CLEAR, emptyMap()) }
         }
         assertNull(state.rowVersion, "롤백된 저장의 버전은 받지 않는다")
     }

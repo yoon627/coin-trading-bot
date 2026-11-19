@@ -137,7 +137,7 @@ class ExchangeDimensionRoundTripTest {
         val userId = insertUser("roundtrip")
         val review = "주문 확인 필요(SELL KIS_PAPER:20261020:0001): 후보 2건"
 
-        service.upsert(userId, TradingState("KRW-BTC", halted = true, haltReason = review, reviewReason = review))
+        service.upsert(userId, TradingState("KRW-BTC", reviewReason = review))
         val kisVersion = service.upsert(userId, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, pendingSellUuid = "KIS_PAPER:20261020:0001", reviewReason = review))
         service.upsert(userId, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, pendingSellUuid = "KIS_PAPER:20261020:0001", reviewReason = null, rowVersion = kisVersion))
 

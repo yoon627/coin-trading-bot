@@ -120,8 +120,6 @@ class TradingStateRoundTripTest {
         pendingSellAvgPrice = 70_000.25,
         pendingSellSince = Instant.parse("2026-08-26T01:02:03Z"),
         pendingSellAlerted = true,
-        halted = true,
-        haltReason = "unexplained locked balance",
         reconcileFailureCount = 3,
         pendingBuyPriorVolume = 0.00098765,
         pendingSellTriggerPrice = 71_000.0,
@@ -159,8 +157,6 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellAvgPrice).isEqualTo(original.pendingSellAvgPrice)
         assertThat(restored.pendingSellSince).isEqualTo(original.pendingSellSince)
         assertThat(restored.pendingSellAlerted).isEqualTo(original.pendingSellAlerted)
-        assertThat(restored.halted).isEqualTo(original.halted)
-        assertThat(restored.haltReason).isEqualTo(original.haltReason)
         assertThat(restored.reconcileFailureCount).isEqualTo(original.reconcileFailureCount)
         assertThat(restored.exitParams).isEqualTo(original.exitParams)
         assertThat(restored.pendingBuyPriorVolume).isEqualTo(original.pendingBuyPriorVolume)
@@ -168,6 +164,29 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellPriorVolume).isEqualTo(original.pendingSellPriorVolume)
         assertThat(restored.pendingBuyIdentifier).isEqualTo(original.pendingBuyIdentifier)
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
+    }
+
+    private suspend fun haltColumns(userId: Long, ticker: String): Pair<Boolean, String?> =
+        databaseClient.sql("SELECT halted, halt_reason FROM trading_states WHERE user_id = :u AND ticker = :t")
+            .bind("u", userId).bind("t", ticker)
+            .map { row -> row.get("halted", java.lang.Boolean::class.java)!!.booleanValue() to row.get("halt_reason", String::class.java) }
+            .one().awaitSingle()
+
+    // 앱은 halt 칼럼을 읽고 쓰지 않는다. 직전 이미지로 되돌려도 그 칼럼이 남긴 값 그대로 읽히고, 새 행은 기본값이다.
+    @Test
+    fun `a save leaves the halt columns of an existing row as they were and a new row gets the defaults`() = runTest {
+        val userId = insertUser("halt-cols")
+        service.upsert(userId, TradingState("KRW-BTC", peakPrice = 1.0))
+        assertThat(haltColumns(userId, "KRW-BTC")).isEqualTo(false to null)
+        databaseClient.sql("UPDATE trading_states SET halted = TRUE, halt_reason = 'old halt' WHERE user_id = :u AND ticker = 'KRW-BTC'")
+            .bind("u", userId).fetch().rowsUpdated().awaitSingle()
+
+        val loaded = service.loadState(userId, "KRW-BTC")!!
+        loaded.peakPrice = 2.0
+        service.upsert(userId, loaded)
+
+        assertThat(haltColumns(userId, "KRW-BTC")).isEqualTo(true to "old halt")
+        assertThat(service.loadState(userId, "KRW-BTC")!!.peakPrice).isEqualTo(2.0)
     }
 
     /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. 두 번째 저장은 첫 저장의 버전을 들고 온다. */

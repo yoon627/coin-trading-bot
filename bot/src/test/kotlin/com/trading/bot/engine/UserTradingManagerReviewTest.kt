@@ -20,11 +20,10 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Mono
 
-/** 확인이 필요한 주문은 halt 해제로 풀리지 않고 pending 해제가 사유를 지운다. pending 해제는 자기 거래소 행만 고친다. */
+/** 확인이 필요한 주문의 사유는 pending 해제가 지운다. pending 해제는 자기 거래소 행만 고친다. */
 class UserTradingManagerReviewTest {
 
     private val botStateRepository = mockk<BotStateRepository>()
@@ -53,20 +52,9 @@ class UserTradingManagerReviewTest {
     }
 
     @Test
-    fun `halt clear is refused with a conflict while the ticker needs an order review`() = runTest {
-        registerEngine()
-        every { engine.getStates() } returns mapOf("KRW-BTC" to TradingState("KRW-BTC", halted = true, haltReason = review, reviewReason = review))
-
-        val result = manager.clearHalt(1L, "KRW-BTC")
-
-        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
-        coVerify(exactly = 0) { engine.clearHalt(any(), any()) }
-    }
-
-    @Test
-    fun `pending clear also clears the review reason and keeps the halt`() = runTest {
+    fun `pending clear also clears the review reason`() = runTest {
         stoppedRow()
-        val state = TradingState("KRW-BTC", halted = true, haltReason = review, reviewReason = review, pendingSellUuid = "s-1")
+        val state = TradingState("KRW-BTC", reviewReason = review, pendingSellUuid = "s-1")
         coEvery { tradingStateService.loadState(1L, "KRW-BTC", Exchange.UPBIT) } returns state
         val saved = slot<TradingState>()
         coEvery { tradingStateService.upsert(1L, capture(saved)) } returns 0L
@@ -75,7 +63,6 @@ class UserTradingManagerReviewTest {
 
         assertEquals("cleared", result["status"], "$result")
         assertNull(saved.captured.reviewReason)
-        assertTrue(saved.captured.halted)
     }
 
     @Test

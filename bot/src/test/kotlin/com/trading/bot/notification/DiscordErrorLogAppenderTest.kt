@@ -50,7 +50,7 @@ class DiscordErrorLogAppenderTest {
     fun `분당 상한을 넘은 새 에러는 개별로 나가지 않고 60초 뒤 요약 1건에 실린다`() {
         val appender = appender()
         (1..5).forEach { appender.handle(error("장애 $it")) }
-        appender.handle(error("[HALT] KRW-XRP pending reconcile failed 5 times"))
+        appender.handle(error("[RECONCILE] KRW-XRP pending reconcile failed 5 times"))
         appender.handle(error("봇 미복원: 1개 유저 복원 실패", logger = "com.trading.bot.engine.UserTradingManager"))
 
         verify(exactly = 5) { notifier.sendErrorAlert(any(), any(), any(), any(), any(), any()) }
@@ -62,7 +62,7 @@ class DiscordErrorLogAppenderTest {
         val digest = slot<ErrorAlertRateLimiter.Digest>()
         verify(exactly = 1) { notifier.sendErrorDigest(capture(digest), props.webhookUrl, any()) }
         assertEquals(
-            listOf("[HALT] KRW-XRP pending reconcile failed 5 times", "봇 미복원: 1개 유저 복원 실패"),
+            listOf("[RECONCILE] KRW-XRP pending reconcile failed 5 times", "봇 미복원: 1개 유저 복원 실패"),
             digest.captured.alerts.map { it.summary },
         )
     }
