@@ -5,6 +5,7 @@ import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.domain.Exchange
 import java.time.Duration
+import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import org.springframework.stereotype.Component
@@ -19,7 +20,7 @@ class ExchangeBalanceLookup(
     override suspend fun krwBalance(user: UserEntity, exchange: String): Double? =
         try {
             val manager = managers.find(Exchange.valueOf(exchange)) ?: return null
-            withTimeoutOrNull(TIMEOUT.toMillis()) {
+            withTimeoutOrNull(TIMEOUT.toKotlinDuration()) {
                 manager.queryClient(userSecretsService.decryptUserSecrets(user)).getAccounts()
                     .find { it.currency == "KRW" }?.balanceDouble()
             }

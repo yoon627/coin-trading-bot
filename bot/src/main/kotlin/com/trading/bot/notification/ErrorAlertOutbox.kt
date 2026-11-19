@@ -16,6 +16,7 @@ import java.time.Instant
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -128,10 +129,10 @@ class ErrorAlertOutbox internal constructor(
     fun stop() {
         running = false
         runBlocking {
-            withTimeoutOrNull(timings.stopWait.toMillis()) { loopJob?.cancelAndJoin() }
+            withTimeoutOrNull(timings.stopWait.toKotlinDuration()) { loopJob?.cancelAndJoin() }
             // 루프가 아직 돌면 같은 큐를 둘이 비워 한 알림을 두 번 넣고 다른 알림을 버린다.
             if (loopJob?.isCompleted == false) return@runBlocking
-            withTimeoutOrNull(timings.flush.toMillis()) {
+            withTimeoutOrNull(timings.flush.toKotlinDuration()) {
                 while (true) {
                     val alert = queue.peek() ?: break
                     if (!store(alert)) break
@@ -147,7 +148,7 @@ class ErrorAlertOutbox internal constructor(
         while (currentCoroutineContext().isActive) {
             lastPassAt = clock.instant()
             try {
-                withTimeout(timings.pass.toMillis()) { runPass() }
+                withTimeout(timings.pass.toKotlinDuration()) { runPass() }
             } catch (e: CancellationException) {
                 if (!currentCoroutineContext().isActive) throw e
                 log.warn("Error alert pass did not finish — retrying on the next pass: {}", e.message)
@@ -155,14 +156,14 @@ class ErrorAlertOutbox internal constructor(
                 // 루프가 끝나면 큐에 든 알림이 종료까지 묶인다. ERROR 로 남기지 않는다(알림이 되돌아온다).
                 log.warn("Error alert pass failed — retrying on the next pass: {}", e.toString())
             }
-            withTimeoutOrNull(INTERVAL.toMillis()) { wakeups.receive() }
+            withTimeoutOrNull(INTERVAL.toKotlinDuration()) { wakeups.receive() }
         }
     }
 
     // 멈춘 조회가 첫 패스를 막지 않게 한다.
     private suspend fun reportBacklog() {
         try {
-            withTimeoutOrNull(timings.insert.toMillis()) {
+            withTimeoutOrNull(timings.insert.toKotlinDuration()) {
                 log.info("Error alert outbox: pending={}, failed={}", repository.countByStatus(PENDING).awaitSingle(), repository.countByStatus(FAILED).awaitSingle())
             }
         } catch (e: CancellationException) {
@@ -192,7 +193,7 @@ class ErrorAlertOutbox internal constructor(
         try {
             val now = clock.instant()
             val row = ErrorAlertOutboxEntity(payload = objectMapper.writeValueAsString(payloadOf(alert)), nextAttemptAt = now, createdAt = now)
-            withTimeoutOrNull(timings.insert.toMillis()) { repository.save(row).awaitSingle() } != null
+            withTimeoutOrNull(timings.insert.toKotlinDuration()) { repository.save(row).awaitSingle() } != null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -268,7 +269,7 @@ class ErrorAlertOutbox internal constructor(
     }
 
     // DB 가 멈추면 패스가 90초 상한까지 묶이고, 그동안 생존 표시는 살아 있어 새 알림이 큐에서 기다린다.
-    private suspend fun <T> db(block: suspend () -> T): T = withTimeout(timings.insert.toMillis()) { block() }
+    private suspend fun <T> db(block: suspend () -> T): T = withTimeout(timings.insert.toKotlinDuration()) { block() }
 
     private companion object {
         const val BATCH = 20

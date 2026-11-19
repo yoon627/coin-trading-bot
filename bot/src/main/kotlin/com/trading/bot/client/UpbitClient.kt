@@ -8,6 +8,7 @@ import java.net.ConnectException
 import java.net.UnknownHostException
 import java.time.Instant
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
 /** identifier 에 특수문자가 있으면 JWT 서명이 어긋난다. [getOrderByIdentifier] 는 404 order_not_found 일 때만 null 이다. */
@@ -29,7 +30,7 @@ suspend fun ExchangeClient.awaitFill(uuid: String, policy: FillPollPolicy = Fill
     repeat(policy.attempts) { attempt ->
         last = getOrder(uuid)
         if (last?.isTerminal() == true) return last
-        if (attempt < policy.attempts - 1) delay(policy.delayMs)
+        if (attempt < policy.attempts - 1) delay(policy.delayMs.milliseconds)
     }
     return last
 }

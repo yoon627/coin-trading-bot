@@ -1,6 +1,7 @@
 package com.trading.bot.kis.client
 
 import java.util.TreeSet
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -71,7 +72,7 @@ class KisRateLimiter(
                     // 선두만 슬롯 시각에 깨어난다. 나머지는 선두가 바뀌었다는 신호나 자기 상한을 기다린다.
                     if (head) minOf(nextSlotMs() - now, deadline - now) else deadline - now
                 }
-                withTimeoutOrNull(sleepMs) { waiter.wake.receive() }
+                withTimeoutOrNull(sleepMs.milliseconds) { waiter.wake.receive() }
             }
         } finally {
             synchronized(lock) {

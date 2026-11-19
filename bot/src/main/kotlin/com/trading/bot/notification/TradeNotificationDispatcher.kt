@@ -14,6 +14,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -98,7 +99,7 @@ class TradeNotificationDispatcher internal constructor(
             } catch (e: Throwable) {
                 log.error("Trade notification pass failed — retrying on the next pass", e)
             }
-            withTimeoutOrNull(INTERVAL.toMillis()) { wakeups.receive() }
+            withTimeoutOrNull(INTERVAL.toKotlinDuration()) { wakeups.receive() }
         }
     }
 

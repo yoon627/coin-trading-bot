@@ -39,6 +39,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import kotlin.math.max
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class TradingEngine(
     private val upbitClient: ExchangeClient,
@@ -243,7 +245,7 @@ class TradingEngine(
         // 막힌 루프 때문에 요청이 끝없이 기다리면 사용자 잠금도 함께 묶인다. 시한이 지나면 해제하지 않고 돌려준다.
         // 잠금을 얻은 직후 시한이 끝나면 블록 결과는 버려지므로 얻었는지를 따로 기록해야 잠금이 새지 않는다.
         var acquired = false
-        withTimeoutOrNull(clearHaltLockTimeoutMs) {
+        withTimeoutOrNull(clearHaltLockTimeoutMs.milliseconds) {
             stateMutex.lock()
             acquired = true
         }
@@ -348,13 +350,13 @@ class TradingEngine(
                 // 티커가 없어도 한 바퀴는 진행이다.
                 markProgress()
 
-                delay(tradingProperties.intervalSeconds * 1000)
+                delay(tradingProperties.intervalSeconds.seconds)
             } catch (e: CancellationException) {
                 throw e // 삼키면 stop 의 join 이 루프가 다시 돌 때까지 늦어진다.
             } catch (e: Exception) {
                 log.error("Trading loop error (user {}): {}", userId, e.message, e)
                 markProgress()
-                delay(ERROR_RETRY_DELAY_MS)
+                delay(ERROR_RETRY_DELAY_MS.milliseconds)
             }
         }
     }
