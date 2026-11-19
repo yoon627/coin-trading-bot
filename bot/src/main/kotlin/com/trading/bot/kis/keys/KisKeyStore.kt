@@ -7,6 +7,7 @@ import com.trading.bot.persistence.entity.UserBrokerKeyEntity
 import com.trading.bot.security.SecretsCrypto
 import com.trading.common.domain.Exchange
 import java.time.Instant
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.withTimeoutOrNull
@@ -120,7 +121,7 @@ class KisKeyStore(
     // DB 오류 메시지에는 실패한 행(암호문 포함)이 실릴 수 있어 예외 종류만 남기고 원인은 붙이지 않는다.
     private suspend fun <T> bounded(block: suspend () -> T): T {
         val done = try {
-            withTimeoutOrNull(dbTimeoutMs) { Completed(block()) }
+            withTimeoutOrNull(dbTimeoutMs.milliseconds) { Completed(block()) }
         } catch (e: DataAccessException) {
             log.warn("KIS key store failed: {}", e.javaClass.simpleName)
             throw KisKeyStoreUnavailableException()

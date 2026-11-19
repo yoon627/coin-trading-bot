@@ -26,6 +26,7 @@ import com.trading.common.strategy.TradingStrategy
 import java.time.Instant
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -135,7 +136,7 @@ class UserTradingManager(
         shuttingDown = true
         val budgetMs = runtime.stopBudget.toMillis()
         runBlocking {
-            val completed = withTimeoutOrNull(budgetMs) {
+            val completed = withTimeoutOrNull(budgetMs.milliseconds) {
                 restoreJob?.cancelAndJoin()
                 // 정지 저장이 걸려도 엔진 정지의 시간 제한을 먹지 않게 동시에 돌린다.
                 val finalStopSaves = async { saveUnpersistedStops() }
@@ -167,7 +168,7 @@ class UserTradingManager(
     internal suspend fun saveUnpersistedStops() {
         for (userId in unpersistedStops.toList()) {
             val saved = try {
-                withTimeoutOrNull(FINAL_STOP_SAVE_TIMEOUT_MS) {
+                withTimeoutOrNull(FINAL_STOP_SAVE_TIMEOUT_MS.milliseconds) {
                     lockFor(userId).withLock {
                         // 그 사이 시작이 저장을 마쳤다면 도는 봇의 행을 덮으면 안 된다.
                         if (userId !in unpersistedStops) return@withLock false
@@ -225,7 +226,7 @@ class UserTradingManager(
             } catch (e: Exception) {
                 log.warn("restore: bot state 조회 실패 (attempt {}/{}): {}", attempt, RESTORE_MAX_ATTEMPTS, e.message)
                 lastQueryFailed = true
-                if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt))
+                if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt).milliseconds)
                 continue
             }
             lastQueryFailed = false
@@ -236,7 +237,7 @@ class UserTradingManager(
             }
             pendingUserIds = failed
             if (pendingUserIds.isEmpty()) return
-            if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt))
+            if (attempt < RESTORE_MAX_ATTEMPTS) delay(restoreBackoffMs(attempt).milliseconds)
         }
         // 조회가 끝까지 실패하면 pendingUserIds 가 비어 있어도 복원된 봇은 없다.
         if (lastQueryFailed) {
@@ -369,7 +370,7 @@ class UserTradingManager(
         }
         // 걸린 DB 호출이 lock 을 계속 쥐지 않게 시간 제한을 둔다. 실패하면 종료 때 다시 저장한다.
         persistOrFail(userId, STOP_UNPERSISTED_MESSAGE) {
-            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { markStopped(userId) } ?: throw IllegalStateException("bot_state 저장 시간 초과")
+            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS.milliseconds) { markStopped(userId) } ?: throw IllegalStateException("bot_state 저장 시간 초과")
         }
         unpersistedStops.remove(userId)
         mapOf("status" to if (engine != null) "stopped" else "not_running")
@@ -408,7 +409,7 @@ class UserTradingManager(
     suspend fun setEntriesPaused(userId: Long, paused: Boolean): Map<String, Any?> = lockFor(userId).withLock {
         if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
         val saved = persistOrFail(userId, ENTRIES_UNPERSISTED_MESSAGE) {
-            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) { saveEntriesPaused(userId, paused) } ?: throw IllegalStateException("bot_state 저장 시간 초과")
+            withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS.milliseconds) { saveEntriesPaused(userId, paused) } ?: throw IllegalStateException("bot_state 저장 시간 초과")
         }
         val previous = entriesPauses.put(userId, EntriesPause(saved.entriesPaused, saved.entriesPausedChangedAt))
         if (previous?.paused != paused) log.info("user {} 신규 매수 {} ({})", userId, if (paused) "중지" else "재개", exchangeKey)
@@ -793,7 +794,7 @@ class UserTradingManager(
 
     /** 상태 저장과 수동 개입 기록을 한 트랜잭션으로, 시간 제한 안에 끝낸다. */
     private suspend fun saveWithRecord(userId: Long, state: TradingState, action: String, detail: Map<String, Any?>) {
-        withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS) {
+        withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS.milliseconds) {
             manualInterventions.saveWithRecord(userId, state, action, detail)
         } ?: throw IllegalStateException("trading_states 저장 시간 초과")
     }
@@ -811,7 +812,7 @@ class UserTradingManager(
     /** 멈춘 엔진의 미저장 상태를 다시 저장하고, 그래도 DB 에 없을 수 있는 매도를 돌려준다. */
     private suspend fun flushStoppedEngine(userId: Long, engine: TradingEngine): List<TradingState> {
         // withTimeout 을 쓰면 시간 초과가 취소로 번져 reload 가 실패 응답을 내지 못한다.
-        if (withTimeoutOrNull(FLUSH_TIMEOUT_MS) { engine.flushUnpersisted() } == null) {
+        if (withTimeoutOrNull(FLUSH_TIMEOUT_MS.milliseconds) { engine.flushUnpersisted() } == null) {
             log.warn("user {} 의 미기록 주문·고점 재기록이 {}ms 안에 끝나지 않았다", userId, FLUSH_TIMEOUT_MS)
         }
         return engine.unpersistedSells()

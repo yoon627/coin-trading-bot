@@ -9,6 +9,7 @@ import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.domain.Exchange
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
@@ -176,7 +177,7 @@ class TradingController(
      * 저장이 상한을 넘으면 커밋 여부를 알 수 없어, reload 는 그대로 하고 503 으로 알린다.
      */
     private suspend fun saveThenReload(userId: Long, save: suspend () -> Unit) {
-        val saved = withContext(NonCancellable) { withTimeoutOrNull(SETTINGS_SAVE_TIMEOUT_MS) { save() } != null }
+        val saved = withContext(NonCancellable) { withTimeoutOrNull(SETTINGS_SAVE_TIMEOUT_MS.milliseconds) { save() } != null }
         try {
             managers.reloadAll(userId)
         } catch (e: RuntimeReloadFailedException) {

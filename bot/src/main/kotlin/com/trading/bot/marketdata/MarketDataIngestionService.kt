@@ -40,6 +40,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Upbit ticker(WS)와 분봉(REST 폴링)을 받아 MarketDataStore 에 넣는다.
@@ -171,7 +172,7 @@ class MarketDataIngestionService(
                     watchdogProperties.restartBackoffMs, e.message, e,
                 )
             }
-            delay(watchdogProperties.restartBackoffMs)
+            delay(watchdogProperties.restartBackoffMs.milliseconds)
         }
     }
 
@@ -182,7 +183,7 @@ class MarketDataIngestionService(
             // 뒤 단계가 실패해도 분봉 수집 루프는 이어 간다.
             guarded("D1 seed retry") { retryFailedSeeds() }
             guarded("D1 reconcile") { reconcilePreviousDay(markets) }
-            delay(CANDLE_COLLECT_INTERVAL_MS)
+            delay(CANDLE_COLLECT_INTERVAL_MS.milliseconds)
         }
     }
 
@@ -199,7 +200,7 @@ class MarketDataIngestionService(
 
     internal suspend fun collectCandlesRound(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
-            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS.milliseconds)
             try {
                 fetchM1WithRateLimitRetry(market)
             } catch (e: CancellationException) {
@@ -219,7 +220,7 @@ class MarketDataIngestionService(
             // 연결 리셋·파싱 오류는 바로 다시 해도 결과가 같아 429 만 재시도한다.
             if (!isRateLimited(e)) throw e
             log.debug("Rate limited on {}; retrying in {}ms", market, RATE_LIMIT_RETRY_DELAY_MS)
-            delay(RATE_LIMIT_RETRY_DELAY_MS)
+            delay(RATE_LIMIT_RETRY_DELAY_MS.milliseconds)
             ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, M1_FETCH_COUNT))
         }
     }
@@ -315,7 +316,7 @@ class MarketDataIngestionService(
     // 집계기는 분봉 전용이라 D1 은 store 에 바로 넣는다.
     internal suspend fun seedDailyCandles(markets: List<String>) {
         for ((index, market) in markets.withIndex()) {
-            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS.milliseconds)
             if (!seedMarket(market)) {
                 seedRetries[market] = SeedRetry(clock.instant().plus(SEED_RETRY_FIRST), SEED_RETRY_FIRST)
             }
@@ -326,7 +327,7 @@ class MarketDataIngestionService(
     internal suspend fun retryFailedSeeds() {
         val due = seedRetries.filterValues { !clock.instant().isBefore(it.nextAt) }
         for ((index, entry) in due.entries.withIndex()) {
-            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS)
+            if (index > 0) delay(CANDLE_REQUEST_SPACING_MS.milliseconds)
             val (market, retry) = entry
             if (seedMarket(market, quiet = true)) {
                 seedRetries.remove(market)
@@ -355,7 +356,7 @@ class MarketDataIngestionService(
                 Reconcile(target, since = now).also { reconciles[market] = it }
             }
             if (state.done) continue
-            if (requested) delay(CANDLE_REQUEST_SPACING_MS)
+            if (requested) delay(CANDLE_REQUEST_SPACING_MS.milliseconds)
             requested = true
             val upbit = try {
                 upbitMarketFeed.getCandles(market, CandleInterval.D1, RECONCILE_FETCH_COUNT).firstOrNull { it.openTime == target }

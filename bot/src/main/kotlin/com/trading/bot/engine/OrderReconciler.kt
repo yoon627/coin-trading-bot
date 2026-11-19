@@ -14,6 +14,7 @@ import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -71,7 +72,7 @@ class OrderReconciler internal constructor(
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch {
-            delay(timings.firstRunAfter.toMillis())
+            delay(timings.firstRunAfter.toKotlinDuration())
             while (isActive) {
                 try {
                     reconcileAll()
@@ -80,7 +81,7 @@ class OrderReconciler internal constructor(
                 } catch (e: Exception) {
                     log.warn("Order reconcile run failed — trying again in {}", timings.every, e)
                 }
-                delay(timings.every.toMillis())
+                delay(timings.every.toKotlinDuration())
             }
         }
     }

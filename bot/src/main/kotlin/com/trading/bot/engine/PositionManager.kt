@@ -36,6 +36,7 @@ import java.time.Clock
 import java.time.Duration
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -253,7 +254,7 @@ class PositionManager(
                 throw reached
             }
             log.warn("Sell order {} for {} failed ({}: {}) — sending it again in {}ms", request.identifier, ticker, failure, error.message, SELL_RESEND_DELAYS_MS[resends])
-            delay(SELL_RESEND_DELAYS_MS[resends])
+            delay(SELL_RESEND_DELAYS_MS[resends].milliseconds)
             if (!stillWanted()) throw mayHaveReached ?: error
             resends++
         }

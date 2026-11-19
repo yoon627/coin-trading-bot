@@ -8,6 +8,7 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
@@ -27,7 +28,7 @@ class KisApiImpl(
     private val tokens: KisTokenSource,
     private val limiter: KisRateLimiter,
     private val properties: KisApiProperties,
-    private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val sleep: suspend (Long) -> Unit = { delay(it.milliseconds) },
 ) : KisApi {
     private val log = LoggerFactory.getLogger(javaClass)
 
