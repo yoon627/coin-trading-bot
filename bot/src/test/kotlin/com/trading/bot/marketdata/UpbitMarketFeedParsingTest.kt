@@ -3,7 +3,10 @@ package com.trading.bot.marketdata
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.common.domain.Exchange
 import io.mockk.mockk
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.runner.ApplicationContextRunner
 import org.springframework.web.reactive.function.client.WebClient

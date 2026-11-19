@@ -73,8 +73,10 @@ class UserTradingManager(
     val exchange: Exchange get() = runtime.exchange
     private val exchangeKey: String = this.runtime.exchange.name
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
+
     // 엔진 등록과 start() 사이에 stop 이 끼지 않도록 사용자별로 start/stop/reload 를 직렬화한다.
     private val userLocks = ConcurrentHashMap<Long, Mutex>()
+
     // 엔진은 멈췄지만 bot_state.running=false 를 쓰지 못한 사용자. DB 행보다 이 집합이 우선한다.
     private val unpersistedStops: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     private val scope = CoroutineScope(Dispatchers.Default)
@@ -82,8 +84,10 @@ class UserTradingManager(
     @Volatile private var shuttingDown = false
     private var restoreJob: Job? = null
     @Volatile private var restoreProgress = RestoreStatus.NOT_STARTED
+
     // 사용자 목록 없이 끝난 복원(bot state 조회 실패·예기치 않은 오류). 재시작 전까지 FAILED 다.
     @Volatile private var restoreAborted = false
+
     // 재시도를 다 쓰고 복원하지 못한 사용자. 그 사용자를 손으로 시작하거나 멈추면 빠진다.
     private val restoreFailedUsers: MutableSet<Long> = ConcurrentHashMap.newKeySet()
 
@@ -763,6 +767,7 @@ class UserTradingManager(
         const val CONFLICT_CODE = "conflict"
 
         private const val RESTORE_MAX_ATTEMPTS = 5
+
         // 저장하지 않은 "Service is shutting down" 과 달리 재시작 때 봇이 다시 뜬다.
         private const val ENTRIES_UNPERSISTED_MESSAGE =
             "신규 매수 중지 설정을 저장하지 못해 바꾸지 않았습니다. 잠시 후 다시 시도하세요."

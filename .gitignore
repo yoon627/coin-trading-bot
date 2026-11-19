@@ -70,6 +70,7 @@ replay_pid*
 .worktrees/
 
 ### Local tool state ###
-.claude/
+.claude/*
+!.claude/settings.json
 .codex/
 .serena/

@@ -47,7 +47,11 @@ class PortfolioController(
 
         if (coins.isNotEmpty()) {
             val markets = coins.map { "KRW-${it.currency}" }.joinToString(",")
-            val tickers = try { client.getTicker(markets) } catch (_: Exception) { emptyList() }
+            val tickers = try {
+                client.getTicker(markets)
+            } catch (_: Exception) {
+                emptyList()
+            }
             val priceMap = tickers.associateBy { it.market }
 
             for (coin in coins) {

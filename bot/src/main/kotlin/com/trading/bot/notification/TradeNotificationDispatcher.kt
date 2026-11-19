@@ -217,6 +217,7 @@ class TradeNotificationDispatcher internal constructor(
     internal companion object {
         val INTERVAL: Duration = Duration.ofSeconds(5)
         const val BATCH = 20
+
         // 시도 횟수가 아니라 시간으로 끊는다. 몇 시간짜리 Discord 장애에도 알림을 잃지 않는다.
         val RETRY_WINDOW: Duration = Duration.ofHours(24)
         val FRESH_BALANCE: Duration = Duration.ofMinutes(10)

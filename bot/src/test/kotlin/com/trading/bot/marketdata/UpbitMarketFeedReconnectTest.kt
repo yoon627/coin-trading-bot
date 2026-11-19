@@ -38,6 +38,7 @@ class UpbitMarketFeedReconnectTest {
     private enum class Step { CLOSE, ERROR, TICKER, HOLD }
 
     private val connections = AtomicInteger(0)
+
     @Volatile
     private var script: (Int) -> Step = { Step.HOLD }
     private lateinit var server: DisposableServer

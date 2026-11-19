@@ -69,10 +69,12 @@ class TradingEngine(
         private const val ERROR_RETRY_DELAY_MS = 60_000L
         internal val STALL_THRESHOLD: java.time.Duration = java.time.Duration.ofMinutes(5)
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
+
         // 경고는 ticker 당 1분에 한 번. 피드 장애 중에는 tick 마다 같은 경고가 난다.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
         private const val MIN_DAILY_CANDLES = 21
         private const val MAX_DAILY_CANDLE_LOOKBACK = 60
+
         // 1분봉 폴링 주기와 캐시 TTL 때문에 경계 직후 몇 분은 오늘 일봉이 없어도 정상이다.
         private const val STALE_DAILY_CANDLE_WARN_MS = 5 * 60_000L
 
@@ -104,14 +106,17 @@ class TradingEngine(
     // 루프의 끝남은 loopJob 의 완료 처리가 알린다. 처리기가 없으면 Error 가 스레드 기본 처리기로 가 stderr 에만 찍힌다.
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineExceptionHandler { _, _ -> })
     private val running = AtomicBoolean(false)
+
     @Volatile
     private var loopJob: Job? = null
     private val states = ConcurrentHashMap<String, TradingState>()
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
+
     // 컨트롤러 스레드(start)와 runLoop 코루틴이 함께 읽고 쓴다.
     @Volatile
     private var activeTickers: List<String> = emptyList()
+
     // 감시 스케줄러가 읽는다. 티커 하나를 처리할 때마다 갱신해 느린 tick 은 멈춤으로 보지 않는다.
     @Volatile
     private var lastProgressAt: Instant? = null
@@ -584,5 +589,4 @@ class TradingEngine(
             ?.distinctBy { it.openTime }
         return if (storeCandles != null && storeCandles.size >= minCandles) storeCandles else null
     }
-
 }

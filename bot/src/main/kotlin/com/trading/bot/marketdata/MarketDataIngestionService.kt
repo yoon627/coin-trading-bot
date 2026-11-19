@@ -82,16 +82,19 @@ class MarketDataIngestionService(
 
     // seed 가 실패한 마켓과 다음 시도 시각·간격. 수집 코루틴만 읽고 쓴다.
     private data class SeedRetry(val nextAt: Instant, val backoff: Duration)
+
     private val seedRetries = mutableMapOf<String, SeedRetry>()
 
     // 마켓별 전일 일봉 대조 상태. [pending] 은 store 와 달랐던 업비트 값으로, 다음 읽기가 같아야 바꾼다.
     // 기동 seed 는 대조로 치지 않는다 — 경계 직후 seed 는 미확정 봉일 수 있다. 수집 코루틴만 읽고 쓴다.
     private data class Reconcile(val day: Instant, val since: Instant, val done: Boolean = false, val pending: NormalizedCandle? = null)
+
     private val reconciles = mutableMapOf<String, Reconcile>()
     private var overdueAlertedFor: Instant? = null
 
     companion object {
         private const val CANDLE_COLLECT_INTERVAL_MS = 60_000L
+
         // Upbit /v1/candles/days 의 최대 개수.
         private const val SEED_DAILY_CANDLE_COUNT = 200
 
@@ -106,8 +109,10 @@ class MarketDataIngestionService(
 
         // 업비트가 전일 봉을 언제 확정하는지 문서에 없어 경계 직후는 건너뛰고, 다를 때는 한 번 더 읽어 확인한다.
         private val RECONCILE_AFTER: Duration = Duration.ofMinutes(2)
+
         // 처음 시도하고 이만큼 지나도 못 끝낸 마켓이 있으면 그날 대조가 막힌 것으로 보고 한 번 알린다(기동이 늦어도 같은 기준).
         private val RECONCILE_OVERDUE: Duration = Duration.ofMinutes(30)
+
         // 가격은 체결가라 정확히 같다. 거래량은 Double 누적이라 상대 오차를 둔다.
         private const val VOLUME_TOLERANCE = 1e-6
         private const val RECONCILE_FETCH_COUNT = 2

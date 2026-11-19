@@ -93,6 +93,12 @@ jobs:
             fi
           done
 
+      # 포맷 기준은 .editorconfig 의 ktlint 설정이다. 훅이 없는 편집(Bash·웹 편집)도 여기서 막는다.
+      # 테스트 뒤에 두어 포맷 위반이 테스트 결과를 가리지 않게 하고, 테스트가 실패해도 함께 알린다.
+      - name: 포맷 검사 (ktlint)
+        if: ${{ !cancelled() }}
+        run: ./gradlew spotlessCheck
+
   build-and-push:
     needs: test
     if: github.event_name != 'pull_request'

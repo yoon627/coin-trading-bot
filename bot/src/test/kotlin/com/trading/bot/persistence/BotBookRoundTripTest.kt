@@ -70,7 +70,7 @@ class BotBookRoundTripTest {
 
     private val runId = UUID.randomUUID().toString().take(8)
 
-    private val V34_COLUMNS = listOf(
+    private val v34Columns = listOf(
         "book_volume", "book_avg_price", "book_written_at", "pending_buy_book_volume", "pending_buy_book_avg",
         "adopt_baseline_volume", "sell_clear_prior_volume", "sell_clear_volume",
     ).joinToString { "'$it'" }
@@ -176,7 +176,7 @@ class BotBookRoundTripTest {
 
     private fun Connection.bookColumns(schema: String): List<String> = strings(
         "SELECT column_name FROM information_schema.columns WHERE table_schema = '$schema' AND table_name = 'trading_states' " +
-            "AND column_name IN ($V34_COLUMNS) ORDER BY column_name",
+            "AND column_name IN ($v34Columns) ORDER BY column_name",
     )
 
     @Test

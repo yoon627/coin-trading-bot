@@ -67,6 +67,19 @@ DB_PORT=5432 ./gradlew :bot:bootRun
 
 DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI는 `DB_TESTS_REQUIRED=true`로 돌리므로 건너뛰면 실패한다.
 
+### 포맷
+
+Kotlin 포맷 기준은 ktlint(Spotless)이고, 규칙은 루트 `.editorconfig`에 있다. VSCode의 JetBrains Kotlin 확장도 같은 `.editorconfig`를 읽어, 저장 시 포맷(`editor.formatOnSave`)이 ktlint와 같은 결과를 내도록 맞춰 두었다(지금 코드 전체에서 확인). 처음 보는 코드 모양에서 드물게 다르면 CI의 `spotlessCheck`가 알려 주고, `./gradlew spotlessApply`로 맞춘다.
+
+```bash
+./gradlew spotlessApply    # 포맷
+./gradlew spotlessCheck    # 검사만 (CI가 돌린다)
+```
+
+`.editorconfig`를 바꾼 뒤에는 `./gradlew --stop`으로 Gradle daemon을 내리고 `build/spotless-clean`을 지운 다음 돌린다. 그러지 않으면 바꾸기 전 설정으로 포맷한다.
+
+Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/claude-format-hook.sh`)이 Edit·Write 한 이 repo의 `.kt`·`.kts` 파일 하나를 바로 포맷한다(Gradle daemon이 떠 있으면 약 2초). 자동으로 못 고치는 lint 오류는 Claude에게 알리고, Gradle 실패는 편집을 막지 않는다. Bash로 고친 파일과 저장소 여러 개를 쓰는 웹 세션·project thread 에는 훅이 돌지 않으므로 CI의 `spotlessCheck`가 막는다.
+
 ## 설정
 
 기본값은 `TradingProperties.kt`, `KisTradingProperties.kt`, `AppConfig.kt`, `application.yml`에 있다.

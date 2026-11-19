@@ -1504,7 +1504,7 @@ class UserTradingManagerTest {
         verify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), any()) }
     }
 
-    private val SELL_SINCE = java.time.Instant.parse("2026-10-08T00:00:00Z")
+    private val sellSince = java.time.Instant.parse("2026-10-08T00:00:00Z")
 
     // 손으로 API 를 부르는 사람이 매수가 막힌 이유를 본다.
     @Test
@@ -1516,6 +1516,7 @@ class UserTradingManagerTest {
         )
 
         val status = manager.getStatus(1L)
+
         @Suppress("UNCHECKED_CAST")
         val positions = (status["positions"] as List<Map<String, Any?>>).associateBy { it["ticker"] }
 
@@ -1533,7 +1534,7 @@ class UserTradingManagerTest {
         every { mockEngine.getStates() } returns mapOf(
             "KRW-BTC" to TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"),
             "KRW-ETH" to TradingState("KRW-ETH", position = true).apply {
-                beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = SELL_SINCE, volume = 0.1, triggerPrice = 1.0, priorVolume = 0.1)
+                beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = sellSince, volume = 0.1, triggerPrice = 1.0, priorVolume = 0.1)
                 adoptSellOrder("u-s")
             },
         )
@@ -1546,6 +1547,6 @@ class UserTradingManagerTest {
         val sell = positions["KRW-ETH"]!!["pending_sell"] as Map<*, *>
         assertEquals("uuid", sell["by"])
         assertEquals("u-s", sell["ref"])
-        assertEquals(SELL_SINCE.toString(), sell["since"])
+        assertEquals(sellSince.toString(), sell["since"])
     }
 }

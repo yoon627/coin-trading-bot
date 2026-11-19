@@ -83,8 +83,10 @@ class DiscordErrorLogAppenderTest {
 
     @Test
     fun `예약이 실패하면 다음 보류가 다시 예약하고 앞의 보류도 그 요약에 실린다`() {
-        every { executor.schedule(any<Runnable>(), any(), any()) } throws
-            RejectedExecutionException("shut down") andThenThrows IllegalStateException("boom") andThenAnswer {
+        every { executor.schedule(any<Runnable>(), any(), any()) }
+            .throws(RejectedExecutionException("shut down"))
+            .andThenThrows(IllegalStateException("boom"))
+            .andThenAnswer {
                 scheduled += firstArg<Runnable>() to thirdArg<TimeUnit>().toMillis(secondArg())
                 mockk(relaxed = true)
             }

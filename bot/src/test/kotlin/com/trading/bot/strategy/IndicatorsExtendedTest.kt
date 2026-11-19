@@ -2,7 +2,9 @@ package com.trading.bot.strategy
 
 import com.trading.common.domain.Candle
 import com.trading.common.strategy.Indicators
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class IndicatorsExtendedTest {

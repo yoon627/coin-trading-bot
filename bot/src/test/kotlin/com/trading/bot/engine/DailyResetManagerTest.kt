@@ -2,7 +2,10 @@ package com.trading.bot.engine
 
 import com.trading.bot.domain.TradingState
 import com.trading.common.config.TradingProperties
-import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.time.Clock
 import java.time.LocalDate

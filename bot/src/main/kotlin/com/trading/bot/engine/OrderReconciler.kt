@@ -161,9 +161,11 @@ class OrderReconciler internal constructor(
 
     private companion object {
         const val BOT_PREFIX = "ctb-"
+
         // Discord 메시지 칸이 1000자라 다 실리게 줄인다(전체 uuid 는 따로 WARN 으로 로그 파일에).
         const val SHOWN = 8
         val WINDOW: Duration = Duration.ofHours(48)
+
         // 막 끝난 주문은 엔진의 reconcile 이 기록할 시간을 둔다.
         val SETTLE: Duration = Duration.ofHours(1)
     }
