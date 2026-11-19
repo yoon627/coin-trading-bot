@@ -599,7 +599,7 @@ class PositionManager(
      * 확정으로 리셋된 뒤 새 일에 다시 알린다. 그동안 미해소 주문이 그 종목의 매매를 막는다.
      */
     private fun recordReconcileFailure(state: TradingState) {
-        val threshold = tradingProperties.reconcileHaltThreshold
+        val threshold = tradingProperties.reconcileAlertThreshold
         val before = state.reconcileFailureCount++
         if (before < threshold && state.reconcileFailureCount >= threshold) {
             // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
@@ -859,7 +859,7 @@ class PositionManager(
 
     /**
      * 막힌 매도를 한 번 알린다. 재시작해도 리셋되지 않도록 횟수 대신 영속된 시작 시각으로 판정한다. pending 은 대사로만 풀린다.
-     * 임계는 reconcileHaltThreshold tick 을 시간으로 환산한 값이다.
+     * 임계는 reconcileAlertThreshold tick 을 시간으로 환산한 값이다.
      */
     private fun warnIfSellStuckTooLong(ticker: String, state: TradingState, orderRef: String) {
         if (state.pendingSellAlerted) return
@@ -869,7 +869,7 @@ class PositionManager(
             return
         }
         val threshold = Duration.ofSeconds(
-            tradingProperties.reconcileHaltThreshold.toLong() * tradingProperties.intervalSeconds,
+            tradingProperties.reconcileAlertThreshold.toLong() * tradingProperties.intervalSeconds,
         )
         val stuckFor = Duration.between(since, clock.instant())
         if (stuckFor < threshold) return

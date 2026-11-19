@@ -88,7 +88,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 | `TRADING_MAX_HOLD_DAYS` | `1` | 보유 상한(거래일, KST 09:00 경계) |
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
 | `TRADING_INTERVAL_SECONDS` | `10` | 매매 루프 주기(초). 허용 `[1, 60]` — 손절·익절·트레일링 평가가 이 주기로만 돈다 |
-| `TRADING_RECONCILE_HALT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 ERROR 로 한 번 알린다(횟수는 저장돼 재시작해도 같은 일을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 막힌 매도 알림은 이 값 × 매매 주기 뒤에 나간다. 허용 `[1, 100]` |
+| `TRADING_RECONCILE_ALERT_THRESHOLD` | `20` | 미확인 매수 조회가 이 횟수만큼 연속 실패하면 ERROR 로 한 번 알린다(횟수는 저장돼 재시작해도 같은 일을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 막힌 매도 알림은 이 값 × 매매 주기 뒤에 나간다. 허용 `[1, 100]` |
 | `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상. 형식은 `TRADING_TICKERS`와 같고 배포 preflight 가 막는다. 앱은 형식이 틀린 항목을 구독에서 빼고 기동 뒤 ERROR 로 알린다 |
 | `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |

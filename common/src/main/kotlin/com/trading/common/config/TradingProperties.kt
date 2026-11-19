@@ -22,11 +22,11 @@ data class TradingProperties(
     val intervalSeconds: Long = 10,
     val autoStart: Boolean = false,
     // reconcilePendingBuy 의 주문·잔고 조회가 연속으로 이 횟수만큼 실패하면 ERROR 로 한 번 알린다. 막힌 매도 알림의 시간 기준(× intervalSeconds)이기도 하다.
-    val reconcileHaltThreshold: Int = 20,
+    val reconcileAlertThreshold: Int = 20,
 ) {
     init {
         // 0 이하면 횟수가 임계를 넘는 순간이 없어 알림이 나가지 않는다.
-        require(reconcileHaltThreshold >= 1) { "trading.reconcile-halt-threshold must be >= 1, got $reconcileHaltThreshold" }
+        require(reconcileAlertThreshold >= 1) { "trading.reconcile-alert-threshold must be >= 1, got $reconcileAlertThreshold" }
         // 0 이하면 tick 루프가 폭주하고 막힌 매도 알림도 첫 reconcile 에서 바로 나간다.
         require(intervalSeconds >= 1) { "trading.interval-seconds must be >= 1, got $intervalSeconds" }
     }

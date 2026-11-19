@@ -194,7 +194,7 @@ class UnknownOrderCharacterizationTest {
 
     @Test
     fun `failed identifier lookups and unreadable balances count toward the alert threshold`() = runTest {
-        val manager = manager(TradingProperties(reconcileHaltThreshold = 2))
+        val manager = manager(TradingProperties(reconcileAlertThreshold = 2))
         val state = TradingState("KRW-BTC")
         val identifier = lostBuy(manager, state)!!
 

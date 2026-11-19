@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
 /**
  * 응답을 못 받은 Upbit 매도의 확정 규칙을 고정한다. 흔적은 주문 전보다 free 가 줄었는지로 보고(locked 는 세지 않는다),
  * 미접수로 확정되면 포지션을 실잔고로 되살린 뒤 pending 을 지운다. 판단을 못 한 조회는 체결 확인 실패 횟수에 세지 않고,
- * 대신 pendingSellSince 부터 reconcileHaltThreshold × intervalSeconds 가 지나면 ERROR 로 한 번 알린다.
+ * 대신 pendingSellSince 부터 reconcileAlertThreshold × intervalSeconds 가 지나면 ERROR 로 한 번 알린다.
  */
 class UnknownSellOrderCharacterizationTest {
 
@@ -90,7 +90,7 @@ class UnknownSellOrderCharacterizationTest {
 
     @Test
     fun `undecided sell lookups are not counted toward the alert threshold`() = runTest {
-        val manager = manager(TradingProperties(reconcileHaltThreshold = 2))
+        val manager = manager(TradingProperties(reconcileAlertThreshold = 2))
         val state = holding()
         val identifier = lostSell(manager, state)
         coEvery { upbit.getOrderByIdentifier(identifier) } throws RuntimeException("503")
@@ -104,7 +104,7 @@ class UnknownSellOrderCharacterizationTest {
     @Test
     fun `a sell stuck for threshold times interval seconds since it was sent is reported once at ERROR`() = runTest {
         // 2 tick × 10초 = 20초
-        val manager = manager(TradingProperties(reconcileHaltThreshold = 2, intervalSeconds = 10))
+        val manager = manager(TradingProperties(reconcileAlertThreshold = 2, intervalSeconds = 10))
         val state = holding()
         val identifier = lostSell(manager, state)
         assertEquals(clock.instant(), state.pendingSellSince)

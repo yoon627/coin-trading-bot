@@ -100,7 +100,7 @@ class UnknownOrderSeamTest {
         val state = pendingBuyByIdentifier()
         coEvery { upbit.getOrderByIdentifier(any()) } throws OrderLookupException.NotYetVisible()
 
-        repeat(TradingProperties().reconcileHaltThreshold + 1) { manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0) }
+        repeat(TradingProperties().reconcileAlertThreshold + 1) { manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0) }
 
         assertEquals(0, state.reconcileFailureCount)
         assertTrue(state.hasPendingBuy())

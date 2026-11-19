@@ -928,7 +928,7 @@ class PositionManagerExtendedTest {
     fun `stuck sell reconcile escalates to an error alert exactly once`() = runTest {
         // 미해소 pending sell 은 processTicker 에서 매도·매수 평가를 통째로 막아, 방치되면
         // 보유 포지션이 손절도 못 한다. 매수 체결 확인 실패 알림과 같은 상한에서 한 번 알린다.
-        val mgr = PositionManager(upbitClient, TradingProperties(reconcileHaltThreshold = 3), mockk(relaxed = true), 1L)
+        val mgr = PositionManager(upbitClient, TradingProperties(reconcileAlertThreshold = 3), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.001", avgBuyPrice = "50000000"),
@@ -953,7 +953,7 @@ class PositionManagerExtendedTest {
     /** 막힌 매도 시나리오 공통 배치. [elapsed] 초 전에 pending 이 시작된 것으로 둔다. */
     private fun stuckSellFixture(elapsedSeconds: Long, alerted: Boolean = false): Pair<PositionManager, TradingState> {
         val now = java.time.Instant.parse("2026-08-22T00:00:00Z")
-        val props = TradingProperties(reconcileHaltThreshold = 20, intervalSeconds = 10) // 임계 200초
+        val props = TradingProperties(reconcileAlertThreshold = 20, intervalSeconds = 10) // 임계 200초
         val mgr = PositionManager(
             upbitClient, props, mockk(relaxed = true), 1L,
             clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC),
@@ -1248,7 +1248,7 @@ class PositionManagerExtendedTest {
     fun `reconcile does not count an unfilled order as a failure`() = runTest {
         // getOrder 는 죽었지만 잔고조회로 "아직 체결 안 됨" 을 확인한 경우는 장애가 아니다.
         // 이걸 실패로 세면 미체결 주문 하나로 멀쩡한 ticker 가 장애 알림을 낸다.
-        val mgr = PositionManager(upbitClient, TradingProperties(reconcileHaltThreshold = 2), mockk(relaxed = true), 1L)
+        val mgr = PositionManager(upbitClient, TradingProperties(reconcileAlertThreshold = 2), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
         val state = TradingState("KRW-BTC", pendingBuyUuid = "n1", pendingBuyStrategy = "vb")
@@ -1267,7 +1267,7 @@ class PositionManagerExtendedTest {
     private fun failingReconcile(threshold: Int): PositionManager {
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } throws RuntimeException("balance api down")
-        return PositionManager(upbitClient, TradingProperties(reconcileHaltThreshold = threshold), mockk(relaxed = true), 1L)
+        return PositionManager(upbitClient, TradingProperties(reconcileAlertThreshold = threshold), mockk(relaxed = true), 1L)
     }
 
     @Test
