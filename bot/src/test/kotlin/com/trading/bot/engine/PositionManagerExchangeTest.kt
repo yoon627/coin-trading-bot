@@ -57,7 +57,7 @@ class PositionManagerExchangeTest {
 
     @Test
     fun `an order missed once and then found cancelled is settled without a person`() = runTest {
-        val state = TradingState("KRX-005930", exchange = Exchange.KIS_PAPER).apply { beginBuyOrder("b-1", "test", priorVolume = 0.0) }
+        val state = TradingState("KRX-005930", exchange = Exchange.KIS_PAPER).apply { beginBuyOrder("b-1", "test", priorVolume = 0.0, java.time.Instant.now()) }
         coEvery { client.getOrderByIdentifier("b-1") } returns null
         manager.reconcilePendingBuy("KRX-005930", state, 70_000.0)
         assertTrue(state.hasPendingBuy())

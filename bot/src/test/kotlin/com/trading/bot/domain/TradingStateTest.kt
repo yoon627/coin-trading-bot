@@ -217,7 +217,7 @@ class TradingStateTest {
     @Test
     fun `a pending order is identified by its uuid once known and by its identifier until then`() {
         val state = TradingState("KRW-BTC")
-        state.beginBuyOrder("ctb-b", "combined", priorVolume = 0.5)
+        state.beginBuyOrder("ctb-b", "combined", priorVolume = 0.5, java.time.Instant.now())
         assertTrue(state.hasPendingBuy())
 
         state.adoptBuyOrder("u-b")

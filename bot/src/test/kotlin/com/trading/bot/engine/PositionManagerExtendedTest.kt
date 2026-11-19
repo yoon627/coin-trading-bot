@@ -1,6 +1,5 @@
 package com.trading.bot.engine
 
-import com.trading.bot.characterization.capturingLogs
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.ExitParamsSnapshot
@@ -1259,82 +1258,39 @@ class PositionManagerExtendedTest {
     }
 
     @Test
-    fun `reconcile does not count an unfilled order as a failure`() = runTest {
-        // getOrder 는 죽었지만 잔고조회로 "아직 체결 안 됨" 을 확인한 경우는 장애가 아니다.
-        // 이걸 실패로 세면 미체결 주문 하나로 멀쩡한 ticker 가 장애 알림을 낸다.
-        val mgr = PositionManager(upbitClient, TradingProperties(reconcileAlertThreshold = 2), mockk(relaxed = true), 1L)
+    fun `an order api outage backs off even when the balance shows no fill`() = runTest {
+        // 잔고로 "아직 체결 안 됨" 을 봤어도 주문 조회는 실패했다. 바퀴마다 다시 물으면 장애 중 같은 API 를 계속 두드린다.
+        val mgr = PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L)
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } returns listOf(Account(currency = "KRW", balance = "100000"))
         val state = TradingState("KRW-BTC", pendingBuyUuid = "n1", pendingBuyStrategy = "vb")
 
         repeat(5) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) }
 
-        assertEquals(0, state.reconcileFailureCount)
-        assertEquals("n1", state.pendingBuyUuid) // pending 은 유지(다음 tick 재확인)
+        coVerify(exactly = 1) { upbitClient.getOrder("n1") }
+        assertEquals(1, state.lookupFailures)
+        assertEquals("n1", state.pendingBuyUuid) // pending 은 유지(간격이 지나면 다시 확인)
     }
 
-    private inline fun reconcileAlerts(block: () -> Unit): List<String> = capturingLogs(PositionManager::class.java) { logs ->
-        block()
-        logs.list.filter { it.level == ch.qos.logback.classic.Level.ERROR }.map { it.formattedMessage }
-    }
-
-    private fun failingReconcile(threshold: Int): PositionManager {
+    private fun failingReconcile(clock: java.time.Clock): PositionManager {
         coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
         coEvery { upbitClient.getAccounts() } throws RuntimeException("balance api down")
-        return PositionManager(upbitClient, TradingProperties(reconcileAlertThreshold = threshold), mockk(relaxed = true), 1L)
-    }
-
-    @Test
-    fun `repeated getOrder and balance failures alert once when the count first reaches the threshold`() = runTest {
-        // 조회가 계속 실패하는 동안 pending 이 매수·매도를 막는다. 알림은 임계를 처음 넘는 순간 한 번이다.
-        val mgr = failingReconcile(threshold = 3)
-        val state = TradingState("KRW-BTC", pendingBuyUuid = "h1", pendingBuyStrategy = "vb")
-
-        val beforeThreshold = reconcileAlerts { repeat(2) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) } }
-        val afterThreshold = reconcileAlerts { repeat(3) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) } }
-
-        assertEquals(emptyList<String>(), beforeThreshold)
-        assertEquals(1, afterThreshold.size, "$afterThreshold")
-        assertTrue("주문 상태를 확인할 수 없다" in afterThreshold.single(), afterThreshold.single())
-        assertEquals(5, state.reconcileFailureCount)
-        assertEquals("h1", state.pendingBuyUuid)
-        assertNull(mgr.buy("KRW-BTC", state, 50000000.0, "vb"), "미해소 매수가 신규 매수를 막는다")
-    }
-
-    @Test
-    fun `a failure count already past the threshold does not alert again after a restart`() = runTest {
-        // 횟수는 저장되므로 재시작 뒤 로드한 상태가 이미 임계 이상이면 같은 일로 다시 알리지 않는다.
-        val mgr = failingReconcile(threshold = 3)
-        val restored = TradingState("KRW-BTC", pendingBuyUuid = "h1", pendingBuyStrategy = "vb", reconcileFailureCount = 3)
-
-        val alerts = reconcileAlerts { mgr.reconcilePendingBuy("KRW-BTC", restored, 50000000.0) }
-
-        assertEquals(emptyList<String>(), alerts)
-        assertEquals(4, restored.reconcileFailureCount)
-    }
-
-    @Test
-    fun `a new run of failures after the count was reset alerts again`() = runTest {
-        val mgr = failingReconcile(threshold = 2)
-        val state = TradingState("KRW-BTC", pendingBuyUuid = "h1", pendingBuyStrategy = "vb")
-
-        val first = reconcileAlerts { repeat(2) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) } }
-        coEvery { upbitClient.getOrder("h1") } returns Order(uuid = "h1", state = "wait", executedVolume = "0")
-        mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
-        assertEquals(0, state.reconcileFailureCount)
-        coEvery { upbitClient.getOrder(any()) } throws RuntimeException("order api down")
-        val second = reconcileAlerts { repeat(2) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) } }
-
-        assertEquals(1, first.size, "$first")
-        assertEquals(1, second.size, "$second")
+        return PositionManager(upbitClient, TradingProperties(), mockk(relaxed = true), 1L, clock = clock)
     }
 
     @Test
     fun `a buy whose failed lookups end in a cancel buys again without a person`() = runTest {
-        val mgr = failingReconcile(threshold = 2)
+        var now = java.time.Instant.parse("2026-09-28T00:00:00Z")
+        val clock = object : java.time.Clock() {
+            override fun instant() = now
+            override fun getZone(): java.time.ZoneId = java.time.ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId?) = this
+        }
+        val mgr = failingReconcile(clock)
         val state = TradingState("KRW-BTC", pendingBuyUuid = "h1", pendingBuyStrategy = "vb")
         repeat(3) { mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0) }
         coEvery { upbitClient.getOrder("h1") } returns Order(uuid = "h1", state = "cancel", executedVolume = "0")
+        now = now.plus(java.time.Duration.ofMinutes(5)) // 백오프 간격이 지났다
         mgr.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
         assertFalse(state.hasPendingBuy())
 
@@ -1350,11 +1306,11 @@ class PositionManagerExtendedTest {
         // getOrder 응답을 받으면(wait 판정) 진전이므로 누적 실패 카운터를 해소한다.
         coEvery { upbitClient.getOrder("h2") } returns Order(uuid = "h2", state = "wait", executedVolume = "0")
         val state = TradingState("KRW-BTC", pendingBuyUuid = "h2", pendingBuyStrategy = "vb")
-        state.reconcileFailureCount = 2
+        state.lookupFailures = 2
 
         manager.reconcilePendingBuy("KRW-BTC", state, 50000000.0)
 
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
     }
 
     @Test

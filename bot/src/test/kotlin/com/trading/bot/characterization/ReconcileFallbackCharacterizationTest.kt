@@ -34,7 +34,7 @@ class ReconcileFallbackCharacterizationTest {
     }
 
     private fun pendingBuy() = TradingState(
-        "KRW-BTC", pendingBuyUuid = "u-1", pendingBuyStrategy = "test", pendingBuyPriorVolume = 0.0, reconcileFailureCount = 3,
+        "KRW-BTC", pendingBuyUuid = "u-1", pendingBuyStrategy = "test", pendingBuyPriorVolume = 0.0, lookupFailures = 3,
     )
 
     private fun pendingSell() = TradingState(
@@ -44,13 +44,13 @@ class ReconcileFallbackCharacterizationTest {
     )
 
     @Test
-    fun `buy - no balance increase resets the failure count and keeps the pending`() = runTest {
+    fun `buy - no balance increase keeps the pending and still counts the failed order lookup`() = runTest {
         coEvery { upbit.getAccounts() } returns listOf(krw())
         val state = pendingBuy()
 
         assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
 
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(4, state.lookupFailures)
         assertEquals("u-1", state.pendingBuyUuid)
     }
 
@@ -61,7 +61,7 @@ class ReconcileFallbackCharacterizationTest {
 
         assertNull(manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0))
 
-        assertEquals(4, state.reconcileFailureCount)
+        assertEquals(4, state.lookupFailures)
         assertEquals("u-1", state.pendingBuyUuid)
     }
 

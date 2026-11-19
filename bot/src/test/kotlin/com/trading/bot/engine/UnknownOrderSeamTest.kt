@@ -42,7 +42,7 @@ class UnknownOrderSeamTest {
         override suspend fun getClosedOrders(state: String, start: Instant, end: Instant, requireComplete: Boolean, market: String?): List<Order> = emptyList()
     }
 
-    private fun lostBuy() = TradingState("KRW-BTC").apply { beginBuyOrder("ctb-1", "test", priorVolume = 0.0) }
+    private fun lostBuy() = TradingState("KRW-BTC").apply { beginBuyOrder("ctb-1", "test", priorVolume = 0.0, java.time.Instant.now()) }
 
     @Test
     fun `a resolver refuses an exchange that cannot find orders by client id`() {
@@ -102,7 +102,7 @@ class UnknownOrderSeamTest {
 
         repeat(TradingProperties().reconcileAlertThreshold + 1) { manager.reconcilePendingBuy("KRW-BTC", state, 50_000_000.0) }
 
-        assertEquals(0, state.reconcileFailureCount)
+        assertEquals(0, state.lookupFailures)
         assertTrue(state.hasPendingBuy())
     }
 }

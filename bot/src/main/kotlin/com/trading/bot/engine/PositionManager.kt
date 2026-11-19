@@ -52,6 +52,12 @@ internal fun TradingState.alreadyConflicted(e: Throwable): Boolean = versionConf
 // 매도를 다시 보내기 전 대기(ms). 길이가 재전송 횟수다.
 private val SELL_RESEND_DELAYS_MS = listOf(1_000L, 2_000L)
 
+// 조회가 실패한 pending 의 다음 조회까지 최대 대기. 장애가 풀린 뒤 이만큼 안에 알아챈다.
+private val MAX_LOOKUP_BACKOFF: Duration = Duration.ofMinutes(5)
+
+// 시프트 넘침을 막는 상한. 간격이 10초면 5번째 두 배에서 이미 상한에 닿는다.
+private const val MAX_BACKOFF_DOUBLINGS = 20
+
 class PositionManager(
     private val upbitClient: ExchangeClient,
     private val tradingProperties: TradingProperties,
@@ -343,7 +349,7 @@ class PositionManager(
         // 체결 확인 전에 재시작해도 이전 진입 정보가 이어지지 않도록 진입 메타를 지우고 pending 을 기록한다.
         // dust 흡수일 때도 수량은 두고 메타만 지운다. 체결이 확정되면 주문 때 장부 + 이번 체결량으로 덮어쓴다.
         state.clearEntryMeta()
-        state.beginBuyOrder(identifier, strategyName, priorVolume)
+        state.beginBuyOrder(identifier, strategyName, priorVolume, clock.instant())
         // 기록부터 체결 반영까지는 stop/reload 가 끊지 못하게 한다.
         // 그 사이 프로세스가 죽어도 기록된 identifier 로 재시작 뒤 확정한다.
         return withContext(NonCancellable) {
@@ -393,10 +399,19 @@ class PositionManager(
     }
 
     /**
-     * 미해소 매수 주문을 거래소 상태로 확정한다. getOrder 가 실패하면 [fillAccounting] 의 판정으로 복원하고,
-     * uuid 없이 identifier 만 있으면 [resolveBuyByIdentifier] 로 넘긴다.
+     * 미해소 매수 주문을 거래소 상태로 확정한다. 조회가 실패한 뒤에는 [nextLookupAt][TradingState.nextLookupAt] 까지 조회하지 않고,
+     * 막힘 알림은 조회와 무관하게 매 바퀴 본다. 확정을 기록하다 던지는 바퀴에도 본다.
      */
     suspend fun reconcilePendingBuy(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
+        try {
+            return if (lookupDue(state)) lookUpPendingBuy(ticker, state, currentPrice) else null
+        } finally {
+            if (state.hasPendingBuy() && warnIfBuyStuckTooLong(ticker, state)) persist(state)
+        }
+    }
+
+    /** getOrder 가 실패하면 [fillAccounting] 의 판정으로 복원하고, uuid 없이 identifier 만 있으면 [resolveBuyByIdentifier] 로 넘긴다. */
+    private suspend fun lookUpPendingBuy(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
         val uuid = state.pendingBuyUuid
             ?: return state.pendingBuyIdentifier?.let { resolveBuyByIdentifier(ticker, state, currentPrice, it) }
         val filled = try {
@@ -405,36 +420,23 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             log.warn("reconcile getOrder failed for {} ({}): falling back to balance", ticker, e.message)
+            // 주문 조회가 실패했으므로 잔고로 확정되지 않으면 간격을 늘린다. 확정되면 pending 해제가 간격을 되돌린다.
+            recordLookupFailure(state)
             return when (val recovery = fillAccounting.recoverBuyWithoutOrder(ticker, state, currentPrice)) {
                 // 주문 응답이 없어 수수료와 주문 금액을 알 수 없으므로 추정하지 않고 미기록으로 둔다.
-                // 커밋 실패는 조회 장애가 아니라서 실패 횟수에 세지 않고 호출부로 올린다.
                 is BuyRecovery.Filled -> completeBuy(ticker, state, recovery.fill, FeeBasis.Unrecorded, orderAmount = null)
-                // 아직 체결되지 않았음을 확인한 정상 판정이라 실패 횟수를 리셋한다.
                 BuyRecovery.NoChange -> {
                     log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
-                    state.reconcileFailureCount = 0
-                    persist(state) // 재시작 뒤 옛 횟수로 새 일을 알리지 못하는 일이 없게 저장한다
                     null
                 }
-                // getOrder 와 잔고 조회가 모두 실패하면 상태를 볼 수 없으므로 실패 횟수를 올린다.
                 is BuyRecovery.LookupFailed -> {
                     log.warn("reconcile balance recovery failed for {} ({}) — pending kept", ticker, recovery.message)
-                    recordReconcileFailure(state)
-                    persist(state)
                     null
                 }
-                BuyRecovery.Unsupported -> {
-                    recordReconcileFailure(state)
-                    persist(state)
-                    null
-                }
+                BuyRecovery.Unsupported -> null
             }
         }
-        // getOrder 가 응답했으면 진전이 있으므로 카운터를 리셋한다.
-        if (state.reconcileFailureCount != 0) {
-            state.reconcileFailureCount = 0
-            persist(state)
-        }
+        recordLookupSuccess(state)
         return applyFillOutcome(ticker, state, currentPrice, filled)
     }
 
@@ -446,23 +448,13 @@ class PositionManager(
         when (val verdict = unknownOrders.resolve(ticker, TradeSide.BUY, state, identifier)) {
             is UnknownOrderVerdict.Found -> {
                 state.adoptBuyOrder(verdict.order.uuid)
-                state.reconcileFailureCount = 0
+                recordLookupSuccess(state)
                 persist(state)
                 return applyFillOutcome(ticker, state, currentPrice, verdict.order)
             }
-            UnknownOrderVerdict.NotPlaced -> {
-                state.clearPendingBuy()
-                state.reconcileFailureCount = 0
-            }
+            UnknownOrderVerdict.NotPlaced -> state.clearPendingBuy()
             is UnknownOrderVerdict.TracedNotPlaced -> settleTracedBuy(ticker, state, identifier)
-            is UnknownOrderVerdict.Undecided -> when (verdict.reason) {
-                // 주문 상태를 볼 수단이 없으면 실패 횟수가 임계를 넘을 때 알린다.
-                UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED, UnknownOrderVerdict.Reason.BALANCE_UNSEEN -> recordReconcileFailure(state)
-                // 횟수는 확정됐을 때만 리셋한다. 404 마다 리셋하면 간헐 장애가 알림을 계속 미뤄
-                // 매매가 멈춘 채 알림이 나가지 않는다.
-                UnknownOrderVerdict.Reason.TRACED, UnknownOrderVerdict.Reason.AWAITING_CONFIRMATION,
-                UnknownOrderVerdict.Reason.NOT_YET_VISIBLE -> Unit
-            }
+            is UnknownOrderVerdict.Undecided -> recordUndecided(state, verdict.reason, state.pendingBuyPriorVolume)
         }
         persist(state)
         return null
@@ -475,7 +467,6 @@ class PositionManager(
     private fun settleTracedBuy(ticker: String, state: TradingState, identifier: String) {
         val tradingDate = calendar.tradingDate(LocalDateTime.now(TradingDay.KST))
         state.clearPendingBuy()
-        state.reconcileFailureCount = 0
         state.boughtToday = true
         state.boughtDate = tradingDate
         // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
@@ -511,7 +502,7 @@ class PositionManager(
         return when {
             // executed > 0 이면 filled 는 null 이 아니지만 smart cast 를 위해 함께 쓴다.
             filled != null && executed > 0.0 -> {
-                val fill = fillAccounting.buyFill(ticker, state, filled, executed, currentPrice)
+                val fill = recordingRead(state) { fillAccounting.buyFill(ticker, state, filled, executed, currentPrice) }
                 completeBuy(ticker, state, fill, filled.feeBasis(), terminalFunds(filled))
             }
             else -> {
@@ -560,7 +551,6 @@ class PositionManager(
         val tradingDate = calendar.tradingDate(now)
         val snapshot = tradingProperties.exitParamsSnapshot()
         val applyTransition: (TradingState) -> Unit = { s ->
-            s.reconcileFailureCount = 0
             // 절대값으로 덮어 syncPosition 이 그사이 잔고로 맞춘 수량과 이중으로 세지 않는다.
             s.markBought(fillPrice, volume, strategy, replace = true, now = now, tradingDate = tradingDate)
             // markBought 뒤에 찍어야 신규 진입은 현재 설정을, 재시작 복원은 저장된 스냅샷을 쓴다.
@@ -594,20 +584,67 @@ class PositionManager(
         state.peakPersistFailed = false
     }
 
+    private fun lookupDue(state: TradingState): Boolean = state.nextLookupAt?.let { !clock.instant().isBefore(it) } ?: true
+
+    /** 실패할 때마다 다음 조회까지 간격을 두 배로 늘린다(첫 실패 뒤 한 바퀴, 상한 [MAX_LOOKUP_BACKOFF]). */
+    private fun recordLookupFailure(state: TradingState) {
+        state.lookupFailures++
+        val doublings = (state.lookupFailures - 1).coerceAtMost(MAX_BACKOFF_DOUBLINGS)
+        val wait = minOf(Duration.ofSeconds(tradingProperties.intervalSeconds).multipliedBy(1L shl doublings), MAX_LOOKUP_BACKOFF)
+        state.nextLookupAt = clock.instant().plus(wait)
+        log.warn("{} pending order check failed {} times in a row — next check in {}s", state.ticker, state.lookupFailures, wait.seconds)
+    }
+
+    private fun recordLookupSuccess(state: TradingState) = state.resetLookupBackoff()
+
     /**
-     * 횟수가 임계를 처음 넘는 순간(직전 < 임계 ≤ 지금) ERROR 로 한 번 알린다. 횟수는 저장되므로 재시작해도 같은 일을 다시 알리지 않고,
-     * 확정으로 리셋된 뒤 새 일에 다시 알린다. 그동안 미해소 주문이 그 종목의 매매를 막는다.
+     * 주문 조회가 답한 뒤 체결을 기록하려고 잔고를 읽는 거래소 호출. 실패하면 간격을 늘린다. 커밋(DB) 실패는 늘리지 않는다 —
+     * 체결된 주문이 기록을 기다리는 동안 그 종목은 손절을 평가하지 못하므로 DB 가 돌아오면 바로 기록해야 한다.
      */
-    private fun recordReconcileFailure(state: TradingState) {
-        val threshold = tradingProperties.reconcileAlertThreshold
-        val before = state.reconcileFailureCount++
-        if (before < threshold && state.reconcileFailureCount >= threshold) {
-            // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
-            log.error(
-                "[RECONCILE] {} 체결 확인 {}번 연속 실패(주문·잔고 조회 장애) — 주문 상태를 확인할 수 없다. 확정될 때까지 이 종목은 매수·매도하지 않는다",
-                state.ticker, state.reconcileFailureCount,
-            )
+    private suspend inline fun <T> recordingRead(state: TradingState, read: () -> T): T =
+        try {
+            read()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            recordLookupFailure(state)
+            throw e
         }
+
+    /**
+     * 거래소가 답했으면(흔적 대기·미발견·아직 안 보임) 성공이다. 주문 전 보유량이 없는 옛 pending 의
+     * [BALANCE_UNSEEN][UnknownOrderVerdict.Reason.BALANCE_UNSEEN] 은 잔고를 묻지 않은 것이라 실패가 아니다.
+     */
+    private fun recordUndecided(state: TradingState, reason: UnknownOrderVerdict.Reason, priorVolume: Double?) =
+        when (reason) {
+            UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED -> recordLookupFailure(state)
+            UnknownOrderVerdict.Reason.BALANCE_UNSEEN -> if (priorVolume != null) recordLookupFailure(state) else recordLookupSuccess(state)
+            UnknownOrderVerdict.Reason.TRACED, UnknownOrderVerdict.Reason.AWAITING_CONFIRMATION,
+            UnknownOrderVerdict.Reason.NOT_YET_VISIBLE -> recordLookupSuccess(state)
+        }
+
+    /** 매수·매도 막힘 알림의 기준 시간. 임계는 바퀴 수라 간격을 곱해 시간으로 바꾼다. */
+    private fun stuckAlertAfter(): Duration =
+        Duration.ofSeconds(tradingProperties.reconcileAlertThreshold.toLong() * tradingProperties.intervalSeconds)
+
+    /** 막힌 매수를 한 번 알린다. 매도와 같이 영속된 주문 시각으로 재므로 조회 간격·재시작과 무관하다. 저장할 것이 생기면 true 다. */
+    private fun warnIfBuyStuckTooLong(ticker: String, state: TradingState): Boolean {
+        if (state.pendingBuyAlerted) return false
+        val since = state.pendingBuySince ?: run {
+            // 시작 시각이 없는 옛 pending 은 지금부터 센다.
+            state.pendingBuySince = clock.instant()
+            return true
+        }
+        val stuckFor = Duration.between(since, clock.instant())
+        if (stuckFor < stuckAlertAfter()) return false
+        // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
+        log.error(
+            "[RECONCILE] {} 매수 주문 {} 이 {}초째 확정되지 않았다. {} 에서 주문 상태를 확인할 수 있을 때까지 " +
+                "이 종목은 매수·매도하지 않고, 확인되면 자동으로 확정합니다.",
+            ticker, state.pendingBuyRef(), stuckFor.seconds, displayName,
+        )
+        state.pendingBuyAlerted = true
+        return true
     }
 
     /**
@@ -746,16 +783,16 @@ class PositionManager(
     suspend fun reconcilePendingSell(ticker: String, state: TradingState, currentPrice: Double): TradeRecord? {
         val uuid = state.pendingSellUuid
         val identifier = state.pendingSellIdentifier
-        val result = try {
+        if (uuid == null && identifier == null) return null
+        val result = if (!lookupDue(state)) null else try {
             when {
                 uuid != null -> confirmSellByUuid(ticker, state, currentPrice, uuid)
-                identifier != null -> resolveSellByIdentifier(ticker, state, currentPrice, identifier)
-                else -> return null
+                else -> resolveSellByIdentifier(ticker, state, currentPrice, identifier!!)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // 조회 실패는 각 단계가 처리하므로 여기 오는 것은 기록 단계의 실패다.
+            // 조회 실패는 각 단계가 처리하므로 여기 오는 것은 기록 단계(체결량 잔고 조회·커밋)의 실패다.
             // 주문 결과가 있는데 잔고 추정으로 넘기면 실제 체결을 추정치로 기록하게 된다.
             if (state.alreadyConflicted(e)) {
                 log.debug("reconcile sell for {} was resolved but stays pending after the state version conflict", ticker)
@@ -764,7 +801,7 @@ class PositionManager(
             }
             null
         }
-        // pending 매도가 남아 있으면 그 티커는 손절도 평가하지 못하므로, 오래 끌면 ERROR 로 알린다.
+        // pending 매도가 남아 있으면 그 티커는 손절도 평가하지 못하므로, 오래 끌면 ERROR 로 알린다. 조회를 건너뛴 바퀴에도 본다.
         state.pendingSellRef()?.let { warnIfSellStuckTooLong(ticker, state, it) }
         persist(state)
         return result
@@ -778,8 +815,11 @@ class PositionManager(
             throw e
         } catch (e: Exception) {
             log.warn("reconcile sell getOrder failed for {} ({}): falling back to balance", ticker, e.message)
+            // 잔고로 확정되면 pending 해제가 간격을 되돌린다.
+            recordLookupFailure(state)
             return recoverSellWithoutOrder(ticker, state, currentPrice)
         }
+        recordLookupSuccess(state)
         return applySellFillOutcome(ticker, state, currentPrice, filled)
     }
 
@@ -788,6 +828,7 @@ class PositionManager(
         when (val verdict = unknownOrders.resolve(ticker, TradeSide.SELL, state, identifier)) {
             is UnknownOrderVerdict.Found -> {
                 state.adoptSellOrder(verdict.order.uuid)
+                recordLookupSuccess(state)
                 persist(state)
                 applySellFillOutcome(ticker, state, currentPrice, verdict.order)
             }
@@ -796,11 +837,15 @@ class PositionManager(
                 null
             }
             is UnknownOrderVerdict.TracedNotPlaced -> {
+                // 장부를 몰라 확정하지 못하고 남아도 거래소는 답했다. 동기화 실패는 다음 바퀴에 다시 본다.
+                recordLookupSuccess(state)
                 settleTracedSell(ticker, state, identifier, verdict.freeNow)
                 null
             }
-            // 매도는 실패 횟수에 세지 않는다. 막힌 매도는 경과 시간 알림으로 알린다.
-            is UnknownOrderVerdict.Undecided -> null
+            is UnknownOrderVerdict.Undecided -> {
+                recordUndecided(state, verdict.reason, state.pendingSellPriorVolume)
+                null
+            }
         }
 
     /**
@@ -868,11 +913,8 @@ class PositionManager(
             state.pendingSellSince = clock.instant()
             return
         }
-        val threshold = Duration.ofSeconds(
-            tradingProperties.reconcileAlertThreshold.toLong() * tradingProperties.intervalSeconds,
-        )
         val stuckFor = Duration.between(since, clock.instant())
-        if (stuckFor < threshold) return
+        if (stuckFor < stuckAlertAfter()) return
         // 알린 뒤에 표시한다. 먼저 표시하면 크래시나 전송 실패 때 알림을 잃는다. 중복 알림이 유실보다 낫다.
         log.error(
             "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). {} 에서 주문 상태를 확인할 수 있을 때까지 " +
@@ -1063,7 +1105,7 @@ class PositionManager(
                     ticker, state, currentPrice, executed,
                     executedVwap = filled.filledVwap(), feeBasis = sellFeeBasis(filled), orderAmount = terminalFunds(filled),
                 )
-                val (remaining, recoveredAvg) = fillAccounting.sellRemainder(ticker, state, filled, executed)
+                val (remaining, recoveredAvg) = recordingRead(state) { fillAccounting.sellRemainder(ticker, state, filled, executed) }
                 val now = LocalDateTime.now(TradingDay.KST)
                 commitFillAndApply(state, record, sellTransition(remaining, recoveredAvg, now))
                 if (remaining > 0.0) {
@@ -1097,7 +1139,6 @@ class PositionManager(
                 log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, recovery.total)
                 return null
             }
-            // 매도는 실패 횟수에 세지 않는다. 막힌 매도는 경과 시간 알림으로 알린다.
             SellRecovery.Unsupported -> return null
             SellRecovery.Cleared -> Unit
         }

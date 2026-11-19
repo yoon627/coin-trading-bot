@@ -44,7 +44,7 @@ class TradingEngineSessionTest {
         calendar = ClosedCalendar,
     )
 
-    private fun pendingBuy(ticker: String) = TradingState(ticker).apply { beginBuyOrder("ctb-$ticker", "test_strategy", 0.0) }
+    private fun pendingBuy(ticker: String) = TradingState(ticker).apply { beginBuyOrder("ctb-$ticker", "test_strategy", 0.0, java.time.Instant.now()) }
 
     @Test
     fun `a closed session reconciles a pending buy but evaluates nothing once it clears`() = runTest {

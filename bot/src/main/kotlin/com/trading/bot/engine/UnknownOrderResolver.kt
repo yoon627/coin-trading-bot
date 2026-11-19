@@ -242,8 +242,8 @@ internal class UnknownOrderResolver(
     }
 
     /**
-     * 매도는 영속된 주문 시각부터 본다. 매수는 주문 시각이 저장되지 않고 흔적 타이머는 재시작마다 다시 시작해 주문보다 늦을 수
-     * 있으므로 거래소가 허용하는 창 전체를 본다. 어느 쪽도 그 창보다 오래된 주문은 보지 못한다.
+     * 매도는 영속된 주문 시각부터 본다. 매수는 거래소가 허용하는 창 전체를 본다 — `pendingBuySince` 는 V38 전에 낸 주문이면 처음
+     * 확인한 때로 채워져 주문보다 늦을 수 있고, 흔적 타이머도 재시작마다 다시 시작한다. 어느 쪽도 그 창보다 오래된 주문은 보지 못한다.
      */
     private fun closedOrdersStart(side: TradeSide, state: TradingState, now: Instant): Instant {
         val earliest = now.minus(CLOSED_ORDERS_MAX_WINDOW)

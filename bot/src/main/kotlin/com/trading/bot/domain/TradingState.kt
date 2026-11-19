@@ -34,8 +34,13 @@ data class TradingState(
     // 보유 여부가 불확실해 신규 매수를 막는다. 잔고 조회가 실패했거나 우리 주문으로 설명되지 않는 locked 잔고가 있을 때다.
     // 그 위에 진입하면 이중 포지션이 된다.
     var unsynced: Boolean = false,
-    // 미해소 매수의 체결 확인이 연속으로 실패한 횟수. 영속이라 재시작해도 같은 일을 다시 알리지 않는다.
-    var reconcileFailureCount: Int = 0,
+    // 매수 주문을 낸 시각과 막힘을 알렸는지. 매도와 같이 재시작과 무관하게 미해소 기간을 재고 같은 pending 을 다시 알리지 않는다.
+    var pendingBuySince: Instant? = null,
+    var pendingBuyAlerted: Boolean = false,
+    // 확인 조회가 연속으로 실패한 횟수와 다음 조회 시각(비영속). 장애 중 바퀴마다 거래소를 두드리지 않게 간격을 늘린다.
+    // 재시작하면 바로 다시 본다. 한 종목에 매수·매도 pending 이 함께 있지 않아 하나만 둔다.
+    var lookupFailures: Int = 0,
+    var nextLookupAt: Instant? = null,
     // 재시작 횟수와 무관하게 미해소 기간을 재려고 카운터가 아니라 시각으로 남긴다.
     var pendingSellSince: Instant? = null,
     // 영속이라 재시작해도 같은 pending 을 다시 알리지 않는다.
@@ -103,8 +108,11 @@ data class TradingState(
     fun pendingSellRef(): String? = pendingSellUuid ?: pendingSellIdentifier
 
     /** 매수 주문을 보내기 전의 의도 기록. 이 상태가 durable 이 된 뒤에만 주문을 보낸다. */
-    fun beginBuyOrder(identifier: String, strategy: String, priorVolume: Double) {
+    fun beginBuyOrder(identifier: String, strategy: String, priorVolume: Double, since: Instant) {
         pendingBuyUuid = null
+        pendingBuySince = since
+        pendingBuyAlerted = false
+        resetLookupBackoff()
         pendingBuyIdentifier = identifier
         pendingBuyStrategy = strategy
         pendingBuyPriorVolume = priorVolume
@@ -132,6 +140,7 @@ data class TradingState(
         pendingSellReason = reason
         pendingSellSince = since
         pendingSellAlerted = false
+        resetLookupBackoff()
         pendingSellVolume = volume
         pendingSellAvgPrice = avgBuyPrice
         pendingSellTriggerPrice = triggerPrice
@@ -150,6 +159,15 @@ data class TradingState(
         pendingBuyPriorVolume = null
         pendingBuyBookVolume = null
         pendingBuyBookAvg = null
+        pendingBuySince = null
+        pendingBuyAlerted = false
+        resetLookupBackoff()
+    }
+
+    /** 성공 조회 없이 끝난 pending(잔고로 확정·주문 거절)의 실패 횟수가 다음 pending 의 첫 조회를 늦추지 않게 한다. */
+    fun resetLookupBackoff() {
+        lookupFailures = 0
+        nextLookupAt = null
     }
 
     fun pnlPercent(currentPrice: Double): Double {
@@ -257,6 +275,7 @@ data class TradingState(
         pendingSellAlerted = false
         pendingSellTriggerPrice = null
         pendingSellPriorVolume = null
+        resetLookupBackoff()
     }
 
     fun pendingRef(side: TradeSide): PendingRef? = when (side) {

@@ -379,7 +379,7 @@ class TradeAuditAtomicityTest {
     }
 
     @Test
-    fun `매수 잔고복원의 커밋 실패는 조회 장애로 세지 않는다`() = runTest {
+    fun `매수 잔고복원의 커밋 실패는 다음 확인을 미루지 않는다`() = runTest {
         coEvery { upbitClient.getOrder(BUY_UUID) } throws IllegalStateException("getOrder down")
         coEvery { upbitClient.getAccounts() } returns listOf(
             Account(currency = "BTC", balance = "0.01", avgBuyPrice = "50000000"),
@@ -390,7 +390,7 @@ class TradeAuditAtomicityTest {
             failingManager().reconcilePendingBuy(TICKER, state, PRICE)
         }
 
-        assertEquals(0, state.reconcileFailureCount, "실패 횟수는 주문 상태를 볼 수단이 없을 때만 센다")
+        assertEquals(1, state.lookupFailures, "실패한 주문 조회만 센다 — 커밋 실패는 더하지 않는다")
         assertEquals(BUY_UUID, state.pendingBuyUuid)
         assertFalse(state.position)
     }
