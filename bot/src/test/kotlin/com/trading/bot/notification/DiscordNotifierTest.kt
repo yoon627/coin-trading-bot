@@ -288,7 +288,7 @@ class DiscordNotifierTest {
                 alerts = listOf(
                     ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.TradingEngine", "Error processing KRW-A", 1),
                     ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.TradingEngine", "Error processing KRW-B", 3),
-                    ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.PositionManager", "[HALT] KRW-XRP", 1),
+                    ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.PositionManager", "[RECONCILE] KRW-XRP", 1),
                 ),
                 overflowByLogger = mapOf("com.trading.bot.client.UpbitClientImpl" to 4),
             ),
@@ -298,7 +298,7 @@ class DiscordNotifierTest {
         assertEquals(
             listOf(
                 "• TradingEngine — Error processing KRW-A",
-                "• PositionManager — [HALT] KRW-XRP",
+                "• PositionManager — [RECONCILE] KRW-XRP",
                 "• TradingEngine — Error processing KRW-B (×3)",
                 "외 4건 — UpbitClientImpl 4",
             ),
@@ -309,13 +309,13 @@ class DiscordNotifierTest {
     @Test
     fun `sendErrorDigest 는 폭주에서도 설명을 한도 안에 두고 다른 로거의 줄과 못 실은 건수를 남긴다`() {
         val flood = (1..60).map { ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.TradingEngine", "x".repeat(200) + it, 1) }
-        val halt = ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.PositionManager", "[HALT] KRW-XRP", 1)
+        val reconcile = ErrorAlertRateLimiter.HeldAlert("com.trading.bot.engine.PositionManager", "[RECONCILE] KRW-XRP", 1)
         val overflow = (1..100).associate { "com.trading.bot.engine.Logger$it" to 1 } // 끝 줄이 500자를 넘게
 
-        val description = digestEmbed(ErrorAlertRateLimiter.Digest(flood + halt, overflow))["description"] as String
+        val description = digestEmbed(ErrorAlertRateLimiter.Digest(flood + reconcile, overflow))["description"] as String
 
         assertTrue(description.length <= 4096, "description ${description.length} exceeds 4096")
-        assertTrue(description.contains("• PositionManager — [HALT] KRW-XRP"))
+        assertTrue(description.contains("• PositionManager — [RECONCILE] KRW-XRP"))
         val trailer = description.lines().last()
         assertTrue(trailer.startsWith("외 ") && trailer.length <= 500, trailer)
     }

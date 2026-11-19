@@ -85,35 +85,6 @@ class TradingController(
         return failOnError(persisting { manager.setEntriesPaused(currentUserId(), paused) })
     }
 
-    @PostMapping("/bot/halt/clear")
-    suspend fun clearHalt(
-        @RequestBody request: ClearHaltRequest,
-        @RequestParam(required = false) exchange: String? = null,
-    ): Map<String, Any> {
-        val target = requestValidators.parseExchange(exchange)
-        val manager = managers.get(target)
-        // 대상은 항상 currentUserId() 의 봇이다.
-        val ticker = requestValidators.normalizeMarkets(target, listOf(request.ticker)).firstOrNull()
-            ?: throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid ticker: ${request.ticker}")
-        return failOnError(persisting { manager.clearHalt(currentUserId(), ticker) })
-    }
-
-    /** 막힌 pending 을 지운다. 정지된 봇만 가능하고(도는 중이면 409) 거래소에서 주문을 확인한 뒤 호출한다. */
-    @PostMapping("/bot/pending/clear")
-    suspend fun clearPending(
-        @RequestBody request: ClearPendingRequest,
-        @RequestParam(required = false) exchange: String? = null,
-    ): Map<String, Any> {
-        val target = requestValidators.parseExchange(exchange)
-        val manager = managers.get(target)
-        val ticker = when (target) {
-            Exchange.UPBIT -> requestValidators.normalizeMarket(request.ticker)
-            else -> requestValidators.normalizeMarkets(target, listOf(request.ticker)).single()
-        }
-        val side = requestValidators.normalizeTradeSide(request.side)
-        return failOnError(persisting { manager.clearPending(currentUserId(), ticker, side) })
-    }
-
     @GetMapping("/account")
     suspend fun getAccount(@RequestParam(required = false) exchange: String? = null): Any {
         // 응답이 Upbit 계좌 DTO 그대로라 다른 거래소는 받지 않는다.
@@ -203,8 +174,6 @@ private inline fun <T> persisting(block: () -> T): T =
     }
 
 data class StartBotRequest(val tickers: List<String>? = null)
-data class ClearHaltRequest(val ticker: String)
-data class ClearPendingRequest(val ticker: String, val side: String)
 data class EntriesPauseRequest(val paused: Boolean? = null)
 data class UserSettingsRequest(val discordWebhookUrl: String? = null)
 data class UpbitKeysRequest(val accessKey: String, val secretKey: String)

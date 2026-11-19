@@ -124,12 +124,13 @@ class UpbitClientImpl(
      * 쪽 수 상한에서 멈춘다. 배열 파라미터·시간대 표기의 해시·인코딩 차이를 피하려고 state 하나와 epoch ms 만 쓰고,
      * 한 쿼리 문자열을 서명과 요청에 함께 쓴다.
      */
-    override suspend fun getClosedOrders(state: String, start: Instant, end: Instant): List<Order> {
+    override suspend fun getClosedOrders(state: String, start: Instant, end: Instant, requireComplete: Boolean, market: String?): List<Order> {
         require(!end.isBefore(start) && Duration.between(start, end) <= MAX_CLOSED_WINDOW) { "종료 주문 창은 7일 이하다: $start..$end" }
         val seen = LinkedHashMap<String, Order>()
         var from = start.toEpochMilli()
         repeat(MAX_CLOSED_PAGES) {
-            val query = "state=$state&start_time=$from&end_time=${end.toEpochMilli()}&limit=$CLOSED_PAGE_SIZE&order_by=asc"
+            val query = (market?.let { "market=$it&" } ?: "") +
+                "state=$state&start_time=$from&end_time=${end.toEpochMilli()}&limit=$CLOSED_PAGE_SIZE&order_by=asc"
             val page = Mono.defer {
                 upbitWebClient.get()
                     .uri("/v1/orders/closed?$query")
@@ -142,11 +143,13 @@ class UpbitClientImpl(
             if (page.size < CLOSED_PAGE_SIZE) return seen.values.toList()
             val next = page.last().createdAt?.let { OffsetDateTime.parse(it).toInstant().toEpochMilli() }
             if (fresh == 0 || next == null) {
+                check(!requireComplete) { "종료 주문($state) 목록을 끝까지 읽지 못했다: 가득 찬 쪽에 새 주문이 없다(${Instant.ofEpochMilli(from)})" }
                 log.warn("Closed orders ({}) stopped paging: a full page brought nothing new from {}", state, Instant.ofEpochMilli(from))
                 return seen.values.toList()
             }
             from = next
         }
+        check(!requireComplete) { "종료 주문($state) 목록을 끝까지 읽지 못했다: ${MAX_CLOSED_PAGES}쪽 상한" }
         log.warn("Closed orders ({}) stopped after {} pages — later orders in the window were not read", state, MAX_CLOSED_PAGES)
         return seen.values.toList()
     }

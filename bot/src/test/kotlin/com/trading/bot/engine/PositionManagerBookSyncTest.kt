@@ -7,7 +7,6 @@ import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.StoredBook
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
@@ -19,7 +18,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -166,7 +164,7 @@ class PositionManagerBookSyncTest {
         assertEquals(0.0, saved.single().holdVolume)
     }
 
-    // 동기화가 실패한 상태는 장부를 모르므로, 이어지는 저장(일일 리셋·clearHalt 등)이 저장된 장부를 덮지 않아야 한다.
+    // 동기화가 실패한 상태는 장부를 모르므로, 이어지는 저장(일일 리셋 등)이 저장된 장부를 덮지 않아야 한다.
     @Test
     fun `a failed sync leaves the book unknown so later saves keep the stored book`() = runTest {
         coEvery { upbit.getAccounts() } throws IllegalStateException("upbit down")
@@ -176,62 +174,6 @@ class PositionManagerBookSyncTest {
 
         assertFalse(state.bookKnown)
         assertTrue(state.unsynced)
-        coVerify(exactly = 0) { stateService.upsert(any(), any()) }
-    }
-
-    @Test
-    fun `a manually cleared buy adopts only what rose above the balance before the order, once`() = runTest {
-        balance("0.06", avg = "51000000")
-        val state = loaded(0.0).apply {
-            pendingBuyUuid = "b-1"
-            pendingBuyPriorVolume = 0.05
-            releasePending(TradeSide.BUY, LocalDate.of(2026, 11, 10))
-        }
-
-        sync(state)
-        sync(state)
-
-        assertEquals(0.01, state.holdVolume, 1e-9)
-        assertEquals(51_000_000.0, state.avgBuyPrice)
-        assertNull(state.adoptBaselineVolume)
-        assertNull(saved.first().adoptBaselineVolume) // 편입과 같은 저장에서 비운다
-    }
-
-    @Test
-    fun `a manually cleared sell reduces the book by what it sold, partial fills included`() = runTest {
-        fun cleared() = loaded(0.01).apply {
-            pendingSellUuid = "s-1"
-            pendingSellPriorVolume = 0.06
-            pendingSellVolume = 0.01
-            releasePending(TradeSide.SELL, LocalDate.of(2026, 11, 10))
-        }
-        balance("0.05")
-        val filled = cleared()
-        sync(filled)
-        balance("0.056")
-        val partial = cleared()
-        sync(partial)
-
-        assertFalse(filled.position)
-        assertEquals(0.006, partial.holdVolume, 1e-9)
-        assertNull(partial.sellClearVolume)
-    }
-
-    @Test
-    fun `a manual clear is judged only after an owner's lock clears`() = runTest {
-        balance("0.05", locked = "0.01")
-        val state = loaded(0.01).apply {
-            pendingSellUuid = "s-1"
-            pendingSellPriorVolume = 0.06
-            pendingSellVolume = 0.01
-            releasePending(TradeSide.SELL, LocalDate.of(2026, 11, 10))
-        }
-
-        sync(state)
-
-        assertTrue(state.unsynced)
-        assertEquals(0.01, state.sellClearVolume)
-        assertFalse(state.position) // 정리한 매도가 이미 팔았을 수 있어 저장된 장부로 손절하지 않는다
         coVerify(exactly = 0) { stateService.upsert(any(), any()) }
     }
 

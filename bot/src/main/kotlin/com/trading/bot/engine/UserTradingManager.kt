@@ -2,18 +2,14 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.TradeSide
-import com.trading.bot.domain.TradingDay
 import com.trading.bot.domain.TradingState
 import com.trading.bot.exchange.ExchangeClient
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
-import com.trading.bot.persistence.ManualInterventionService
-import com.trading.bot.persistence.TradingStateConflictException
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
-import com.trading.bot.persistence.entity.ManualInterventionEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.bot.config.ExitParamsDeclarationCheck
@@ -70,7 +66,6 @@ class UserTradingManager(
     private val shadowExitObservationRepository: ShadowExitObservationRepository? = null,
     private val exitParamsDeclarationCheck: ExitParamsDeclarationCheck? = null,
     runtime: ExchangeRuntime? = null,
-    private val manualInterventions: ManualInterventionService,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
@@ -459,114 +454,21 @@ class UserTradingManager(
                     "avg_buy_price" to state.avgBuyPrice,
                     "hold_volume" to state.holdVolume,
                     "bought_today" to state.boughtToday,
-                    "halted" to state.halted,
                     "unsynced" to state.unsynced,
-                    // 미해소 주문이 있으면 그 티커는 매매를 평가하지 않는다. 정지 뒤 /api/bot/pending/clear 로 푼다.
+                    // 버전 충돌은 정지 뒤 시작으로만 풀린다. 그때까지 신규 매수를 막는다.
+                    "version_conflict" to state.versionConflict,
+                    "reconcile_failure_count" to state.reconcileFailureCount,
+                    // 미해소 주문이 있으면 그 티커는 매매를 평가하지 않는다. 대사로 확정되면 풀린다.
                     "pending_buy" to state.pendingRef(TradeSide.BUY)?.let { mapOf("by" to it.by, "ref" to it.ref) },
                     "pending_sell" to state.pendingRef(TradeSide.SELL)?.let {
                         mapOf("by" to it.by, "ref" to it.ref, "since" to state.pendingSellSince?.toString())
                     },
                 )
             } ?: emptyList<Map<String, Any?>>()),
-            "halted_tickers" to (engine?.getHaltedTickers() ?: emptyList<String>()),
             // 저장된 값을 읽지 못했으면 null 이다.
             "entries_paused" to pause?.paused,
             "entries_paused_changed_at" to pause?.changedAt?.toString(),
         )
-    }
-
-    /**
-     * 자동으로 풀리지 않는 pending 을 거래소를 확인한 사람이 지운다. 도는 엔진은 매 tick 같은 state 를 reconcile 하므로
-     * 정지된 봇에서만 받는다. 엔진이 없어도 저장 행이 running 이면 곧 기동되므로 거절한다.
-     */
-    suspend fun clearPending(userId: Long, ticker: String, side: TradeSide): Map<String, Any> = lockFor(userId).withLock {
-        // 종료 중 저장은 lock 밖에서 돌아 해제 전 메모리 값으로 되쓸 수 있다.
-        if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
-        val engine = engines[userId]
-        val running = engine?.isRunning() == true || (
-            userId !in unpersistedStops &&
-                botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()?.running == true
-            )
-        if (running) {
-            return@withLock mapOf("error" to "Stop the bot before clearing a pending order", "code" to CONFLICT_CODE)
-        }
-        // 정지 엔진의 미저장 상태를 먼저 저장한다. 그래도 DB 에 없을 수 있는 매도가 남으면 해제하지 않는다.
-        // 엔진을 버리면 그 주문의 유일한 기록이 사라진다.
-        if (engine != null) {
-            val unrecorded = withContext(NonCancellable) { flushOrLog(userId, engine) }
-            if (unrecorded.isNotEmpty()) {
-                throw BotControlPersistFailedException(
-                    PENDING_CLEAR_UNPERSISTED_MESSAGE,
-                    IllegalStateException("정지 엔진의 매도 주문 기록을 DB 에 남기지 못함: ${sellRefs(unrecorded)}"),
-                )
-            }
-        }
-        val state = tradingStateService.loadState(userId, ticker, runtime.exchange)
-        // 다른 거래소 행을 이 매니저가 풀면 그 거래소의 미확정 주문 기록이 사라진다.
-        if (state != null && state.exchange != runtime.exchange) {
-            return@withLock mapOf(
-                "error" to "$ticker 의 상태는 ${state.exchange} 거래소 행이다 — ${runtime.exchange} 에서 해제하지 않는다",
-                "code" to CONFLICT_CODE,
-            )
-        }
-        val ref = state?.pendingRef(side) ?: return@withLock mapOf("status" to "not_pending")
-        if (engine != null) engines.remove(userId, engine)
-        val cleared = state.pendingFields(side)
-        // 체결된 주문이었다면 이 값으로 거래 기록을 맞춘다. 표에도 남지만 저장이 실패해도 보이도록 먼저 로그에 남긴다.
-        log.warn("Clearing pending {} {} ({} {}) by hand for user {} — fields: {}", side, ticker, ref.by, ref.ref, userId, cleared)
-        state.releasePending(side, TradingDay.of(LocalDateTime.now(TradingDay.KST)))
-        if (side == TradeSide.BUY && state.adoptBaselineVolume == null && state.currentBookVolume() != null) {
-            // 주문 전 보유를 모르면 그 주문이 산 코인을 소유자 코인과 가를 수 없어 편입하지 않는다.
-            log.error("{} 미해소 매수 정리: 주문 전 보유 기록이 없어 그 주문이 산 코인을 봇 장부에 넣지 않는다 — 거래소 잔고를 확인하라", ticker)
-        }
-        persistOrFail(userId, PENDING_CLEAR_UNPERSISTED_MESSAGE) {
-            saveWithRecord(
-                userId, state, ManualInterventionEntity.PENDING_CLEAR,
-                mapOf("side" to side.name, "ref" to "${ref.by}:${ref.ref}", "cleared" to cleared),
-            )
-        }
-        log.info("Pending {} {} cleared for user {}", side, ticker, userId)
-        mapOf("status" to "cleared", "ticker" to ticker, "side" to side.name.lowercase(), "cleared" to cleared)
-    }
-
-    suspend fun clearHalt(userId: Long, ticker: String): Map<String, Any> = lockFor(userId).withLock {
-        val engine = engines[userId] ?: return@withLock mapOf("status" to "not_running")
-        // 버전이 충돌한 종목은 메모리가 DB 보다 뒤처져 저장이 늘 실패한다. 다시 시도가 아니라 정지 뒤 시작으로 안내한다.
-        // 주문 확인 안내보다 먼저다 — pending 해제도 정지 뒤 시작으로 DB 를 다시 읽어야 할 수 있다.
-        if (engine.getStates()[ticker]?.versionConflict == true) return@withLock versionConflictRefusal(ticker)
-        // 거래소 확인이 필요한 주문은 halt 만 풀면 그 주문이 확정되지 않은 채 매수가 다시 열린다.
-        engine.getStates()[ticker]?.reviewReason?.let { reason ->
-            return@withLock mapOf(
-                "error" to "$ticker 는 주문 확인이 필요하다($reason) — 거래소에서 확인한 뒤 /api/bot/pending/clear 로 해제한다",
-                "code" to CONFLICT_CODE,
-            )
-        }
-        // 바쁜 루프는 저장 실패가 아니라 ERROR 알림 없이 다시 시도하라고 돌려준다(null).
-        val cleared = persistOrFail(userId, HALT_CLEAR_UNPERSISTED_MESSAGE) {
-            try {
-                engine.clearHalt(ticker) { state, before ->
-                    saveWithRecord(
-                        userId, state, ManualInterventionEntity.HALT_CLEAR,
-                        mapOf("halt_reason" to before.haltReason, "reconcile_failure_count" to before.reconcileFailureCount),
-                    )
-                }
-            } catch (busy: HaltClearBusyException) {
-                log.warn("halt clear for user {} timed out waiting for the trading loop: {}", userId, busy.message)
-                null
-            } catch (conflict: TradingStateConflictException) {
-                // 엔진이 충돌을 표시하고 한 번 알렸다. 저장 실패 ERROR 로 다시 알리지 않는다.
-                log.warn("halt clear for user {} refused — {}", userId, conflict.message)
-                return@withLock versionConflictRefusal(ticker)
-            }
-        } ?: return@withLock mapOf("error" to "매매 루프가 $ticker 를 처리 중이다 — 잠시 후 다시 시도한다", "code" to CONFLICT_CODE)
-        // 기다리는 사이 주문 확인이 필요해졌으면 위와 같이 pending 해제로 안내한다.
-        if (!cleared) engine.getStates()[ticker]?.reviewReason?.let { reason ->
-            return@withLock mapOf(
-                "error" to "$ticker 는 주문 확인이 필요하다($reason) — 거래소에서 확인한 뒤 /api/bot/pending/clear 로 해제한다",
-                "code" to CONFLICT_CODE,
-            )
-        }
-        mapOf("status" to if (cleared) "cleared" else "not_halted")
     }
 
     /** [runtime] 과 무관하게 Upbit 클라이언트다. 거래소별 조회는 [queryClient] 를 쓴다. */
@@ -696,6 +598,10 @@ class UserTradingManager(
     internal fun createEngine(user: UserEntity): TradingEngine {
         // Upbit 엔진 클라이언트는 createUpbitClient 로 만들어야 그 메서드를 stub 한 spy 가 엔진 클라이언트도 바꾼다.
         val parts = if (runtime === upbitRuntime) upbitRuntime.partsFor(createUpbitClient(user)) else runtime.partsFor(user)
+        // 결과를 모르는 주문은 identifier 조회로만 확정한다. 그 조회가 없는 거래소는 확정할 길이 없어 엔진을 만들지 않는다.
+        check(parts.unknownOrderPolicy.supportsClientOrderId) {
+            "${parts.displayName} 는 identifier 로 주문을 조회하지 못해 결과를 모르는 주문을 확정할 수 없다 — 엔진을 만들지 않는다"
+        }
         val client = parts.client
         // 상태 저장·거래 기록·체결 알림 이벤트는 한 트랜잭션으로 커밋하고, 알림은 발송기가 커밋 뒤에 보낸다.
         val userId = user.id!!
@@ -785,18 +691,6 @@ class UserTradingManager(
         val existing = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull() ?: return
         if (!existing.running) return
         botStateRepository.save(existing.copy(running = false, updatedAt = LocalDateTime.now())).awaitSingle()
-    }
-
-    private fun versionConflictRefusal(ticker: String): Map<String, Any> = mapOf(
-        "error" to "$ticker 상태를 다른 쓰기가 먼저 바꿔 이 봇은 더 저장하지 못한다 — 봇을 정지한 뒤 다시 시작한다",
-        "code" to CONFLICT_CODE,
-    )
-
-    /** 상태 저장과 수동 개입 기록을 한 트랜잭션으로, 시간 제한 안에 끝낸다. */
-    private suspend fun saveWithRecord(userId: Long, state: TradingState, action: String, detail: Map<String, Any?>) {
-        withTimeoutOrNull(STOP_SAVE_TIMEOUT_MS.milliseconds) {
-            manualInterventions.saveWithRecord(userId, state, action, detail)
-        } ?: throw IllegalStateException("trading_states 저장 시간 초과")
     }
 
     private inline fun <T> persistOrFail(userId: Long, userMessage: String, block: () -> T): T =

@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test
 
 /**
  * uuid 를 아는 pending 에서 getOrder 가 실패했을 때 실잔고로 넘어가는 규칙을 고정한다.
- * 매수: 증분이 없으면 halt 카운터를 리셋하고, 잔고도 못 읽으면 카운터를 올리고, 증분이 있으면 수수료 미기록(Unrecorded)으로 확정한다.
+ * 매수: 증분이 없으면 체결 확인 실패 횟수를 리셋하고, 잔고도 못 읽으면 카운터를 올리고, 증분이 있으면 수수료 미기록(Unrecorded)으로 확정한다.
  * 매도: free + locked 가 남아 있으면 pending 을 두고, 0 이면 주문 시점 수량과 추정 수수료(Estimate)로 확정한다.
  */
 class ReconcileFallbackCharacterizationTest {
@@ -44,7 +44,7 @@ class ReconcileFallbackCharacterizationTest {
     )
 
     @Test
-    fun `buy - no balance increase resets the halt counter and keeps the pending`() = runTest {
+    fun `buy - no balance increase resets the failure count and keeps the pending`() = runTest {
         coEvery { upbit.getAccounts() } returns listOf(krw())
         val state = pendingBuy()
 
@@ -55,7 +55,7 @@ class ReconcileFallbackCharacterizationTest {
     }
 
     @Test
-    fun `buy - an unreadable balance raises the halt counter and keeps the pending`() = runTest {
+    fun `buy - an unreadable balance raises the failure count and keeps the pending`() = runTest {
         coEvery { upbit.getAccounts() } throws RuntimeException("accounts down")
         val state = pendingBuy()
 

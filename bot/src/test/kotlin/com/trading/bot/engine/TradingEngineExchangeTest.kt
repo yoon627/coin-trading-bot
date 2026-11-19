@@ -104,17 +104,4 @@ class TradingEngineExchangeTest {
         coVerify(exactly = 0) { positionManager.reconcilePendingSell("KRX-005930", any(), any()) }
         coVerify(exactly = 0) { positionManager.syncPosition("KRX-005930", any()) }
     }
-
-    @Test
-    fun `a halt that needs an order review is not cleared by halt clear`() = runBlocking {
-        val engine = engine(Exchange.UPBIT)
-        val state = TradingState("KRW-BTC", halted = true, haltReason = "주문 확인 필요(BUY ctb-1): x", reviewReason = "주문 확인 필요(BUY ctb-1): x")
-        engine.start(listOf("KRW-BTC"), linkedMapOf("KRW-BTC" to state))
-        engine.stop()
-
-        assertFalse(engine.clearHalt("KRW-BTC"))
-
-        assertTrue(state.halted)
-        coVerify(exactly = 0) { positionManager.persistStateOrThrow(any()) }
-    }
 }

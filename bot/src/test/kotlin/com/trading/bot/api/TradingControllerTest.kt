@@ -1,6 +1,5 @@
 package com.trading.bot.api
 
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
@@ -78,26 +77,6 @@ class TradingControllerTest {
     }
 
     @Test
-    fun `clearing a pending order on a running bot surfaces as 409`() {
-        coEvery { manager.clearPending(userId, "KRW-BTC", TradeSide.SELL) } returns
-            mapOf("error" to "Stop the bot before clearing a pending order", "code" to "conflict")
-
-        val ex = assertThrows<ResponseStatusException> {
-            authed { controller.clearPending(ClearPendingRequest("krw-btc", "Sell")) }
-        }
-        assertEquals(HttpStatus.CONFLICT, ex.statusCode)
-    }
-
-    @Test
-    fun `clearing a pending order rejects an unknown side before touching the bot`() {
-        val ex = assertThrows<ResponseStatusException> {
-            authed { controller.clearPending(ClearPendingRequest("KRW-BTC", "both")) }
-        }
-        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
-        coVerify(exactly = 0) { manager.clearPending(any(), any(), any()) }
-    }
-
-    @Test
     fun `startBot returns success map without throwing on happy path`() {
         coEvery { manager.startBot(userId, null) } returns
             mapOf("status" to "started", "strategy" to "combined")
@@ -127,12 +106,6 @@ class TradingControllerTest {
     fun `startBot persistence failure is 503 with the manager's message`() {
         coEvery { manager.startBot(userId, null) } throws persistFailure
         assertServiceUnavailable { controller.startBot(null) }
-    }
-
-    @Test
-    fun `clearHalt persistence failure is 503 with the manager's message`() {
-        coEvery { manager.clearHalt(userId, "KRW-BTC") } throws persistFailure
-        assertServiceUnavailable { controller.clearHalt(ClearHaltRequest("KRW-BTC")) }
     }
 
     // 설정 저장(Discord webhook)

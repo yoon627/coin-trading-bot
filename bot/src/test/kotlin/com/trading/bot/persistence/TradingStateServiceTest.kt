@@ -2,7 +2,6 @@ package com.trading.bot.persistence
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.trading.bot.domain.SellReason
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.entity.TradingStateEntity
 import io.mockk.every
@@ -10,7 +9,6 @@ import io.mockk.verify
 import io.mockk.slot
 import io.mockk.mockk
 import java.time.Instant
-import java.time.LocalDate
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -49,8 +47,7 @@ class TradingStateServiceTest {
                 ticker = "KRW-BTC",
                 pendingBuyUuid = "pending-1",
                 pendingBuyStrategy = "volatility_breakout",
-                halted = true,
-                haltReason = "reconcile 실패",
+                reconcileFailureCount = 3,
                 exitParamsJson = "{not valid json",
             ),
         )
@@ -60,7 +57,7 @@ class TradingStateServiceTest {
         val state = states["KRW-BTC"]!!
         assertEquals("pending-1", state.pendingBuyUuid)
         assertEquals("volatility_breakout", state.pendingBuyStrategy)
-        assertEquals(true, state.halted)
+        assertEquals(3, state.reconcileFailureCount)
         assertNull(state.exitParams) // 스냅샷만 버리고 전역 청산값으로 폴백한다
     }
 
@@ -216,21 +213,6 @@ class TradingStateServiceTest {
 
         assertEquals(0.01, row.bookVolume)
         assertEquals(row.updatedAt, row.bookWrittenAt)
-    }
-
-    // pending/clear 는 봇이 멈춘 채 행을 읽어 정리하고 다시 저장한다. 그 저장이 장부를 낡게 만들면 다음 기동이 잔고 전체를 편입한다.
-    @Test
-    fun `a pending clear saved before the first sync keeps the stored book for the next load`() = runTest {
-        val stored = storedRow(0.01).copy(pendingSellUuid = "s-1", pendingSellVolume = 0.01, pendingSellPriorVolume = 0.06)
-        every { repository.findByUserIdAndTicker(1L, "KRW-BTC") } returns Mono.just(stored)
-        val state = service.loadState(1L, "KRW-BTC")!!.apply { releasePending(TradeSide.SELL, LocalDate.of(2026, 11, 10)) }
-
-        val row = savedOnUpsert(stored, state)
-        rows(row)
-
-        val next = service.loadStates(1L).getValue("KRW-BTC")
-        assertEquals(0.01, next.storedBook?.volume)
-        assertEquals(0.06, next.sellClearPriorVolume)
     }
 
     // 재시작 전 걸어 둔 매수의 체결은 주문 때 장부 위에만 더한다. 그 값은 pending 과 함께 저장된다.

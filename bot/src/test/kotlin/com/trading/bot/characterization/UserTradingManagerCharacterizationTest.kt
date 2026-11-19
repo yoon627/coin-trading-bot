@@ -9,7 +9,6 @@ import com.trading.bot.engine.PositionManager
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.engine.TradingEngine
 import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.engine.savingInterventions
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.persistence.BotStateRepository
@@ -31,7 +30,6 @@ import io.mockk.slot
 import io.mockk.spyk
 import io.mockk.verify
 import java.time.Clock
-import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlinx.coroutines.awaitCancellation
@@ -53,10 +51,10 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 /**
- * Upbit 봇 매니저의 복원·시작·정지·pending 해제와 엔진 배선을 고정한다. bot_state 는 exchange "UPBIT" 로 읽고 쓴다.
+ * Upbit 봇 매니저의 복원·시작·정지와 엔진 배선을 고정한다. bot_state 는 exchange "UPBIT" 로 읽고 쓴다.
  * 복원은 autoStart 일 때만, access key 만 확인하고, 복호화 → 상태 로드 → 엔진 등록 → 기동 순서이며 실패하면 1·2·4·8초 간격으로 5회까지 한다.
  * 시작은 access·secret key 를 둘 다 요구하고 기동 전에 running=true 를 저장하며, 도는 엔진에 다른 목록을 주면 CONFLICT 다.
- * 정지는 running=false 를 저장하고, pending 해제는 엔진도 DB 행도 멈췄을 때만 받는다. 엔진은 복호화된 키로 서명하는 Upbit 클라이언트,
+ * 정지는 running=false 를 저장한다. 엔진은 복호화된 키로 서명하는 Upbit 클라이언트,
  * TradeExecutionService.commitFill, KST 시계의 DailyResetManager 로 만든다. SmartLifecycle phase 는 100, 종료 예산은 25초다.
  */
 class UserTradingManagerCharacterizationTest {
@@ -74,7 +72,6 @@ class UserTradingManagerCharacterizationTest {
         userRepository, botStateRepository, tradeExecutionService, mockk<DiscordNotifier>(relaxed = true),
         strategy, TradingProperties(autoStart = autoStart), webClient,
         userSecretsService, mockk<MarketDataStore>(relaxed = true), tradingStateService,
-        manualInterventions = savingInterventions(tradingStateService),
     )
 
     @BeforeEach
@@ -249,53 +246,6 @@ class UserTradingManagerCharacterizationTest {
         assertFalse(saved.captured.running)
         assertEquals(10L, saved.captured.id) // 새 행이 아니라 읽은 행을 고쳐 쓴다
         assertNull(manager.getEngine(1L))
-    }
-
-    @Test
-    fun `clearing a pending is refused while the engine runs`() = runTest {
-        registerRunningEngine()
-
-        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        assertEquals("Stop the bot before clearing a pending order", result["error"])
-        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"])
-        coVerify(exactly = 0) { tradingStateService.loadState(any(), any()) }
-        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
-    }
-
-    @Test
-    fun `clearing a pending is refused without an engine when the UPBIT row is still running`() = runTest {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(row(running = true))
-
-        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        assertEquals("Stop the bot before clearing a pending order", result["error"])
-        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"])
-        verify(exactly = 1) { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") }
-        coVerify(exactly = 0) { tradingStateService.loadState(any(), any()) }
-    }
-
-    @Test
-    fun `a stopped bot's pending is cleared from the row read by user and ticker`() = runTest {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(row(running = false))
-        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns
-            TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined")
-        val written = slot<TradingState>()
-        coEvery { tradingStateService.upsert(1L, capture(written)) } returns 0L
-
-        val before = TradingDay.of(LocalDateTime.now(TradingDay.KST))
-        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        assertEquals("cleared", result["status"])
-        coVerify(exactly = 1) { tradingStateService.loadState(any(), any()) }
-        coVerify(exactly = 1) { tradingStateService.loadState(1L, "KRW-BTC") }
-        coVerify(exactly = 1) { tradingStateService.upsert(any(), any()) }
-        assertEquals("KRW-BTC", written.captured.ticker)
-        assertFalse(written.captured.hasPendingBuy())
-        // 매수 해제는 체결이 남겼을 진입 흔적을 대신 남긴다.
-        assertEquals("combined", written.captured.entryStrategy)
-        assertTrue(written.captured.boughtToday)
-        assertTrue(written.captured.buyDate!! >= before, "buyDate=${written.captured.buyDate}")
     }
 
     @Test

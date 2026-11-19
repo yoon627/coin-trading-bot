@@ -390,8 +390,7 @@ class TradeAuditAtomicityTest {
             failingManager().reconcilePendingBuy(TICKER, state, PRICE)
         }
 
-        assertEquals(0, state.reconcileFailureCount, "halt 카운터는 주문 상태를 볼 수단이 없을 때만 센다")
-        assertFalse(state.halted)
+        assertEquals(0, state.reconcileFailureCount, "실패 횟수는 주문 상태를 볼 수단이 없을 때만 센다")
         assertEquals(BUY_UUID, state.pendingBuyUuid)
         assertFalse(state.position)
     }

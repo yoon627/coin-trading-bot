@@ -147,7 +147,10 @@ class UpbitSeamDefaultsTest {
     fun `upbit polling and unknown-order constants are unchanged`() {
         assertEquals(FillPollPolicy(10, 300), FillPollPolicy.UPBIT)
         assertEquals(FillPollPolicy(FILL_POLL_ATTEMPTS, FILL_POLL_DELAY_MS), FillPollPolicy.UPBIT)
-        assertEquals(UnknownOrderPolicy(2, Duration.ofSeconds(60), supportsClientOrderId = true), UnknownOrderPolicy.UPBIT)
+        assertEquals(
+            UnknownOrderPolicy(2, Duration.ofSeconds(60), supportsClientOrderId = true, tracedNotPlacedAfter = Duration.ofMinutes(30)),
+            UnknownOrderPolicy.UPBIT,
+        )
     }
 
     // Double 의 toString 은 작은 수를 "1.0E-5" 로 써서 거래소가 거절한다. 그러면 손절이 막힌다.

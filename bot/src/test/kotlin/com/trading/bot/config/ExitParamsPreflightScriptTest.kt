@@ -215,10 +215,10 @@ class ExitParamsPreflightScriptTest {
     }
 
     @Test
-    fun `자릿수를 잘못 적은 halt 임계는 막는다`() {
+    fun `자릿수를 잘못 적은 미해소 주문 알림 임계는 막는다`() {
         // 2000 이면 주기 10초에서 막힌 매도 알림이 약 5.5시간 뒤에 나간다.
-        assertThat(run("TRADING_RECONCILE_HALT_THRESHOLD=2000").flagged).containsExactly("TRADING_RECONCILE_HALT_THRESHOLD")
-        assertThat(run("TRADING_RECONCILE_HALT_THRESHOLD=100").exit).isEqualTo(0)
+        assertThat(run("TRADING_RECONCILE_ALERT_THRESHOLD=2000").flagged).containsExactly("TRADING_RECONCILE_ALERT_THRESHOLD")
+        assertThat(run("TRADING_RECONCILE_ALERT_THRESHOLD=100").exit).isEqualTo(0)
     }
 
     @Test

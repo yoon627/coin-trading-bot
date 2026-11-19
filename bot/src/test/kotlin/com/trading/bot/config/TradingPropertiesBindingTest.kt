@@ -114,7 +114,7 @@ class TradingPropertiesBindingTest {
             assertThat(p.roundTripFeeRate).isEqualTo(0.001)
             assertThat(p.intervalSeconds).isEqualTo(10L)
             assertThat(p.autoStart).isFalse()
-            assertThat(p.reconcileHaltThreshold).isEqualTo(20)
+            assertThat(p.reconcileAlertThreshold).isEqualTo(20)
         }
     }
 

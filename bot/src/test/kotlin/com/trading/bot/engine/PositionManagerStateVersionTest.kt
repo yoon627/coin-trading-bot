@@ -15,12 +15,14 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.config.TradingProperties
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -152,8 +154,6 @@ class PositionManagerStateVersionTest {
         manager.persistState(state)
         val writesAtConflict = store.writes
         assertTrue(state.versionConflict)
-        assertTrue(state.halted)
-        assertEquals("state version conflict", state.haltReason)
 
         state.pendingPersistFailed = true
         state.peakPersistFailed = true
@@ -170,14 +170,15 @@ class PositionManagerStateVersionTest {
         assertEquals(1, errors().size, errors().toString())
     }
 
+    // 충돌한 종목은 저장이 늘 실패하므로 진입 검사에서 바로 막는다. 잔고 조회·선기록까지 가면 매수 신호마다 헛돈다.
     @Test
-    fun `a conflict on a ticker already halted for review keeps the review reason`() = runTest {
-        val state = loadedHolding().apply { halted = true; haltReason = "주문 확인 필요(SELL s-0): 후보 2건" }
-        store.writeElsewhere("KRW-BTC")
+    fun `a ticker whose state conflicted skips a buy signal before reading the balance`() = runTest {
+        val state = TradingState("KRW-BTC", rowVersion = 5L).apply { versionConflict = true }
 
-        manager.persistState(state)
+        assertNull(manager.buy("KRW-BTC", state, price, "test"))
 
-        assertTrue(state.versionConflict)
-        assertEquals("주문 확인 필요(SELL s-0): 후보 2건", state.haltReason)
+        coVerify(exactly = 0) { upbit.getAccounts() }
+        assertTrue(sent.isEmpty())
+        assertTrue(errors().isEmpty(), errors().toString())
     }
 }

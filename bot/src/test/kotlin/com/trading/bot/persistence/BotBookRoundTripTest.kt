@@ -106,15 +106,13 @@ class BotBookRoundTripTest {
             userId,
             known(0.01).copy(
                 pendingBuyUuid = "b-1", pendingBuyBookVolume = 0.002, pendingBuyBookAvg = 4.0,
-                adoptBaselineVolume = 0.003, sellClearPriorVolume = 0.004, sellClearVolume = 0.005,
             ),
         )
 
         val loaded = service.loadState(userId, "KRW-BTC")!!
         assertThat(loaded.storedBook?.volume).isEqualTo(0.01)
         assertThat(loaded.storedBook?.avgPrice).isEqualTo(50_000_000.0)
-        assertThat(listOf(loaded.pendingBuyBookVolume, loaded.pendingBuyBookAvg, loaded.adoptBaselineVolume, loaded.sellClearPriorVolume, loaded.sellClearVolume))
-            .containsExactly(0.002, 4.0, 0.003, 0.004, 0.005)
+        assertThat(listOf(loaded.pendingBuyBookVolume, loaded.pendingBuyBookAvg)).containsExactly(0.002, 4.0)
     }
 
     @Test
@@ -125,7 +123,7 @@ class BotBookRoundTripTest {
 
         val loaded = service.loadState(userId, "KRW-BTC")!!
         assertThat(loaded.storedBook).isNull()
-        // 새 버전이 동기화 전에 저장해도(일일 리셋·clearHalt 등) 낡은 표시를 지우지 않는다.
+        // 새 버전이 동기화 전에 저장해도(일일 리셋 등) 낡은 표시를 지우지 않는다.
         service.upsert(userId, loaded)
         assertThat(service.loadState(userId, "KRW-BTC")!!.storedBook).isNull()
     }

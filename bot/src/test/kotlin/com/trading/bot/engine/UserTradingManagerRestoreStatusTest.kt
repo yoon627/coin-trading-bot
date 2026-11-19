@@ -41,7 +41,6 @@ class UserTradingManagerRestoreStatusTest {
                 strategy, TradingProperties(autoStart = autoStart), mockk<WebClient>(relaxed = true),
                 mockk<UserSecretsService>(relaxed = true), mockk<MarketDataStore>(relaxed = true),
                 mockk<TradingStateService>(relaxed = true),
-                manualInterventions = mockk(relaxed = true),
             ),
         )
         every { manager.createEngine(any()) } returns mockEngine

@@ -34,9 +34,7 @@ data class TradingState(
     // 보유 여부가 불확실해 신규 매수를 막는다. 잔고 조회가 실패했거나 우리 주문으로 설명되지 않는 locked 잔고가 있을 때다.
     // 그 위에 진입하면 이중 포지션이 된다.
     var unsynced: Boolean = false,
-    // pending reconcile 이 계속 실패하면 켠다. 신규 매수만 막는다. 매도·reconcile 까지 막으면 포지션을 청산할 수 없다.
-    var halted: Boolean = false,
-    var haltReason: String? = null,
+    // 미해소 매수의 체결 확인이 연속으로 실패한 횟수. 영속이라 재시작해도 같은 일을 다시 알리지 않는다.
     var reconcileFailureCount: Int = 0,
     // 재시작 횟수와 무관하게 미해소 기간을 재려고 카운터가 아니라 시각으로 남긴다.
     var pendingSellSince: Instant? = null,
@@ -73,19 +71,11 @@ data class TradingState(
     var pendingSellIdentifier: String? = null,
     // 이 행을 가진 거래소. 엔진은 다른 거래소의 행을 쓰지 않는다.
     val exchange: Exchange = Exchange.UPBIT,
-    // 사람이 거래소에서 확인해야 하는 주문의 사유. 있는 동안 halt 해제를 거절한다. 방향을 담지 않으므로
-    // 매수·매도 pending 이 모두 비었을 때만 지운다(자동 확정이든 사람의 pending 해제든).
-    var reviewReason: String? = null,
     // 저장된 봇 장부(로드 때만). 동기화의 입력일 뿐 저장의 출처가 아니다. null 이면 장부를 저장하기 전의 행이다.
     val storedBook: StoredBook? = null,
     // holdVolume·avgBuyPrice 가 봇 장부로 확정됐는지(비영속). 동기화 성공·체결·청산이 켜고 끄지 않는다.
     // 꺼져 있으면 저장이 행의 기존 장부를 그대로 둔다 — 로드 직후 0 을 저장하면 봇 포지션이 관리 밖으로 빠진다.
     var bookKnown: Boolean = false,
-    // 손으로 정리한 미해소 매수의 주문 전 free. 다음 동기화가 그 위로 늘어난 free 를 한 번 편입하고 비운다.
-    var adoptBaselineVolume: Double? = null,
-    // 손으로 정리한 미해소 매도의 주문 전 free·주문 수량. 다음 동기화가 체결된 만큼 장부를 한 번 줄이고 비운다.
-    var sellClearPriorVolume: Double? = null,
-    var sellClearVolume: Double? = null,
     // 이 상태가 마지막으로 읽거나 저장한 행의 버전. 저장은 이 값으로만 된다 — 그사이 다른 쓰기가 있으면 충돌이다.
     // 저장이 커밋된 뒤에만 바꾼다. null 이면 아직 행이 없다. 체결 커밋이 저장하는 사본에도 실려야 해서 생성자에 둔다.
     var rowVersion: Long? = null,
@@ -160,7 +150,6 @@ data class TradingState(
         pendingBuyPriorVolume = null
         pendingBuyBookVolume = null
         pendingBuyBookAvg = null
-        liftReviewIfSettled()
     }
 
     fun pnlPercent(currentPrice: Double): Double {
@@ -268,70 +257,11 @@ data class TradingState(
         pendingSellAlerted = false
         pendingSellTriggerPrice = null
         pendingSellPriorVolume = null
-        liftReviewIfSettled()
-    }
-
-    private fun liftReviewIfSettled() {
-        if (!hasPendingBuy() && !hasPendingSell()) reviewReason = null
     }
 
     fun pendingRef(side: TradeSide): PendingRef? = when (side) {
         TradeSide.BUY -> pendingBuyUuid?.let { PendingRef("uuid", it) } ?: pendingBuyIdentifier?.let { PendingRef("identifier", it) }
         TradeSide.SELL -> pendingSellUuid?.let { PendingRef("uuid", it) } ?: pendingSellIdentifier?.let { PendingRef("identifier", it) }
-    }
-
-    /** [releasePending] 이 지우는 필드(키는 `trading_states` 컬럼명). 해제를 되돌리거나 거래 기록을 맞출 근거로 남긴다. */
-    fun pendingFields(side: TradeSide): Map<String, Any?> = when (side) {
-        TradeSide.BUY -> linkedMapOf(
-            "pending_buy_uuid" to pendingBuyUuid,
-            "pending_buy_identifier" to pendingBuyIdentifier,
-            "pending_buy_strategy" to pendingBuyStrategy,
-            "pending_buy_prior_volume" to pendingBuyPriorVolume,
-            "pending_buy_book_volume" to pendingBuyBookVolume,
-            "pending_buy_book_avg" to pendingBuyBookAvg,
-        )
-        TradeSide.SELL -> linkedMapOf(
-            "pending_sell_uuid" to pendingSellUuid,
-            "pending_sell_identifier" to pendingSellIdentifier,
-            "pending_sell_reason" to pendingSellReason?.name,
-            "pending_sell_volume" to pendingSellVolume,
-            "pending_sell_avg_price" to pendingSellAvgPrice,
-            "pending_sell_since" to pendingSellSince?.toString(),
-            "pending_sell_alerted" to pendingSellAlerted,
-            "pending_sell_trigger_price" to pendingSellTriggerPrice,
-            "pending_sell_prior_volume" to pendingSellPriorVolume,
-        )
-    }
-
-    /**
-     * 거래소를 확인한 사람이 막힌 pending 을 지운다. 매수는 체결이 남겼을 진입 흔적(전략·매수일·당일 진입)을 대신 남겨야
-     * 들어온 코인이 다음 시작에 실리고 보유상한이 걸린다. 매도는 보유 중인데 매수일이 없으면 오늘로 채운다.
-     */
-    fun releasePending(side: TradeSide, today: LocalDate) {
-        when (side) {
-            TradeSide.BUY -> {
-                entryStrategy = entryStrategy ?: pendingBuyStrategy
-                buyDate = buyDate ?: today
-                boughtToday = true
-                boughtDate = today
-                // 그 주문이 산 코인은 다음 동기화가 주문 전 free 위만 편입한다. 주문 전 free 를 모르는 옛 행은 편입하지 않는다.
-                adoptBaselineVolume = pendingBuyPriorVolume
-                clearPendingBuy()
-            }
-            TradeSide.SELL -> {
-                if (position && buyDate == null) buyDate = today
-                sellClearPriorVolume = pendingSellPriorVolume
-                sellClearVolume = pendingSellVolume
-                clearPendingSell()
-            }
-        }
-        reconcileFailureCount = 0
-    }
-
-    fun clearHalt() {
-        halted = false
-        haltReason = null
-        reconcileFailureCount = 0
     }
 }
 

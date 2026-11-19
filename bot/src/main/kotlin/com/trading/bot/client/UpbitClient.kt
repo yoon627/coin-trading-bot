@@ -6,18 +6,17 @@ import com.trading.bot.exchange.FillPollPolicy
 import com.trading.common.domain.Candle
 import java.net.ConnectException
 import java.net.UnknownHostException
-import java.time.Instant
 import java.util.UUID
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 
-/** identifier 에 특수문자가 있으면 JWT 서명이 어긋난다. [getOrderByIdentifier] 는 404 order_not_found 일 때만 null 이다. */
+/**
+ * identifier 에 특수문자가 있으면 JWT 서명이 어긋난다. [getOrderByIdentifier] 는 404 order_not_found 일 때만 null 이다.
+ * [getClosedOrders] 의 401·403 은 ERROR 로 남기지 않는다.
+ */
 interface UpbitClient : ExchangeClient {
     suspend fun getMinuteCandles(market: String, unit: Int = 1, count: Int = 200): List<Candle>
     suspend fun cancelOrder(uuid: String): Order
-
-    /** [state](done·cancel) 인 종료 주문 중 [start]..[end] 에 만든 것. 창은 7일 이하다. 401·403 은 ERROR 로 남기지 않는다. */
-    suspend fun getClosedOrders(state: String, start: Instant, end: Instant): List<Order>
 }
 
 const val FILL_POLL_ATTEMPTS = 10
