@@ -7,7 +7,10 @@ import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.api.RequestValidators
 import com.trading.bot.config.DiscordProperties
 import com.trading.bot.domain.TradeSide
-import io.mockk.*
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
