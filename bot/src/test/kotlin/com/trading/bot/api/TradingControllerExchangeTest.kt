@@ -2,7 +2,6 @@ package com.trading.bot.api
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.RuntimeReloadFailedException
 import com.trading.bot.engine.TradingManagers
@@ -42,7 +41,6 @@ class TradingControllerExchangeTest {
         coEvery { upbit.getStatus(1L) } returns status
         coEvery { upbit.startBot(1L, any()) } returns mapOf("status" to "started")
         coEvery { upbit.stopBot(1L) } returns mapOf("status" to "stopped")
-        coEvery { upbit.clearPending(1L, any(), any()) } returns mapOf("status" to "cleared")
     }
 
     private fun authFilter(): WebFilter = WebFilter { exchange, chain ->
@@ -74,7 +72,6 @@ class TradingControllerExchangeTest {
             client.post("/api/bot/start$q", mapOf("tickers" to listOf("krw-btc"))),
             client.post("/api/bot/start$q"),
             client.post("/api/bot/stop$q"),
-            client.post("/api/bot/pending/clear$q", mapOf("ticker" to "krw-btc", "side" to "sell")),
         )
     }
 
@@ -91,7 +88,6 @@ class TradingControllerExchangeTest {
         coVerify(exactly = 3) { upbit.startBot(1L, listOf("KRW-BTC")) }
         coVerify(exactly = 3) { upbit.startBot(1L, null) }
         coVerify(exactly = 3) { upbit.stopBot(1L) }
-        coVerify(exactly = 3) { upbit.clearPending(1L, "KRW-BTC", TradeSide.SELL) }
     }
 
     @Test
@@ -102,31 +98,28 @@ class TradingControllerExchangeTest {
         coVerify(exactly = 0) { upbit.getStatus(any()) }
         coVerify(exactly = 0) { upbit.startBot(any(), any()) }
         coVerify(exactly = 0) { upbit.stopBot(any()) }
-        coVerify(exactly = 0) { upbit.clearPending(any(), any(), any()) }
     }
 
     @Test
     fun `등록된 KIS 매니저로 가고 티커는 KRX 규칙으로 본다`() {
         coEvery { paper.startBot(1L, any()) } returns mapOf("status" to "started")
-        coEvery { paper.clearPending(1L, any(), any()) } returns mapOf("status" to "cleared")
         val client = client(TradingManagers.of(Exchange.UPBIT to upbit, Exchange.KIS_PAPER to paper))
 
         client.post("/api/bot/start?exchange=KIS_PAPER", mapOf("tickers" to listOf("krx-005930"))).expectStatus().isOk
-        client.post("/api/bot/pending/clear?exchange=KIS_PAPER", mapOf("ticker" to "KRX-005930", "side" to "buy"))
-            .expectStatus().isOk
         client.post("/api/bot/start?exchange=KIS_PAPER", mapOf("tickers" to listOf("KRW-BTC"))).expectStatus().isBadRequest
-        client.post("/api/bot/pending/clear?exchange=KIS_PAPER", mapOf("ticker" to "KRW-BTC", "side" to "buy"))
-            .expectStatus().isBadRequest
 
         coVerify(exactly = 1) { paper.startBot(1L, listOf("KRX-005930")) }
-        coVerify(exactly = 1) { paper.clearPending(1L, "KRX-005930", TradeSide.BUY) }
         coVerify(exactly = 0) { upbit.startBot(any(), any()) }
-        coVerify(exactly = 0) { upbit.clearPending(any(), any(), any()) }
     }
 
     @Test
     fun `halt 해제 경로는 없다`() {
         client().post("/api/bot/halt/clear", mapOf("ticker" to "krw-btc")).expectStatus().isNotFound
+    }
+
+    @Test
+    fun `pending 해제 경로는 없다`() {
+        client().post("/api/bot/pending/clear", mapOf("ticker" to "krw-btc", "side" to "sell")).expectStatus().isNotFound
     }
 
     @Test

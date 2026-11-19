@@ -38,8 +38,6 @@ const TideAPI = {
   botStatus: () => TideAPI._fetch('/api/bot/status'),
   botStart: (req = {}) => TideAPI._fetch('/api/bot/start', { method: 'POST', body: JSON.stringify(req) }),
   botStop: () => TideAPI._fetch('/api/bot/stop', { method: 'POST' }),
-  // 화면 버튼 없이 콘솔에서 쓴다. 정지된 봇의 막힌 pending 을 지운다. side 는 'buy' | 'sell'.
-  clearPending: (ticker, side) => TideAPI._fetch('/api/bot/pending/clear', { method: 'POST', body: JSON.stringify({ ticker, side }) }),
 
   portfolio: () => TideAPI._fetch('/api/portfolio'),
   account: () => TideAPI._fetch('/api/account'),

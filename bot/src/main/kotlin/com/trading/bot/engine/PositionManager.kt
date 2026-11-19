@@ -46,9 +46,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
-/** trading_states.review_reason 컬럼 길이. */
-private const val REVIEW_REASON_MAX_LENGTH = 200
-
 /** 이미 알린 버전 충돌이다. 그 뒤의 저장 실패는 매 tick 되풀이되므로 ERROR 로 다시 알리지 않는다. */
 internal fun TradingState.alreadyConflicted(e: Throwable): Boolean = versionConflict && e is TradingStateConflictException
 
@@ -88,7 +85,7 @@ class PositionManager(
         upbitClient.getAccounts().find { it.currency == currency }
 
     /**
-     * 봇 장부를 거래소 잔고로 맞춘다. 장부는 줄이기만 한다 — 늘리는 것은 봇 체결과 손으로 정리한 미해소 매수의 편입뿐이다.
+     * 봇 장부를 거래소 잔고로 맞춘다. 장부는 줄이기만 한다 — 늘리는 것은 봇 체결뿐이다.
      * 줄이는 기준은 잔고 합(free+locked)이라 소유자 주문이 봇 코인을 잠근 채 재시작해도 장부가 줄지 않는다.
      * 장부를 저장하기 전의 행은 봇 흔적이 있을 때만 한 번 잔고 전체를 편입한다(소유자 결정).
      */
@@ -99,29 +96,12 @@ class PositionManager(
             val locked = account?.lockedDouble() ?: 0.0
             // 우리 매도 주문으로 설명되지 않는 잠금(소유자 주문·출금 대기).
             val foreignLock = locked - minOf(locked, ourSellLockCeiling(state))
-            // 손으로 정리한 주문의 결과와 옛 행의 편입은 free 로 판정한다. 잠금이 풀린 뒤 다시 본다.
-            val deferred = when {
-                foreignLock <= VOLUME_EPSILON -> null
-                state.sellClearVolume != null || state.adoptBaselineVolume != null -> "the manual pending clear"
-                adoptsFromBalance(state) -> "adopting the unstored book"
-                else -> null
-            }
-            if (deferred != null) {
-                deferSync(ticker, state, deferred, foreignLock, account)
+            // 옛 행의 편입은 free 로 판정한다. 잠금이 풀린 뒤 다시 본다.
+            if (foreignLock > VOLUME_EPSILON && adoptsFromBalance(state)) {
+                deferSync(ticker, state, foreignLock, account)
                 return
             }
-            var (volume, avg, fromBalance) = bookToSync(ticker, state, account)
-            applyClearedSell(ticker, state, free, fromBalance)?.let { sold -> volume = (volume - sold).coerceAtLeast(0.0) }
-            state.adoptBaselineVolume?.let { baseline ->
-                val added = (free - baseline).coerceAtLeast(0.0)
-                if (!fromBalance && added > VOLUME_EPSILON) {
-                    val accountAvg = account?.avgBuyPriceDouble() ?: 0.0
-                    avg = if (volume > VOLUME_EPSILON && avg > 0.0) (avg * volume + accountAvg * added) / (volume + added) else accountAvg
-                    volume += added
-                    log.warn("Adopted {} {} bought by the manually cleared order (average from the exchange, approximate)", added, ticker)
-                }
-                state.adoptBaselineVolume = null
-            }
+            val (volume, avg) = bookToSync(ticker, state, account)
             val held = minOf(volume, free + locked)
             if (held < volume - VOLUME_EPSILON) log.info("Book for {} shrinks to the balance: {} → {}", ticker, volume, held)
             state.position = held > VOLUME_EPSILON
@@ -152,39 +132,31 @@ class PositionManager(
         }
     }
 
-    /**
-     * 장부는 모르는 채로 두고(저장하지 않는다) 새로 사지 않는다. 옛 행은 이전 버전처럼 팔 수 있는 잔고로 손절 평가를 이어 간다.
-     * 손으로 정리한 주문은 그 결과를 모르는 동안 보유를 세우지 않는다 — 정리한 매도가 이미 팔았으면 저장된 장부로 손절할 때
-     * 소유자 코인이 팔린다.
-     */
-    private fun deferSync(ticker: String, state: TradingState, what: String, foreignLock: Double, account: Account?) {
-        if (adoptsFromBalance(state)) {
-            val volume = account?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-            state.position = volume > VOLUME_EPSILON
-            state.holdVolume = if (state.position) volume else 0.0
-            state.avgBuyPrice = if (state.position) account?.avgBuyPriceDouble() ?: 0.0 else 0.0
-        }
+    /** 장부는 모르는 채로 두고(저장하지 않는다) 새로 사지 않는다. 옛 행은 이전 버전처럼 팔 수 있는 잔고로 손절 평가를 이어 간다. */
+    private fun deferSync(ticker: String, state: TradingState, foreignLock: Double, account: Account?) {
+        val volume = account?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+        state.position = volume > VOLUME_EPSILON
+        state.holdVolume = if (state.position) volume else 0.0
+        state.avgBuyPrice = if (state.position) account?.avgBuyPriceDouble() ?: 0.0 else 0.0
         state.unsynced = true
         if (!state.unattributableLockWarned) {
-            log.warn("Deferring {} on {}: locked={} is not ours — re-checking after it clears", what, ticker, foreignLock)
+            log.warn("Deferring adopting the unstored book on {}: locked={} is not ours — re-checking after it clears", ticker, foreignLock)
             state.unattributableLockWarned = true
         }
     }
 
     private fun adoptsFromBalance(state: TradingState): Boolean =
-        !state.bookKnown && state.storedBook == null && state.adoptBaselineVolume == null && hasBotTrace(state)
+        !state.bookKnown && state.storedBook == null && hasBotTrace(state)
 
     private fun hasBotTrace(state: TradingState): Boolean =
         state.hasPendingBuy() || state.hasPendingSell() || state.entryStrategy != null || state.buyDate != null
 
-    private data class SyncBook(val volume: Double, val avg: Double, val fromBalance: Boolean)
+    private data class SyncBook(val volume: Double, val avg: Double)
 
-    /** 동기화의 출발 장부. [SyncBook.fromBalance] 면 이미 지금 잔고에서 잡은 값이라 손으로 정리한 주문의 결과를 다시 반영하지 않는다. */
+    /** 동기화의 출발 장부. */
     private fun bookToSync(ticker: String, state: TradingState, account: Account?): SyncBook {
-        if (state.bookKnown) return SyncBook(state.holdVolume, state.avgBuyPrice, fromBalance = false)
-        state.storedBook?.let { return SyncBook(it.volume, it.avgPrice, fromBalance = false) }
-        // 장부를 저장하기 전의 행. 정리한 매수가 있으면 그 주문 전 free 위만 편입한다(아래 규칙이 0 에서 더한다).
-        if (state.adoptBaselineVolume != null) return SyncBook(0.0, 0.0, fromBalance = false)
+        if (state.bookKnown) return SyncBook(state.holdVolume, state.avgBuyPrice)
+        state.storedBook?.let { return SyncBook(it.volume, it.avgPrice) }
         val accountAvg = account?.avgBuyPriceDouble() ?: 0.0
         if (hasBotTrace(state)) {
             // 미해소 매도가 있으면 그 주문 수량이 봇 장부다. 주문 수량이 없는 옛 행은 잔고 전체로.
@@ -193,29 +165,13 @@ class PositionManager(
             if (volume > VOLUME_EPSILON) {
                 log.warn("Adopting {} {} as the bot's position once — its book was not stored before this version", volume, ticker)
             }
-            return SyncBook(volume, accountAvg, fromBalance = true)
+            return SyncBook(volume, accountAvg)
         }
         val free = account?.balanceDouble() ?: 0.0
         if (free > VOLUME_EPSILON) {
             log.warn("Not adopting {} {} — nothing shows the bot bought it, so it is treated as the owner's", free, ticker)
         }
-        return SyncBook(0.0, 0.0, fromBalance = false)
-    }
-
-    /** 손으로 정리한 미해소 매도가 체결된 만큼(주문 전 free − 지금 free, 주문 수량까지)을 돌려주고 기준값을 비운다. */
-    private fun applyClearedSell(ticker: String, state: TradingState, free: Double, fromBalance: Boolean): Double? {
-        val ordered = state.sellClearVolume ?: return null
-        val prior = state.sellClearPriorVolume
-        state.sellClearVolume = null
-        state.sellClearPriorVolume = null
-        if (fromBalance) return null
-        if (prior == null) {
-            log.error("{}: the manually cleared sell has no balance before the order — the book is kept as is, check the exchange", ticker)
-            return null
-        }
-        val sold = (prior - free).coerceIn(0.0, ordered)
-        if (sold > VOLUME_EPSILON) log.info("Manually cleared sell on {} filled {} — reducing the book", ticker, sold)
-        return sold
+        return SyncBook(0.0, 0.0)
     }
 
     /**
@@ -498,7 +454,7 @@ class PositionManager(
                 state.clearPendingBuy()
                 state.reconcileFailureCount = 0
             }
-            is UnknownOrderVerdict.NeedsReview -> markNeedsReview(ticker, state, TradeSide.BUY, verdict.reason)
+            is UnknownOrderVerdict.TracedNotPlaced -> settleTracedBuy(ticker, state, identifier)
             is UnknownOrderVerdict.Undecided -> when (verdict.reason) {
                 // 주문 상태를 볼 수단이 없으면 실패 횟수가 임계를 넘을 때 알린다.
                 UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED, UnknownOrderVerdict.Reason.BALANCE_UNSEEN -> recordReconcileFailure(state)
@@ -510,6 +466,24 @@ class PositionManager(
         }
         persist(state)
         return null
+    }
+
+    /**
+     * 잔고 흔적이 있었지만 어디서도 찾지 못한 매수를 미접수로 확정한다. 실제로 체결됐는데 못 찾은 것이라면 그 코인은 장부 밖에 있으므로
+     * 같은 거래일에 다시 사서 노출을 두 배로 늘리지 않게 당일 진입을 막는다. 거래 기록은 남기지 않는다.
+     */
+    private fun settleTracedBuy(ticker: String, state: TradingState, identifier: String) {
+        val tradingDate = calendar.tradingDate(LocalDateTime.now(TradingDay.KST))
+        state.clearPendingBuy()
+        state.reconcileFailureCount = 0
+        state.boughtToday = true
+        state.boughtDate = tradingDate
+        // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
+        log.error(
+            "[UNKNOWN ORDER] {} 매수 주문 {} 을 잔고 흔적 뒤에도 찾지 못하고 종료 주문 목록에도 없어 미접수로 확정했다 — " +
+                "거래 기록·장부 편입 없이 {} 거래일에는 다시 사지 않는다. 실제로 체결됐다면 그 코인은 봇 장부 밖에 남는다",
+            ticker, identifier, tradingDate,
+        )
     }
 
     /**
@@ -634,23 +608,6 @@ class PositionManager(
                 state.ticker, state.reconcileFailureCount,
             )
         }
-    }
-
-    /**
-     * 자동으로 확정할 수 없는 주문을 ERROR 로 한 번 알린다. pending 은 그대로 두어 그 종목의 매매를 막고 저장은 호출부가 한다.
-     * ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다. 같은 주문이면 [reason] 이 바뀌어도 다시 알리지 않는다.
-     * [TradingState.reviewReason] 은 pending 이 모두 비면(자동 확정 또는 pending 해제) 사라진다.
-     */
-    internal fun markNeedsReview(ticker: String, state: TradingState, side: TradeSide, reason: String) {
-        val ref = state.pendingRef(side)?.ref
-        val alertKey = "주문 확인 필요(${side.name} $ref)".take(REVIEW_REASON_MAX_LENGTH)
-        if (state.reviewReason?.startsWith(alertKey) == true) return
-        // 원문은 아래 ERROR 로그에만 남긴다. 길이를 넘기면 저장이 매번 실패해 체결 확정까지 커밋되지 못한다.
-        state.reviewReason = "$alertKey: $reason".take(REVIEW_REASON_MAX_LENGTH)
-        log.error(
-            "[REVIEW] {} {} 주문 {} 을 자동으로 확정할 수 없습니다 — 신규 진입을 멈춥니다. {} 주문 내역을 확인하세요: {}",
-            ticker, side.name, ref, displayName, reason,
-        )
     }
 
     /**
@@ -807,7 +764,7 @@ class PositionManager(
             }
             null
         }
-        // pending 매도가 남아 있으면 그 티커는 손절도 평가하지 못하므로, 오래 끌면 ERROR 로 사람을 부른다.
+        // pending 매도가 남아 있으면 그 티커는 손절도 평가하지 못하므로, 오래 끌면 ERROR 로 알린다.
         state.pendingSellRef()?.let { warnIfSellStuckTooLong(ticker, state, it) }
         persist(state)
         return result
@@ -835,22 +792,73 @@ class PositionManager(
                 applySellFillOutcome(ticker, state, currentPrice, verdict.order)
             }
             UnknownOrderVerdict.NotPlaced -> {
-                // 코인이 그대로이므로 포지션을 되살리고 다음 tick 에 다시 판다.
-                // 미접수면 주문량이 지금 free 이하라 락 상한이 0 이 되어, 동기화와 pending 해제의 순서는 결과에 영향이 없다.
-                if (!state.position) syncPosition(ticker, state)
-                state.clearPendingSell()
+                releaseUnplacedSell(ticker, state)
                 null
             }
-            is UnknownOrderVerdict.NeedsReview -> {
-                markNeedsReview(ticker, state, TradeSide.SELL, verdict.reason)
+            is UnknownOrderVerdict.TracedNotPlaced -> {
+                settleTracedSell(ticker, state, identifier, verdict.freeNow)
                 null
             }
-            // 매도는 실패 횟수에 세지 않는다. 경과 시간 알림이 사람을 부른다.
+            // 매도는 실패 횟수에 세지 않는다. 막힌 매도는 경과 시간 알림으로 알린다.
             is UnknownOrderVerdict.Undecided -> null
         }
 
     /**
-     * 막힌 매도를 한 번 알린다. 재시작해도 리셋되지 않도록 횟수 대신 영속된 시작 시각으로 판정한다.
+     * 코인이 그대로이므로 포지션을 되살리고 다음 tick 에 다시 판다.
+     * 미접수면 주문량이 지금 free 이하라 락 상한이 0 이 되어, 동기화와 pending 해제의 순서는 결과에 영향이 없다.
+     */
+    private suspend fun releaseUnplacedSell(ticker: String, state: TradingState) {
+        if (!state.position) syncPosition(ticker, state)
+        state.clearPendingSell()
+    }
+
+    /**
+     * 잔고 흔적이 있었지만 어디서도 찾지 못한 매도를 미접수로 확정한다. 실제로 팔렸는데 못 찾은 것이라면 남은 소유자 코인을 다시 팔지
+     * 않도록, 줄어든 잔고 min(주문 수량, 주문 전 free − 지금 free) 만큼 주문 때 장부에서 뺀다 — 소유자가 판 것이었다면 그만큼 봇 코인이
+     * 장부 밖에 남는 쪽으로 틀린다. 주문 때 장부는 저장되지 않아 max(지금 장부, 주문 수량)으로 보고, 그사이 동기화가 이미 줄였으면
+     * 지금 장부보다 늘리지 않는다. 거래 기록은 남기지 않는다.
+     */
+    private suspend fun settleTracedSell(ticker: String, state: TradingState, identifier: String, freeNow: Double) {
+        val ordered = state.pendingSellVolume
+        val prior = state.pendingSellPriorVolume
+        if (ordered == null || prior == null) {
+            // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다. 잔고가 줄었는데 장부를 그대로 두므로 사람이 알아야 한다.
+            log.error(
+                "[UNKNOWN ORDER] {} 매도 주문 {} 을 찾지 못해 미접수로 확정했지만 주문 수량 기록이 없어 봇 장부를 줄이지 못했다 — " +
+                    "다음 매도가 줄어든 잔고(소유자 코인일 수 있다)를 팔 수 있다",
+                ticker, identifier,
+            )
+            releaseUnplacedSell(ticker, state)
+            return
+        }
+        if (!state.position || !state.bookKnown) syncPosition(ticker, state)
+        // 장부를 모르면 줄일 기준이 없다. 그대로 확정하면 저장된 옛 장부가 남아 다음 동기화 뒤 소유자 코인을 팔 수 있다.
+        if (!state.bookKnown) {
+            log.warn("Sell order {} for {} stays pending — the bot book is unknown (sync failed), so the 30-minute wait starts over", identifier, ticker)
+            return
+        }
+        val left = (prior - freeNow).coerceIn(0.0, ordered)
+        val before = state.holdVolume
+        val after = minOf(before, maxOf(before, ordered) - left).coerceAtLeast(0.0)
+        if (after <= VOLUME_EPSILON) {
+            state.shrinkBookTo(0.0)
+            state.position = false
+            state.avgBuyPrice = 0.0
+            state.clearEntryMeta()
+        } else {
+            state.shrinkBookTo(after)
+        }
+        state.clearPendingSell()
+        // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
+        log.error(
+            "[UNKNOWN ORDER] {} 매도 주문 {} 을 잔고 흔적 뒤에도 찾지 못하고 종료 주문 목록에도 없어 미접수로 확정했다 — " +
+                "줄어든 잔고 {} 만큼 봇 장부를 줄였다({} → {}). 거래 기록은 남기지 않는다",
+            ticker, identifier, left, before, state.holdVolume,
+        )
+    }
+
+    /**
+     * 막힌 매도를 한 번 알린다. 재시작해도 리셋되지 않도록 횟수 대신 영속된 시작 시각으로 판정한다. pending 은 대사로만 풀린다.
      * 임계는 reconcileHaltThreshold tick 을 시간으로 환산한 값이다.
      */
     private fun warnIfSellStuckTooLong(ticker: String, state: TradingState, orderRef: String) {
@@ -867,8 +875,8 @@ class PositionManager(
         if (stuckFor < threshold) return
         // 알린 뒤에 표시한다. 먼저 표시하면 크래시나 전송 실패 때 알림을 잃는다. 중복 알림이 유실보다 낫다.
         log.error(
-            "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). 수동 확인 필요 — " +
-                "봇을 정지하고 {} 주문 내역을 확인한 뒤(미체결이면 먼저 취소) POST /api/bot/pending/clear 로 해제할 수 있습니다.",
+            "매도 reconcile 미해소 {}초 — {} 의 청산이 막혀 있습니다(주문 {}). {} 에서 주문 상태를 확인할 수 있을 때까지 " +
+                "이 종목은 매수·매도하지 않고, 확인되면 자동으로 확정합니다.",
             stuckFor.seconds, ticker, orderRef, displayName,
         )
         state.pendingSellAlerted = true
@@ -1089,7 +1097,7 @@ class PositionManager(
                 log.warn("reconcile sell pending kept for {}: order unknown and balance remains (total={})", ticker, recovery.total)
                 return null
             }
-            // 매도는 실패 횟수에 세지 않는다. 경과 시간 알림이 사람을 부른다.
+            // 매도는 실패 횟수에 세지 않는다. 막힌 매도는 경과 시간 알림으로 알린다.
             SellRecovery.Unsupported -> return null
             SellRecovery.Cleared -> Unit
         }

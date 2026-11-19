@@ -115,16 +115,12 @@ class TradingStateService(
             pendingSellPriorVolume = pendingSellPriorVolume,
             pendingBuyIdentifier = pendingBuyIdentifier,
             pendingSellIdentifier = pendingSellIdentifier,
-            reviewReason = reviewReason,
             updatedAt = now,
             bookVolume = if (bookKnown) holdVolume else existing?.bookVolume,
             bookAvgPrice = if (bookKnown) avgBuyPrice else existing?.bookAvgPrice,
             bookWrittenAt = if (bookKnown || existing?.hasValidBook() == true) now else existing?.bookWrittenAt,
             pendingBuyBookVolume = pendingBuyBookVolume,
             pendingBuyBookAvg = pendingBuyBookAvg,
-            adoptBaselineVolume = adoptBaselineVolume,
-            sellClearPriorVolume = sellClearPriorVolume,
-            sellClearVolume = sellClearVolume,
             version = rowVersion,
         )
     }
@@ -143,14 +139,10 @@ class TradingStateService(
         return TradingState(
             ticker = ticker,
             exchange = rowExchange,
-            reviewReason = reviewReason,
             storedBook = book,
             // 재시작 뒤 체결을 주문 때 장부 위에만 더한다. 장부를 저장하기 전 행이면 null 이다.
             pendingBuyBookVolume = pendingBuyBookVolume,
             pendingBuyBookAvg = pendingBuyBookAvg,
-            adoptBaselineVolume = adoptBaselineVolume,
-            sellClearPriorVolume = sellClearPriorVolume,
-            sellClearVolume = sellClearVolume,
             peakPrice = peakPrice,
             buyDate = buyDate,
             boughtToday = boughtToday,

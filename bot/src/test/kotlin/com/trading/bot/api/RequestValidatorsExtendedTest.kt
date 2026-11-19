@@ -1,6 +1,5 @@
 package com.trading.bot.api
 
-import com.trading.bot.domain.TradeSide
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -68,13 +67,6 @@ class RequestValidatorsExtendedTest {
         assertDoesNotThrow { validators.validatePassword("a".repeat(72)) }
         assertDoesNotThrow { validators.validatePassword("가".repeat(24)) } // 72바이트
         assertThrows<ResponseStatusException> { validators.validatePassword("가".repeat(25)) } // 75바이트
-    }
-
-    @Test
-    fun `normalizeTradeSide accepts buy and sell in any case and rejects anything else`() {
-        assertEquals(TradeSide.BUY, validators.normalizeTradeSide("buy"))
-        assertEquals(TradeSide.SELL, validators.normalizeTradeSide(" SELL "))
-        assertThrows<ResponseStatusException> { validators.normalizeTradeSide("both") }
     }
 
     @Test

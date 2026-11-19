@@ -493,12 +493,10 @@ class TradingEngineTest {
     }
 
     @Test
-    fun `a buy pending released by hand is still loaded outside the user list so its coins get synced`(): Unit = runBlocking {
-        // 목록 밖이라 안 실리면 해제 전에 들어온 코인이 손절 없이 남는다.
+    fun `a ticker with only an entry trace is still loaded outside the user list so its coins get synced`(): Unit = runBlocking {
+        // 목록 밖이라 안 실리면 봇이 산 코인이 손절 없이 남는다.
         val engine = createEngine()
-        val released = TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined").apply {
-            releasePending(TradeSide.BUY, LocalDate.of(2026, 10, 8))
-        }
+        val released = TradingState("KRW-BTC", entryStrategy = "combined", buyDate = LocalDate.of(2026, 10, 8), boughtToday = true)
 
         engine.start(listOf("KRW-ETH"), mapOf("KRW-BTC" to released))
 

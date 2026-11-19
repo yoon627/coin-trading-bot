@@ -141,7 +141,7 @@ class TradingEngine(
                 // 보유 기간이 이미 지난 티커는 첫 tick 에 팔리므로 buyDate 를 같이 남긴다.
                 log.warn("User {}: 사용자 목록 밖 티커를 청산될 때까지 관리합니다(ticker=buyDate): {}", userId, restored.associateWith { own[it]?.buyDate })
             }
-            // 빠진 ticker 의 미해소 주문은 아무도 reconcile 하지 않으므로 사람이 봐야 한다.
+            // 진입 흔적이 미해소 주문을 실으므로 여기 걸리면 안 된다. 걸린 주문은 이 실행에서 reconcile 되지 않아 확정되지 않는다.
             own.filterKeys { it !in active }
                 .filterValues { it.hasPendingOrder() }
                 .forEach { (ticker, state) ->

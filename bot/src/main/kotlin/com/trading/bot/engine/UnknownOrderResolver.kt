@@ -22,20 +22,23 @@ internal sealed interface UnknownOrderVerdict {
     /** 흔적 없는 404 가 끊김 없이 이어져 미접수로 확정했다. */
     data object NotPlaced : UnknownOrderVerdict
 
+    /**
+     * 잔고 흔적을 본 주문이 정한 시간이 지나도 identifier 조회와 종료 주문 목록 어디에도 없어 미접수로 확정했다.
+     * [freeNow] 는 이번 조회에서 본 free 잔고다(매도 장부를 줄이는 데 쓴다).
+     */
+    data class TracedNotPlaced(val freeNow: Double) : UnknownOrderVerdict
+
     /** 아직 판단할 수 없어 pending 을 유지한다. */
     data class Undecided(val reason: Reason) : UnknownOrderVerdict
 
-    /** 자동으로 확정할 수 없다. pending 을 둔 채 사람이 확인해야 한다. */
-    data class NeedsReview(val reason: String) : UnknownOrderVerdict
-
     enum class Reason {
-        /** identifier 조회 실패. uuid 없는 응답도 여기에 든다. */
+        /** identifier 조회 또는 종료 주문 목록 조회 실패. uuid 없는 응답도 여기에 든다. */
         ORDER_LOOKUP_FAILED,
 
         /** 거래소에 없는데 잔고 조회가 실패했거나 비교할 주문 전 잔고가 없다. */
         BALANCE_UNSEEN,
 
-        /** 거래소에 없는데 잔고가 주문 전과 달랐던 적이 있다. 이 엔진이 도는 동안은 자동으로 풀지 않는다. */
+        /** 거래소에 없는데 잔고가 주문 전과 달랐던 적이 있다. 첫 흔적 뒤 정한 시간이 지나기를 기다린다. */
         TRACED,
 
         /** 잔고 변화 없는 404. 확정 조건을 기다린다. */
@@ -48,7 +51,7 @@ internal sealed interface UnknownOrderVerdict {
 
 /**
  * 응답을 못 받은 주문이 실제로 접수됐는지 identifier 로 판정한다. pending 처리와 저장은 PositionManager 가 한다.
- * 못 찾은 이력은 엔진마다 만드는 이 인스턴스의 메모리에만 있어 재시작·reload 하면 처음부터 다시 센다.
+ * 못 찾은 이력은 엔진마다 만드는 이 인스턴스의 메모리에만 있어 재시작·reload 하면 처음부터 다시 센다(더 오래 기다리는 쪽).
  */
 internal class UnknownOrderResolver(
     private val upbitClient: ExchangeClient,
@@ -58,12 +61,16 @@ internal class UnknownOrderResolver(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    init {
+        // 못 찾음을 미접수로 읽는 규칙 전체가 이 전제에 기댄다. 엔진 생성이 먼저 거절하고 여기는 마지막 방어다.
+        require(policy.supportsClientOrderId) { "$displayName 는 client order id 로 주문을 찾지 못해 미해소 주문을 대사할 수 없다" }
+    }
+
     /**
-     * identifier 로 못 찾은 이력. [traced] 는 잔고 흔적을 한 번이라도 봤다는 뜻이고, 그런 주문은 자동으로 풀지 않는다.
-     * 단 이 엔진 안에서만이다. 재시작·reload 뒤에는 흔적이 남아 있으면 다시 잡지만, 그 사이 사라졌으면 일반 규칙으로 풀린다.
-     * [misses] 를 다시 세는 것은 더 오래 기다리는 쪽이라 안전하다.
+     * identifier 로 못 찾은 이력. [tracedSince] 는 잔고 흔적을 처음 본 시각이고, 그 뒤로는 조회 실패·잔고 조회 실패·흔적이
+     * 사라진 조회가 끼어도 그대로 둔다 — 끊으면 거래소가 불안정한 동안 영원히 확정하지 못한다.
      */
-    private data class IdentifierMiss(val misses: Int = 0, val firstMissAt: Instant? = null, val traced: Boolean = false)
+    private data class IdentifierMiss(val misses: Int = 0, val firstMissAt: Instant? = null, val tracedSince: Instant? = null)
 
     // 확정되지 않고 풀린 항목은 지우지 않는다. 불명 주문 수만큼이라 쌓여도 작다.
     private val identifierMisses = ConcurrentHashMap<String, IdentifierMiss>()
@@ -78,9 +85,10 @@ internal class UnknownOrderResolver(
         data object Unknown : IdentifierLookup
 
         data object NotYetVisible : IdentifierLookup
-
-        data class NeedsReview(val reason: String) : IdentifierLookup
     }
+
+    /** 잔고 흔적 판정에 쓴 값. [free] 는 지금 free 잔고다. */
+    private data class Observed(val traced: Boolean, val free: Double)
 
     /** 조회·잔고 실패는 [UnknownOrderVerdict.Undecided] 로 돌려주고 `CancellationException` 외에는 던지지 않는다. */
     suspend fun resolve(ticker: String, side: TradeSide, state: TradingState, identifier: String): UnknownOrderVerdict =
@@ -89,15 +97,12 @@ internal class UnknownOrderResolver(
                 identifierMisses.remove(identifier)
                 UnknownOrderVerdict.Found(lookup.order)
             }
-            // 연속 미발견 규칙은 거래소가 client order id 로 찾아 준다는 전제다. 없는 거래소는 이 규칙으로 미접수를 확정하지 않는다.
-            IdentifierLookup.NotFound -> if (!policy.supportsClientOrderId) {
-                UnknownOrderVerdict.NeedsReview("$displayName 에서 주문 $identifier 를 찾지 못했는데, 이 거래소는 미접수를 확정할 수 없다")
-            } else {
-                val trace = when (side) {
-                    TradeSide.BUY -> buyTrace(ticker, state)
-                    TradeSide.SELL -> sellTrace(ticker, state)
+            IdentifierLookup.NotFound -> {
+                val observed = when (side) {
+                    TradeSide.BUY -> observeBuy(ticker, state)
+                    TradeSide.SELL -> observeSell(ticker, state)
                 }
-                judgeMiss(ticker, side, identifier, trace)
+                judgeMiss(ticker, side, state, identifier, observed)
             }
             IdentifierLookup.Unknown -> {
                 breakMissStreak(identifier)
@@ -108,7 +113,6 @@ internal class UnknownOrderResolver(
                 breakMissStreak(identifier)
                 UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.NOT_YET_VISIBLE)
             }
-            is IdentifierLookup.NeedsReview -> UnknownOrderVerdict.NeedsReview(lookup.reason)
         }
 
     private suspend fun lookupByIdentifier(ticker: String, identifier: String): IdentifierLookup =
@@ -119,8 +123,6 @@ internal class UnknownOrderResolver(
         } catch (e: OrderLookupException.NotYetVisible) {
             log.info("identifier lookup for {} order {}: not visible yet ({})", ticker, identifier, e.message)
             IdentifierLookup.NotYetVisible
-        } catch (e: OrderLookupException.NeedsReview) {
-            IdentifierLookup.NeedsReview(e.reason)
         } catch (e: Exception) {
             log.warn("identifier lookup failed for {} order {}: {}", ticker, identifier, e.message)
             IdentifierLookup.Unknown
@@ -130,11 +132,12 @@ internal class UnknownOrderResolver(
         upbitClient.getAccounts().find { it.currency == currency }
 
     /** 주문 전보다 보유가 늘었는지. 시장가 매수는 접수되면 바로 체결된다. null 이면 판단할 수 없다. */
-    private suspend fun buyTrace(ticker: String, state: TradingState): Boolean? {
+    private suspend fun observeBuy(ticker: String, state: TradingState): Observed? {
         val prior = state.pendingBuyPriorVolume ?: return null
         return try {
-            val held = findAccount(ticker.substringAfter("-"))?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
-            held - prior > VOLUME_EPSILON
+            val account = findAccount(ticker.substringAfter("-"))
+            val held = account?.let { heldVolume(it, ourSellLockCeiling(state)) } ?: 0.0
+            Observed(traced = held - prior > VOLUME_EPSILON, free = account?.balanceDouble() ?: 0.0)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -144,11 +147,11 @@ internal class UnknownOrderResolver(
     }
 
     /** 주문 전보다 free 가 줄었는지. 매도가 접수됐으면 팔렸거나 주문에 잠겼다. null 이면 판단할 수 없다. */
-    private suspend fun sellTrace(ticker: String, state: TradingState): Boolean? {
+    private suspend fun observeSell(ticker: String, state: TradingState): Observed? {
         val prior = state.pendingSellPriorVolume ?: return null
         return try {
             val free = findAccount(ticker.substringAfter("-"))?.balanceDouble() ?: 0.0
-            prior - free > VOLUME_EPSILON
+            Observed(traced = prior - free > VOLUME_EPSILON, free = free)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -158,38 +161,48 @@ internal class UnknownOrderResolver(
     }
 
     /**
-     * 잔고 변화 없는 404 가 끊김 없이 이어져야 미접수로 확정한다. 시장가 주문은 접수되면 바로 잔고가 움직인다는 전제라
-     * 증명은 아니어서, 잔고 흔적이 한 번이라도 보인 주문은 pending 을 둔 채 사람이 확인하게 한다.
-     * 흔적이 나중에 사라져도 그 사이의 수동 매매와 구분할 수 없으므로 이 엔진 안에서는 풀지 않는다.
+     * 잔고 변화 없는 404 가 끊김 없이 이어지면 미접수로 확정한다. 시장가 주문은 접수되면 바로 잔고가 움직인다는 전제다.
+     * 잔고 흔적이 한 번이라도 보인 주문은 그 뒤 [UnknownOrderPolicy.tracedNotPlacedAfter] 가 지난 404 에서 종료 주문 목록을
+     * 다시 보고 판정한다. 확정은 이번에 잔고를 본 조회에서만 한다(매도 장부를 줄일 free 가 필요하다).
      */
-    private fun judgeMiss(ticker: String, side: TradeSide, identifier: String, trace: Boolean?): UnknownOrderVerdict {
-        val label = when (side) {
-            TradeSide.BUY -> "Buy"
-            TradeSide.SELL -> "Sell"
-        }
-        val prev = identifierMisses[identifier] ?: IdentifierMiss()
-        if (trace == true && !prev.traced) {
-            log.error(
-                "{} 주문 {}({}) 을 거래소가 찾지 못하는데 잔고가 주문 전과 다릅니다 — 자동 처리하지 않습니다(이 티커의 매매가 멈춥니다). " +
-                    "봇을 정지하고 $displayName 주문 내역을 확인한 뒤(미체결이면 먼저 취소) POST /api/bot/pending/clear 로 해제하고 다시 시작하세요.",
-                label, identifier, ticker,
-            )
-        }
-        if (trace != false || prev.traced) {
-            identifierMisses[identifier] = IdentifierMiss(traced = prev.traced || trace == true)
-            // 호출부가 조회 장애로 셀 수 있게, 잔고를 못 봤으면 이전 흔적과 무관하게 BALANCE_UNSEEN 이다.
-            return UnknownOrderVerdict.Undecided(
-                if (trace == null) UnknownOrderVerdict.Reason.BALANCE_UNSEEN else UnknownOrderVerdict.Reason.TRACED,
-            )
-        }
+    private suspend fun judgeMiss(
+        ticker: String,
+        side: TradeSide,
+        state: TradingState,
+        identifier: String,
+        observed: Observed?,
+    ): UnknownOrderVerdict {
         val now = clock.instant()
+        val prev = identifierMisses[identifier] ?: IdentifierMiss()
+        val tracedSince = prev.tracedSince ?: now.takeIf { observed?.traced == true }
+        if (tracedSince != null) {
+            if (prev.tracedSince == null) {
+                // ERROR 로그는 DiscordErrorLogAppender 가 알림으로 보낸다.
+                log.error(
+                    "{} 주문 {}({}) 을 거래소가 찾지 못하는데 잔고가 주문 전과 다르다 — {}분 뒤에도 못 찾고 종료 주문 목록에도 없으면 " +
+                        "미접수로 확정한다. 그때까지 이 종목은 매매하지 않는다",
+                    side.label(), identifier, ticker, policy.tracedNotPlacedAfter.toMinutes(),
+                )
+            }
+            identifierMisses[identifier] = IdentifierMiss(tracedSince = tracedSince)
+            // 호출부가 조회 장애로 셀 수 있게, 잔고를 못 봤으면 흔적과 무관하게 BALANCE_UNSEEN 이다.
+            if (observed == null) return UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.BALANCE_UNSEEN)
+            if (Duration.between(tracedSince, now) < policy.tracedNotPlacedAfter) {
+                return UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.TRACED)
+            }
+            return confirmTraced(ticker, side, state, identifier, observed.free, now)
+        }
+        if (observed == null) {
+            identifierMisses[identifier] = IdentifierMiss()
+            return UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.BALANCE_UNSEEN)
+        }
         val next = prev.copy(misses = prev.misses + 1, firstMissAt = prev.firstMissAt ?: now)
         val waited = Duration.between(next.firstMissAt, now)
         if (next.misses >= policy.notPlacedMisses && waited >= policy.notPlacedAfter) {
             identifierMisses.remove(identifier)
             log.warn(
                 "{} order {} for {} was never placed (not found {} times over {}s, no balance change) — released",
-                label, identifier, ticker, next.misses, waited.seconds,
+                side.label(), identifier, ticker, next.misses, waited.seconds,
             )
             return UnknownOrderVerdict.NotPlaced
         }
@@ -197,8 +210,65 @@ internal class UnknownOrderResolver(
         return UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.AWAITING_CONFIRMATION)
     }
 
-    /** 미발견이 아닌 답이 끼면 연속 횟수를 끊는다. 흔적 기록은 남긴다. */
+    /**
+     * 흔적이 있는 주문을 identifier 조회와 다른 경로인 종료 주문 목록(done·cancel)에서 찾는다. 한쪽의 일시적 404 를 걸러 낸다.
+     * 있으면 체결 내용을 담은 주문을 다시 읽어 이어받고, 없으면 미접수로 확정한다. 목록·주문 조회가 실패하면 다음 조회에서 다시 본다.
+     */
+    private suspend fun confirmTraced(
+        ticker: String,
+        side: TradeSide,
+        state: TradingState,
+        identifier: String,
+        free: Double,
+        now: Instant,
+    ): UnknownOrderVerdict {
+        val start = closedOrdersStart(side, state, now)
+        val match = try {
+            CLOSED_STATES.firstNotNullOfOrNull { s ->
+                upbitClient.getClosedOrders(s, start, now, requireComplete = true, market = ticker).firstOrNull { it.identifier == identifier }
+            }?.let { upbitClient.getOrder(it.uuid) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("closed orders check for {} order {} failed — kept pending: {}", ticker, identifier, e.message)
+            return UnknownOrderVerdict.Undecided(UnknownOrderVerdict.Reason.ORDER_LOOKUP_FAILED)
+        }
+        identifierMisses.remove(identifier)
+        if (match != null) {
+            log.warn("{} order {} for {} was missing by identifier but listed as {} — adopting {}", side.label(), identifier, ticker, match.state, match.uuid)
+            return UnknownOrderVerdict.Found(match)
+        }
+        return UnknownOrderVerdict.TracedNotPlaced(free)
+    }
+
+    /**
+     * 매도는 영속된 주문 시각부터 본다. 매수는 주문 시각이 저장되지 않고 흔적 타이머는 재시작마다 다시 시작해 주문보다 늦을 수
+     * 있으므로 거래소가 허용하는 창 전체를 본다. 어느 쪽도 그 창보다 오래된 주문은 보지 못한다.
+     */
+    private fun closedOrdersStart(side: TradeSide, state: TradingState, now: Instant): Instant {
+        val earliest = now.minus(CLOSED_ORDERS_MAX_WINDOW)
+        val since = state.pendingSellSince?.takeIf { side == TradeSide.SELL }?.minus(ORDER_TIME_MARGIN) ?: return earliest
+        return maxOf(since, earliest)
+    }
+
+    /** 미발견이 아닌 답이 끼면 연속 횟수를 끊는다. 흔적 타이머는 남긴다. */
     private fun breakMissStreak(identifier: String) {
-        identifierMisses.computeIfPresent(identifier) { _, miss -> IdentifierMiss(traced = miss.traced) }
+        identifierMisses.computeIfPresent(identifier) { _, miss -> IdentifierMiss(tracedSince = miss.tracedSince) }
+    }
+
+    private fun TradeSide.label(): String = when (this) {
+        TradeSide.BUY -> "Buy"
+        TradeSide.SELL -> "Sell"
+    }
+
+    private companion object {
+        val CLOSED_STATES = listOf("done", "cancel")
+
+        // 업비트 종료 주문 조회 창의 상한.
+        // 거래소 상한(7일)이 끝값을 받는지 문서에 없어 1분 안쪽으로 묻는다.
+        val CLOSED_ORDERS_MAX_WINDOW: Duration = Duration.ofDays(7).minusMinutes(1)
+
+        // 주문 시각은 보내기 직전에 찍으므로 거래소 시각과의 차이를 덮을 만큼 앞당긴다.
+        val ORDER_TIME_MARGIN: Duration = Duration.ofMinutes(1)
     }
 }

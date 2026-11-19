@@ -106,15 +106,13 @@ class BotBookRoundTripTest {
             userId,
             known(0.01).copy(
                 pendingBuyUuid = "b-1", pendingBuyBookVolume = 0.002, pendingBuyBookAvg = 4.0,
-                adoptBaselineVolume = 0.003, sellClearPriorVolume = 0.004, sellClearVolume = 0.005,
             ),
         )
 
         val loaded = service.loadState(userId, "KRW-BTC")!!
         assertThat(loaded.storedBook?.volume).isEqualTo(0.01)
         assertThat(loaded.storedBook?.avgPrice).isEqualTo(50_000_000.0)
-        assertThat(listOf(loaded.pendingBuyBookVolume, loaded.pendingBuyBookAvg, loaded.adoptBaselineVolume, loaded.sellClearPriorVolume, loaded.sellClearVolume))
-            .containsExactly(0.002, 4.0, 0.003, 0.004, 0.005)
+        assertThat(listOf(loaded.pendingBuyBookVolume, loaded.pendingBuyBookAvg)).containsExactly(0.002, 4.0)
     }
 
     @Test

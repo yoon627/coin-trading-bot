@@ -181,15 +181,4 @@ class PositionManagerStateVersionTest {
         assertTrue(sent.isEmpty())
         assertTrue(errors().isEmpty(), errors().toString())
     }
-
-    @Test
-    fun `a conflict on a ticker that needs an order review keeps the review reason`() = runTest {
-        val state = loadedHolding().apply { reviewReason = "주문 확인 필요(SELL s-0): 후보 2건" }
-        store.writeElsewhere("KRW-BTC")
-
-        manager.persistState(state)
-
-        assertTrue(state.versionConflict)
-        assertEquals("주문 확인 필요(SELL s-0): 후보 2건", state.reviewReason)
-    }
 }

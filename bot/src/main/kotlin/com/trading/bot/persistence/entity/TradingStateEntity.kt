@@ -37,18 +37,14 @@ data class TradingStateEntity(
     val pendingSellIdentifier: String? = null,
     // [com.trading.common.domain.Exchange.name]
     val exchange: String = "UPBIT",
-    val reviewReason: String? = null,
     val updatedAt: Instant = Instant.now(),
     val bookVolume: Double? = null,
     val bookAvgPrice: Double? = null,
     // 장부를 쓸 때 updatedAt 과 같은 값. 다르면 장부 칼럼을 모르는 옛 버전이 행을 저장한 것이라 장부를 믿지 않는다.
     val bookWrittenAt: Instant? = null,
-    val adoptBaselineVolume: Double? = null,
     // 미해소 매수를 낼 때의 봇 장부. 재시작 뒤 체결을 이 위에만 더한다.
     val pendingBuyBookVolume: Double? = null,
     val pendingBuyBookAvg: Double? = null,
-    val sellClearPriorVolume: Double? = null,
-    val sellClearVolume: Double? = null,
     // 저장은 이 값이 그대로일 때만 되고 1 씩 오른다(V37). null 이면 새 행이라 INSERT 한다.
     @Version val version: Long? = null,
 )

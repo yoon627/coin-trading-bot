@@ -133,19 +133,17 @@ class ExchangeDimensionRoundTripTest {
     }
 
     @Test
-    fun `exchange and review reason survive a round trip and stay out of the upbit view`() = runTest {
+    fun `exchange survives a round trip and stays out of the upbit view`() = runTest {
         val userId = insertUser("roundtrip")
-        val review = "주문 확인 필요(SELL KIS_PAPER:20261020:0001): 후보 2건"
 
-        service.upsert(userId, TradingState("KRW-BTC", reviewReason = review))
-        val kisVersion = service.upsert(userId, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, pendingSellUuid = "KIS_PAPER:20261020:0001", reviewReason = review))
-        service.upsert(userId, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, pendingSellUuid = "KIS_PAPER:20261020:0001", reviewReason = null, rowVersion = kisVersion))
+        service.upsert(userId, TradingState("KRW-BTC"))
+        val kisVersion = service.upsert(userId, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, pendingSellUuid = "KIS_PAPER:20261020:0001"))
+        service.upsert(userId, TradingState("KRX-005930", exchange = Exchange.KIS_PAPER, pendingSellUuid = "KIS_PAPER:20261020:0002", rowVersion = kisVersion))
 
         assertThat(service.loadStates(userId).keys).containsExactly("KRW-BTC")
-        assertThat(service.loadState(userId, "KRW-BTC")?.reviewReason).isEqualTo(review)
         val kis = service.loadState(userId, "KRX-005930", Exchange.KIS_PAPER)
         assertThat(kis?.exchange).isEqualTo(Exchange.KIS_PAPER)
-        assertThat(kis?.reviewReason).isNull()
+        assertThat(kis?.pendingSellUuid).isEqualTo("KIS_PAPER:20261020:0002")
         assertThat(stateRepository.findByUserIdAndExchange(userId, "KIS_PAPER").collectList().awaitSingle()).hasSize(1)
     }
 

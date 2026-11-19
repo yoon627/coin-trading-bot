@@ -166,26 +166,42 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
-    private suspend fun haltColumns(userId: Long, ticker: String): Pair<Boolean, String?> =
-        databaseClient.sql("SELECT halted, halt_reason FROM trading_states WHERE user_id = :u AND ticker = :t")
+    /** 앱이 읽고 쓰지 않는 칼럼(halt·확인 필요 사유·pending 해제 기준값). */
+    private suspend fun retiredColumns(userId: Long, ticker: String): List<Any?> =
+        databaseClient.sql(
+            "SELECT halted, halt_reason, review_reason, adopt_baseline_volume, sell_clear_prior_volume, sell_clear_volume " +
+                "FROM trading_states WHERE user_id = :u AND ticker = :t",
+        )
             .bind("u", userId).bind("t", ticker)
-            .map { row -> row.get("halted", java.lang.Boolean::class.java)!!.booleanValue() to row.get("halt_reason", String::class.java) }
+            .map { row ->
+                listOf(
+                    row.get("halted", java.lang.Boolean::class.java)!!.booleanValue(),
+                    row.get("halt_reason", String::class.java),
+                    row.get("review_reason", String::class.java),
+                    row.get("adopt_baseline_volume", java.lang.Double::class.java)?.toDouble(),
+                    row.get("sell_clear_prior_volume", java.lang.Double::class.java)?.toDouble(),
+                    row.get("sell_clear_volume", java.lang.Double::class.java)?.toDouble(),
+                )
+            }
             .one().awaitSingle()
 
-    // 앱은 halt 칼럼을 읽고 쓰지 않는다. 직전 이미지로 되돌려도 그 칼럼이 남긴 값 그대로 읽히고, 새 행은 기본값이다.
+    // 앱은 이 칼럼들을 읽고 쓰지 않는다. 직전 이미지로 되돌려도 그 칼럼이 남긴 값 그대로 읽히고, 새 행은 기본값이다.
     @Test
-    fun `a save leaves the halt columns of an existing row as they were and a new row gets the defaults`() = runTest {
-        val userId = insertUser("halt-cols")
+    fun `a save leaves the retired columns of an existing row as they were and a new row gets the defaults`() = runTest {
+        val userId = insertUser("retired-cols")
         service.upsert(userId, TradingState("KRW-BTC", peakPrice = 1.0))
-        assertThat(haltColumns(userId, "KRW-BTC")).isEqualTo(false to null)
-        databaseClient.sql("UPDATE trading_states SET halted = TRUE, halt_reason = 'old halt' WHERE user_id = :u AND ticker = 'KRW-BTC'")
+        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(false, null, null, null, null, null)
+        databaseClient.sql(
+            "UPDATE trading_states SET halted = TRUE, halt_reason = 'old halt', review_reason = 'old review', " +
+                "adopt_baseline_volume = 0.1, sell_clear_prior_volume = 0.2, sell_clear_volume = 0.3 WHERE user_id = :u AND ticker = 'KRW-BTC'",
+        )
             .bind("u", userId).fetch().rowsUpdated().awaitSingle()
 
         val loaded = service.loadState(userId, "KRW-BTC")!!
         loaded.peakPrice = 2.0
         service.upsert(userId, loaded)
 
-        assertThat(haltColumns(userId, "KRW-BTC")).isEqualTo(true to "old halt")
+        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(true, "old halt", "old review", 0.1, 0.2, 0.3)
         assertThat(service.loadState(userId, "KRW-BTC")!!.peakPrice).isEqualTo(2.0)
     }
 

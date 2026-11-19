@@ -3,7 +3,6 @@ package com.trading.bot.engine
 import ch.qos.logback.classic.Level
 import com.trading.bot.characterization.capturingLogs
 import com.trading.bot.client.UpbitClientImpl
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.exchange.ExchangeClient
 import com.trading.bot.exchange.FillPollPolicy
 import com.trading.bot.exchange.UnknownOrderPolicy
@@ -61,7 +60,7 @@ class UserTradingManagerExchangeRuntimeTest {
         fillPoll = FillPollPolicy(attempts = 1, delayMs = 0),
         fillAccounting = mockk(relaxed = true),
         errorClassifier = mockk(relaxed = true),
-        unknownOrderPolicy = UnknownOrderPolicy(1, Duration.ZERO, supportsClientOrderId = false),
+        unknownOrderPolicy = UnknownOrderPolicy(1, Duration.ZERO, supportsClientOrderId = true, tracedNotPlacedAfter = Duration.ofMinutes(5)),
         profile = runtimeProfile,
         marketDataStore = null,
         dailyCandleCache = null,
@@ -86,7 +85,6 @@ class UserTradingManagerExchangeRuntimeTest {
         strategy, TradingProperties(autoStart = true), mockk(relaxed = true),
         userSecretsService, mockk(relaxed = true), tradingStateService,
         runtime = runtime,
-        manualInterventions = savingInterventions(tradingStateService),
     )
 
     private val manager = spyk(newManager()).also { every { it.createEngine(any()) } returns engine }
@@ -153,21 +151,6 @@ class UserTradingManagerExchangeRuntimeTest {
     }
 
     @Test
-    fun `clearing a pending ignores a running UPBIT row and checks the runtime's row`() = runTest {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(row("UPBIT", running = true))
-        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.just(row("KIS_PAPER", running = false))
-        coEvery { tradingStateService.loadState(1L, "KRX-005930", Exchange.KIS_PAPER) } returns null
-
-        assertEquals(mapOf("status" to "not_pending"), manager.clearPending(1L, "KRX-005930", TradeSide.BUY))
-
-        every { botStateRepository.findByUserIdAndExchange(1L, "KIS_PAPER") } returns Mono.just(row("KIS_PAPER", running = true))
-        val refused = manager.clearPending(1L, "KRX-005930", TradeSide.BUY)
-
-        assertEquals(UserTradingManager.CONFLICT_CODE, refused["code"])
-        verifyNoUpbitRowTouched()
-    }
-
-    @Test
     fun `phase and stop budget come from the runtime`() {
         assertEquals(7, manager.phase)
         every { botStateRepository.findByRunningTrueAndExchange("KIS_PAPER") } returns Flux.just(row("KIS_PAPER", running = true))
@@ -218,6 +201,23 @@ class UserTradingManagerExchangeRuntimeTest {
     }
 
     @Test
+    fun `an exchange that cannot look orders up by client id gets no engine`() {
+        val current = parts.copy(unknownOrderPolicy = parts.unknownOrderPolicy.copy(supportsClientOrderId = false))
+        val manager = UserTradingManager(
+            userRepository, botStateRepository, mockk(relaxed = true), mockk(relaxed = true),
+            strategy, TradingProperties(autoStart = true), mockk(relaxed = true),
+            userSecretsService, mockk(relaxed = true), tradingStateService,
+            runtime = object : ExchangeRuntime by runtime {
+                override fun partsFor(user: UserEntity) = current
+            },
+        )
+
+        val error = assertThrows(IllegalStateException::class.java) { manager.createEngine(user) }
+
+        assertTrue("KIS 모의" in error.message.orEmpty() && "identifier" in error.message.orEmpty(), error.message)
+    }
+
+    @Test
     fun `auto start and default tickers come from the runtime profile`() = runTest {
         // spy 는 하위 클래스라 private 필드를 읽으려면 원래 인스턴스가 필요하다.
         val plain = newManager()
@@ -247,7 +247,6 @@ class UserTradingManagerExchangeRuntimeTest {
             strategy, properties, mockk(relaxed = true),
             userSecretsService, marketDataStore, tradingStateService,
             dailyCandleCache = dailyCandleCache,
-            manualInterventions = savingInterventions(tradingStateService),
         )
 
         val engine = upbitManager.createEngine(user.copy(upbitAccessKey = "ak", upbitSecretKey = "sk"))

@@ -174,6 +174,27 @@ class UpbitClientTest {
         assertEquals(4, mockServer.requestCount, "새 주문이 없는 가득 찬 쪽에서 멈춘다")
     }
 
+    @Test
+    fun `a closed-order listing for one market asks only for that market`() = runTest {
+        mockServer.enqueue(MockResponse().setBody("[]").addHeader("Content-Type", "application/json"))
+
+        client.getClosedOrders("done", java.time.Instant.parse("2026-11-11T00:00:00Z"), java.time.Instant.parse("2026-11-12T00:00:00Z"), market = "KRW-BTC")
+
+        assertTrue(mockServer.takeRequest().path!!.contains("market=KRW-BTC&state=done"))
+    }
+
+    // "목록에 없다"로 미접수를 확정하는 호출부는 잘린 목록을 받으면 안 된다.
+    @Test
+    fun `a closed-order listing that must be complete fails instead of returning a cut list`() = runTest {
+        val full = "[" + (1..100).joinToString(",") { closed("a-$it", "2026-11-12T00:40:00+09:00") } + "]"
+        mockServer.enqueue(MockResponse().setBody(full).addHeader("Content-Type", "application/json"))
+        mockServer.enqueue(MockResponse().setBody(full).addHeader("Content-Type", "application/json"))
+
+        assertThrows<IllegalStateException> {
+            client.getClosedOrders("done", java.time.Instant.parse("2026-11-11T00:00:00Z"), java.time.Instant.parse("2026-11-12T23:00:00Z"), requireComplete = true)
+        }
+    }
+
     // 만료된 키는 그 사용자를 건너뛸 일이라 ERROR(Discord)가 아니다. 서명 오류는 우리 버그라 ERROR 다.
     @Test
     fun `an expired key on closed orders is not logged as an error, a signing error is`() = runTest {

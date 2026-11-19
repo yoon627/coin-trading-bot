@@ -8,20 +8,17 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.SellReason
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.persistence.BotStateRepository
-import com.trading.bot.persistence.ManualInterventionService
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
-import com.trading.bot.persistence.entity.ManualInterventionEntity
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.bot.persistence.entity.TradeRecordEntity
@@ -32,7 +29,6 @@ import com.trading.common.strategy.TradingStrategy
 import io.mockk.Called
 import io.mockk.CapturingSlot
 import io.mockk.Ordering
-import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -77,7 +73,6 @@ class UserTradingManagerTest {
     private lateinit var userSecretsService: UserSecretsService
     private lateinit var marketDataStore: MarketDataStore
     private lateinit var tradingStateService: TradingStateService
-    private lateinit var interventions: ManualInterventionService
     private lateinit var upbitWebClient: WebClient
     private lateinit var manager: UserTradingManager
     private val mockEngine: TradingEngine = mockk(relaxed = true)
@@ -93,14 +88,12 @@ class UserTradingManagerTest {
         marketDataStore = mockk(relaxed = true)
         tradingStateService = mockk(relaxed = true)
         // 기록 서비스는 상태 저장을 실제로 부르게 둔다 — 아니면 해제 시험의 저장 단언이 헛돈다.
-        interventions = savingInterventions(tradingStateService)
         upbitWebClient = mockk(relaxed = true)
         manager = spyk(
             UserTradingManager(
                 userRepository, botStateRepository, tradeExecutionService, discordNotifier,
                 strategy, TradingProperties(autoStart = true), upbitWebClient,
                 userSecretsService, marketDataStore, tradingStateService,
-                manualInterventions = interventions,
             ),
         )
         // engine.start 의 실코루틴 기동을 피하고 restore 오케스트레이션만 검증하기 위한 seam.
@@ -501,7 +494,6 @@ class UserTradingManagerTest {
                 userRepository, botStateRepository, actualTradeExecutionService, auditNotifier,
                 strategy, TradingProperties(autoStart = true), upbitWebClient,
                 userSecretsService, marketDataStore, tradingStateService,
-                manualInterventions = interventions,
             ),
         )
         every { manager.createEngine(any()) } answers { callOriginal() }
@@ -1512,209 +1504,7 @@ class UserTradingManagerTest {
         verify(exactly = 1) { mockEngine.start(listOf("KRW-BTC"), any()) }
     }
 
-    // --- 막힌 pending 의 수동 해제, 정지된 봇에서만 ---
-
     private val SELL_SINCE = java.time.Instant.parse("2026-10-08T00:00:00Z")
-
-    private fun stoppedRow() {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L).copy(running = false))
-    }
-
-    private fun pendingRow(state: TradingState): CapturingSlot<TradingState> {
-        coEvery { tradingStateService.loadState(1L, state.ticker) } returns state
-        val saved = slot<TradingState>()
-        coEvery { tradingStateService.upsert(1L, capture(saved)) } returns 0L
-        return saved
-    }
-
-    private inline fun warnsDuring(block: () -> Unit): List<String> {
-        val logger = LoggerFactory.getLogger(UserTradingManager::class.java) as Logger
-        val appender = ListAppender<ILoggingEvent>().apply { start() }
-        logger.addAppender(appender)
-        try {
-            block()
-        } finally {
-            logger.detachAppender(appender)
-        }
-        return appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
-    }
-
-    @Test
-    fun `a stopped bot's buy pending is cleared with the entry trace and every cleared field reported`() = runTest {
-        stoppedRow()
-        val saved = pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyStrategy = "combined", pendingBuyPriorVolume = 0.0))
-
-        lateinit var result: Map<String, Any>
-        val warns = warnsDuring { runBlocking { result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) } }
-
-        assertEquals("cleared", result["status"], "$result")
-        assertEquals("ctb-1", (result["cleared"] as Map<*, *>)["pending_buy_identifier"])
-        assertFalse(saved.captured.hasPendingBuy())
-        assertEquals("combined", saved.captured.entryStrategy, "다음 시작이 목록 밖이어도 싣도록 진입 흔적을 남긴다")
-        assertNotNull(saved.captured.buyDate)
-        assertEquals(1, warns.count { it.contains("KRW-BTC") && it.contains("ctb-1") && it.contains("pending_buy_strategy") }, "$warns")
-    }
-
-    @Test
-    fun `a stopped bot's sell pending is cleared and the position is left for the next start to sync`() = runTest {
-        stoppedRow()
-        val state = TradingState("KRW-BTC", position = true, holdVolume = 0.001).apply {
-            beginSellOrder("ctb-s", SellReason.STOP_LOSS, since = SELL_SINCE, volume = 0.001, triggerPrice = 1.0, priorVolume = 0.001)
-        }
-        val saved = pendingRow(state)
-
-        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.SELL)
-
-        assertEquals("cleared", result["status"], "$result")
-        assertFalse(saved.captured.hasPendingSell())
-        assertTrue(saved.captured.position)
-    }
-
-    @Test
-    fun `clearing is refused while the engine runs, and nothing is written`() = runTest {
-        engines()[1L] = mockEngine
-        every { mockEngine.isRunning() } returns true
-
-        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
-        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
-    }
-
-    @Test
-    fun `clearing is refused while the saved state still says running, as during a restore`() = runTest {
-        // 엔진이 없어도 복원 재시도·자동 시작 대기면 곧 기동되어, 운영자가 거래소를 확인하기 전에 해제된 행으로 돈다.
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-
-        val result = manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"], "$result")
-        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
-    }
-
-    @Test
-    fun `a stop whose save is still pending counts as stopped`() = runTest {
-        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
-        unpersistedStops().add(1L)
-        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"))
-
-        assertEquals("cleared", manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)["status"])
-    }
-
-    @Test
-    fun `nothing to clear is reported as not pending`() = runTest {
-        stoppedRow()
-        coEvery { tradingStateService.loadState(1L, "KRW-ETH") } returns null
-        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
-
-        assertEquals("not_pending", manager.clearPending(1L, "KRW-ETH", TradeSide.BUY)["status"])
-        assertEquals("not_pending", manager.clearPending(1L, "KRW-BTC", TradeSide.SELL)["status"])
-        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
-    }
-
-    @Test
-    fun `a stopped engine left in the map is recorded and dropped before the row is changed`() = runTest {
-        // 남겨 두면 다음 시작의 기록이 메모리 값으로 해제를 되돌린다.
-        stoppedRow()
-        engines()[1L] = mockEngine
-        every { mockEngine.isRunning() } returns false
-        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
-        val engineGoneAtSave = mutableListOf<Boolean>()
-        coEvery { tradingStateService.upsert(1L, any()) } coAnswers { engineGoneAtSave += engines()[1L] == null; 0L }
-
-        manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        coVerify(ordering = Ordering.ORDERED) {
-            mockEngine.flushUnpersisted()
-            tradingStateService.loadState(1L, "KRW-BTC")
-        }
-        assertEquals(listOf(true), engineGoneAtSave, "저장 전에 맵에서 빠져야 한다")
-    }
-
-    @Test
-    fun `a stopped engine whose sell cannot be recorded is kept and nothing is cleared`() = runTest {
-        // 버리면 메모리에만 있는 매도 주문의 유일한 기록이 사라진다. 남겨 두면 다음 시도·시작이 다시 기록한다.
-        stoppedRow()
-        engines()[1L] = mockEngine
-        every { mockEngine.isRunning() } returns false
-        every { mockEngine.unpersistedSells() } returns
-            listOf(TradingState("KRW-ETH", position = true, pendingSellIdentifier = "ctb-sell-9", pendingPersistFailed = true))
-
-        val ex = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }
-        }
-
-        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
-        assertSame(mockEngine, engines()[1L])
-        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
-    }
-
-    @Test
-    fun `a clear whose save fails is a 503 and reports no clear`() = runTest {
-        stoppedRow()
-        coEvery { tradingStateService.loadState(1L, "KRW-BTC") } returns TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1")
-        coEvery { tradingStateService.upsert(1L, any()) } throws RuntimeException("db down")
-
-        val ex = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }
-        }
-
-        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
-    }
-
-    // 지운 pending 은 상태 저장과 같은 트랜잭션의 기록으로 남는다 — 로그는 배포 때 컨테이너와 함께 사라진다.
-    @Test
-    fun `a pending clear is saved together with a record of what it cleared`() = runTest {
-        stoppedRow()
-        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1", pendingBuyBookVolume = 0.002, pendingBuyBookAvg = 4.0))
-        val detail = slot<Map<String, Any?>>()
-        coEvery { interventions.saveWithRecord(1L, any(), ManualInterventionEntity.PENDING_CLEAR, capture(detail)) } just Runs
-
-        manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)
-
-        assertEquals("BUY", detail.captured["side"])
-        assertEquals("identifier:ctb-1", detail.captured["ref"])
-        val cleared = detail.captured["cleared"] as Map<*, *>
-        assertEquals("ctb-1", cleared["pending_buy_identifier"])
-        assertEquals(0.002, cleared["pending_buy_book_volume"])
-    }
-
-    @Test
-    fun `a pending clear whose record cannot be saved is a 503 and the engine stays dropped`() = runTest {
-        stoppedRow()
-        engines()[1L] = mockEngine
-        every { mockEngine.isRunning() } returns false
-        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"))
-        coEvery { interventions.saveWithRecord(any(), any(), any(), any()) } throws RuntimeException("insert failed")
-
-        val ex = assertThrows(BotControlPersistFailedException::class.java) {
-            runBlocking { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }
-        }
-
-        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, ex.message)
-        assertNull(engines()[1L]) // 미기록분을 이미 저장했다 — 다음 시작은 DB 행으로 돈다
-    }
-
-    // 시간 제한은 상태 저장만이 아니라 기록 삽입·커밋까지 감싼다.
-    @Test
-    fun `a pending clear whose save and record run past the time limit is a 503`() = runTest {
-        stoppedRow()
-        pendingRow(TradingState("KRW-BTC", pendingBuyIdentifier = "ctb-1"))
-        coEvery { interventions.saveWithRecord(any(), any(), any(), any()) } coAnswers { delay(60_000) }
-
-        val ex = runCatching { manager.clearPending(1L, "KRW-BTC", TradeSide.BUY) }.exceptionOrNull()
-
-        assertEquals(PENDING_CLEAR_UNPERSISTED_MESSAGE, (ex as? BotControlPersistFailedException)?.message, "$ex")
-    }
-
-    @Test
-    fun `clearing is refused while shutting down`() = runTest {
-        stoppedRow()
-        markShuttingDown()
-
-        assertEquals("Service is shutting down", manager.clearPending(1L, "KRW-BTC", TradeSide.BUY)["error"])
-        coVerify(exactly = 0) { tradingStateService.upsert(any(), any()) }
-    }
 
     // 손으로 API 를 부르는 사람이 매수가 막힌 이유를 본다.
     @Test
