@@ -78,8 +78,9 @@ class TradingEngineTickCharacterizationTest {
         clock = clock,
     )
 
-    private fun storeTickerAged(seconds: Long, price: Double) =
-        NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = price, timestamp = Instant.now().minusSeconds(seconds))
+    // 엔진은 주입된 시계로 시세 나이를 잰다.
+    private fun storeTickerAged(clock: Clock, seconds: Long, price: Double) =
+        NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = price, timestamp = clock.instant().minusSeconds(seconds))
 
     /** [date] KST [hour] 시 정각. 거래일은 clock 의 zone 으로 계산하므로 운영 기본값처럼 KST zone 을 쓴다. */
     private fun kstClock(date: LocalDate, hour: Int): Clock =
@@ -174,13 +175,14 @@ class TradingEngineTickCharacterizationTest {
         every { store.getCandles(Exchange.UPBIT, "BTC/KRW", CandleInterval.D1, 60) } returns storeDaily(monday)
         coEvery { upbit.getTicker("KRW-BTC") } returns listOf(Ticker(market = "KRW-BTC", tradePrice = 100.0))
 
-        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(29, 101.0)
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        val clock = kstClock(monday, 12)
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(clock, 29, 101.0)
+        engine(clock).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
         coVerify(exactly = 0) { upbit.getTicker(any()) }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 101.0, "test_strategy") }
 
-        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(30, 101.0)
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(clock, 30, 101.0)
+        engine(clock).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
         coVerify(exactly = 1) { upbit.getTicker("KRW-BTC") }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }

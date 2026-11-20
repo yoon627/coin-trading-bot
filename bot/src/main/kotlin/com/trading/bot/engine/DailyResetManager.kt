@@ -9,6 +9,7 @@ import com.trading.common.strategy.ExitGates
 import org.slf4j.LoggerFactory
 import java.time.Clock
 import java.time.LocalDate
+import java.util.concurrent.ConcurrentHashMap
 
 class DailyResetManager(
     private val tradingProperties: TradingProperties,
@@ -19,7 +20,9 @@ class DailyResetManager(
     private val log = LoggerFactory.getLogger(javaClass)
 
     private var lastResetDate: LocalDate? = null
-    private val overrunWarnedBuyDate = mutableMapOf<String, LocalDate>()
+
+    // 종목마다 다른 코루틴이 판정해도 안전하게 동시 맵을 쓴다.
+    private val overrunWarnedBuyDate = ConcurrentHashMap<String, LocalDate>()
 
     fun getTradingDate(): LocalDate = calendar.tradingDate(clock)
 

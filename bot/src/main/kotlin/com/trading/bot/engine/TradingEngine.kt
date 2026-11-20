@@ -281,15 +281,11 @@ class TradingEngine(
                     }
                 }
 
-                roundRestPrices = HashMap()
-                try {
-                    for (ticker in activeTickers) {
-                        if (!running.get()) break
-                        stateMutex.withLock { processTicker(ticker) }
-                        markProgress()
-                    }
-                } finally {
-                    roundRestPrices = null
+                val round = prefetchRestPrices()
+                for (ticker in activeTickers) {
+                    if (!running.get()) break
+                    stateMutex.withLock { processTicker(ticker, round) }
+                    markProgress()
                 }
                 // 티커가 없어도 한 바퀴는 진행이다.
                 markProgress()
@@ -334,8 +330,15 @@ class TradingEngine(
 
     private fun TradingState.hasPendingOrder(): Boolean = hasPendingBuy() || hasPendingSell()
 
-    /** 도는 라운드에서 REST 로 받으려 한 종목과 그 시세(못 받았으면 null). 라운드 밖에서는 null 이다. 루프 코루틴만 쓴다. */
-    private var roundRestPrices: HashMap<String, Double?>? = null
+    /**
+     * 라운드 앞에서 묶음으로 물은 종목과 그 시세. [asked] 에 있는데 값이 없으면 묶음이 실패했거나 거래소가 답하지 않은 것이라
+     * 그 라운드에 따로 다시 묻지 않는다. [asked] 에 없는 종목(라운드 중 시세가 낡은 종목 등)만 따로 묻는다.
+     */
+    internal class RestRound(private val prices: Map<String, Double?>) {
+        fun asked(ticker: String): Boolean = ticker in prices
+
+        fun price(ticker: String): Double? = prices[ticker]
+    }
 
     /**
      * 따로 물어도 거래소가 모른다고 한(404) 마켓. 묶음에 넣으면 묶음 전체가 실패하므로 묶음에서만 뺀다 — 보유·미해소 주문이 있으면
@@ -343,19 +346,20 @@ class TradingEngine(
      */
     private val unknownRestMarkets = HashSet<String>()
 
-    private suspend fun restPrice(ticker: String): Double? {
+    /** 시세가 낡은 활성 종목을 라운드 앞에서 한 번에 묻는다. 루프 코루틴만 쓴다. */
+    private suspend fun prefetchRestPrices(): RestRound {
+        val markets = activeTickers.filter { it !in unknownRestMarkets && willProcess(it) && getRealtimePrice(it) == null }
+        if (markets.isEmpty()) return RestRound(emptyMap())
+        val prices = fetchRestPrices(markets)
+        return RestRound(markets.associateWith { prices[it] })
+    }
+
+    private suspend fun restPrice(ticker: String, round: RestRound?): Double? {
         if (ticker in unknownRestMarkets) {
             return if (states[ticker]?.let { it.position || it.hasPendingOrder() } == true) fetchRestPrices(listOf(ticker))[ticker] else null
         }
-        val round = roundRestPrices ?: return fetchRestPrices(listOf(ticker))[ticker]
-        if (ticker !in round) {
-            val markets = listOf(ticker) + activeTickers.filter {
-                it != ticker && it !in round && it !in unknownRestMarkets && willProcess(it) && getRealtimePrice(it) == null
-            }
-            val prices = fetchRestPrices(markets)
-            markets.forEach { round[it] = prices[it] }
-        }
-        return round[ticker]
+        if (round != null && round.asked(ticker)) return round.price(ticker)
+        return fetchRestPrices(listOf(ticker))[ticker]
     }
 
     /**
@@ -392,7 +396,7 @@ class TradingEngine(
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
         val storeTicker = marketDataStore?.getLatestTicker(exchange, normalizedMarket)
         if (storeTicker != null) {
-            val now = System.currentTimeMillis()
+            val now = clock.millis()
             val ageMs = now - storeTicker.timestamp.toEpochMilli()
             if (ageMs < PRICE_STALE_THRESHOLD_MS) {
                 return storeTicker.price
@@ -406,10 +410,10 @@ class TradingEngine(
         return null
     }
 
-    private suspend fun processTicker(ticker: String) {
+    private suspend fun processTicker(ticker: String, round: RestRound) {
         val state = states[ticker] ?: return
         if (!willProcess(ticker)) return
-        processTicker(ticker, state, strategy)
+        processTicker(ticker, state, strategy, round)
     }
 
     // 장외에도 미해소 주문은 확정해야 다음 세션까지 결과가 밀리지 않는다.
@@ -418,9 +422,9 @@ class TradingEngine(
         return calendar.isSessionOpen(clock.instant()) || state.hasPendingOrder()
     }
 
-    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
+    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy, round: RestRound? = null) {
         try {
-            val currentPrice = getRealtimePrice(ticker) ?: restPrice(ticker) ?: return
+            val currentPrice = getRealtimePrice(ticker) ?: restPrice(ticker, round) ?: return
 
             // 보유 여부를 확정하지 못했으면 다시 확인한다. 계속 모르면 buy() 가 신규 진입을 막는다.
             if (state.unsynced) {
@@ -545,7 +549,7 @@ class TradingEngine(
     // 평가는 막지 않는다. 전략이 알아서 false 를 내지만 그 이유를 로그로 남긴다.
     private fun warnInsufficientCandles(ticker: String, strategy: TradingStrategy, actual: Int) {
         val key = "$ticker:min-candles"
-        val now = System.currentTimeMillis()
+        val now = clock.millis()
         val last = candleWarnAtMs[key]
         if (last != null && now - last < STALE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now
@@ -568,7 +572,7 @@ class TradingEngine(
 
     // store 와 REST 경고가 서로를 억제하지 않도록 키에 소스를 넣는다.
     private fun warnStaleDailyCandle(source: String, ticker: String, dayOpen: Instant, newestOpen: Instant?, action: String) {
-        val now = System.currentTimeMillis()
+        val now = clock.millis()
         val key = "$ticker:$source:stale-d1"
         if (now - (candleWarnAtMs[key] ?: 0L) < STALE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now
