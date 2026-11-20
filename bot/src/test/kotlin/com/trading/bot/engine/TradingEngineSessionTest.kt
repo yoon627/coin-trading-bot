@@ -24,7 +24,7 @@ class TradingEngineSessionTest {
     private val upbitClient = mockk<UpbitClient>(relaxed = true)
     private val positionManager = mockk<PositionManager>(relaxed = true)
     private val dailyResetManager = mockk<DailyResetManager>(relaxed = true) {
-        every { checkAndReset(any()) } returns false
+        every { getTradingDate() } returns java.time.LocalDate.of(2026, 11, 20)
     }
     private val strategy = mockk<TradingStrategy>(relaxed = true) {
         every { name } returns "test_strategy"

@@ -19,23 +19,10 @@ class DailyResetManager(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private var lastResetDate: LocalDate? = null
-
     // 종목마다 다른 코루틴이 판정해도 안전하게 동시 맵을 쓴다.
     private val overrunWarnedBuyDate = ConcurrentHashMap<String, LocalDate>()
 
     fun getTradingDate(): LocalDate = calendar.tradingDate(clock)
-
-    fun checkAndReset(states: Map<String, TradingState>): Boolean {
-        val tradingDate = getTradingDate()
-        if (lastResetDate == tradingDate) return false
-
-        log.info("Daily reset triggered for trading date: {}", tradingDate)
-        // lastResetDate 는 재시작하면 null 이라, 해제 여부는 state 마다 boughtDate 로 판단해야 당일 재매수를 막는다.
-        states.values.forEach { it.resetDaily(tradingDate) }
-        lastResetDate = tradingDate
-        return true
-    }
 
     /** 보유 일수 상한은 진입 시점 스냅샷을 따른다. 스냅샷이 없으면 전역 설정값을 쓴다. */
     fun shouldSellForDailyReset(state: TradingState): Boolean {

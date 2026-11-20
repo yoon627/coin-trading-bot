@@ -13,6 +13,7 @@ import io.mockk.every
 import io.mockk.mockk
 import java.time.LocalDate
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -42,7 +43,7 @@ class TradingEngineTickerSetTest {
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { strategy.minCandles } returns 21
-        every { dailyResetManager.checkAndReset(any()) } returns false
+        every { dailyResetManager.getTradingDate() } returns java.time.LocalDate.of(2026, 11, 20)
     }
 
     private fun createEngine() = TradingEngine(
@@ -170,7 +171,7 @@ class TradingEngineTickerSetTest {
         coEvery { upbitClient.getTicker(any()) } coAnswers { firstTick.complete(Unit); tickersAt(firstArg(), 100.0) }
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
         // 우리 주문으로 설명되지 않는 락(releaseHoldings 뒤)은 실제 포지션일 수 있어 남긴다.
-        coEvery { positionManager.syncPosition("KRW-U", any()) } coAnswers { secondArg<TradingState>().unsynced = true }
+        coEvery { positionManager.syncPosition("KRW-U", any(), any()) } coAnswers { secondArg<TradingState>().unsynced = true }
         val engine = createEngine()
 
         engine.start(
@@ -184,6 +185,8 @@ class TradingEngineTickerSetTest {
             ),
         )
         withTimeout(5_000) { firstTick.await() }
+        // 시계의 첫 REST 묶음은 작업자의 동기화와 겹칠 수 있어, 정리 자체를 기다린다.
+        withTimeout(5_000) { while ("KRW-GONE" in engine.getActiveTickers()) delay(20) }
         engine.stop()
 
         assertEquals(listOf("KRW-BTC", "KRW-XRP", "KRW-U", "KRW-P"), engine.getActiveTickers())
@@ -196,28 +199,31 @@ class TradingEngineTickerSetTest {
     @Test
     fun `the 09 00 boundary drops a retained ticker sold during the day after flushing its reset`() = runBlocking {
         val xrp = heldEntry("KRW-XRP")
-        val firstTick = CompletableDeferred<Unit>()
         val engine = createEngine()
-        var activeAtBoundary: List<String> = emptyList()
-        var boundaries = 0
-        every { dailyResetManager.checkAndReset(any()) } answers {
-            if (boundaries++ == 0) {
-                activeAtBoundary = engine.getActiveTickers()
-                xrp.markSold() // 낮 동안 엔진이 청산했다
-                true
+        val activeAtBoundary = java.util.concurrent.atomic.AtomicReference<List<String>>(emptyList())
+        val rounds = java.util.concurrent.atomic.AtomicInteger()
+        // 첫 바퀴는 기동 리셋(보유 중이라 잔류), 다음 바퀴에 거래일이 바뀐다. 그사이 엔진이 청산했다.
+        // 거래일은 시계만 묻도록 사용자 목록을 비운다 — 목록 안 종목의 매수 평가도 거래일을 묻는다.
+        every { dailyResetManager.getTradingDate() } answers {
+            if (rounds.getAndIncrement() == 0) {
+                java.time.LocalDate.of(2026, 11, 19)
             } else {
-                false
+                if (rounds.get() == 2) {
+                    activeAtBoundary.set(engine.getActiveTickers())
+                    xrp.markSold()
+                }
+                java.time.LocalDate.of(2026, 11, 20)
             }
         }
-        coEvery { upbitClient.getTicker(any()) } coAnswers { firstTick.complete(Unit); tickersAt(firstArg(), 100.0) }
+        coEvery { upbitClient.getTicker(any()) } coAnswers { tickersAt(firstArg(), 100.0) }
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
 
-        engine.start(listOf("KRW-BTC"), mapOf("KRW-XRP" to xrp))
-        withTimeout(5_000) { firstTick.await() }
+        engine.start(emptyList(), mapOf("KRW-XRP" to xrp))
+        withTimeout(5_000) { while ("KRW-XRP" in engine.getActiveTickers()) delay(20) }
         engine.stop()
 
-        assertTrue("KRW-XRP" in activeAtBoundary, "보유 중에는 잔류로 활성이어야 한다")
-        assertEquals(listOf("KRW-BTC"), engine.getActiveTickers())
+        assertTrue("KRW-XRP" in activeAtBoundary.get(), "보유 중에는 잔류로 활성이어야 한다")
+        assertEquals(emptyList<String>(), engine.getActiveTickers())
         coVerify { positionManager.persistState(xrp) } // 리셋을 flush 한 뒤 뺀다
     }
 

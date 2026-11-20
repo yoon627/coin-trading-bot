@@ -147,16 +147,14 @@ class TradingEngineTickCharacterizationTest {
         val clock = MutableClock(monday.atTime(8, 59, 59).atZone(TradingDay.KST).toInstant(), TradingDay.KST)
         val reset = DailyResetManager(TradingProperties(), clock)
         val state = TradingState("KRW-BTC", boughtToday = true, boughtDate = monday.minusDays(1))
-        val states = mapOf("KRW-BTC" to state)
 
         assertEquals(monday.minusDays(1), reset.getTradingDate())
-        assertTrue(reset.checkAndReset(states)) // 첫 호출은 항상 리셋
+        state.resetDaily(reset.getTradingDate()) // 작업자의 첫 바퀴는 항상 리셋한다
         assertTrue(state.boughtToday)
-        assertFalse(reset.checkAndReset(states))
 
         clock.advance(1)
         assertEquals(monday, reset.getTradingDate())
-        assertTrue(reset.checkAndReset(states))
+        state.resetDaily(reset.getTradingDate())
         assertFalse(state.boughtToday)
     }
 
@@ -278,13 +276,15 @@ class TradingEngineTickCharacterizationTest {
         engine.start(listOf("KRW-BTC"))
         try {
             coVerify(timeout = 5_000) { upbit.getTicker("KRW-BTC") }
+            coVerify(timeout = 5_000) { positionManager.persistState(any()) }
         } finally {
             engine.stop()
         }
 
+        // 시계의 REST 묶음은 동기화와 겹칠 수 있지만, 작업자는 동기화를 마친 뒤에 첫 바퀴(리셋 저장)를 처리한다.
         coVerifyOrder {
-            positionManager.syncPosition("KRW-BTC", TradingState("KRW-BTC"))
-            upbit.getTicker("KRW-BTC")
+            positionManager.syncPosition("KRW-BTC", TradingState("KRW-BTC"), any())
+            positionManager.persistState(any())
         }
         assertEquals(mapOf("KRW-BTC" to TradingState("KRW-BTC")), engine.getStates())
     }
