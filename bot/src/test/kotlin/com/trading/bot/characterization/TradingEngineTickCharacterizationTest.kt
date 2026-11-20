@@ -78,8 +78,9 @@ class TradingEngineTickCharacterizationTest {
         clock = clock,
     )
 
-    private fun storeTickerAged(seconds: Long, price: Double) =
-        NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = price, timestamp = Instant.now().minusSeconds(seconds))
+    // 엔진은 주입된 시계로 시세 나이를 잰다.
+    private fun storeTickerAged(clock: Clock, seconds: Long, price: Double) =
+        NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = price, timestamp = clock.instant().minusSeconds(seconds))
 
     /** [date] KST [hour] 시 정각. 거래일은 clock 의 zone 으로 계산하므로 운영 기본값처럼 KST zone 을 쓴다. */
     private fun kstClock(date: LocalDate, hour: Int): Clock =
@@ -146,16 +147,14 @@ class TradingEngineTickCharacterizationTest {
         val clock = MutableClock(monday.atTime(8, 59, 59).atZone(TradingDay.KST).toInstant(), TradingDay.KST)
         val reset = DailyResetManager(TradingProperties(), clock)
         val state = TradingState("KRW-BTC", boughtToday = true, boughtDate = monday.minusDays(1))
-        val states = mapOf("KRW-BTC" to state)
 
         assertEquals(monday.minusDays(1), reset.getTradingDate())
-        assertTrue(reset.checkAndReset(states)) // 첫 호출은 항상 리셋
+        state.resetDaily(reset.getTradingDate()) // 작업자의 첫 바퀴는 항상 리셋한다
         assertTrue(state.boughtToday)
-        assertFalse(reset.checkAndReset(states))
 
         clock.advance(1)
         assertEquals(monday, reset.getTradingDate())
-        assertTrue(reset.checkAndReset(states))
+        state.resetDaily(reset.getTradingDate())
         assertFalse(state.boughtToday)
     }
 
@@ -174,13 +173,14 @@ class TradingEngineTickCharacterizationTest {
         every { store.getCandles(Exchange.UPBIT, "BTC/KRW", CandleInterval.D1, 60) } returns storeDaily(monday)
         coEvery { upbit.getTicker("KRW-BTC") } returns listOf(Ticker(market = "KRW-BTC", tradePrice = 100.0))
 
-        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(29, 101.0)
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        val clock = kstClock(monday, 12)
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(clock, 29, 101.0)
+        engine(clock).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
         coVerify(exactly = 0) { upbit.getTicker(any()) }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 101.0, "test_strategy") }
 
-        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(30, 101.0)
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(clock, 30, 101.0)
+        engine(clock).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
         coVerify(exactly = 1) { upbit.getTicker("KRW-BTC") }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
@@ -276,13 +276,15 @@ class TradingEngineTickCharacterizationTest {
         engine.start(listOf("KRW-BTC"))
         try {
             coVerify(timeout = 5_000) { upbit.getTicker("KRW-BTC") }
+            coVerify(timeout = 5_000) { positionManager.persistState(any()) }
         } finally {
             engine.stop()
         }
 
+        // 시계의 REST 묶음은 동기화와 겹칠 수 있지만, 작업자는 동기화를 마친 뒤에 첫 바퀴(리셋 저장)를 처리한다.
         coVerifyOrder {
-            positionManager.syncPosition("KRW-BTC", TradingState("KRW-BTC"))
-            upbit.getTicker("KRW-BTC")
+            positionManager.syncPosition("KRW-BTC", TradingState("KRW-BTC"), any())
+            positionManager.persistState(any())
         }
         assertEquals(mapOf("KRW-BTC" to TradingState("KRW-BTC")), engine.getStates())
     }

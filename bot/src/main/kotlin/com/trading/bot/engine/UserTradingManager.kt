@@ -19,6 +19,7 @@ import com.trading.bot.persistence.ShadowExitObservationRepository
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.domain.Exchange
 import com.trading.common.strategy.TradingStrategy
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalDateTime
 import java.util.concurrent.ConcurrentHashMap
@@ -445,7 +446,7 @@ class UserTradingManager(
                 "last_progress_at" to live?.lastProgressAt()?.toString(),
             ),
             "strategy" to strategy.name,
-            // states 는 루프가 돌아야 채워지므로 start 직후에도 값이 있는 activeTickers 를 쓴다.
+            // states 는 작업자가 돌아야 채워지므로 start 직후에도 값이 있는 활성 목록(getActiveTickers)을 쓴다.
             "tickers" to (engine?.getActiveTickers() ?: emptyList<String>()),
             "user_tickers" to (live?.getUserTickers() ?: emptyList<String>()),
             "entry_tickers" to (live?.getEntryTickers() ?: emptyList<String>()),
@@ -520,7 +521,7 @@ class UserTradingManager(
             return
         }
         val wasRunning = existing.isRunning()
-        // activeTickers 를 넘기면 목록에서 빠진 티커가 새 엔진의 진입 대상이 된다.
+        // 활성 목록(getActiveTickers)을 넘기면 목록에서 빠진 티커가 새 엔진의 진입 대상이 된다.
         val tickers = existing.getUserTickers()
         // 요청이 끊겨도 루프 join 까지 기다린다. join 전에 돌아가면 옛 루프와 새 루프가 겹친다.
         withContext(NonCancellable) { existing.stop() }
@@ -613,6 +614,8 @@ class UserTradingManager(
         val client = parts.client
         // 상태 저장·거래 기록·체결 알림 이벤트는 한 트랜잭션으로 커밋하고, 알림은 발송기가 커밋 뒤에 보낸다.
         val userId = user.id!!
+        // 엔진과 포지션 관리가 같은 시계로 시세 나이·조회 백오프·막힘 알림을 잰다.
+        val clock = Clock.systemUTC()
         val positionManager = PositionManager(
             client, parts.profile, tradingStateService, userId,
             commitFill = { persistState, record ->
@@ -627,6 +630,7 @@ class UserTradingManager(
             unknownOrderPolicy = parts.unknownOrderPolicy,
             displayName = parts.displayName,
             entriesPaused = { entriesPaused(userId) },
+            clock = clock,
         )
         val dailyResetManager = DailyResetManager(parts.profile, userId = user.id!!, calendar = parts.calendar)
 
@@ -643,6 +647,7 @@ class UserTradingManager(
             exchange = parts.exchange,
             dailyCandleCache = parts.dailyCandleCache,
             shadowExitObserver = shadowExitObserver(user.id!!),
+            clock = clock,
             calendar = parts.calendar,
             rules = parts.rules,
         )

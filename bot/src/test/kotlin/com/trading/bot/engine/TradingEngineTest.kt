@@ -69,7 +69,7 @@ class TradingEngineTest {
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { strategy.minCandles } returns 21
-        every { dailyResetManager.checkAndReset(any()) } returns false
+        every { dailyResetManager.getTradingDate() } returns java.time.LocalDate.of(2026, 11, 20)
         every { dailyResetManager.shouldSellForDailyReset(any()) } returns false
     }
 
@@ -160,8 +160,10 @@ class TradingEngineTest {
             val errors = appender.list.filter { it.level == Level.ERROR }
             assertTrue(
                 errors.none {
-                    it.formattedMessage.contains("Trading loop error") ||
-                        it.formattedMessage.contains("Error processing")
+                    it.formattedMessage.contains("Trading clock error") ||
+                        it.formattedMessage.contains("round failed") ||
+                        it.formattedMessage.contains("Error processing") ||
+                        it.formattedMessage.contains("ENGINE DEAD")
                 },
                 "cancel 이 오탐 ERROR 로그를 남김: ${errors.map { it.formattedMessage }}",
             )
@@ -170,10 +172,10 @@ class TradingEngineTest {
         }
     }
 
-    /** Error 는 루프의 catch(Exception) 를 지나 루프를 끝낸다. running 은 그대로라 화면·health 로는 보이지 않는다. */
+    /** Error 는 시계의 catch(Exception) 를 지나 시계를 끝낸다. running 은 그대로라 화면·health 로는 보이지 않는다. */
     @Test
     fun `정지 없이 끝난 루프는 ERROR 로 알리고 생존 판정이 거짓이 된다`(): Unit = runBlocking {
-        every { dailyResetManager.checkAndReset(any()) } throws StackOverflowError("boom")
+        every { dailyResetManager.getTradingDate() } throws StackOverflowError("boom")
         val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         logger.addAppender(appender)
@@ -218,8 +220,8 @@ class TradingEngineTest {
         val t0 = Instant.parse("2026-11-04T03:00:00Z")
         val entered = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)
-        every { dailyResetManager.checkAndReset(any()) } answers {
-            entered.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS); false
+        every { dailyResetManager.getTradingDate() } answers {
+            entered.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS); java.time.LocalDate.of(2026, 11, 4)
         }
         val engine = createEngine(clock = Clock.fixed(t0, ZoneOffset.UTC))
 
@@ -269,7 +271,7 @@ class TradingEngineTest {
         val t0 = Instant.parse("2026-11-04T03:00:00Z")
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        coEvery { positionManager.syncPosition(any(), any()) } coAnswers { entered.complete(Unit); release.await() }
+        coEvery { positionManager.syncPosition(any(), any(), any()) } coAnswers { entered.complete(Unit); release.await() }
         val engine = createEngine(clock = Clock.fixed(t0, ZoneOffset.UTC))
         engine.start(listOf("KRW-BTC"))
         try {
@@ -508,7 +510,7 @@ class TradingEngineTest {
         engine.start(listOf("KRW-ETH"), mapOf("KRW-BTC" to released))
 
         // 활성 목록 대신 동기화 호출을 본다. 지킬 것이 없으면 루프가 곧바로 목록에서 빼므로 목록 단언은 루프와 경쟁한다.
-        coVerify(timeout = 5_000) { positionManager.syncPosition("KRW-BTC", released) }
+        coVerify(timeout = 5_000) { positionManager.syncPosition("KRW-BTC", released, any()) }
         engine.stop()
     }
 
@@ -968,7 +970,7 @@ class TradingEngineTest {
 
         engine.processTicker("KRW-BTC", state, strategy)
 
-        coVerify { positionManager.syncPosition("KRW-BTC", state) }
+        coVerify { positionManager.syncPosition("KRW-BTC", state, any()) }
     }
 
     // openTime 을 하루씩 달리해 distinctBy 뒤에도 21개가 남는다([0]=최신).

@@ -95,9 +95,11 @@ class PositionManager(
      * 줄이는 기준은 잔고 합(free+locked)이라 소유자 주문이 봇 코인을 잠근 채 재시작해도 장부가 줄지 않는다.
      * 장부를 저장하기 전의 행은 봇 흔적이 있을 때만 한 번 잔고 전체를 편입한다(소유자 결정).
      */
-    suspend fun syncPosition(ticker: String, state: TradingState) {
+    suspend fun syncPosition(ticker: String, state: TradingState, accounts: List<Account>? = null) {
         try {
-            val account = findAccount(ticker.substringAfter("-"))
+            // 기동 때는 엔진이 한 번 받은 잔고를 나눠 쓴다. 종목마다 다시 물으면 기동 때 계좌 한도를 몰아 쓴다.
+            val currency = ticker.substringAfter("-")
+            val account = if (accounts != null) accounts.find { it.currency == currency } else findAccount(currency)
             val free = account?.balanceDouble() ?: 0.0
             val locked = account?.lockedDouble() ?: 0.0
             // 우리 매도 주문으로 설명되지 않는 잠금(소유자 주문·출금 대기).

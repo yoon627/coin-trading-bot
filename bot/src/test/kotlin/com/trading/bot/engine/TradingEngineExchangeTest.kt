@@ -29,7 +29,7 @@ class TradingEngineExchangeTest {
     private val client = mockk<ExchangeClient>(relaxed = true)
     private val positionManager = mockk<PositionManager>(relaxed = true)
     private val dailyResetManager = mockk<DailyResetManager>(relaxed = true) {
-        every { checkAndReset(any()) } returns false
+        every { getTradingDate() } returns java.time.LocalDate.of(2026, 11, 20)
     }
     private val strategy = mockk<TradingStrategy> {
         every { name } returns "test_strategy"
@@ -60,7 +60,7 @@ class TradingEngineExchangeTest {
     @Test
     fun `a ticker the engine adds gets the engine's exchange`() = runBlocking {
         val synced = CompletableDeferred<Unit>()
-        coEvery { positionManager.syncPosition("KRX-005930", any()) } coAnswers { synced.complete(Unit) }
+        coEvery { positionManager.syncPosition("KRX-005930", any(), any()) } coAnswers { synced.complete(Unit) }
         val engine = engine(Exchange.KIS_PAPER)
 
         engine.start(listOf("KRX-005930"))
@@ -102,6 +102,6 @@ class TradingEngineExchangeTest {
         engine.stop()
 
         coVerify(exactly = 0) { positionManager.reconcilePendingSell("KRX-005930", any(), any()) }
-        coVerify(exactly = 0) { positionManager.syncPosition("KRX-005930", any()) }
+        coVerify(exactly = 0) { positionManager.syncPosition("KRX-005930", any(), any()) }
     }
 }

@@ -12,6 +12,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.OffsetDateTime
 import kotlinx.coroutines.reactor.awaitSingle
+import kotlinx.coroutines.reactor.mono
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatusCode
 import org.springframework.web.reactive.function.client.ClientResponse
@@ -24,11 +25,12 @@ class UpbitClientImpl(
     private val upbitWebClient: WebClient,
     private val authProvider: UpbitAuthProvider?,
     private val retryBackoffBase: Duration = Duration.ofSeconds(1),
+    private val rateLimiter: UpbitRateLimiter? = null,
 ) : UpbitClient {
     private val log = LoggerFactory.getLogger(javaClass)
 
     override suspend fun getAccounts(): List<Account> {
-        return Mono.defer {
+        return limited(UpbitRateLimiter.Group.DEFAULT) {
             upbitWebClient.get()
                 .uri("/v1/accounts")
                 .header("Authorization", authProvider!!.authorizationHeader())
@@ -74,20 +76,21 @@ class UpbitClientImpl(
             "${URLEncoder.encode(it.key, StandardCharsets.UTF_8)}=${URLEncoder.encode(it.value, StandardCharsets.UTF_8)}"
         }
         // 여기서는 재시도하지 않는다. 다시 보낼지와 접수 여부 확인은 호출부가 identifier 로 정한다.
-        return upbitWebClient.post()
-            .uri("/v1/orders")
-            .header("Authorization", authProvider!!.authorizationHeader(queryString))
-            .bodyValue(params)
-            .retrieve()
-            .onStatus(HttpStatusCode::isError) { handleError(it) }
-            .bodyToMono<Order>()
-            .awaitSingle()
+        return limited(UpbitRateLimiter.Group.ORDER) {
+            upbitWebClient.post()
+                .uri("/v1/orders")
+                .header("Authorization", authProvider!!.authorizationHeader(queryString))
+                .bodyValue(params)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError) { handleError(it) }
+                .bodyToMono<Order>()
+        }.awaitSingle()
             .requireUuid()
     }
 
     override suspend fun getOrder(uuid: String): Order {
         val queryString = "uuid=$uuid"
-        return Mono.defer {
+        return limited(UpbitRateLimiter.Group.DEFAULT) {
             upbitWebClient.get()
                 .uri("/v1/order?uuid={uuid}", uuid)
                 .header("Authorization", authProvider!!.authorizationHeader(queryString))
@@ -100,7 +103,7 @@ class UpbitClientImpl(
     override suspend fun getOrderByIdentifier(identifier: String): Order? {
         val queryString = "identifier=$identifier"
         return try {
-            Mono.defer {
+            limited(UpbitRateLimiter.Group.DEFAULT) {
                 upbitWebClient.get()
                     .uri("/v1/order?identifier={identifier}", identifier)
                     .header("Authorization", authProvider!!.authorizationHeader(queryString))
@@ -131,7 +134,7 @@ class UpbitClientImpl(
         repeat(MAX_CLOSED_PAGES) {
             val query = (market?.let { "market=$it&" } ?: "") +
                 "state=$state&start_time=$from&end_time=${end.toEpochMilli()}&limit=$CLOSED_PAGE_SIZE&order_by=asc"
-            val page = Mono.defer {
+            val page = limited(UpbitRateLimiter.Group.DEFAULT) {
                 upbitWebClient.get()
                     .uri("/v1/orders/closed?$query")
                     .header("Authorization", authProvider!!.authorizationHeader(query))
@@ -159,7 +162,8 @@ class UpbitClientImpl(
 
     override suspend fun cancelOrder(uuid: String): Order {
         val queryString = "uuid=$uuid"
-        return Mono.defer {
+        // 업비트는 주문 취소를 default 그룹으로 센다(주문 생성·취소 후 재주문만 order). https://docs.upbit.com/kr/reference/rate-limits
+        return limited(UpbitRateLimiter.Group.DEFAULT) {
             upbitWebClient.delete()
                 .uri("/v1/order?uuid={uuid}", uuid)
                 .header("Authorization", authProvider!!.authorizationHeader(queryString))
@@ -167,6 +171,15 @@ class UpbitClientImpl(
                 .onStatus(HttpStatusCode::isError) { handleError(it) }
                 .bodyToMono<Order>()
         }.retryOnRateLimit().awaitSingle()
+    }
+
+    /**
+     * 계좌 한도 안에서 private 요청을 만든다. 구독할 때마다(재시도 포함) 한도를 먼저 받고 서명한다 — 재시도도 업비트가 센다.
+     * 제한기가 없으면(공개 시세 클라이언트·시험) 그대로 보낸다.
+     */
+    private fun <T : Any> limited(group: UpbitRateLimiter.Group, request: () -> Mono<T>): Mono<T> {
+        val limiter = rateLimiter ?: return Mono.defer(request)
+        return mono { limiter.acquire(group) }.then(Mono.defer(request))
     }
 
     // ERROR 는 Discord 로 나가므로 호출자가 정상으로 다루는 오류(expected)는 INFO 로 남긴다.
