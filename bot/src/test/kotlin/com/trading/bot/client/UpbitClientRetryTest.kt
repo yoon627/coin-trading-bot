@@ -1,6 +1,8 @@
 package com.trading.bot.client
 
 import com.trading.bot.domain.OrderRequest
+import io.mockk.coVerify
+import io.mockk.mockk
 import java.time.Duration
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.MockResponse
@@ -17,6 +19,7 @@ class UpbitClientRetryTest {
 
     private lateinit var mockServer: MockWebServer
     private lateinit var client: UpbitClient
+    private val limiter = mockk<UpbitRateLimiter>(relaxed = true)
 
     @BeforeEach
     fun setup() {
@@ -30,7 +33,7 @@ class UpbitClientRetryTest {
         val webClient = WebClient.builder()
             .baseUrl(mockServer.url("/").toString().trimEnd('/'))
             .build()
-        client = UpbitClientImpl(webClient, authProvider, retryBackoffBase = Duration.ofMillis(1))
+        client = UpbitClientImpl(webClient, authProvider, retryBackoffBase = Duration.ofMillis(1), rateLimiter = limiter)
     }
 
     @AfterEach
@@ -53,6 +56,19 @@ class UpbitClientRetryTest {
         assertEquals(1, accounts.size)
         assertEquals("KRW", accounts[0].currency)
         assertEquals(3, mockServer.requestCount) // 첫 요청 + 재시도 2회
+        coVerify(exactly = 3) { limiter.acquire(UpbitRateLimiter.Group.DEFAULT) } // 재시도도 한도를 쓴다
+    }
+
+    @Test
+    fun `an order takes the order budget and a public quote takes none`() = runTest {
+        mockServer.enqueue(MockResponse().setBody("""{"uuid":"o-1","state":"wait"}""").addHeader("Content-Type", "application/json"))
+        mockServer.enqueue(MockResponse().setBody("""[{"market":"KRW-BTC","trade_price":1.0}]""").addHeader("Content-Type", "application/json"))
+
+        client.placeOrder(OrderRequest(market = "KRW-BTC", side = "bid", ordType = "price", price = "10000"))
+        client.getTicker("KRW-BTC")
+
+        coVerify(exactly = 1) { limiter.acquire(UpbitRateLimiter.Group.ORDER) }
+        coVerify(exactly = 0) { limiter.acquire(UpbitRateLimiter.Group.DEFAULT) }
     }
 
     @Test
