@@ -2,6 +2,7 @@ package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Order
+import com.trading.bot.domain.TradingDay
 import com.trading.bot.persistence.BotStateRepository
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradingStateService
@@ -13,6 +14,8 @@ import jakarta.annotation.PreDestroy
 import java.math.BigDecimal
 import java.time.Clock
 import java.time.Duration
+import java.time.Instant
+import java.time.LocalTime
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CancellationException
@@ -33,10 +36,10 @@ import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Component
 
 /**
- * 하루 한 번, 업비트의 봇 주문(identifier `ctb-`) 중 체결됐는데 거래 기록이 없는 것을 사용자별 ERROR 한 줄로 알린다(#341).
+ * 매일 09:05 KST 에 한 번, 업비트의 봇 주문(identifier `ctb-`) 중 체결됐는데 거래 기록이 없는 것을 사용자별 ERROR 한 줄로 알린다(#341).
  * 매도 기록이 실패한 채 강제 종료되거나, 잔고 흔적 뒤 미접수로 확정한 주문이 실제로는 체결됐으면 거래 기록이 빠지고 엔진은 다시 보지 않는다.
  * 고치지는 않는다 — 체결가·수수료·청산 사유를 사람이 확인해 `exchange_order_id` 를 그 uuid 로 보정 행을 넣는다.
- * 엔진 루프·공용 스케줄러를 막지 않게 자체 코루틴에서 돈다.
+ * 엔진 루프·공용 스케줄러를 막지 않게 자체 코루틴에서 돈다. 기동 직후에는 돌지 않고 다음 09:05 를 기다린다.
  */
 @Component
 class OrderReconciler internal constructor(
@@ -49,7 +52,7 @@ class OrderReconciler internal constructor(
     private val clock: Clock,
     private val timings: Timings = Timings(),
 ) {
-    internal data class Timings(val firstRunAfter: Duration = Duration.ofMinutes(10), val every: Duration = Duration.ofHours(24))
+    internal data class Timings(val untilNextRun: (Instant) -> Duration = ::untilNextDailyRun)
 
     @Autowired
     constructor(
@@ -72,16 +75,15 @@ class OrderReconciler internal constructor(
     fun start() {
         if (!started.compareAndSet(false, true)) return
         scope.launch {
-            delay(timings.firstRunAfter.toKotlinDuration())
             while (isActive) {
+                delay(timings.untilNextRun(clock.instant()).toKotlinDuration())
                 try {
                     reconcileAll()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    log.warn("Order reconcile run failed — trying again in {}", timings.every, e)
+                    log.warn("Order reconcile run failed — trying again at the next run", e)
                 }
-                delay(timings.every.toKotlinDuration())
             }
         }
     }
@@ -169,4 +171,15 @@ class OrderReconciler internal constructor(
         // 막 끝난 주문은 엔진의 reconcile 이 기록할 시간을 둔다.
         val SETTLE: Duration = Duration.ofHours(1)
     }
+}
+
+// 업비트 거래일이 바뀌는 09:00 KST 에 맞춘다. 조회 창(48시간, 막 만든 1시간 제외)은 실행 시각과 무관하게 같다.
+private val DAILY_RUN_AT: LocalTime = LocalTime.of(9, 5)
+
+/** [now] 다음의 09:05 KST 까지. 정각이면 다음 날이다 — 같은 시각에 두 번 돌지 않는다. */
+internal fun untilNextDailyRun(now: Instant): Duration {
+    val local = now.atZone(TradingDay.KST)
+    val today = local.toLocalDate().atTime(DAILY_RUN_AT).atZone(TradingDay.KST)
+    val next = if (today.isAfter(local)) today else today.plusDays(1)
+    return Duration.between(now, next)
 }

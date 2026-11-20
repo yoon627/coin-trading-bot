@@ -138,6 +138,35 @@ class OrderReconcilerTest {
     }
 
     @Test
+    fun `the next run is at 09-05 KST, today if it is still ahead and tomorrow otherwise`() {
+        assertEquals(java.time.Duration.ofMinutes(1), untilNextDailyRun(Instant.parse("2026-11-19T00:04:00Z")))
+        assertEquals(java.time.Duration.ofHours(24), untilNextDailyRun(Instant.parse("2026-11-19T00:05:00Z")))
+        assertEquals(java.time.Duration.ofHours(9).plusMinutes(5), untilNextDailyRun(Instant.parse("2026-11-19T15:00:00Z")))
+        assertEquals(
+            java.time.Duration.ofHours(24).minusSeconds(1),
+            untilNextDailyRun(Instant.parse("2026-11-19T00:05:01Z")),
+        )
+    }
+
+    @Test
+    fun `starting the reconciler waits for the next run instead of running at once`() = runBlocking {
+        val runs = java.util.concurrent.atomic.AtomicInteger()
+        every { botStates.findByExchange("UPBIT") } answers { runs.incrementAndGet(); Flux.empty() }
+        val asked = mutableListOf<Instant>()
+        val waiting = OrderReconciler(
+            botStates, users, secrets, { client }, states, executions, Clock.fixed(now, ZoneOffset.UTC),
+            OrderReconciler.Timings(untilNextRun = { asked += it; java.time.Duration.ofHours(1) }),
+        )
+
+        waiting.start()
+        kotlinx.coroutines.delay(100)
+        waiting.stop()
+
+        assertEquals(0, runs.get(), "기동 직후에는 대조하지 않는다")
+        assertEquals(listOf(now), asked)
+    }
+
+    @Test
     fun `the loop keeps running after a failed run and stops when the bean is destroyed`() = runBlocking {
         val runs = java.util.concurrent.atomic.AtomicInteger()
         every { botStates.findByExchange("UPBIT") } answers {
@@ -145,7 +174,7 @@ class OrderReconcilerTest {
         }
         val looping = OrderReconciler(
             botStates, users, secrets, { client }, states, executions, Clock.fixed(now, ZoneOffset.UTC),
-            OrderReconciler.Timings(firstRunAfter = java.time.Duration.ofMillis(1), every = java.time.Duration.ofMillis(20)),
+            OrderReconciler.Timings(untilNextRun = { java.time.Duration.ofMillis(20) }),
         )
 
         looping.start()
