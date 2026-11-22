@@ -11,7 +11,6 @@ import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradingState
-import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.persistence.TradingStateService
 import com.trading.common.strategy.TradingStrategy
 import com.trading.common.config.TradingProperties
@@ -36,7 +35,7 @@ class TradingEngineStateVersionTest {
         commitFill = { persist, _: TradeRecord -> persist(); true },
     )
     private val strategy = mockk<TradingStrategy>(relaxed = true)
-    private val marketData = mockk<MarketDataStore>(relaxed = true)
+    private val marketData = relaxedMarketDataStore()
     private val engine = TradingEngine(
         upbitClient = upbit,
         positionManager = manager,

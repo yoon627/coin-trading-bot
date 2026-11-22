@@ -10,7 +10,7 @@ import com.trading.bot.engine.DailyCandleCache
 import com.trading.bot.engine.DailyResetManager
 import com.trading.bot.engine.PositionManager
 import com.trading.bot.engine.TradingEngine
-import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.engine.relaxedMarketDataStore
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Candle
 import com.trading.common.domain.CandleInterval
@@ -50,7 +50,7 @@ class TradingEngineTickCharacterizationTest {
     private val upbit = mockk<UpbitClient>(relaxed = true)
     private val positionManager = mockk<PositionManager>(relaxed = true)
     private val strategy = mockk<TradingStrategy>()
-    private val store = mockk<MarketDataStore>(relaxed = true)
+    private val store = relaxedMarketDataStore()
 
     @BeforeEach
     fun setup() {

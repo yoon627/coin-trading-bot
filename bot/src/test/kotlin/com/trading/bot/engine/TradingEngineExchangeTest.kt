@@ -6,7 +6,6 @@ import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradingState
 import com.trading.bot.exchange.ExchangeClient
-import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Exchange
 import com.trading.common.strategy.TradingStrategy
@@ -36,7 +35,7 @@ class TradingEngineExchangeTest {
         every { minCandles } returns 21
         coEvery { shouldBuy(any(), any(), any()) } returns false
     }
-    private val marketDataStore = mockk<MarketDataStore>(relaxed = true) {
+    private val marketDataStore = relaxedMarketDataStore {
         every { getLatestTicker(any(), any()) } returns null
     }
 

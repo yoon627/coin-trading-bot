@@ -232,6 +232,9 @@ class PositionManager(
         null
     }
 
+    /** 소유자가 신규 진입을 멈췄다. 체결 경로가 매수 판단 전에 본다. */
+    internal fun entriesPausedNow(): Boolean = entriesPaused()
+
     private fun skipWhileEntriesPaused(ticker: String): Boolean {
         if (!entriesPaused()) {
             if (pausedSkipLogged.isNotEmpty()) pausedSkipLogged.clear()

@@ -22,8 +22,11 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.slf4j.LoggerFactory
 import kotlin.math.max
+import kotlin.math.min
 
 /** 트레이더가 읽고 바꾸는 엔진의 관리 목록. 상태·작업자·활성 목록은 엔진이 가진다. */
 internal interface TickerRoster {
@@ -57,7 +60,7 @@ internal class TickerTrader(
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        private const val PRICE_STALE_THRESHOLD_MS = 30_000L
+        internal const val PRICE_STALE_THRESHOLD_MS = 30_000L
 
         // 경고는 ticker 당 1분에 한 번. 피드 장애 중에는 tick 마다 같은 경고가 난다.
         private const val STALE_WARN_INTERVAL_MS = 60_000L
@@ -70,6 +73,7 @@ internal class TickerTrader(
 
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
+    private val tradeErrorAtMs = ConcurrentHashMap<String, Long>()
 
     /**
      * 따로 물어도 거래소가 모른다고 한(404) 마켓. 묶음에 넣으면 묶음 전체가 실패하므로 묶음에서만 뺀다 — 보유·미해소 주문이 있으면
@@ -100,10 +104,123 @@ internal class TickerTrader(
         return true
     }
 
-    override suspend fun process(ticker: String, state: TradingState, round: Round) {
+    override suspend fun process(ticker: String, state: TradingState, round: Round, lastTrade: PriceSample?) {
         if (!willProcess(ticker)) return
-        processTicker(ticker, state, strategy, round.rest)
+        processTicker(ticker, state, strategy, round.rest, lastTrade?.takeIf { isFresh(it.time) }?.price)
     }
+
+    /**
+     * 체결 하나로 청산·매수를 판단한다. 바퀴와 달리 주문 말고는 거래소·DB 를 부르지 않는다 — 체결 확인·저장·잔고 동기화·보유일 청산은
+     * 바퀴가 한다. 새 고점은 메모리에만 올리고 저장은 바퀴에 맡긴다.
+     */
+    override suspend fun onTrade(ticker: String, state: TradingState, trade: PriceSample, orders: TradeOrders): TradeOutcome {
+        if (!isFresh(trade.time) || state.unsynced || state.hasPendingOrder() || !calendar.isSessionOpen(clock.instant())) {
+            return TradeOutcome.NO_ORDER
+        }
+        return try {
+            tradeDecision(ticker, state, trade, orders)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            warnTradeFailure(ticker, state, e)
+            if (orders != TradeOrders.NONE) TradeOutcome.NO_RESULT else TradeOutcome.NO_ORDER
+        }
+    }
+
+    private suspend fun tradeDecision(ticker: String, state: TradingState, trade: PriceSample, orders: TradeOrders): TradeOutcome {
+        val price = trade.price
+        val dust = rules.isDust(state, price)
+        if (state.position) {
+            if (state.updatePeakPrice(price)) state.peakPersistFailed = true
+            val reason = decidePriceExit(state, price)
+            // runSwing 과 같은 순서 — 고점·판단 뒤에 관측해야 같은 체결을 본다.
+            if (dust) shadowExitObserver?.forget(ticker) else shadowExitObserver?.onTick(ticker, state, price)
+            var sellWithoutResult = false
+            if (reason != null && orders != TradeOrders.NONE) {
+                currentCoroutineContext().ensureActive()
+                val sold = positionManager.sell(ticker, state, price, reason)
+                if (sold != null) {
+                    shadowExitObserver?.onLiveExit(ticker, price, reason.name, sold.executedVwap)
+                    return TradeOutcome.ORDERED
+                }
+                if (!dust) return TradeOutcome.NO_RESULT
+                // runSwing 과 같이 팔지 못한 dust 는 같은 체결에서 매수(흡수)로 넘어간다.
+                sellWithoutResult = true
+            }
+            if (!dust) return TradeOutcome.NO_ORDER
+            val bought = tradeBuy(ticker, state, trade, orders)
+            return if (bought == TradeOutcome.NO_ORDER && sellWithoutResult) TradeOutcome.NO_RESULT else bought
+        }
+        shadowExitObserver?.forget(ticker)
+        return tradeBuy(ticker, state, trade, orders)
+    }
+
+    private suspend fun tradeBuy(ticker: String, state: TradingState, trade: PriceSample, orders: TradeOrders): TradeOutcome {
+        val price = trade.price
+        if (orders != TradeOrders.ALL || !mayEnterOnTrade(ticker, state, price)) return TradeOutcome.NO_ORDER
+        val candles = dailyCandlesAt(ticker, price) ?: return TradeOutcome.NO_ORDER
+        if (!strategy.shouldBuyNormalized(candles, price, tradingProperties)) return TradeOutcome.NO_ORDER
+        return buyWindow.withWindow(ticker) {
+            // 창구를 기다리는 동안 다른 경로가 상태를 바꿨거나 체결이 낡았을 수 있다.
+            currentCoroutineContext().ensureActive()
+            if (!isFresh(trade.time) || !calendar.isSessionOpen(clock.instant()) || !mayEnterOnTrade(ticker, state, price)) {
+                TradeOutcome.NO_ORDER
+            } else if (positionManager.buy(ticker, state, price, strategy.name) == null) {
+                TradeOutcome.NO_RESULT
+            } else {
+                TradeOutcome.ORDERED
+            }
+        }
+    }
+
+    // runSwing 의 진입 가드와 같다. 신규 진입 중지는 buy() 도 막지만 매수 창구를 잡기 전에 거른다. 팔지 못한 매도가 상태를 바꿨을 수 있어 다시 본다.
+    private fun mayEnterOnTrade(ticker: String, state: TradingState, price: Double): Boolean =
+        (!state.position || rules.isDust(state, price)) && !state.boughtToday && !state.unsynced && !state.hasPendingOrder() &&
+            !roster.isExitOnly(ticker) && roster.state(ticker) === state && !positionManager.entriesPausedNow()
+
+    /**
+     * 저장소 일봉의 오늘 봉 종가를 체결 가격으로 바꾼 사본. 저장소 일봉은 1분봉 polling 이라 약 1분 늦다(소유자 결정 2026-11-22).
+     * 오늘 봉이 없거나 모자라면 null — 체결 경로는 REST 일봉을 부르지 않고 바퀴가 REST 로 판단한다.
+     */
+    private fun dailyCandlesAt(ticker: String, price: Double): List<NormalizedCandle>? {
+        val minCandles = effectiveMinCandles(strategy)
+        val stored = loadStoreDailyCandles(ticker, minCandles) ?: run {
+            warnTradeCandlesMissing(ticker, minCandles)
+            return null
+        }
+        val dayOpen = currentTradingDayOpen()
+        val today = stored.first()
+        if (!isCurrentDay(today.openTime, dayOpen)) {
+            if (pastBoundaryGrace(dayOpen)) {
+                warnStaleDailyCandle("store", ticker, dayOpen, today.openTime, "trades do not evaluate buys; the round falls back to REST")
+            }
+            return null
+        }
+        val live = today.copy(closePrice = price, highPrice = max(today.highPrice, price), lowPrice = min(today.lowPrice, price))
+        return listOf(live) + stored.drop(1)
+    }
+
+    private fun warnTradeCandlesMissing(ticker: String, minCandles: Int) {
+        val key = "$ticker:trade-d1"
+        val now = clock.millis()
+        if (candleWarnAtMs[key]?.let { now - it < STALE_WARN_INTERVAL_MS } == true) return
+        candleWarnAtMs[key] = now
+        log.warn(
+            "Store has fewer than {} D1 candles for {} (user {}) — trades do not evaluate buys; the round falls back to REST",
+            minCandles, ticker, userId,
+        )
+    }
+
+    // 체결은 초당 수십 건이라 같은 실패를 1분에 한 번만 알린다.
+    private fun warnTradeFailure(ticker: String, state: TradingState, e: Exception) {
+        if (state.alreadyConflicted(e)) return
+        val now = clock.millis()
+        if (tradeErrorAtMs[ticker]?.let { now - it < STALE_WARN_INTERVAL_MS } == true) return
+        tradeErrorAtMs[ticker] = now
+        log.error("Error processing a trade for {} (user {}): {}", ticker, userId, e.message, e)
+    }
+
+    private fun isFresh(tradeTime: Instant): Boolean = clock.millis() - tradeTime.toEpochMilli() < PRICE_STALE_THRESHOLD_MS
 
     /** 시세가 낡은 활성 종목을 라운드 앞에서 한 번에 묻는다. 시계만 부른다. */
     suspend fun prefetchRestPrices(active: List<String>): RestRound {
@@ -175,9 +292,19 @@ internal class TickerTrader(
         return calendar.isSessionOpen(clock.instant()) || state.hasPendingOrder()
     }
 
-    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy, round: RestRound? = null) {
+    /**
+     * [tradePrice] 는 30초 안에 받은 마지막 체결 가격이다. 있으면 가격 청산·매수는 체결 경로가 하므로 이 바퀴는 하지 않는다 —
+     * 저장소 가격이 체결보다 늦어 판단 순서가 뒤바뀐다.
+     */
+    internal suspend fun processTicker(
+        ticker: String,
+        state: TradingState,
+        strategy: TradingStrategy,
+        round: RestRound? = null,
+        tradePrice: Double? = null,
+    ) {
         try {
-            val currentPrice = getRealtimePrice(ticker) ?: restPrice(ticker, round) ?: return
+            val currentPrice = tradePrice ?: getRealtimePrice(ticker) ?: restPrice(ticker, round) ?: return
 
             // 보유 여부를 확정하지 못했으면 다시 확인한다. 계속 모르면 buy() 가 신규 진입을 막는다.
             if (state.unsynced) {
@@ -218,7 +345,7 @@ internal class TickerTrader(
             }
 
             if (!calendar.isSessionOpen(clock.instant())) return
-            runSwing(ticker, state, strategy, currentPrice)
+            runSwing(ticker, state, strategy, currentPrice, priceDecisions = tradePrice == null)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -231,13 +358,17 @@ internal class TickerTrader(
         }
     }
 
-    private suspend fun runSwing(ticker: String, state: TradingState, strategy: TradingStrategy, currentPrice: Double) {
+    /**
+     * [priceDecisions] 가 false 면 체결 경로가 가격 청산·관측을 맡아 보유일 청산과 dust 정리만 한다. 매수는 저장소 일봉이 쓸 수 없을 때만
+     * REST 일봉으로 한다(체결 경로는 저장소 일봉만 본다).
+     */
+    private suspend fun runSwing(ticker: String, state: TradingState, strategy: TradingStrategy, currentPrice: Double, priceDecisions: Boolean) {
         // 최소 주문 금액 미만 보유(dust)도 청산 평가는 한다. 기록된 수량이 낡았을 수 있어 실제로는 팔 수 있다.
         val dust = rules.isDust(state, currentPrice)
         if (state.position) {
-            val reason = decideSell(state, currentPrice)
+            val reason = if (priceDecisions) decideSell(state, currentPrice) else dailyResetReason(state)
             // decideSell 이 peak 을 갱신한 뒤에 관측해야 같은 tick 을 본다.
-            if (dust) shadowExitObserver?.forget(ticker) else shadowExitObserver?.onTick(ticker, state, currentPrice)
+            if (dust) shadowExitObserver?.forget(ticker) else if (priceDecisions) shadowExitObserver?.onTick(ticker, state, currentPrice)
             val sold = if (reason != null) positionManager.sell(ticker, state, currentPrice, reason) else null
             if (sold != null) {
                 shadowExitObserver?.onLiveExit(ticker, currentPrice, reason!!.name, sold.executedVwap)
@@ -260,6 +391,8 @@ internal class TickerTrader(
         // 오늘 봉이 있는 소스로만 판정한다.
         val dayOpen = currentTradingDayOpen()
         val currentStoreCandles = storeCandles?.takeIf { isCurrentDay(it.first().openTime, dayOpen) }
+        // 저장소 일봉으로 판단할 수 있으면 체결 경로가 산다. 없으면 체결 가격으로 아래 REST 대체 판단을 한다.
+        if (!priceDecisions && currentStoreCandles != null) return
         val shouldBuy = if (currentStoreCandles != null) {
             strategy.shouldBuyNormalized(currentStoreCandles, currentPrice, tradingProperties)
         } else {
@@ -289,13 +422,18 @@ internal class TickerTrader(
         dailyCandleCache?.get(ticker, MAX_DAILY_CANDLE_LOOKBACK) ?: upbitClient.getDayCandles(ticker, MAX_DAILY_CANDLE_LOOKBACK)
 
     // 손익 기준(손절 > 트레일링 > 익절)이 먼저이고 일일 리셋은 마지막이다.
-    internal fun decideSell(state: TradingState, currentPrice: Double): SellReason? = when {
+    internal fun decideSell(state: TradingState, currentPrice: Double): SellReason? =
+        decidePriceExit(state, currentPrice) ?: dailyResetReason(state)
+
+    private fun decidePriceExit(state: TradingState, currentPrice: Double): SellReason? = when {
         positionManager.checkStopLoss(state, currentPrice) -> SellReason.STOP_LOSS
         positionManager.checkTrailingStop(state, currentPrice) -> SellReason.TRAILING_STOP
         positionManager.checkTakeProfit(state, currentPrice) -> SellReason.TAKE_PROFIT
-        dailyResetManager.shouldSellForDailyReset(state) -> SellReason.DAILY_RESET
         else -> null
     }
+
+    private fun dailyResetReason(state: TradingState): SellReason? =
+        if (dailyResetManager.shouldSellForDailyReset(state)) SellReason.DAILY_RESET else null
 
     // 하한이 없으면 짧은 store window 를 쓰게 되어 RSI 처럼 길이에 민감한 지표 값이 달라진다.
     private fun effectiveMinCandles(strategy: TradingStrategy): Int =

@@ -1,7 +1,6 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitClientImpl
-import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Exchange
@@ -28,7 +27,7 @@ import org.springframework.web.reactive.function.client.WebClient
 class UpbitExchangeRuntimeTest {
 
     private val properties = TradingProperties()
-    private val marketDataStore = mockk<MarketDataStore>(relaxed = true)
+    private val marketDataStore = relaxedMarketDataStore()
     private val dailyCandleCache = mockk<DailyCandleCache>()
 
     private fun runtime(webClient: WebClient = mockk(relaxed = true)) =

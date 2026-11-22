@@ -9,12 +9,21 @@ import com.trading.bot.domain.Account
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.domain.SellReason
+import com.trading.bot.domain.TradeRecord
+import com.trading.common.config.PriceEventsProperties
 import com.trading.common.config.TradingProperties
+import com.trading.common.domain.CandleInterval
+import com.trading.common.domain.Exchange
+import com.trading.common.domain.NormalizedCandle
+import com.trading.common.domain.NormalizedTicker
+import com.trading.common.domain.NormalizedTrade
 import com.trading.common.strategy.TradingStrategy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -23,6 +32,8 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -49,21 +60,26 @@ class TradingEngineWorkersTest {
     private val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
     private val logs = ListAppender<ILoggingEvent>().apply { start() }
     private val t0 = Instant.parse("2026-11-20T03:00:00Z")
+    private val trades = MutableSharedFlow<NormalizedTrade>(extraBufferCapacity = 10_000)
+    private val workerLogger = LoggerFactory.getLogger(TickerWorker::class.java) as Logger
 
     @BeforeEach
     fun setup() {
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
+        every { marketDataStore.trades } returns trades
         every { strategy.name } returns "test_strategy"
         every { strategy.minCandles } returns 21
         every { dailyResetManager.getTradingDate() } returns LocalDate.of(2026, 11, 20)
         every { dailyResetManager.shouldSellForDailyReset(any()) } returns false
         coEvery { upbitClient.getTicker(any()) } coAnswers { firstArg<String>().split(",").map { Ticker(market = it, tradePrice = 100.0) } }
         logger.addAppender(logs)
+        workerLogger.addAppender(logs)
     }
 
     @AfterEach
     fun teardown() {
         logger.detachAppender(logs)
+        workerLogger.detachAppender(logs)
     }
 
     /** 시험 스케줄러의 가상 시각을 따르는 시계. */
@@ -73,17 +89,31 @@ class TradingEngineWorkersTest {
         override fun withZone(zone: ZoneId?): Clock = this
     }
 
-    private fun TestScope.engine() = TradingEngine(
+    private fun TestScope.engine(
+        priceEvents: PriceEventsProperties = PriceEventsProperties(),
+        intervalSeconds: Long = 1,
+    ) = TradingEngine(
         upbitClient = upbitClient,
         positionManager = positionManager,
         dailyResetManager = dailyResetManager,
         strategy = strategy,
-        tradingProperties = TradingProperties(intervalSeconds = 1),
+        tradingProperties = TradingProperties(intervalSeconds = intervalSeconds),
         userId = 1L,
         marketDataStore = marketDataStore,
         clock = virtualClock(),
+        priceEvents = priceEvents,
         dispatcher = StandardTestDispatcher(testScheduler),
     )
+
+    private fun TestScope.trade(market: String, price: Double, exchange: Exchange = Exchange.UPBIT, at: Instant = virtualClock().instant()) =
+        NormalizedTrade(exchange, market, price, volume = 1.0, tradeTime = at, sequentialId = seq++)
+
+    private var seq = 1L
+
+    private suspend fun awaitCollector() = withTimeout(5_000) { while (trades.subscriptionCount.value == 0) delay(10) }
+
+    private fun heldForReal(vararg tickers: String) =
+        tickers.associateWith { TradingState(it, position = true, avgBuyPrice = 100.0, holdVolume = 1_000.0, peakPrice = 100.0) }
 
     private fun held(vararg tickers: String) = tickers.associateWith { TradingState(it, position = true, avgBuyPrice = 100.0, holdVolume = 1.0) }
 
@@ -251,5 +281,194 @@ class TradingEngineWorkersTest {
         } finally {
             engine.stop()
         }
+    }
+
+    // --- 체결 이벤트 ---
+
+    private fun todayCandles() = (0 until 30).map { i ->
+        NormalizedCandle(
+            Exchange.UPBIT, "BTC/KRW", openPrice = 100.0, highPrice = 101.0, lowPrice = 99.0, closePrice = 100.0, volume = 1.0,
+            openTime = LocalDate.of(2026, 11, 20).minusDays(i.toLong()).atStartOfDay(ZoneOffset.UTC).toInstant(),
+        )
+    }
+
+    @Test
+    fun `while trades are fresh a round does not exit on the store price, and takes over once they stop`() = runTest {
+        var storePrice = 100.0
+        every { marketDataStore.getLatestTicker(any(), any()) } answers { NormalizedTicker(Exchange.UPBIT, "BTC/KRW", storePrice, timestamp = virtualClock().instant()) }
+        every { positionManager.checkStopLoss(any(), any()) } answers { secondArg<Double>() <= 95.0 }
+        val engine = engine()
+        engine.start(listOf("KRW-BTC"), heldForReal("KRW-BTC"))
+        try {
+            awaitCollector()
+            delay(100) // 시작 바퀴는 저장소 가격(100)으로 판단한다
+            trades.emit(trade("BTC/KRW", 100.0)); delay(10)
+            storePrice = 50.0
+            repeat(20) { delay(500); trades.emit(trade("BTC/KRW", 100.0)) }
+            coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
+
+            delay(31_000)
+            coVerify(atLeast = 1) { positionManager.sell("KRW-BTC", any(), 50.0, SellReason.STOP_LOSS) }
+        } finally {
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `while trades are fresh a round still reconciles, retries persists and makes the hold-days exit at the trade price`() = runTest {
+        val engine = engine()
+        engine.start(listOf("KRW-BTC"), heldForReal("KRW-BTC"))
+        try {
+            awaitCollector()
+            delay(100)
+            trades.emit(trade("BTC/KRW", 101.0)); delay(10)
+            every { dailyResetManager.shouldSellForDailyReset(any()) } returns true
+            delay(1_000)
+
+            coVerify(exactly = 1) { positionManager.sell("KRW-BTC", any(), 101.0, SellReason.DAILY_RESET) }
+            coVerify(atLeast = 2) { positionManager.retryPendingPersistIfNeeded(any()) }
+        } finally {
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `an overflowing trade mailbox drops the oldest trades and warns at most once a minute with the count, rounds are kept`() = runTest {
+        every { positionManager.checkStopLoss(any(), any()) } answers { secondArg<Double>() <= 95.0 }
+        val gates = List(2) { CompletableDeferred<Unit>() }
+        var sells = 0
+        coEvery { positionManager.sell(any(), any(), any(), any()) } coAnswers { gates.getOrNull(sells++)?.await(); mockk<TradeRecord>(relaxed = true) }
+        val seen = mutableListOf<Double>()
+        every { positionManager.checkTakeProfit(any(), any()) } answers { seen += secondArg<Double>(); false }
+        var retries = 0
+        coEvery { positionManager.retryPendingPersistIfNeeded(any()) } answers { retries++ }
+        val overflow = TickerWorker.TRADE_MAILBOX_CAPACITY + 100
+        val engine = engine()
+        engine.start(listOf("KRW-BTC"), heldForReal("KRW-BTC"))
+        fun drops() = logs.list.filter { it.level == Level.WARN && "dropped" in it.formattedMessage }.map { it.formattedMessage }
+        suspend fun burstDuringSell(gate: CompletableDeferred<Unit>) {
+            trades.emit(trade("BTC/KRW", 90.0)); delay(100) // 매도 중에 멈춘다
+            val before = retries
+            seen.clear()
+            repeat(overflow) { trades.emit(trade("BTC/KRW", 200.0 + it)) }
+            delay(3_000) // 바퀴 몇 개가 합쳐진다
+            gate.complete(Unit); delay(100)
+            assertEquals((100 until overflow).map { 200.0 + it }, seen.filter { it >= 200.0 }, "오래된 체결부터 버린다")
+            assertTrue(retries > before, "바퀴는 버리지 않는다")
+        }
+        try {
+            awaitCollector()
+            delay(100)
+
+            burstDuringSell(gates[0])
+            assertEquals(1, drops().size, drops().toString())
+            assertTrue("100" in drops().single(), drops().toString())
+
+            burstDuringSell(gates[1])
+            assertEquals(1, drops().size, "1분 안의 두 번째 버림은 알리지 않는다: ${drops()}")
+
+            delay(61_000)
+            trades.emit(trade("BTC/KRW", 150.0)); delay(100)
+            assertEquals(2, drops().size, drops().toString())
+            assertTrue("100" in drops().last(), "알리지 않은 버림은 다음 경고가 센다: ${drops()}")
+        } finally {
+            gates.forEach { it.complete(Unit) }
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `the collector hands each worker only its own exchange's trades and starts after the workers exist`() = runTest {
+        every { positionManager.checkStopLoss(any(), any()) } answers { secondArg<Double>() <= 95.0 }
+        val engine = engine(intervalSeconds = 60)
+        engine.start(listOf("KRW-BTC"), heldForReal("KRW-BTC"))
+        try {
+            awaitCollector()
+            delay(100)
+            trades.emit(trade("BTC/KRW", 90.0, exchange = Exchange.KIS)); delay(100)
+            trades.emit(trade("ETH/KRW", 90.0)); delay(100)
+            coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
+
+            trades.emit(trade("BTC/KRW", 90.0)); delay(100)
+            coVerify(exactly = 1) { positionManager.sell("KRW-BTC", any(), 90.0, SellReason.STOP_LOSS) }
+        } finally {
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `trades for a released ticker are dropped and the engine stays alive`() = runTest {
+        val restored = mapOf("KRW-OLD" to TradingState("KRW-OLD", buyDate = LocalDate.of(2026, 11, 1)))
+        val engine = engine()
+        engine.start(listOf("KRW-BTC"), restored)
+        try {
+            withTimeout(5_000) { while ("KRW-OLD" in engine.getActiveTickers()) delay(20) }
+            awaitCollector()
+            repeat(3) { trades.emit(trade("OLD/KRW", 1.0)) }
+            delay(1_500)
+
+            assertTrue(engine.isLoopAlive())
+            assertTrue(errors().isEmpty(), errors().toString())
+        } finally {
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `a trade collector that ends while the engine runs is reported as engine dead`() = runTest {
+        val ended = mockk<SharedFlow<NormalizedTrade>>()
+        coEvery { ended.collect(any()) } throws IllegalStateException("feed gone")
+        every { marketDataStore.trades } returns ended
+        val engine = engine()
+        engine.start(listOf("KRW-BTC"))
+        try {
+            withTimeout(5_000) { while (engine.isLoopAlive()) delay(20) }
+
+            assertTrue(errors().any { "[ENGINE DEAD] trade collector" in it }, errors().toString())
+        } finally {
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `with price events switched off the engine does not take trades and only rounds decide`() = runTest {
+        val engine = engine(priceEvents = PriceEventsProperties(enabled = false), intervalSeconds = 60)
+        engine.start(listOf("KRW-BTC"), heldForReal("KRW-BTC"))
+        try {
+            delay(100)
+            trades.emit(trade("BTC/KRW", 90.0))
+            delay(1_000)
+
+            assertEquals(0, trades.subscriptionCount.value)
+            verify(exactly = 0) { marketDataStore.trades }
+            coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
+            assertTrue(engine.isLoopAlive())
+        } finally {
+            engine.stop()
+        }
+    }
+
+    @Test
+    fun `after stop no order is started from trades left in a mailbox`() = runTest {
+        every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns todayCandles()
+        coEvery { strategy.shouldBuyNormalized(any(), 123.0, any()) } returns true
+        val inBuy = CompletableDeferred<String>()
+        coEvery { positionManager.buy(any(), any(), any(), any()) } coAnswers { inBuy.complete(firstArg()); CompletableDeferred<Unit>().await(); null }
+        val engine = engine()
+        engine.start(listOf("KRW-BTC", "KRW-ETH"))
+        try {
+            awaitCollector()
+            delay(100)
+            trades.emit(trade("BTC/KRW", 123.0))
+            assertEquals("KRW-BTC", withTimeout(5_000) { inBuy.await() })
+            repeat(3) { trades.emit(trade("ETH/KRW", 123.0)) } // ETH 는 매수 창구 앞에서 기다린다
+            delay(100)
+        } finally {
+            engine.stop()
+        }
+        repeat(3) { trades.emit(trade("ETH/KRW", 123.0)) }
+        delay(1_000)
+
+        coVerify(exactly = 0) { positionManager.buy("KRW-ETH", any(), any(), any()) }
     }
 }

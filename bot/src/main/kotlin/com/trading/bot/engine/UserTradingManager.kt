@@ -16,6 +16,7 @@ import com.trading.bot.config.ExitParamsDeclarationCheck
 import com.trading.common.config.ExitParamRanges
 import com.trading.common.config.TradingProperties
 import com.trading.bot.persistence.ShadowExitObservationRepository
+import com.trading.common.config.PriceEventsProperties
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.domain.Exchange
 import com.trading.common.strategy.TradingStrategy
@@ -67,6 +68,7 @@ class UserTradingManager(
     private val shadowExitObservationRepository: ShadowExitObservationRepository? = null,
     private val exitParamsDeclarationCheck: ExitParamsDeclarationCheck? = null,
     runtime: ExchangeRuntime? = null,
+    private val priceEventsProperties: PriceEventsProperties = PriceEventsProperties(),
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
@@ -650,6 +652,7 @@ class UserTradingManager(
             clock = clock,
             calendar = parts.calendar,
             rules = parts.rules,
+            priceEvents = priceEventsProperties,
         )
     }
 

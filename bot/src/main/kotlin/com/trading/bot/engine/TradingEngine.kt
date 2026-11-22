@@ -8,8 +8,10 @@ import com.trading.bot.exchange.TradingCalendar
 import com.trading.bot.exchange.UpbitMarketRules
 import com.trading.bot.exchange.UpbitTradingCalendar
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.common.config.PriceEventsProperties
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Exchange
+import com.trading.common.domain.MarketPair
 import com.trading.common.strategy.TradingStrategy
 import java.time.Clock
 import java.time.Instant
@@ -52,6 +54,8 @@ class TradingEngine(
     private val clock: Clock = Clock.systemUTC(),
     private val calendar: TradingCalendar = UpbitTradingCalendar,
     private val rules: MarketRules = UpbitMarketRules,
+    // 끄면 체결을 받지 않아 바퀴만 판단한다.
+    private val priceEvents: PriceEventsProperties = PriceEventsProperties(),
     // 시험이 가상 시간으로 시계·작업자를 돌린다.
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
@@ -289,7 +293,23 @@ class TradingEngine(
             workers[ticker] = worker
             launch { worker.run(accounts) }.invokeOnCompletion { cause -> onPartEnded("ticker worker $ticker", worker.released, cause) }
         }
+        // 작업자가 생긴 뒤에 구독한다. 그 전의 체결은 받지 않는다 — 시작 가격은 첫 바퀴가 정한다.
+        if (priceEvents.enabled && marketDataStore != null) {
+            // 저장소는 내부 표기(BTC/KRW)로 싣는다. 정리된 작업자는 우편함이 닫혀 받지 않는다.
+            val routes = workers.values.associateBy { MarketPair.normalize(exchange, it.ticker) }
+            launch { collectTrades(marketDataStore, routes, TradeAgeMonitor(clock, userId)) }.invokeOnCompletion { cause -> onPartEnded("trade collector", released = false, cause) }
+        }
         launch { runClock() }.invokeOnCompletion { cause -> onPartEnded("clock", released = false, cause) }
+    }
+
+    /** 자기 거래소의 체결을 그 종목 작업자에게 넣는다. 끝나면 체결 판단이 멈추므로 엔진이 도는 중의 끝남은 죽음이다. */
+    private suspend fun collectTrades(store: MarketDataStore, routes: Map<String, TickerWorker>, ages: TradeAgeMonitor) {
+        store.trades.collect { trade ->
+            if (trade.exchange != exchange) return@collect
+            val worker = routes[trade.market] ?: return@collect
+            ages.observe(trade.tradeTime)
+            worker.offerTrade(trade.price, trade.tradeTime)
+        }
     }
 
     /** 기동 동기화에 쓸 잔고를 한 번 받아 나눠 쓴다. 실패하면 작업자가 각자 다시 묻는다. */
