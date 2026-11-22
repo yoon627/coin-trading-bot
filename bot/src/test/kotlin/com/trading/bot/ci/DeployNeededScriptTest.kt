@@ -12,7 +12,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * 수동 배포는 마지막 정상 배포 이후 운영에 들어가는 파일이 바뀌었을 때만 엔진을 재시작한다.
+ * 배포(push·수동 실행)는 마지막 정상 배포 이후 운영에 들어가는 파일이 바뀌었을 때만 엔진을 재시작한다.
  * 판정을 모르는 경로는 배포 쪽으로 기울어야 한다 — 놓친 변경은 조용히 미반영되지만 불필요한 재시작은 보인다.
  */
 @DisabledOnOs(OS.WINDOWS, disabledReason = "bash 스크립트 — 배포는 CI(Linux) 에서 돈다")

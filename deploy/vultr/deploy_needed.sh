@@ -29,7 +29,7 @@ if ! git cat-file -e "${last_good}^{commit}" 2>/dev/null; then
     echo "마지막 정상 배포 $last_good 가 이 체크아웃에 없어 차이를 알 수 없다 — 배포한다"
     exit 0
 fi
-# 수동 실행 두 개의 배포 job 은 시작 순서가 아니라 테스트·빌드가 끝난 순서로 줄을 선다. 늦게 선 옛 커밋이
+# 배포 job 두 개(push·수동 실행)는 시작 순서가 아니라 테스트·빌드가 끝난 순서로 줄을 선다. 늦게 선 옛 커밋이
 # 새 배포를 덮으면 새 스키마 위에 옛 앱이 뜰 수 있다.
 if [[ "$target" != "$last_good" ]] && git merge-base --is-ancestor "$target" "$last_good"; then
     echo "ERROR: 배포 대상 $target 이 마지막 정상 배포 $last_good 보다 옛 커밋이다 — 되돌리려면 force 로 실행한다" >&2
