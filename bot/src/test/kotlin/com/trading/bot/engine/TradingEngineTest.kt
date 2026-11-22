@@ -147,9 +147,10 @@ class TradingEngineTest {
             withContext(NonCancellable) { delay(300); postProcessingDone.set(true) }
             null
         }
-        val logger = LoggerFactory.getLogger(TradingEngine::class.java) as Logger
+        // 종목 처리 오류는 트레이더가, 시계·작업자 오류는 엔진이 남긴다.
+        val loggers = listOf(TradingEngine::class.java, TickerTrader::class.java).map { LoggerFactory.getLogger(it) as Logger }
         val appender = ListAppender<ILoggingEvent>().apply { start() }
-        logger.addAppender(appender)
+        loggers.forEach { it.addAppender(appender) }
 
         try {
             val engine = createEngine()
@@ -168,7 +169,7 @@ class TradingEngineTest {
                 "cancel 이 오탐 ERROR 로그를 남김: ${errors.map { it.formattedMessage }}",
             )
         } finally {
-            logger.detachAppender(appender)
+            loggers.forEach { it.detachAppender(appender) }
         }
     }
 
@@ -541,7 +542,7 @@ class TradingEngineTest {
         every { positionManager.checkStopLoss(state, any()) } returns true
         every { positionManager.checkTrailingStop(state, any()) } returns true
         every { positionManager.checkTakeProfit(state, any()) } returns true
-        assertEquals(SellReason.STOP_LOSS, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.STOP_LOSS, engine.trader.decideSell(state, 100.0))
     }
 
     @Test
@@ -550,7 +551,7 @@ class TradingEngineTest {
         val state = sellState()
         every { positionManager.checkStopLoss(state, any()) } returns false
         every { positionManager.checkTrailingStop(state, any()) } returns true
-        assertEquals(SellReason.TRAILING_STOP, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.TRAILING_STOP, engine.trader.decideSell(state, 100.0))
     }
 
     @Test
@@ -561,7 +562,7 @@ class TradingEngineTest {
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns true
         every { dailyResetManager.shouldSellForDailyReset(state) } returns true
-        assertEquals(SellReason.TAKE_PROFIT, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.TAKE_PROFIT, engine.trader.decideSell(state, 100.0))
     }
 
     @Test
@@ -572,7 +573,7 @@ class TradingEngineTest {
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns false
         every { dailyResetManager.shouldSellForDailyReset(state) } returns true
-        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.DAILY_RESET, engine.trader.decideSell(state, 100.0))
     }
 
     @Test
@@ -582,7 +583,7 @@ class TradingEngineTest {
         every { positionManager.checkStopLoss(state, any()) } returns false
         every { positionManager.checkTrailingStop(state, any()) } returns false
         every { positionManager.checkTakeProfit(state, any()) } returns false
-        assertNull(engine.decideSell(state, 100.0))
+        assertNull(engine.trader.decideSell(state, 100.0))
     }
 
     // --- processTicker 게이트 순서와 조기 return ---
@@ -605,7 +606,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         assertEquals(52_000_000.0, state.peakPrice)
         coVerify(exactly = 1) { positionManager.persistPeak(state) }
@@ -622,7 +623,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         assertEquals(52_000_000.0, state.peakPrice)
         coVerify(exactly = 1) { positionManager.persistPeak(state) }
@@ -636,7 +637,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 0) { positionManager.persistPeak(any()) }
     }
@@ -653,7 +654,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 52_000_000.0))
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 1) { positionManager.persistPeak(state) } // 신고점이 아닌데도 재시도
     }
@@ -671,7 +672,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { positionManager.reconcilePendingSell(any(), any(), any()) } returns null
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 1) { positionManager.persistPeak(state) }
     }
@@ -685,7 +686,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.buy("KRW-BTC", state, 51_000_000.0, "test_strategy") }
     }
@@ -715,7 +716,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy") }
         coVerify(exactly = 0) { observer.onTick(any(), any(), any()) }
@@ -732,7 +733,7 @@ class TradingEngineTest {
         every { positionManager.checkStopLoss(any(), any()) } returns true
         coEvery { positionManager.sell(any(), any(), any(), any()) } returns null // 가드가 주문하지 않았다
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.sell("KRW-BTC", state, 10_000_000.0, SellReason.STOP_LOSS) }
         coVerify { positionManager.buy("KRW-BTC", state, 10_000_000.0, "test_strategy") }
@@ -745,8 +746,8 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true, holdVolume = 0.01), strategy) // 10만원
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true), strategy) // 수량 미상
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true, holdVolume = 0.01), strategy) // 10만원
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC", position = true), strategy) // 수량 미상
 
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
     }
@@ -765,7 +766,7 @@ class TradingEngineTest {
             tradeRec(TradeSide.SELL)
         }
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.sell("KRW-BTC", state, 100.0, SellReason.STOP_LOSS) }
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
@@ -782,7 +783,7 @@ class TradingEngineTest {
             tradeRec(TradeSide.BUY)
         }
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.reconcilePendingBuy("KRW-BTC", state, 100.0) }
         coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
@@ -797,7 +798,7 @@ class TradingEngineTest {
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
         coEvery { positionManager.reconcilePendingBuy("KRW-BTC", state, any()) } returns null // 미해소, uuid 유지
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
     }
@@ -814,8 +815,8 @@ class TradingEngineTest {
         coEvery { positionManager.reconcilePendingBuy(any(), any(), any()) } returns null
         coEvery { positionManager.reconcilePendingSell(any(), any(), any()) } returns null
 
-        engine.processTicker("KRW-BTC", buying, strategy)
-        engine.processTicker("KRW-BTC", selling, strategy)
+        engine.trader.processTicker("KRW-BTC", buying, strategy)
+        engine.trader.processTicker("KRW-BTC", selling, strategy)
 
         coVerify { positionManager.reconcilePendingBuy("KRW-BTC", buying, 100.0) }
         coVerify { positionManager.reconcilePendingSell("KRW-BTC", selling, 100.0) }
@@ -831,7 +832,7 @@ class TradingEngineTest {
         every { positionManager.checkStopLoss(any(), any()) } returns true // 재평가되면 sell 트리거
         coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } returns null // 미해소, uuid 유지
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }
     }
@@ -844,7 +845,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
     }
@@ -863,7 +864,7 @@ class TradingEngineTest {
             tradeRec(TradeSide.SELL)
         }
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.reconcilePendingSell("KRW-BTC", state, 100.0) }
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
@@ -882,7 +883,7 @@ class TradingEngineTest {
         coEvery { positionManager.sell("KRW-BTC", state, 100.0, SellReason.STOP_LOSS) } returns
             tradeRec(TradeSide.SELL).copy(reason = "STOP_LOSS", executedVwap = 99.0)
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 1) { observer.onLiveExit("KRW-BTC", 100.0, "STOP_LOSS", 99.0, any()) }
     }
@@ -900,7 +901,7 @@ class TradingEngineTest {
             tradeRec(TradeSide.SELL).copy(price = 100.0, reason = "STOP_LOSS", executedVwap = 99.5)
         }
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 1) { observer.onLiveExit("KRW-BTC", 100.0, "STOP_LOSS", 99.5, decidedAt) }
     }
@@ -926,7 +927,7 @@ class TradingEngineTest {
             null
         }
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 108.0)) // 고점 대비 −1.8%, 후보 발동
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 95.0))
         coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, any()) } answers {
@@ -934,7 +935,7 @@ class TradingEngineTest {
             state.markSold()
             tradeRec(TradeSide.SELL).copy(price = 108.0, reason = "STOP_LOSS", executedVwap = 107.6)
         }
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         assertEquals(108.0, saved.captured.observedTickPrice)
         assertEquals(108.0, saved.captured.liveExitPrice)
@@ -955,7 +956,7 @@ class TradingEngineTest {
             tradeRec(TradeSide.SELL).copy(reason = "STOP_LOSS")
         }
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 0) { observer.onLiveExit(any(), any(), any(), any(), any()) }
     }
@@ -968,7 +969,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns emptyList()
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
 
-        engine.processTicker("KRW-BTC", state, strategy)
+        engine.trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify { positionManager.syncPosition("KRW-BTC", state, any()) }
     }
@@ -988,7 +989,7 @@ class TradingEngineTest {
     fun `loadStoreDailyCandles returns store candles when distinct sufficient`() {
         val engine = createEngine()
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns distinctDailyNormalized()
-        assertEquals(21, engine.loadStoreDailyCandles("KRW-BTC")?.size)
+        assertEquals(21, engine.trader.loadStoreDailyCandles("KRW-BTC")?.size)
     }
 
     @Test
@@ -999,14 +1000,14 @@ class TradingEngineTest {
             NormalizedCandle(Exchange.UPBIT, "KRW-BTC", 100.0, 100.0, 100.0, 100.0, 1.0, openTime = Instant.EPOCH)
         }
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns polluted
-        assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+        assertNull(engine.trader.loadStoreDailyCandles("KRW-BTC"))
     }
 
     @Test
     fun `loadStoreDailyCandles returns null when store has too few candles`() {
         val engine = createEngine()
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns distinctDailyNormalized().take(10)
-        assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+        assertNull(engine.trader.loadStoreDailyCandles("KRW-BTC"))
     }
 
     @Test
@@ -1015,7 +1016,7 @@ class TradingEngineTest {
             upbitClient, positionManager, dailyResetManager,
             strategy, tradingProperties,
         )
-        assertNull(engine.loadStoreDailyCandles("KRW-BTC"))
+        assertNull(engine.trader.loadStoreDailyCandles("KRW-BTC"))
     }
 
     // --- 09:00 경계 stale window: store 최신 D1 이 오늘 거래일 봉일 때만 매수 판정 ---
@@ -1044,7 +1045,7 @@ class TradingEngineTest {
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns dailyNormalized(today.minusDays(1))
         coEvery { strategy.shouldBuyNormalized(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 0) { strategy.shouldBuyNormalized(any(), any(), any()) }
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
@@ -1061,7 +1062,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns dailyLegacy(today)
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 0) { strategy.shouldBuyNormalized(any(), any(), any()) }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
@@ -1075,7 +1076,7 @@ class TradingEngineTest {
         every { marketDataStore.getCandles(any(), any(), CandleInterval.D1, any()) } returns dailyNormalized(today)
         coEvery { strategy.shouldBuyNormalized(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
@@ -1094,7 +1095,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns dailyLegacy(today.minusDays(1))
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 0) { strategy.shouldBuy(any(), any(), any()) }
         coVerify(exactly = 0) { positionManager.buy(any(), any(), any(), any()) }
@@ -1109,7 +1110,7 @@ class TradingEngineTest {
         coEvery { upbitClient.getDayCandles("KRW-BTC", any()) } returns dailyLegacy(today)
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
 
-        engine.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine.trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
@@ -1128,7 +1129,7 @@ class TradingEngineTest {
         val engine = createEngine()
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 1)
 
-        assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
+        assertEquals(70000000.0, engine.trader.getRealtimePrice("KRW-BTC"))
     }
 
     @Test
@@ -1136,7 +1137,7 @@ class TradingEngineTest {
         val engine = createEngine()
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(69000000.0, ageSeconds = 60)
 
-        assertNull(engine.getRealtimePrice("KRW-BTC")) // null → processTicker 의 REST 폴백 경로
+        assertNull(engine.trader.getRealtimePrice("KRW-BTC")) // null → processTicker 의 REST 폴백 경로
     }
 
     @Test
@@ -1144,10 +1145,10 @@ class TradingEngineTest {
         val engine = createEngine()
         // 25s, threshold(30s) 안쪽. 5s 는 느린 CI 를 위한 여유
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 25)
-        assertEquals(70000000.0, engine.getRealtimePrice("KRW-BTC"))
+        assertEquals(70000000.0, engine.trader.getRealtimePrice("KRW-BTC"))
 
         // 32s, threshold 바깥이라 null
         every { marketDataStore.getLatestTicker(any(), any()) } returns storeTicker(70000000.0, ageSeconds = 32)
-        assertNull(engine.getRealtimePrice("KRW-BTC"))
+        assertNull(engine.trader.getRealtimePrice("KRW-BTC"))
     }
 }

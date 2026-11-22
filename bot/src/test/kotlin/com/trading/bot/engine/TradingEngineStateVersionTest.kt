@@ -68,7 +68,7 @@ class TradingEngineStateVersionTest {
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         logger.addAppender(appender)
         try {
-            repeat(4) { engine.processTicker("KRW-BTC", state, strategy) }
+            repeat(4) { engine.trader.processTicker("KRW-BTC", state, strategy) }
             val errors = appender.list.filter { it.level == Level.ERROR }
             assertEquals(1, errors.size, errors.joinToString { it.formattedMessage })
             assertTrue(state.hasPendingSell(), "체결을 기록할 수 없어 pending 이 남는다")

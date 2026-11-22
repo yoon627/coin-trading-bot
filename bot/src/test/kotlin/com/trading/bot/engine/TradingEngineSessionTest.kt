@@ -52,7 +52,7 @@ class TradingEngineSessionTest {
         val state = pendingBuy("KRW-BTC")
         coEvery { positionManager.reconcilePendingBuy("KRW-BTC", state, 100.0) } answers { state.clearPendingBuy(); null }
 
-        engine().processTicker("KRW-BTC", state, strategy)
+        engine().trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 1) { positionManager.reconcilePendingBuy("KRW-BTC", state, 100.0) }
         coVerify(exactly = 0) { upbitClient.getDayCandles(any(), any()) }
@@ -64,7 +64,7 @@ class TradingEngineSessionTest {
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         val state = TradingState("KRW-BTC", position = true, holdVolume = 1.0, avgBuyPrice = 200.0)
 
-        engine().processTicker("KRW-BTC", state, strategy)
+        engine().trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 0) { positionManager.checkStopLoss(any(), any()) }
         coVerify(exactly = 0) { positionManager.sell(any(), any(), any(), any()) }

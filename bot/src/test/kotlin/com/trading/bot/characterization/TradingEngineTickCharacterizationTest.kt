@@ -105,7 +105,7 @@ class TradingEngineTickCharacterizationTest {
         coEvery { upbit.getDayCandles("KRW-BTC", 60) } returns restDaily(monday)
         val state = TradingState("KRW-BTC")
 
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", state, strategy)
+        engine(kstClock(monday, 12)).trader.processTicker("KRW-BTC", state, strategy)
 
         coVerifySequence {
             upbit.getTicker("KRW-BTC")
@@ -122,7 +122,7 @@ class TradingEngineTickCharacterizationTest {
             NormalizedTicker(exchange = Exchange.UPBIT, market = "BTC/KRW", price = 101.0, timestamp = Instant.now())
         every { store.getCandles(Exchange.UPBIT, "BTC/KRW", CandleInterval.D1, 60) } returns storeDaily(monday)
 
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(kstClock(monday, 12)).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         confirmVerified(upbit)
         coVerify(exactly = 1) { strategy.shouldBuyNormalized(any(), 101.0, any()) }
@@ -136,8 +136,8 @@ class TradingEngineTickCharacterizationTest {
         coEvery { upbit.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbit.getDayCandles("KRW-BTC", 60) } returns restDaily(saturday)
 
-        engine(kstClock(saturday, 14)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
-        engine(sundayBeforeNine).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(kstClock(saturday, 14)).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(sundayBeforeNine).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 2) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
@@ -175,12 +175,12 @@ class TradingEngineTickCharacterizationTest {
 
         val clock = kstClock(monday, 12)
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(clock, 29, 101.0)
-        engine(clock).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(clock).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
         coVerify(exactly = 0) { upbit.getTicker(any()) }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 101.0, "test_strategy") }
 
         every { store.getLatestTicker(Exchange.UPBIT, "BTC/KRW") } returns storeTickerAged(clock, 30, 101.0)
-        engine(clock).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(clock).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
         coVerify(exactly = 1) { upbit.getTicker("KRW-BTC") }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", any(), 100.0, "test_strategy") }
     }
@@ -190,7 +190,7 @@ class TradingEngineTickCharacterizationTest {
         coEvery { upbit.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
         coEvery { upbit.getDayCandles("KRW-BTC", 60) } returns restDaily(monday.minusDays(1))
 
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(kstClock(monday, 12)).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 1) { upbit.getDayCandles("KRW-BTC", 60) }
         coVerify(exactly = 0) { strategy.shouldBuy(any(), any(), any()) }
@@ -203,7 +203,7 @@ class TradingEngineTickCharacterizationTest {
         coEvery { cache.get("KRW-BTC", 60) } returns restDaily(monday)
         coEvery { upbit.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))
 
-        engine(kstClock(monday, 12), dailyCandleCache = cache).processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
+        engine(kstClock(monday, 12), dailyCandleCache = cache).trader.processTicker("KRW-BTC", TradingState("KRW-BTC"), strategy)
 
         coVerify(exactly = 1) { cache.get("KRW-BTC", 60) }
         coVerify(exactly = 0) { upbit.getDayCandles(any(), any()) }
@@ -218,7 +218,7 @@ class TradingEngineTickCharacterizationTest {
 
         val unsettled = TradingState("KRW-BTC", pendingBuyUuid = "u-1")
         coEvery { positionManager.reconcilePendingBuy("KRW-BTC", unsettled, 100.0) } returns null
-        engine.processTicker("KRW-BTC", unsettled, strategy)
+        engine.trader.processTicker("KRW-BTC", unsettled, strategy)
 
         val settled = TradingState("KRW-BTC", pendingBuyUuid = "u-2")
         coEvery { positionManager.reconcilePendingBuy("KRW-BTC", settled, 100.0) } coAnswers {
@@ -227,7 +227,7 @@ class TradingEngineTickCharacterizationTest {
             settled.avgBuyPrice = 200.0
             mockk<TradeRecord>(relaxed = true)
         }
-        engine.processTicker("KRW-BTC", settled, strategy)
+        engine.trader.processTicker("KRW-BTC", settled, strategy)
 
         coVerify(exactly = 2) { positionManager.reconcilePendingBuy(any(), any(), any()) }
         verify(exactly = 0) { positionManager.checkStopLoss(any(), any()) }
@@ -243,7 +243,7 @@ class TradingEngineTickCharacterizationTest {
         val state = TradingState("KRW-BTC", position = true, avgBuyPrice = 200.0, holdVolume = 1.0, pendingSellUuid = "s-1")
         coEvery { positionManager.reconcilePendingSell("KRW-BTC", state, 100.0) } returns null
 
-        engine(kstClock(monday, 12)).processTicker("KRW-BTC", state, strategy)
+        engine(kstClock(monday, 12)).trader.processTicker("KRW-BTC", state, strategy)
 
         coVerify(exactly = 1) { positionManager.reconcilePendingSell("KRW-BTC", state, 100.0) }
         verify(exactly = 0) { positionManager.checkStopLoss(any(), any()) }
@@ -259,13 +259,13 @@ class TradingEngineTickCharacterizationTest {
         every { positionManager.checkTrailingStop(state, 100.0) } returns true
         every { positionManager.checkTakeProfit(state, 100.0) } returns true
 
-        assertEquals(SellReason.STOP_LOSS, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.STOP_LOSS, engine.trader.decideSell(state, 100.0))
         every { positionManager.checkStopLoss(state, 100.0) } returns false
-        assertEquals(SellReason.TRAILING_STOP, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.TRAILING_STOP, engine.trader.decideSell(state, 100.0))
         every { positionManager.checkTrailingStop(state, 100.0) } returns false
-        assertEquals(SellReason.TAKE_PROFIT, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.TAKE_PROFIT, engine.trader.decideSell(state, 100.0))
         every { positionManager.checkTakeProfit(state, 100.0) } returns false
-        assertEquals(SellReason.DAILY_RESET, engine.decideSell(state, 100.0))
+        assertEquals(SellReason.DAILY_RESET, engine.trader.decideSell(state, 100.0))
     }
 
     @Test
