@@ -150,8 +150,111 @@ class DeployWorkflowStepScriptTest {
         val deploy = steps("deploy-vultr").first { it["name"] == "Deploy to Vultr" }
 
         assertThat(compat["continue-on-error"]).isEqualTo(true)
-        assertThat(compat["if"]).isEqualTo("steps.changes.outputs.deploy == 'true' || inputs.rollback_check")
+        assertThat(compat["if"]).isEqualTo("(steps.changes.outputs.deploy == 'true' && steps.gate.outputs.go == 'true') || inputs.rollback_check")
         assertThat((deploy["env"] as Map<*, *>)["ROLLBACK_COMPAT"]).isEqualTo("\${{ steps.compat.outputs.compat }}")
+    }
+
+    // main push 는 자동 배포다. 다만 app 밖 컨테이너가 다시 만들어지는 배포는 수동 실행으로 남긴다.
+    @Test
+    fun `push 는 판정이 자동이라고 할 때만 배포하고 아니면 경고로 수동 실행을 안내한다`() {
+        val auto = runStep("deploy-vultr", "gate", repo, gateEnv("push"), gateFake(exit = 0, output = "auto=true\napp 만 바뀌었다"))
+        val manual = runStep("deploy-vultr", "gate", repo, gateEnv("push"), gateFake(exit = 0, output = "auto=false\nservices.postgres 가 바뀌었다"))
+        val broken = runStep("deploy-vultr", "gate", repo, gateEnv("push"), gateFake(exit = 2, output = "usage"))
+
+        assertThat(auto.githubOutput).describedAs(auto.output).isEqualTo("go=true\n")
+        assertThat(manual.githubOutput).describedAs(manual.output).isEqualTo("go=false\n")
+        assertThat(manual.output).contains("::warning::", "services.postgres")
+        assertThat(broken.exit).describedAs(broken.output).isEqualTo(0)
+        assertThat(broken.githubOutput).isEqualTo("go=false\n")
+        assertThat(broken.output).contains("::warning::")
+    }
+
+    // 보류된 push 는 뒤 push 도 계속 보류되어 운영이 뒤처진다. 경고 주석만으로는 안 보여 배포 webhook 으로 알린다.
+    @Test
+    fun `자동 배포를 보류하면 배포 webhook 으로 알리고 webhook 값은 출력하지 않는다`() {
+        val webhook = "https://discord.example.test/api/webhooks/1/secret?wait=true&x=1"
+        File(repo, "deploy/vultr").mkdirs()
+        File(repo, "deploy/vultr/notify_deploy.sh").writeText(
+            "echo \"notify level=${'$'}1 webhook_set=${'$'}{DISCORD_DEPLOY_WEBHOOK_URL:+yes}\" >> '${File(work, "notify.calls").path}'\n" +
+                "[[ \"${'$'}DISCORD_DEPLOY_WEBHOOK_URL\" == '$webhook' ]] && echo exact >> '${File(work, "notify.calls").path}'\n" +
+                "echo \"${'$'}2\" >> '${File(work, "notify.calls").path}'\n",
+        )
+        // deploy.sh 처럼 source 로 읽으므로 export 접두·따옴표·주석 줄도 같은 값이 된다.
+        val env = gateEnv("push") + ("VULTR_DEPLOY_ENV" to "# comment\nDB_PASSWORD=x\nexport DISCORD_DEPLOY_WEBHOOK_URL=\"$webhook\"\n")
+
+        val result = runStep("deploy-vultr", "gate", repo, env, gateFake(exit = 0, output = "auto=false\nservices.caddy 가 바뀌었다"))
+
+        val calls = File(work, "notify.calls").readText()
+        assertThat(result.githubOutput).isEqualTo("go=false\n")
+        assertThat(calls).contains("notify level=failure webhook_set=yes", "exact", "자동 배포 보류", "services.caddy")
+        assertThat(result.output).doesNotContain(webhook)
+    }
+
+    @Test
+    fun `push 는 main 이 앞서 있으면 최신 커밋에 맡기고 문서만 앞서 있으면 그대로 배포한다`() {
+        val older = initRepo(withScript = false)
+        write("bot/src/main/kotlin/App.kt", "v2")
+        commitAll("newer code")
+        val newer = git("rev-parse", "HEAD").trim()
+        git("branch", "-M", "main")
+        git("remote", "add", "origin", repo.path)
+
+        val stale = runStep("deploy-vultr", "main-head", repo, mapOf("EVENT_NAME" to "push", "GITHUB_SHA" to older))
+        val current = runStep("deploy-vultr", "main-head", repo, mapOf("EVENT_NAME" to "push", "GITHUB_SHA" to newer))
+        File(repo, "docs").mkdirs()
+        File(repo, "docs/note.md").writeText("x\n")
+        git("add", "docs")
+        git("-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "docs")
+        val docsOnly = runStep("deploy-vultr", "main-head", repo, mapOf("EVENT_NAME" to "push", "GITHUB_SHA" to newer))
+        val manual = runStep("deploy-vultr", "main-head", repo, mapOf("EVENT_NAME" to "workflow_dispatch", "GITHUB_SHA" to older))
+
+        assertThat(stale.githubOutput).describedAs(stale.output).isEqualTo("current=false\n")
+        assertThat(stale.output).contains("::notice::")
+        assertThat(current.githubOutput).describedAs(current.output).isEqualTo("current=true\n")
+        assertThat(docsOnly.githubOutput).describedAs(docsOnly.output).isEqualTo("current=true\n")
+        assertThat(manual.githubOutput).describedAs(manual.output).isEqualTo("current=true\n")
+    }
+
+    @Test
+    fun `main 이 앞선 push 는 운영 조회·판정·배포를 하지 않는다`() {
+        for (id in listOf("prepare", "changes")) {
+            assertThat(step("deploy-vultr", id)["if"]).describedAs(id).isEqualTo("steps.main-head.outputs.current == 'true'")
+        }
+    }
+
+    @Test
+    fun `수동 실행은 자동 배포 판정을 거치지 않는다`() {
+        val result = runStep("deploy-vultr", "gate", repo, gateEnv("workflow_dispatch"), gateFake(exit = 0, output = "auto=false"))
+
+        assertThat(result.githubOutput).describedAs(result.output).isEqualTo("go=true\n")
+        assertThat(File(work, "gate.calls")).doesNotExist()
+    }
+
+    @Test
+    fun `배포 job 은 main 의 push 와 수동 실행에서 돌고 배포 스텝은 판정을 따른다`() {
+        val workflow: Map<*, *> = Yaml().load(RepoFiles.file(WORKFLOW).readText())
+        val job = (workflow["jobs"] as Map<*, *>)["deploy-vultr"] as Map<*, *>
+        val deploy = steps("deploy-vultr").first { it["name"] == "Deploy to Vultr" }
+        val gate = step("deploy-vultr", "gate")
+
+        assertThat(job["if"]).isEqualTo("(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'")
+        assertThat(gate["if"]).isEqualTo("steps.changes.outputs.deploy == 'true'")
+        assertThat(deploy["if"]).isEqualTo("steps.changes.outputs.deploy == 'true' && steps.gate.outputs.go == 'true'")
+    }
+
+    private fun gateEnv(event: String) = mapOf(
+        "EVENT_NAME" to event,
+        "LAST_GOOD_SHA" to SHA,
+        "GITHUB_SHA" to SHA,
+    )
+
+    /** auto_deploy_gate.sh 를 대신한다 — 판정 자체는 AutoDeployGateScriptTest 가 본다. */
+    private fun gateFake(exit: Int, output: String): File? {
+        File(repo, "deploy/vultr").mkdirs()
+        File(repo, "deploy/vultr/auto_deploy_gate.sh").writeText(
+            "echo called >> '${File(work, "gate.calls").path}'\nprintf '%b\\n' '$output'\nexit $exit\n",
+        )
+        return null
     }
 
     private fun compatEnv(lastGood: String, target: String, check: String) = mapOf(

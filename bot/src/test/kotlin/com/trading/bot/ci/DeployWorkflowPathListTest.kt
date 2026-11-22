@@ -58,12 +58,12 @@ class DeployWorkflowPathListTest {
     }
 
     @Test
-    fun `배포 job 은 main 수동 실행에서만 돌고 판정 결과로 배포한다`() {
+    fun `배포 job 은 main 의 push 와 수동 실행에서 돌고 판정 결과로 배포한다`() {
         val deploy = job("deploy-vultr")
 
         assertThat(deploy["if"])
-            .describedAs("push 가 배포하면 머지할 때마다 엔진이 재시작된다")
-            .isEqualTo("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'")
+            .describedAs("main 이 아닌 ref 나 PR 이 운영에 배포하면 안 된다")
+            .isEqualTo("(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'")
 
         val decide = step(deploy, "changes")
         assertThat(decide["run"] as String).contains("bash ./$SCRIPT ")
@@ -75,7 +75,8 @@ class DeployWorkflowPathListTest {
         assertThat(prepare).contains("""echo "last_good_sha=${'$'}last_good_sha" >> "${'$'}GITHUB_OUTPUT"""")
         assertThat(prepare).contains("""echo "running_sha=${'$'}running_sha" >> "${'$'}GITHUB_OUTPUT"""")
         val deployStep = steps(deploy).firstOrNull { it["name"] == "Deploy to Vultr" } ?: error("Deploy to Vultr 스텝이 없다")
-        assertThat(deployStep["if"]).isEqualTo("steps.changes.outputs.deploy == 'true'")
+        // 운영 파일이 바뀌지 않았으면 재시작하지 않고, push 는 자동 배포 판정도 통과해야 한다.
+        assertThat(deployStep["if"]).isEqualTo("steps.changes.outputs.deploy == 'true' && steps.gate.outputs.go == 'true'")
     }
 
     /** 이미 배포·검증한 `:sha` 태그를 다시 빌드하면 내용이 바뀌어, 롤백·재기동이 검증하지 않은 이미지를 받는다. */

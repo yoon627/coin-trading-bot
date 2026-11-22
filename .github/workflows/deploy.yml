@@ -1,7 +1,8 @@
 name: CI/CD (test + GHCR + Vultr)
 
 # PR 은 테스트만 돌린다. push 와 수동 실행은 이미지를 GHCR 에 올린다.
-# 배포는 엔진 재시작이라 push 로는 하지 않고 main 수동 실행으로만 한다.
+# main push(머지)는 운영에 자동 배포한다. 배포는 엔진 재시작이라 운영에 들어가는 파일이 바뀐 push 만 배포하고, 운영 compose 의
+# app 밖(postgres·caddy 등)이 바뀌었으면 배포하지 않고 경고를 남긴다 — 그때는 봇을 멈출지 정한 뒤 main 수동 실행으로 배포한다.
 on:
   push:
     branches: [main]
@@ -151,7 +152,7 @@ jobs:
 
   deploy-vultr:
     needs: [test, build-and-push]
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
@@ -165,8 +166,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      # push 배포는 테스트·빌드가 끝난 순서로 줄을 서서, 뒤에 머지된 커밋이 먼저 배포될 수 있다. 그 뒤에 도는 옛 커밋은
+      # 엔진만 한 번 더 재시작하거나(옛 커밋 거부로) 실패하므로, main 이 앞서 있으면 그 최신 커밋의 실행에 맡긴다.
+      # 수동 실행은 사람이 고른 커밋이라 보지 않는다.
+      - name: Check deployment commit is current main
+        id: main-head
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != push ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch origin main --quiet
+          current_main="$(git rev-parse origin/main)"
+          if [[ "$current_main" == "$GITHUB_SHA" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 뒤따른 문서 전용 push 는 paths-ignore 로 실행이 생기지 않는다. 여기서 건너뛰면 이 커밋을 배포할 실행이
+          # 없으므로, 차이가 문서뿐이면 그대로 배포한다. 제외 목록은 on.push.paths-ignore 와 같게 유지한다.
+          code_changes="$(git diff --name-only "$GITHUB_SHA" "$current_main" -- . ':(exclude)**.md' ':(exclude)docs/**')"
+          if [[ -z "$code_changes" ]]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+            echo "origin/main($current_main) 이 앞서지만 문서만 다르다 — 이 커밋을 배포한다"
+          else
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo "::notice::main 이 ${current_main:0:12} 로 앞서 있어 ${GITHUB_SHA:0:12} 는 배포하지 않는다 — 최신 커밋의 실행이 배포한다"
+          fi
+
       - name: Prepare Vultr deploy files
         id: prepare
+        if: steps.main-head.outputs.current == 'true'
         # 운영을 조회만 하는 스텝이라 시한에 걸려도 서버는 그대로다. SSH 한 번이 최악 약 130초(접속 10 + 무응답 120)다.
         timeout-minutes: 3
         env:
@@ -236,6 +269,7 @@ jobs:
       # 실행한 커밋을 그대로 배포한다. 운영에 들어가는 파일이 그대로면 엔진을 재시작하지 않는다.
       - name: Check production changes since last good deploy
         id: changes
+        if: steps.main-head.outputs.current == 'true'
         env:
           FORCE: ${{ inputs.force }}
           LAST_GOOD_SHA: ${{ steps.prepare.outputs.last_good_sha }}
@@ -265,11 +299,57 @@ jobs:
             echo "::notice::마지막 정상 배포 $LAST_GOOD_SHA 이후 운영에 들어가는 파일 변경이 없어 배포하지 않았다. secret 처럼 파일 밖 변경을 반영하려면 force 로 다시 실행한다."
           fi
 
+      # push 의 자동 배포는 app 컨테이너만 바뀌는 배포에만 한다. 수동 실행은 사람이 시점을 정했으므로 판정하지 않는다.
+      - name: Auto deploy gate
+        id: gate
+        if: steps.changes.outputs.deploy == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LAST_GOOD_SHA: ${{ steps.prepare.outputs.last_good_sha }}
+          VULTR_DEPLOY_ENV: ${{ secrets.VULTR_DEPLOY_ENV }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != push ]]; then
+            echo 'go=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 보류된 push 는 그 뒤 push 도 같은 이유로 보류되어(마지막 정상 배포가 그대로다) 운영이 main 보다 계속 뒤처진다.
+          # 경고 주석만으로는 안 보이므로 배포 webhook 으로도 알린다. webhook 값은 출력하지 않는다.
+          hold() {
+            echo 'go=false' >> "$GITHUB_OUTPUT"
+            echo "::warning::$1"
+            (
+              # deploy.sh 와 같은 방식(source)으로 읽어야 그 배포가 알리는 webhook 과 같은 값이 된다.
+              env_file="$(mktemp)"
+              printf '%s\n' "$VULTR_DEPLOY_ENV" > "$env_file"
+              set +eu
+              set -a
+              # shellcheck disable=SC1090
+              source "$env_file" > /dev/null 2>&1
+              set +a
+              rm -f "$env_file"
+              bash ./deploy/vultr/notify_deploy.sh failure "자동 배포 보류: ${GITHUB_SHA:0:12} — $1 ${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-}"
+            ) || true
+          }
+          rc=0
+          result="$(bash ./deploy/vultr/auto_deploy_gate.sh "$LAST_GOOD_SHA" "$GITHUB_SHA")" || rc=$?
+          printf '%s\n' "$result"
+          if [[ "$rc" -ne 0 ]]; then
+            hold "자동 배포 판정이 exit $rc 로 끝났다 — main 수동 실행으로 배포한다"
+            exit 0
+          fi
+          if [[ "${result%%$'\n'*}" == 'auto=true' ]]; then
+            echo 'go=true' >> "$GITHUB_OUTPUT"
+          else
+            hold "자동 배포하지 않았다 — ${result#*$'\n'}"
+          fi
+
       # 마이그레이션이 바뀐 배포는 직전 정상 이미지가 새 스키마에서 뜨는지 runner 에서 본다. 통과하면 deploy.sh 가 자동
       # 롤백을 허용한다. 검사가 실패하거나 시한에 걸려도 배포는 진행하고 자동 롤백만 빠진다(지금까지와 같다).
       - name: Rollback compatibility check
         id: compat
-        if: steps.changes.outputs.deploy == 'true' || inputs.rollback_check
+        if: (steps.changes.outputs.deploy == 'true' && steps.gate.outputs.go == 'true') || inputs.rollback_check
         continue-on-error: true
         timeout-minutes: 15
         env:
@@ -295,7 +375,7 @@ jobs:
           esac
 
       - name: Deploy to Vultr
-        if: steps.changes.outputs.deploy == 'true'
+        if: steps.changes.outputs.deploy == 'true' && steps.gate.outputs.go == 'true'
         env:
           SSH_KNOWN_HOSTS: ${{ github.workspace }}/deploy/vultr/known_hosts
           ROLLBACK_COMPAT: ${{ steps.compat.outputs.compat }}
