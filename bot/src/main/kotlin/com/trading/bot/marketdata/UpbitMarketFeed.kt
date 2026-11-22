@@ -7,9 +7,11 @@ import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
-import kotlinx.coroutines.channels.awaitClose
+import com.trading.common.domain.NormalizedTrade
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.reactor.awaitSingle
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -26,11 +28,13 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
-/** Upbit ticker 는 WebSocket, 캔들은 REST 로 가져와 정규화한다. */
+/** Upbit ticker·체결(trade)은 WebSocket 한 연결로, 캔들은 REST 로 가져와 정규화한다. */
 @Component
 class UpbitMarketFeed internal constructor(
     private val upbitWebClient: WebClient,
@@ -49,12 +53,52 @@ class UpbitMarketFeed internal constructor(
         private const val WS_URL = "wss://api.upbit.com/websocket/v1"
         private const val MAX_RECONNECT_DELAY_MS = 60_000L
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
+        private const val WARN_INTERVAL_MS = 60_000L
+
+        // 수집이 10초 멈춰도 실측 최대(초당 40건) × 기본 watchlist 13종목을 담는다. 그보다 밀리면 오래된 체결부터 버린다.
+        internal const val TRADE_CHANNEL_CAPACITY = 40 * 13 * 10
     }
 
-    fun tickerFlow(markets: List<String>): Flow<NormalizedTicker> = callbackFlow {
+    /** 마켓별 수를 모아 두고 WARN 은 1분에 한 번만 낸다. 수는 수집 요약이 [drain] 으로 가져가며 비운다. */
+    private inner class ThrottledCounts(private val warn: (count: Long, detail: String?) -> Unit) {
+        private val counts = ConcurrentHashMap<String, Long>()
+        private val sinceWarn = AtomicLong()
+        private val lastWarnAt = AtomicLong(-WARN_INTERVAL_MS)
+
+        fun record(market: String?, nowMs: Long, detail: String? = null) {
+            if (market != null) counts.merge(market, 1L, Long::plus)
+            sinceWarn.incrementAndGet()
+            val last = lastWarnAt.get()
+            if (nowMs - last >= WARN_INTERVAL_MS && lastWarnAt.compareAndSet(last, nowMs)) warn(sinceWarn.getAndSet(0), detail)
+        }
+
+        // remove 가 값을 원자적으로 가져가므로 그 뒤의 증가는 새 항목으로 남아 다음 drain 에 잡힌다.
+        fun drain(): Map<String, Long> = counts.keys.mapNotNull { key -> counts.remove(key)?.let { key to it } }.toMap()
+    }
+
+    private val droppedTrades = ThrottledCounts { count, _ ->
+        log.warn("Upbit WS collector fell behind; dropped {} trades since the last warning", count)
+    }
+    private val parseFailures = ThrottledCounts { count, detail ->
+        log.warn("Upbit WS dropped {} malformed frames since the last warning (latest: {})", count, detail)
+    }
+
+    /**
+     * ticker 는 받는 즉시 [onTicker] 로 넘긴다(netty 스레드) — 지금 손절가의 출처라 체결이 밀려도 잃지 않게 체결 버퍼와 나눈다.
+     * 체결은 상한 있는 버퍼를 거쳐 flow 로 내보낸다.
+     */
+    fun marketFlow(
+        markets: List<String>,
+        includeTrades: Boolean,
+        onTicker: (NormalizedTicker) -> Unit,
+    ): Flow<NormalizedTrade> = flow {
         val connected = AtomicBoolean(false)
         val reconnectAttempts = AtomicInteger(0)
         val running = AtomicBoolean(true)
+        val trades = Channel<NormalizedTrade>(TRADE_CHANNEL_CAPACITY, BufferOverflow.DROP_OLDEST) { dropped ->
+            // 닫을 때 남은 체결도 여기로 오는데 그건 밀려서 버린 것이 아니다.
+            if (running.get()) recordDropped(dropped.market, System.currentTimeMillis())
+        }
         val disposable = AtomicReference<Disposable?>(null)
         val reconnectThread = AtomicReference<Thread?>(null)
 
@@ -69,19 +113,21 @@ class UpbitMarketFeed internal constructor(
                     connected.set(true)
                     log.info("Upbit WebSocket connected. Markets: {}", markets)
 
-                    val subscriptionMessage = buildSubscriptionMessage(markets)
+                    val subscriptionMessage = buildSubscriptionMessage(markets, includeTrades)
                     val sendMono = outbound.sendString(reactor.core.publisher.Flux.just(subscriptionMessage)).then()
 
                     val receiveMono = inbound.receive()
                         .asByteArray()
                         .map { bytes -> String(bytes, StandardCharsets.UTF_8) }
                         .doOnNext { message ->
-                            parseTickerMessage(message)?.let { ticker ->
-                                // handshake 성공만으로는 구독이 받아들여졌는지 알 수 없어 시세를 받은 뒤에 횟수를 되돌린다.
-                                // 횟수는 연결이 끝날 때만 늘어 한 연결에서는 첫 시세에서만 0 이 아니다.
-                                val failed = reconnectAttempts.getAndSet(0)
-                                if (failed > 0) log.info("Upbit WS receiving tickers; reconnect backoff reset after {} attempts", failed)
-                                trySend(ticker)
+                            val event = parseMessage(message) ?: return@doOnNext
+                            // handshake 성공만으로는 구독이 받아들여졌는지 알 수 없어 ticker 나 체결을 받은 뒤에 횟수를 되돌린다.
+                            // 횟수는 연결이 끝날 때만 늘어 한 연결에서는 처음 받은 메시지에서만 0 이 아니다.
+                            val failed = reconnectAttempts.getAndSet(0)
+                            if (failed > 0) log.info("Upbit WS receiving data; reconnect backoff reset after {} attempts", failed)
+                            when (event) {
+                                is MarketEvent.Ticker -> if (running.get()) onTicker(event.ticker)
+                                is MarketEvent.Trade -> trades.trySend(event.trade)
                             }
                         }
                         .doOnError { e -> log.warn("Upbit WS receive error: {}", e.message) }
@@ -121,11 +167,14 @@ class UpbitMarketFeed internal constructor(
 
         connect()
 
-        awaitClose {
+        try {
+            for (trade in trades) emit(trade)
+        } finally {
             running.set(false)
             reconnectThread.get()?.interrupt()
             disposable.get()?.dispose()
-            log.info("Upbit ticker flow closed")
+            trades.cancel()
+            log.info("Upbit market flow closed")
         }
     }
 
@@ -171,43 +220,75 @@ class UpbitMarketFeed internal constructor(
         }
     }
 
-    private fun buildSubscriptionMessage(markets: List<String>): String {
+    internal fun recordDropped(market: String, nowMs: Long) = droppedTrades.record(market, nowMs)
+
+    /** 마지막 호출 뒤 마켓별로 밀려서 버린 체결 수. */
+    fun drainDropped(): Map<String, Long> = droppedTrades.drain()
+
+    /** 마지막 호출 뒤 마켓별로 읽지 못한 ticker·체결 프레임 수. */
+    fun drainParseFailures(): Map<String, Long> = parseFailures.drain()
+
+    // 업비트는 한 요청에 type 객체를 여러 개 받는다. 연결·요청 한도(초당 5)를 늘리지 않으려고 같은 요청에 싣는다.
+    internal fun buildSubscriptionMessage(markets: List<String>, includeTrades: Boolean): String {
         val upbitCodes = markets.map { MarketPair.toUpbitFormat(it) }
         val ticket = mapOf("ticket" to UUID.randomUUID().toString())
-        val type = mapOf(
-            "type" to "ticker",
-            "codes" to upbitCodes,
-            "isOnlyRealtime" to true,
-        )
-        return objectMapper.writeValueAsString(listOf(ticket, type))
+        val types = listOf("ticker").plus(if (includeTrades) listOf("trade") else emptyList()).map { type ->
+            mapOf(
+                "type" to type,
+                "codes" to upbitCodes,
+                "isOnlyRealtime" to true,
+            )
+        }
+        return objectMapper.writeValueAsString(listOf(ticket) + types)
     }
 
-    internal fun parseTickerMessage(message: String): NormalizedTicker? {
-        return try {
-            val node = objectMapper.readTree(message)
-            if (!node.has("type") || node["type"].asText() != "ticker") return null
-
-            val upbitCode = node["code"].asText()
-            NormalizedTicker(
-                exchange = Exchange.UPBIT,
-                market = MarketPair.normalize(Exchange.UPBIT, upbitCode),
-                price = node["trade_price"].asDouble(),
-                bidPrice = node["highest_bid_price"]?.asDouble() ?: 0.0,
-                askPrice = node["lowest_ask_price"]?.asDouble() ?: 0.0,
-                volume24h = node["acc_trade_volume_24h"]?.asDouble() ?: 0.0,
-                quoteVolume24h = node["acc_trade_price_24h"]?.asDouble() ?: 0.0,
-                changeRate24h = node["signed_change_rate"]?.asDouble() ?: 0.0,
-                highPrice24h = node["high_price"]?.asDouble() ?: 0.0,
-                lowPrice24h = node["low_price"]?.asDouble() ?: 0.0,
-                timestamp = Instant.ofEpochMilli(node["timestamp"]?.asLong() ?: System.currentTimeMillis()),
-            )
+    internal fun parseMessage(message: String, nowMs: Long = System.currentTimeMillis()): MarketEvent? {
+        val node = try {
+            objectMapper.readTree(message)
         } catch (e: com.fasterxml.jackson.core.JacksonException) {
             // 연결 ACK 같은 프레임이 흔히 섞여 들어온다.
-            log.debug("Skipped non-parsable ticker frame: {}", e.message)
-            null
+            log.debug("Skipped non-parsable frame: {}", e.message)
+            return null
+        }
+        return try {
+            when (node["type"]?.asText()) {
+                "ticker" -> MarketEvent.Ticker(toTicker(node))
+                "trade" -> MarketEvent.Trade(toTrade(node))
+                else -> null
+            }
         } catch (e: Exception) {
-            log.warn("Failed to parse ticker message: {}", e.message)
+            parseFailures.record(marketOf(node), nowMs, e.message)
             null
         }
     }
+
+    private fun marketOf(node: JsonNode): String? =
+        node["code"]?.asText()?.let { runCatching { MarketPair.normalize(Exchange.UPBIT, it) }.getOrNull() }
+
+    private fun toTicker(node: JsonNode): NormalizedTicker {
+        val upbitCode = node["code"].asText()
+        return NormalizedTicker(
+            exchange = Exchange.UPBIT,
+            market = MarketPair.normalize(Exchange.UPBIT, upbitCode),
+            price = node["trade_price"].asDouble(),
+            bidPrice = node["highest_bid_price"]?.asDouble() ?: 0.0,
+            askPrice = node["lowest_ask_price"]?.asDouble() ?: 0.0,
+            volume24h = node["acc_trade_volume_24h"]?.asDouble() ?: 0.0,
+            quoteVolume24h = node["acc_trade_price_24h"]?.asDouble() ?: 0.0,
+            changeRate24h = node["signed_change_rate"]?.asDouble() ?: 0.0,
+            highPrice24h = node["high_price"]?.asDouble() ?: 0.0,
+            lowPrice24h = node["low_price"]?.asDouble() ?: 0.0,
+            timestamp = Instant.ofEpochMilli(node["timestamp"]?.asLong() ?: System.currentTimeMillis()),
+        )
+    }
+
+    // 체결 번호·체결 시각이 없으면 중복도 낡음도 가릴 수 없어 받지 않는다(required 가 던진다).
+    private fun toTrade(node: JsonNode): NormalizedTrade = NormalizedTrade(
+        exchange = Exchange.UPBIT,
+        market = MarketPair.normalize(Exchange.UPBIT, node.required("code").asText()),
+        price = node.required("trade_price").asDouble(),
+        volume = node.required("trade_volume").asDouble(),
+        tradeTime = Instant.ofEpochMilli(node.required("trade_timestamp").asLong()),
+        sequentialId = node.required("sequential_id").asLong(),
+    )
 }

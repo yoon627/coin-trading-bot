@@ -4,11 +4,13 @@ import com.trading.bot.config.MarketDataWatchdogProperties
 import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.config.reportableEntries
 import com.trading.bot.stream.CandleAggregator
+import com.trading.common.config.PriceEventsProperties
 import com.trading.common.domain.CandleInterval
 import com.trading.common.domain.Exchange
 import com.trading.common.domain.MarketPair
 import com.trading.common.domain.NormalizedCandle
 import com.trading.common.domain.NormalizedTicker
+import com.trading.common.domain.NormalizedTrade
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.CancellationException
@@ -43,7 +45,7 @@ import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Upbit ticker(WS)와 분봉(REST 폴링)을 받아 MarketDataStore 에 넣는다.
+ * Upbit ticker·체결(WS)과 분봉(REST 폴링)을 받아 MarketDataStore 에 넣는다.
  * 분봉은 CandleAggregator 로도 보내 엔진이 읽는 D1 등 상위 봉을 만든다.
  */
 @Component
@@ -53,6 +55,7 @@ class MarketDataIngestionService(
     private val candleAggregator: CandleAggregator,
     private val watchlistProperties: WatchlistProperties,
     private val watchdogProperties: MarketDataWatchdogProperties,
+    private val priceEventsProperties: PriceEventsProperties,
     private val clock: Clock = Clock.systemUTC(),
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -122,6 +125,9 @@ class MarketDataIngestionService(
 
         // 이 시간 넘게 시세를 못 받으면 ERROR(Discord) 한 번. 재시작으로 금방 풀리는 끊김은 알리지 않는다.
         internal const val FEED_OUTAGE_ALERT_MS = 300_000L
+
+        // 운영에서 체결이 들어오는지 로그로 확인하는 주기.
+        private const val TRADE_INTAKE_LOG_INTERVAL_MS = 300_000L
     }
 
     @PostConstruct
@@ -138,9 +144,10 @@ class MarketDataIngestionService(
         markets = m
         lastTickerAt = System.currentTimeMillis()
         lastDataAt = lastTickerAt
-        log.info("Starting in-process market data ingestion for {} markets: {}", m.size, m)
+        log.info("Starting in-process market data ingestion for {} markets (trades={}): {}", m.size, priceEventsProperties.enabled, m)
         tickerJob = scope.launch { runTickerCollection(m) }
         scope.launch { collectCandlesPeriodically(m) }
+        if (priceEventsProperties.enabled) scope.launch { logTradeIntakePeriodically(m) }
     }
 
     // @PostConstruct 는 Discord appender 가 붙기 전이라 그 ERROR 는 Discord 에 가지 않는다.
@@ -167,7 +174,7 @@ class MarketDataIngestionService(
     private suspend fun runTickerCollection(markets: List<String>) {
         while (currentCoroutineContext().isActive) {
             try {
-                upbitMarketFeed.tickerFlow(markets).collect { ticker -> ingestTicker(ticker) }
+                upbitMarketFeed.marketFlow(markets, priceEventsProperties.enabled, ::ingestTicker).collect { trade -> ingestTrade(trade) }
                 log.warn("Ticker flow completed unexpectedly; restarting in {}ms", watchdogProperties.restartBackoffMs)
             } catch (e: CancellationException) {
                 throw e
@@ -291,6 +298,34 @@ class MarketDataIngestionService(
         } catch (e: Exception) {
             log.warn("store.updateTicker failed for {}: {}", ticker.market, e.message)
         }
+    }
+
+    // 워치독은 ticker 로만 판단한다 — 체결은 거래가 적은 마켓에서 오래 없을 수 있다.
+    private fun ingestTrade(trade: NormalizedTrade) {
+        try {
+            marketDataStore.publishTrade(trade)
+        } catch (e: Exception) {
+            log.warn("store.publishTrade failed for {}: {}", trade.market, e.message)
+        }
+    }
+
+    private suspend fun logTradeIntakePeriodically(markets: List<String>) {
+        while (true) {
+            delay(TRADE_INTAKE_LOG_INTERVAL_MS.milliseconds)
+            logTradeIntake(markets)
+        }
+    }
+
+    internal fun logTradeIntake(markets: List<String>) {
+        val intake = marketDataStore.drainTradeIntake()
+        val dropped = upbitMarketFeed.drainDropped()
+        val parseFailed = upbitMarketFeed.drainParseFailures()
+        val perMarket = markets.joinToString(", ") { market ->
+            val counts = intake[market]
+            "$market received=${counts?.received ?: 0} duplicates=${counts?.duplicates ?: 0} " +
+                "feedDropped=${dropped[market] ?: 0} parseFailed=${parseFailed[market] ?: 0}"
+        }
+        log.info("[trade intake] last {}s: {}", TRADE_INTAKE_LOG_INTERVAL_MS / 1000, perMarket)
     }
 
     // 한쪽 실패가 다른 쪽이나 수집 코루틴을 멈추지 않게 따로 감싼다.
