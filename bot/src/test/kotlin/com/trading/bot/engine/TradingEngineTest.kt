@@ -64,7 +64,7 @@ class TradingEngineTest {
         positionManager = mockk(relaxed = true)
         dailyResetManager = mockk(relaxed = true)
         strategy = mockk()
-        marketDataStore = mockk(relaxed = true)
+        marketDataStore = relaxedMarketDataStore()
         // store miss 기본값. relaxed mock 이 non-null mock 을 돌려 store hit 으로 오작동하는 것을 막는다.
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"

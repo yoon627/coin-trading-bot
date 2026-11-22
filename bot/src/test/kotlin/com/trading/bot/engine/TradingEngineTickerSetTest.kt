@@ -39,7 +39,7 @@ class TradingEngineTickerSetTest {
         positionManager = mockk(relaxed = true)
         dailyResetManager = mockk(relaxed = true)
         strategy = mockk()
-        marketDataStore = mockk(relaxed = true)
+        marketDataStore = relaxedMarketDataStore()
         every { marketDataStore.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { strategy.minCandles } returns 21

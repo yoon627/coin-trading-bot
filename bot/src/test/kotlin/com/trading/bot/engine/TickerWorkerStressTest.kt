@@ -3,7 +3,6 @@ package com.trading.bot.engine
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradingState
-import com.trading.bot.marketdata.MarketDataStore
 import com.trading.common.config.TradingProperties
 import com.trading.common.strategy.TradingStrategy
 import io.mockk.coEvery
@@ -26,7 +25,7 @@ class TickerWorkerStressTest {
         val positionManager = mockk<PositionManager>(relaxed = true)
         val dailyResetManager = mockk<DailyResetManager>(relaxed = true)
         val strategy = mockk<TradingStrategy>(relaxed = true)
-        val store = mockk<MarketDataStore>(relaxed = true)
+        val store = relaxedMarketDataStore()
         every { store.getLatestTicker(any(), any()) } returns null
         every { strategy.name } returns "test_strategy"
         every { dailyResetManager.getTradingDate() } returns LocalDate.of(2026, 11, 20)
