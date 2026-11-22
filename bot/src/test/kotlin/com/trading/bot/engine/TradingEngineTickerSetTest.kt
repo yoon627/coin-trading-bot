@@ -106,11 +106,11 @@ class TradingEngineTickerSetTest {
         val xrp = engine.getStates().getValue("KRW-XRP") // 1코인
         coEvery { upbitClient.getTicker("KRW-XRP") } returns listOf(Ticker(tradePrice = 1_000.0)) // 1,000원어치
 
-        engine.processTicker("KRW-XRP", xrp, strategy)
+        engine.trader.processTicker("KRW-XRP", xrp, strategy)
         coVerify(exactly = 1) { positionManager.releaseDust("KRW-XRP", xrp, 1_000.0) }
 
         coEvery { upbitClient.getTicker("KRW-XRP") } returns listOf(Ticker(tradePrice = 10_000.0)) // 1만원, 팔 수 있다
-        engine.processTicker("KRW-XRP", xrp, strategy)
+        engine.trader.processTicker("KRW-XRP", xrp, strategy)
         coVerify(exactly = 1) { positionManager.releaseDust(any(), any(), any()) }
     }
 
@@ -158,8 +158,8 @@ class TradingEngineTickerSetTest {
         coEvery { strategy.shouldBuy(any(), any(), any()) } returns true
         val btc = TradingState("KRW-BTC")
 
-        engine.processTicker("KRW-XRP", xrp, strategy)
-        engine.processTicker("KRW-BTC", btc, strategy)
+        engine.trader.processTicker("KRW-XRP", xrp, strategy)
+        engine.trader.processTicker("KRW-BTC", btc, strategy)
 
         coVerify(exactly = 0) { positionManager.buy("KRW-XRP", any(), any(), any()) }
         coVerify(exactly = 1) { positionManager.buy("KRW-BTC", btc, 100.0, "test_strategy") }

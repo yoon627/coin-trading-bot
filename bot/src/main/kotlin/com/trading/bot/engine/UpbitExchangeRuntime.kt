@@ -22,13 +22,12 @@ class UpbitExchangeRuntime(
     override val profile: TradingProperties,
     private val marketDataStore: MarketDataStore?,
     private val dailyCandleCache: DailyCandleCache?,
+    // 업비트는 계좌마다 요청 수를 센다. 클라이언트를 호출마다 새로 만들므로 한도는 계좌(접근 키)마다 하나를 함께 쓴다.
+    private val rateLimiters: UpbitRateLimiters = UpbitRateLimiters(),
 ) : ExchangeRuntime {
     override val exchange: Exchange = Exchange.UPBIT
 
     override val stopBudget: Duration = Duration.ofSeconds(25)
-
-    // 업비트는 계좌마다 요청 수를 센다. 클라이언트를 호출마다 새로 만들므로 한도는 계좌(접근 키)마다 하나를 함께 쓴다.
-    private val rateLimiters = UpbitRateLimiters()
 
     override fun canStart(user: UserEntity): Boolean =
         !user.upbitAccessKey.isNullOrBlank() && !user.upbitSecretKey.isNullOrBlank()
