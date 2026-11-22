@@ -100,7 +100,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | `TRADING_TRAILING_ARM_PCT` | `3.0` | 트레일링을 켜는 고점 수익률(%) |
 | `TRADING_MAX_HOLD_DAYS` | `1` | 보유 상한(거래일, KST 09:00 경계) |
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
-| `TRADING_INTERVAL_SECONDS` | `10` | 매매 루프 주기(초). 허용 `[1, 60]` — 손절·익절·트레일링 평가가 이 주기로만 돈다 |
+| `TRADING_INTERVAL_SECONDS` | `10` | 공용 시계 주기(초). 허용 `[1, 60]` — 종목마다 작업자가 이 주기로 손절·익절·트레일링을 평가한다 |
 | `TRADING_RECONCILE_ALERT_THRESHOLD` | `20` | 미해소 주문(매수·매도)이 이 값 × 매매 주기(초) 넘게 확정되지 않으면 ERROR 로 한 번 알린다(주문 시각·알림 여부는 저장돼 재시작해도 같은 주문을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 허용 `[1, 100]` |
 | `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상. 형식은 `TRADING_TICKERS`와 같고 배포 preflight 가 막는다. 앱은 형식이 틀린 항목을 구독에서 빼고 기동 뒤 ERROR 로 알린다 |
 | `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
@@ -124,7 +124,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | GET | `/api/user/me` | 내 정보 |
 | POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
 | POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`) |
-| GET | `/api/bot/status` | 봇 상태, 매매 루프 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
+| GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
 | GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`) |
@@ -135,7 +135,16 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 
 `/api/kis/keys`는 `KIS_TRADING_ENABLED=true`일 때만 있다(꺼져 있으면 404). 세 값은 `APP_ENCRYPTION_SECRET`으로 각각 암호화해 `user_broker_keys`에 두고, 응답에는 앱키·앱시크릿을 어떤 형태로도 내지 않는다. 앱키는 128자, 앱시크릿은 512자 이하의 공백 없는 ASCII, 계좌번호는 `12345678-01` 또는 `1234567801`이다. 형식이 틀리거나 경로가 `KIS_PAPER`·`KIS`가 아니면 400, `KIS_TRADING_LIVE_ENABLED=false`에서 실전(`KIS`) 키를 저장하면 409, DB 가 10초 안에 답하지 않거나 DB 오류면 503 이다(저장 요청이었다면 반영됐는지 상태 조회로 확인한다). 삭제는 실전 키도 받는다. 저장·삭제 뒤 그 환경의 매니저가 등록돼 있으면 도는 엔진이 키를 다시 읽는다. 지금은 KIS 매니저가 없어 저장·삭제만 한다. 다시 읽기에 실패하면 503 이고 저장·삭제는 이미 반영된 상태다. `APP_ENCRYPTION_SECRET`을 바꾸면 저장된 KIS 키를 복호화하지 못하므로 키를 다시 저장한다. 그때 상태 조회는 `configured: true`에 `account: null`로 보인다.
 
-`running` 은 시작·정지 상태이고, 매매 루프가 실제로 도는지는 `loop` 로 본다 — `alive`(루프가 정지 없이 끝나지 않았는지 — 봇이 정지돼 있으면 false)와 `last_progress_at`(시작·종목 처리·한 바퀴 끝·오류 재시도 때 남기는 마지막 진행 시각, UTC, 정지돼 있으면 null). 매 바퀴 오류로 끝나는 루프도 진행으로 보이지만 그때는 1분마다 오류 ERROR 가 따로 나간다. 루프가 정지 없이 끝나면 바로 `[ENGINE DEAD]`, 5분 넘게 진행이 없으면 `[ENGINE STALLED]` ERROR(Discord)가 한 번 나간다(회복하면 INFO). 둘 다 그 사용자의 손절·청산 평가가 멈췄다는 뜻이라 봇을 정지한 뒤 다시 시작하고, 정지가 끝나지 않으면 컨테이너를 재시작한다. 설정 저장도 엔진을 새로 띄운다.
+`running` 은 시작·정지 상태이고, 엔진이 실제로 도는지는 `loop` 로 본다 — `alive`(공용 시계와 종목 작업자가 정지 없이 끝나지 않았는지 — 봇이 정지돼 있으면 false)와 `last_progress_at`(시계와 활성 작업자 중 가장 오래 진행하지 않은 쪽의 시각, UTC, 정지돼 있으면 null — 매수 창구 앞에서 기다리는 종목은 뺀다). 한 바퀴가 오류로 끝나는 종목도 진행으로 보이지만 그때는 그 바퀴마다 오류 ERROR 가 따로 나간다. 시계나 작업자가 정지 없이 끝나면 바로 어느 쪽인지 붙여 `[ENGINE DEAD]`, 5분 넘게 진행이 없으면 `[ENGINE STALLED]` ERROR(Discord)가 한 번 나간다(회복하면 INFO). 둘 다 그 사용자의 손절·청산 평가가 멈췄다는 뜻이라 봇을 정지한 뒤 다시 시작하고, 정지가 끝나지 않으면 컨테이너를 재시작한다. 목록 밖 종목을 더 관리할 것이 없어 정리할 때 그 작업자가 끝나는 것은 정상이다. 설정 저장도 엔진을 새로 띄운다.
+
+### 매매 엔진
+
+사용자마다 엔진 하나가 돈다. 종목마다 작업자 하나가 그 종목의 상태(보유·미해소 주문·고점·일일 리셋)를 혼자 맡고, 공용 시계가 `TRADING_INTERVAL_SECONDS` 마다 모든 작업자에게 바퀴를 보낸다. 바퀴에는 거래일과, 시세가 낡은 종목들의 REST 가격을 한 번에 묶어 받은 결과가 실린다(묶음이 실패한 바퀴는 따로 다시 묻지 않는다 — IP 차단 방지). 작업자는 바퀴를 차례로 처리하고, 처리하는 동안 온 바퀴는 가장 새 것 하나로 합친다.
+
+- 종목끼리 기다리지 않는다 — 한 종목의 주문이 오래 걸려도(장애 때 30초+) 다른 종목은 그 바퀴에 손절을 평가하고 판다.
+- 매수만 엔진에서 한 번에 하나 나간다(원화 잔고를 나눠 쓰므로 잔고 조회부터 체결 확인까지).
+- 업비트 private 요청은 계좌마다 어떤 1초 창에서도 주문 10·그 밖 25 를 넘지 않게 기다렸다 보낸다(공식 한도 12·30). 엔진·포트폴리오 화면·잔고 API·09:05 대조가 같은 계좌의 한도를 함께 쓴다. 공개 시세 API 는 따로 센다.
+- 바깥(상태 API·관리자)은 종목 상태를 읽기만 한다. 정지는 모든 작업자가 끝날 때까지(주문 중이면 그 주문이 끝날 때까지) 기다린다.
 
 ### 신규 매수 중지
 
@@ -174,7 +183,7 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 ### 상태 저장 충돌
 
-`trading_states` 는 엔진이 마지막으로 읽거나 저장한 버전 그대로일 때만 저장된다(V37). 그사이 다른 쓰기(실수로 두 번 뜬 컨테이너, 잠금을 잡지 않은 경로)가 행을 바꿨으면 그 행을 덮지 않는다. 한 프로세스 안에서는 종목 잠금이 저장을 차례로 세우므로 평소에는 일어나지 않는다.
+`trading_states` 는 엔진이 마지막으로 읽거나 저장한 버전 그대로일 때만 저장된다(V37). 그사이 다른 쓰기(실수로 두 번 뜬 컨테이너 등)가 행을 바꿨으면 그 행을 덮지 않는다. 한 프로세스 안에서는 종목마다 작업자 하나만 그 종목의 상태를 쓰므로 평소에는 일어나지 않는다.
 
 - 충돌한 종목은 `[CONFLICT]` ERROR 를 한 번 낸다. 그 뒤로는 그 종목을 더 저장하지 않고, 매수 진입 검사가 그 종목의 신규 매수를 막는다(`GET /api/bot/status` 의 `positions[].version_conflict`). 손절 매도는 기록이 막혀도 나간다.
 - 미해소 주문이 걸려 있으면 그 체결을 기록할 수 없어, 그 종목은 다시 시작할 때까지 확정에서 멈춘다(미해소 매수면 손절 판단도 멈춘다).

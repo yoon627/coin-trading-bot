@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.client.UpbitApiException
+import com.trading.bot.domain.Account
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
 import com.trading.bot.exchange.ExchangeClient
@@ -18,12 +19,15 @@ import com.trading.common.domain.NormalizedCandle
 import com.trading.common.strategy.TradingStrategy
 import java.time.Clock
 import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,12 +36,12 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.slf4j.event.Level
 import kotlin.math.max
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class TradingEngine(
@@ -57,16 +61,17 @@ class TradingEngine(
     private val clock: Clock = Clock.systemUTC(),
     private val calendar: TradingCalendar = UpbitTradingCalendar,
     private val rules: MarketRules = UpbitMarketRules,
+    // 시험이 가상 시간으로 시계·작업자를 돌린다.
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    // 사용자가 준 목록(bot_state.tickers). 신규 진입은 이 목록 안에서만 한다. activeTickers 에는 보유·미해소 주문 때문에
+    // 사용자가 준 목록(bot_state.tickers). 신규 진입은 이 목록 안에서만 한다. 활성 목록에는 보유·미해소 주문 때문에
     // 남은 티커가 섞이므로 재기동 입력으로 쓰면 그 티커가 신규 진입 대상이 된다. null 은 start 전뿐이다.
     @Volatile
     private var userTickers: List<String>? = null
 
     companion object {
-        private const val ERROR_RETRY_DELAY_MS = 60_000L
         internal val STALL_THRESHOLD: java.time.Duration = java.time.Duration.ofMinutes(5)
         private const val PRICE_STALE_THRESHOLD_MS = 30_000L
 
@@ -103,8 +108,8 @@ class TradingEngine(
     /** 엔진 시작 때 알릴 설정 조합. ERROR 는 Discord 로 간다. */
     internal data class ConfigWarning(val level: Level, val message: String)
 
-    // 루프의 끝남은 loopJob 의 완료 처리가 알린다. 처리기가 없으면 Error 가 스레드 기본 처리기로 가 stderr 에만 찍힌다.
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineExceptionHandler { _, _ -> })
+    // 끝남은 loopJob 과 시계·작업자의 완료 처리가 알린다. 처리기가 없으면 Error 가 스레드 기본 처리기로 가 stderr 에만 찍힌다.
+    private val scope = CoroutineScope(dispatcher + SupervisorJob() + CoroutineExceptionHandler { _, _ -> })
     private val running = AtomicBoolean(false)
 
     @Volatile
@@ -113,13 +118,26 @@ class TradingEngine(
     private val staleWarnAtMs = ConcurrentHashMap<String, Long>()
     private val candleWarnAtMs = ConcurrentHashMap<String, Long>()
 
-    // 컨트롤러 스레드(start)와 runLoop 코루틴이 함께 읽고 쓴다.
-    @Volatile
-    private var activeTickers: List<String> = emptyList()
+    // 컨트롤러 스레드(start)가 채우고, 작업자들이 정리될 때 원자적으로 뺀다.
+    private val activeRef = AtomicReference<List<String>>(emptyList())
+    private val active: List<String> get() = activeRef.get()
 
-    // 감시 스케줄러가 읽는다. 티커 하나를 처리할 때마다 갱신해 느린 tick 은 멈춤으로 보지 않는다.
+    // 도는 실행의 작업자. 정리된 작업자는 빠진다.
+    private val workers = ConcurrentHashMap<String, TickerWorker>()
+
+    // 매수는 원화 잔고를 나눠 쓰므로 엔진에서 한 번에 하나만 나간다(잔고 조회부터 체결 확인까지).
+    private val buyWindow = Mutex()
+
+    // 매수 창구 앞에서 기다리는 종목. 기다림은 멈춤이 아니라 정지 감시에서 뺀다 — 창구를 쥔 종목이 멈추면 그쪽이 걸린다.
+    private val buyWaiters = ConcurrentHashMap.newKeySet<String>()
+
+    // 감시 스케줄러가 읽는다. 시계는 바퀴마다, 작업자는 메시지마다 갱신한다.
     @Volatile
-    private var lastProgressAt: Instant? = null
+    private var clockProgressAt: Instant? = null
+
+    // 엔진이 도는 중에 시계나 정리되지 않은 작업자가 끝났다. 정지 뒤 새 실행에서 지운다.
+    @Volatile
+    private var deadPart: String? = null
 
     fun start(
         tickers: List<String> = tradingProperties.tickerList(),
@@ -127,7 +145,10 @@ class TradingEngine(
     ) {
         if (!running.compareAndSet(false, true)) return
         // 감시가 이 사이에 옛 실행의 진행 시각으로 멈춤을 판정하지 않게 바로 기록한다.
-        markProgress()
+        workers.clear()
+        buyWaiters.clear()
+        deadPart = null
+        clockProgressAt = clock.instant()
         // 루프 없이 running=true 로 남으면 다른 경로가 도는 엔진으로 착각하므로 되돌린다.
         try {
             val own = ownStates(initialStates)
@@ -136,7 +157,7 @@ class TradingEngine(
             val requested = tickers.toSet()
             val restored = own.filterValues { it.hasEntryTrace() }.keys.filter { it !in requested }
             val active = (tickers + restored).distinct()
-            activeTickers = active
+            activeRef.set(active)
             // 활성 ticker 의 상태만 남긴다. 먼저 채우고 나머지를 빼는 순서는 잠금 없이 읽는 getStates() 에서
             // 계속 활성인 티커가 잠깐 사라지지 않게 하려는 것이다.
             val seeded = own.filterKeys { it in active }
@@ -157,17 +178,8 @@ class TradingEngine(
                 }
             reportStartupConfig()
             log.info("Starting trading engine for user {} ({}) with strategy: {}", userId, username, strategy.name)
-            loopJob = scope.launch { runLoop() }.also { job ->
-                // Error·뜻밖의 취소·scope 종료로 끝나면 running 은 true 인 채 손절 평가가 멈춘다. 정지는 running 을 먼저 내린다.
-                job.invokeOnCompletion { cause ->
-                    if (running.get()) {
-                        log.error("[ENGINE DEAD] Trading loop for user {} ({}) ended without stop — 손절·청산 평가가 멈췄다. 봇을 정지한 뒤 다시 시작한다", userId, username, cause)
-                    } else if (cause != null && cause !is CancellationException) {
-                        // 정지 중 후처리에서 난 Error 는 scope 처리기가 버리므로 여기서만 남는다.
-                        log.warn("Trading loop for user {} ({}) failed while stopping", userId, username, cause)
-                    }
-                }
-            }
+            // 시계·작업자를 띄우기 전(기동 잔고 조회 등)에 끝나면 그 부분의 완료 처리가 없으므로 여기서 알린다.
+            loopJob = scope.launch { runLoop() }.also { job -> job.invokeOnCompletion { cause -> if (cause != null) onPartEnded("engine", released = false, cause) } }
         } catch (e: Throwable) {
             running.set(false)
             throw e
@@ -193,14 +205,11 @@ class TradingEngine(
     // 동시에 들어온 stop 도 같은 loopJob 이 끝날 때까지 기다리게 한다.
     private val stopMutex = Mutex()
 
-    // 루프가 종목 하나를 처리하는 동안 잡는다. 지금은 루프 밖에서 종목 상태를 바꾸는 곳이 없어 겨루는 쪽이 없다.
-    private val stateMutex = Mutex()
-
     suspend fun stop() = stopMutex.withLock {
         val job = loopJob
         if (running.compareAndSet(true, false)) {
             log.info("Stopping trading engine for user {} ({})", userId, username)
-            // 진행 중인 주문 후처리가 끝날 때까지 기다린다. 기다리지 않고 새 엔진을 띄우면 두 루프가 함께 매매한다.
+            // 진행 중인 주문 후처리가 끝날 때까지 기다린다. 기다리지 않고 새 엔진을 띄우면 옛 작업자와 새 작업자가 함께 매매한다.
             job?.cancelAndJoin()
             loopJob = null
         } else {
@@ -210,30 +219,30 @@ class TradingEngine(
 
     fun isRunning(): Boolean = running.get()
 
-    fun lastProgressAt(): Instant? = lastProgressAt
+    /** 시계와 활성 작업자 중 가장 오래 진행하지 않은 쪽의 시각. 매수 창구 앞에서 기다리는 작업자는 뺀다. */
+    fun lastProgressAt(): Instant? {
+        val clockAt = clockProgressAt ?: return null
+        return workers.values.filter { it.ticker !in buyWaiters }.map { it.progressAt }.plus(clockAt).min()
+    }
 
-    /** 도는 루프가 [STALL_THRESHOLD] 넘게 진행하지 않았다. 정지·끝난 루프는 false — 끝남은 loopJob 완료 처리가 알린다. */
+    /** 도는 엔진이 [STALL_THRESHOLD] 넘게 진행하지 않았다. 정지·끝난 엔진은 false — 끝남은 완료 처리가 알린다. */
     fun isStalled(now: Instant): Boolean {
-        val last = lastProgressAt ?: return false
+        val last = lastProgressAt() ?: return false
         return isLoopAlive() && java.time.Duration.between(last, now) > STALL_THRESHOLD
     }
 
-    private fun markProgress() {
-        lastProgressAt = clock.instant()
-    }
-
-    /** start 중(loopJob 대입 전)은 살아 있는 것으로 본다. */
-    fun isLoopAlive(): Boolean = running.get() && loopJob?.isActive != false
+    /** start 중(loopJob 대입 전)은 살아 있는 것으로 본다. 시계나 정리되지 않은 작업자가 끝났으면 죽은 것이다. */
+    fun isLoopAlive(): Boolean = running.get() && loopJob?.isActive != false && deadPart == null
 
     fun getStates(): Map<String, TradingState> = states.toMap()
 
-    fun getActiveTickers(): List<String> = activeTickers.toList()
+    fun getActiveTickers(): List<String> = active.toList()
 
     fun getUserTickers(): List<String> = userTickers.orEmpty().toList()
 
-    fun getEntryTickers(): List<String> = activeTickers.filter { !isExitOnly(it) }
+    fun getEntryTickers(): List<String> = active.filter { !isExitOnly(it) }
 
-    fun getExitOnlyTickers(): List<String> = activeTickers.filter { isExitOnly(it) }
+    fun getExitOnlyTickers(): List<String> = active.filter { isExitOnly(it) }
 
     /**
      * reload 가 실패했을 때 직전 목록·상태로 같은 엔진을 다시 띄운다. stop 이 루프를 join 한 뒤에 부른다.
@@ -242,7 +251,7 @@ class TradingEngine(
     fun resume() = start(userTickers.orEmpty(), getStates())
 
     /**
-     * 루프가 저장하지 못한 pending 과 고점을 다시 저장한다. 엔진이 멈추면 다음 tick 의 재시도가 없으므로
+     * 작업자가 저장하지 못한 pending 과 고점을 다시 저장한다. 엔진이 멈추면 다음 tick 의 재시도가 없으므로
      * 버리기 전에 부른다. stop 이 루프를 join 한 뒤에 부른다.
      */
     internal suspend fun flushUnpersisted() {
@@ -259,68 +268,101 @@ class TradingEngine(
     internal fun unpersistedSells(): List<TradingState> =
         states.values.filter { (it.pendingPersistFailed || it.versionConflict) && it.hasPendingSell() }
 
-    private suspend fun runLoop() {
-        activeTickers.forEach { ticker ->
+    /**
+     * 종목마다 작업자를 띄우고 공용 시계가 바퀴를 보낸다. 한 작업자의 실패는 다른 작업자를 멈추지 않는다.
+     * 정지는 이 코루틴을 취소하고 모든 작업자가 끝날 때까지 기다린다(주문 중이면 그 주문이 끝날 때까지).
+     */
+    private suspend fun runLoop(): Unit = supervisorScope {
+        active.forEach { ticker ->
             states.computeIfAbsent(ticker) { TradingState(it, exchange = exchange) }
         }
-
-        activeTickers.forEach { ticker ->
-            stateMutex.withLock { positionManager.syncPosition(ticker, states[ticker]!!) }
-            markProgress()
+        val accounts = startupAccounts()
+        for (ticker in active) {
+            val worker = TickerWorker(ticker, states.getValue(ticker), tickerWork, clock)
+            workers[ticker] = worker
+            launch { worker.run(accounts) }.invokeOnCompletion { cause -> onPartEnded("ticker worker $ticker", worker.released, cause) }
         }
-        stateMutex.withLock { releaseSettledTickers() }
+        launch { runClock() }.invokeOnCompletion { cause -> onPartEnded("clock", released = false, cause) }
+    }
 
-        while (running.get() && scope.isActive) {
+    /** 기동 동기화에 쓸 잔고를 한 번 받아 나눠 쓴다. 실패하면 작업자가 각자 다시 묻는다. */
+    private suspend fun startupAccounts(): List<Account>? =
+        try {
+            upbitClient.getAccounts()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Startup balance lookup for user {} failed — each ticker syncs on its own: {}", userId, e.message)
+            null
+        }
+
+    private suspend fun runClock() {
+        var announcedDate: LocalDate? = null
+        while (true) {
             try {
-                stateMutex.withLock {
-                    if (dailyResetManager.checkAndReset(states)) {
-                        // 리셋을 저장하지 않으면 재시작 때 boughtToday=true 가 복원돼 당일 진입이 막힌다.
-                        states.values.forEach { positionManager.persistState(it) }
-                        // 저장 뒤에 빼야 그 티커의 리셋도 저장된다.
-                        releaseSettledTickers()
-                    }
+                val tradingDate = dailyResetManager.getTradingDate()
+                if (tradingDate != announcedDate) {
+                    log.info("Trading date {} for user {}", tradingDate, userId)
+                    announcedDate = tradingDate
                 }
-
-                roundRestPrices = HashMap()
-                try {
-                    for (ticker in activeTickers) {
-                        if (!running.get()) break
-                        stateMutex.withLock { processTicker(ticker) }
-                        markProgress()
-                    }
-                } finally {
-                    roundRestPrices = null
-                }
-                // 티커가 없어도 한 바퀴는 진행이다.
-                markProgress()
-
-                delay(tradingProperties.intervalSeconds.seconds)
+                val round = Round(tradingDate, prefetchRestPrices())
+                workers.values.forEach { it.offer(round) }
             } catch (e: CancellationException) {
-                throw e // 삼키면 stop 의 join 이 루프가 다시 돌 때까지 늦어진다.
+                throw e
             } catch (e: Exception) {
-                log.error("Trading loop error (user {}): {}", userId, e.message, e)
-                markProgress()
-                delay(ERROR_RETRY_DELAY_MS.milliseconds)
+                log.error("Trading clock error (user {}): {}", userId, e.message, e)
             }
+            // 티커가 없어도 한 바퀴는 진행이다.
+            clockProgressAt = clock.instant()
+            delay(tradingProperties.intervalSeconds.seconds)
+        }
+    }
+
+    // Error·뜻밖의 취소로 끝나면 running 은 true 인 채 그 부분의 손절 평가가 멈춘다. 정지는 running 을 먼저 내린다.
+    private fun onPartEnded(part: String, released: Boolean, cause: Throwable?) {
+        if (released) return
+        if (running.get()) {
+            deadPart = part
+            log.error("[ENGINE DEAD] {} for user {} ({}) ended without stop — 손절·청산 평가가 멈췄다. 봇을 정지한 뒤 다시 시작한다", part, userId, username, cause)
+        } else if (cause != null && cause !is CancellationException) {
+            // 정지 중 후처리에서 난 Error 는 scope 처리기가 버리므로 여기서만 남는다.
+            log.warn("{} for user {} ({}) failed while stopping", part, userId, username, cause)
+        }
+    }
+
+    private val tickerWork = object : TickerWork {
+        override suspend fun sync(ticker: String, state: TradingState, accounts: List<Account>?) =
+            positionManager.syncPosition(ticker, state, accounts)
+
+        override suspend fun resetDay(state: TradingState, tradingDate: LocalDate) {
+            // 재시작하면 마지막 리셋일을 모르므로 해제 여부는 state 의 boughtDate 로 판단해 당일 재매수를 막는다.
+            state.resetDaily(tradingDate)
+            positionManager.persistState(state)
+        }
+
+        override suspend fun releaseIfSettled(ticker: String, state: TradingState): Boolean = releaseIfSettledTicker(ticker, state)
+
+        override suspend fun process(ticker: String, state: TradingState, round: Round) {
+            if (!willProcess(ticker)) return
+            processTicker(ticker, state, strategy, round.rest)
         }
     }
 
     /**
-     * 목록 밖 티커 중 더 관리할 것이 없는 것을 뺀다. 엔진 밖에서 팔린 티커는 진입 메타가 남아 있어서,
-     * 지우지 않으면 사람이 다시 샀을 때 옛 buyDate 로 보유 기간 매도가 나간다.
+     * 목록 밖 티커가 더 관리할 것이 없으면 뺀다. 엔진 밖에서 팔린 티커는 진입 메타가 남아 있어서,
+     * 지우지 않으면 사람이 다시 샀을 때 옛 buyDate 로 보유 기간 매도가 나간다. 그 종목의 작업자만 부른다.
      */
-    private suspend fun releaseSettledTickers() {
-        val settled = states.filter { (ticker, state) -> isExitOnly(ticker) && !state.mustKeep() }
-        if (settled.isEmpty()) return
-        settled.forEach { (ticker, state) ->
-            states.remove(ticker)
-            if (state.hasEntryTrace()) {
-                state.clearEntryMeta()
-                positionManager.persistState(state)
-            }
+    private suspend fun releaseIfSettledTicker(ticker: String, state: TradingState): Boolean {
+        if (!isExitOnly(ticker) || state.mustKeep()) return false
+        if (state.hasEntryTrace()) {
+            state.clearEntryMeta()
+            positionManager.persistState(state)
         }
-        activeTickers = activeTickers.filter { it !in settled.keys }
-        log.info("User {}: released tickers outside the list with nothing left to manage: {}", userId, settled.keys)
+        states.remove(ticker)
+        workers.remove(ticker)
+        activeRef.updateAndGet { tickers -> tickers - ticker }
+        log.info("User {}: released ticker outside the list with nothing left to manage: {}", userId, ticker)
+        return true
     }
 
     private fun isExitOnly(ticker: String): Boolean = userTickers?.let { ticker !in it } == true
@@ -334,28 +376,26 @@ class TradingEngine(
 
     private fun TradingState.hasPendingOrder(): Boolean = hasPendingBuy() || hasPendingSell()
 
-    /** 도는 라운드에서 REST 로 받으려 한 종목과 그 시세(못 받았으면 null). 라운드 밖에서는 null 이다. 루프 코루틴만 쓴다. */
-    private var roundRestPrices: HashMap<String, Double?>? = null
-
     /**
      * 따로 물어도 거래소가 모른다고 한(404) 마켓. 묶음에 넣으면 묶음 전체가 실패하므로 묶음에서만 뺀다 — 보유·미해소 주문이 있으면
-     * 일시적인 404 였을 수 있어 손절을 위해 계속 따로 묻는다. 루프 코루틴만 쓴다.
+     * 일시적인 404 였을 수 있어 손절을 위해 계속 따로 묻는다. 시계와 작업자들이 함께 쓴다.
      */
-    private val unknownRestMarkets = HashSet<String>()
+    private val unknownRestMarkets: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    private suspend fun restPrice(ticker: String): Double? {
+    /** 시세가 낡은 활성 종목을 라운드 앞에서 한 번에 묻는다. 시계만 부른다. */
+    private suspend fun prefetchRestPrices(): RestRound {
+        val markets = active.filter { it !in unknownRestMarkets && willProcess(it) && getRealtimePrice(it) == null }
+        if (markets.isEmpty()) return RestRound(emptyMap())
+        val prices = fetchRestPrices(markets)
+        return RestRound(markets.associateWith { prices[it] })
+    }
+
+    private suspend fun restPrice(ticker: String, round: RestRound?): Double? {
         if (ticker in unknownRestMarkets) {
             return if (states[ticker]?.let { it.position || it.hasPendingOrder() } == true) fetchRestPrices(listOf(ticker))[ticker] else null
         }
-        val round = roundRestPrices ?: return fetchRestPrices(listOf(ticker))[ticker]
-        if (ticker !in round) {
-            val markets = listOf(ticker) + activeTickers.filter {
-                it != ticker && it !in round && it !in unknownRestMarkets && willProcess(it) && getRealtimePrice(it) == null
-            }
-            val prices = fetchRestPrices(markets)
-            markets.forEach { round[it] = prices[it] }
-        }
-        return round[ticker]
+        if (round != null && round.asked(ticker)) return round.price(ticker)
+        return fetchRestPrices(listOf(ticker))[ticker]
     }
 
     /**
@@ -392,7 +432,7 @@ class TradingEngine(
         val normalizedMarket = MarketPair.normalize(exchange, ticker)
         val storeTicker = marketDataStore?.getLatestTicker(exchange, normalizedMarket)
         if (storeTicker != null) {
-            val now = System.currentTimeMillis()
+            val now = clock.millis()
             val ageMs = now - storeTicker.timestamp.toEpochMilli()
             if (ageMs < PRICE_STALE_THRESHOLD_MS) {
                 return storeTicker.price
@@ -406,21 +446,15 @@ class TradingEngine(
         return null
     }
 
-    private suspend fun processTicker(ticker: String) {
-        val state = states[ticker] ?: return
-        if (!willProcess(ticker)) return
-        processTicker(ticker, state, strategy)
-    }
-
     // 장외에도 미해소 주문은 확정해야 다음 세션까지 결과가 밀리지 않는다.
     private fun willProcess(ticker: String): Boolean {
         val state = states[ticker] ?: return false
         return calendar.isSessionOpen(clock.instant()) || state.hasPendingOrder()
     }
 
-    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy) {
+    internal suspend fun processTicker(ticker: String, state: TradingState, strategy: TradingStrategy, round: RestRound? = null) {
         try {
-            val currentPrice = getRealtimePrice(ticker) ?: restPrice(ticker) ?: return
+            val currentPrice = getRealtimePrice(ticker) ?: restPrice(ticker, round) ?: return
 
             // 보유 여부를 확정하지 못했으면 다시 확인한다. 계속 모르면 buy() 가 신규 진입을 막는다.
             if (state.unsynced) {
@@ -521,8 +555,22 @@ class TradingEngine(
             }
             strategy.shouldBuy(candles, currentPrice, tradingProperties)
         }
-        if (shouldBuy) {
+        if (shouldBuy) buyThroughWindow(ticker, state, currentPrice)
+    }
+
+    private suspend fun buyThroughWindow(ticker: String, state: TradingState, currentPrice: Double) {
+        buyWaiters += ticker
+        try {
+            buyWindow.lock()
+        } finally {
+            buyWaiters -= ticker
+        }
+        try {
+            // 오래 기다렸다가 막 창구를 잡은 종목을 멈춤으로 보지 않게 잡은 시각을 진행으로 남긴다.
+            workers[ticker]?.markProgress()
             positionManager.buy(ticker, state, currentPrice, strategy.name)
+        } finally {
+            buyWindow.unlock()
         }
     }
 
@@ -545,7 +593,7 @@ class TradingEngine(
     // 평가는 막지 않는다. 전략이 알아서 false 를 내지만 그 이유를 로그로 남긴다.
     private fun warnInsufficientCandles(ticker: String, strategy: TradingStrategy, actual: Int) {
         val key = "$ticker:min-candles"
-        val now = System.currentTimeMillis()
+        val now = clock.millis()
         val last = candleWarnAtMs[key]
         if (last != null && now - last < STALE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now
@@ -568,7 +616,7 @@ class TradingEngine(
 
     // store 와 REST 경고가 서로를 억제하지 않도록 키에 소스를 넣는다.
     private fun warnStaleDailyCandle(source: String, ticker: String, dayOpen: Instant, newestOpen: Instant?, action: String) {
-        val now = System.currentTimeMillis()
+        val now = clock.millis()
         val key = "$ticker:$source:stale-d1"
         if (now - (candleWarnAtMs[key] ?: 0L) < STALE_WARN_INTERVAL_MS) return
         candleWarnAtMs[key] = now

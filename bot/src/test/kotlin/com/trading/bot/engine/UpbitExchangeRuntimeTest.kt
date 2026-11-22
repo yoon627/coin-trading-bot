@@ -18,6 +18,8 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Assertions.assertNotSame
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.web.reactive.function.client.WebClient
@@ -111,6 +113,19 @@ class UpbitExchangeRuntimeTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    // 엔진·화면·대조가 같은 계좌로 따로 만든 클라이언트도 한 한도를 함께 쓴다. 클라이언트마다 두면 서로의 요청을 못 본다.
+    @Test
+    fun `clients of the same account share one rate limiter and other accounts do not`() {
+        val runtime = runtime(mockk(relaxed = true))
+        val a1 = runtime.queryClient(user("access-a", "secret-a-that-is-long-enough-for-hmac"))
+        val a2 = runtime.queryClient(user("access-a", "secret-a-that-is-long-enough-for-hmac"))
+        val b = runtime.queryClient(user("access-b", "secret-b-that-is-long-enough-for-hmac"))
+
+        assertSame(field(a1, "rateLimiter"), field(a2, "rateLimiter"))
+        assertNotNull(field(a1, "rateLimiter"))
+        assertNotSame(field(a1, "rateLimiter"), field(b, "rateLimiter"))
     }
 
     private fun json(body: String) = MockResponse().setBody(body).addHeader("Content-Type", "application/json")

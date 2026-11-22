@@ -56,6 +56,18 @@ class PositionManagerBookSyncTest {
 
     private suspend fun sync(state: TradingState) = manager.syncPosition("KRW-BTC", state)
 
+    // 기동 때 엔진이 한 번 받은 잔고를 나눠 준다. 종목마다 다시 묻지 않는다.
+    @Test
+    fun `a balance handed in at startup is used instead of asking the exchange`() = runTest {
+        val state = loaded(0.01)
+
+        manager.syncPosition("KRW-BTC", state, listOf(Account(currency = "BTC", balance = "0.004", avgBuyPrice = "30000000")))
+
+        coVerify(exactly = 0) { upbit.getAccounts() }
+        assertEquals(0.004, state.holdVolume, 1e-12)
+        assertTrue(state.bookKnown)
+    }
+
     @Test
     fun `a stored book is restored, not the whole balance, with the book's average`() = runTest {
         balance("0.06")

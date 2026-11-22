@@ -26,71 +26,46 @@ class DailyResetManagerTest {
         assertNotNull(date)
     }
 
-    @Test
-    fun `checkAndReset resets states on first call`() {
-        val states = mapOf(
-            "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true),
-            "KRW-ETH" to TradingState("KRW-ETH", boughtToday = true),
-        )
-
-        val result = manager.checkAndReset(states)
-        assertTrue(result)
-        assertFalse(states["KRW-BTC"]!!.boughtToday)
-        assertFalse(states["KRW-ETH"]!!.boughtToday)
-    }
-
-    @Test
-    fun `checkAndReset does not reset twice on same day`() {
-        val states = mapOf(
-            "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true),
-        )
-
-        manager.checkAndReset(states)
-        states["KRW-BTC"]!!.boughtToday = true
-
-        val secondResult = manager.checkAndReset(states)
-        assertFalse(secondResult)
-        assertTrue(states["KRW-BTC"]!!.boughtToday)
-    }
-
     // --- 재시작 뒤 boughtToday ---
 
+    // 작업자의 리셋 시점(첫 바퀴·거래일이 바뀐 바퀴)은 TickerWorkerTest 가 본다. 여기는 그 거래일로 무엇을 지우는지다.
+
     @Test
-    fun `checkAndReset keeps boughtToday for state bought on the current trading date`() {
-        // 재시작 직후엔 lastResetDate 가 없어 첫 tick 이 리셋을 호출한다.
+    fun `a reset keeps boughtToday for state bought on the current trading date`() {
+        // 재시작 직후엔 작업자가 마지막 리셋일을 몰라 첫 바퀴가 리셋한다.
         // 이때 복원된 boughtToday 를 지우면 당일 재매수가 열린다.
         val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
         val states = mapOf(
             "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11)),
         )
 
-        m.checkAndReset(states)
+        states.values.forEach { it.resetDaily(m.getTradingDate()) }
 
         assertTrue(states["KRW-BTC"]!!.boughtToday)
     }
 
     @Test
-    fun `checkAndReset clears boughtToday for state bought on a previous trading date`() {
+    fun `a reset clears boughtToday for state bought on a previous trading date`() {
         // 09:00 경계를 넘겨 재시작하면 어제의 boughtToday 는 해제돼야 당일 매수가 열린다.
         val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
         val states = mapOf(
             "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 10)),
         )
 
-        m.checkAndReset(states)
+        states.values.forEach { it.resetDaily(m.getTradingDate()) }
 
         assertFalse(states["KRW-BTC"]!!.boughtToday)
     }
 
     @Test
-    fun `checkAndReset resets only the states whose trading date rolled over`() {
+    fun `a reset clears only the states whose trading date rolled over`() {
         val m = DailyResetManager(TradingProperties(), fixedClock("2026-06-11T10:00:00"))
         val states = mapOf(
             "KRW-BTC" to TradingState("KRW-BTC", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 10)),
             "KRW-ETH" to TradingState("KRW-ETH", boughtToday = true, boughtDate = LocalDate.of(2026, 6, 11)),
         )
 
-        m.checkAndReset(states)
+        states.values.forEach { it.resetDaily(m.getTradingDate()) }
 
         assertFalse(states["KRW-BTC"]!!.boughtToday)
         assertTrue(states["KRW-ETH"]!!.boughtToday)
