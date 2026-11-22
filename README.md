@@ -104,6 +104,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | `TRADING_RECONCILE_ALERT_THRESHOLD` | `20` | 미해소 주문(매수·매도)이 이 값 × 매매 주기(초) 넘게 확정되지 않으면 ERROR 로 한 번 알린다(주문 시각·알림 여부는 저장돼 재시작해도 같은 주문을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 허용 `[1, 100]` |
 | `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상. 형식은 `TRADING_TICKERS`와 같고 배포 preflight 가 막는다. 앱은 형식이 틀린 항목을 구독에서 빼고 기동 뒤 ERROR 로 알린다 |
 | `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
+| `TRADING_PRICE_EVENTS_ENABLED` | `true` | 시세 수집이 업비트 체결(`trade`)도 같은 연결로 받는다. 끄면 ticker 만 받는다. 봇은 아직 쓰지 않는다 |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |
 | `KIS_TRADING_INVEST_RATIO`, `KIS_TRADING_INTERVAL_SECONDS`, 청산 키 5개(`KIS_TRADING_TAKE_PROFIT_PCT` 등) | 같은 이름의 `TRADING_*` 기본값 | KIS 프로파일. 허용 구간도 `TRADING_*`와 같다 |
 | `KIS_TRADING_MAX_INVEST_AMOUNT` / `KIS_TRADING_MAX_ORDER_AMOUNT` | `1000000` / `2000000` | KIS 1회 투자·주문 금액 상한(KRW) |
@@ -145,6 +146,8 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - 매수만 엔진에서 한 번에 하나 나간다(원화 잔고를 나눠 쓰므로 잔고 조회부터 체결 확인까지).
 - 업비트 private 요청은 계좌마다 어떤 1초 창에서도 주문 10·그 밖 25 를 넘지 않게 기다렸다 보낸다(공식 한도 12·30). 엔진·포트폴리오 화면·잔고 API·09:05 대조가 같은 계좌의 한도를 함께 쓴다. 공개 시세 API 는 따로 센다.
 - 바깥(상태 API·관리자)은 종목 상태를 읽기만 한다. 정지는 모든 작업자가 끝날 때까지(주문 중이면 그 주문이 끝날 때까지) 기다린다.
+
+시세 수집은 ticker 와 함께 업비트 체결(`trade`)을 같은 WebSocket 연결·같은 구독 요청으로 받는다. ticker 는 체결을 건너뛰어(실측: BTC 체결 100건 중 14건이 ticker 에 안 보였다) 체결마다 판단하려면 `trade` 가 필요하다. 받은 체결은 체결 번호(`sequential_id`)로 중복만 거른 뒤 저장소의 체결 흐름에 싣는다(번호가 연속이 아니라 빠진 체결은 알 수 없다). 봇은 아직 이 흐름을 쓰지 않고 가격은 계속 ticker 로만 본다. ticker 는 체결과 다른 길로 받는 즉시 저장소에 넣어, 체결이 밀려도 최신 ticker 를 잃지 않는다(밀린 체결은 오래된 것부터 버린다). 5분마다 INFO `[trade intake]` 한 줄에 마켓별 받은 수·중복·피드에서 밀려 버린 수·읽지 못한 프레임 수가 남는다.
 
 ### 신규 매수 중지
 
