@@ -2,6 +2,7 @@ package com.trading.bot.config
 
 import com.trading.bot.kis.config.KisApiProperties
 import com.trading.bot.kis.config.KisTradingProperties
+import com.trading.common.config.PriceEventsProperties
 import com.trading.common.config.ShadowExitProperties
 import com.trading.common.config.TradingProperties
 import kotlin.reflect.KClass
@@ -20,6 +21,7 @@ internal object DeployPassthrough {
     val PASSED: List<KClass<*>> = listOf(
         TradingProperties::class,
         ShadowExitProperties::class,
+        PriceEventsProperties::class,
         WatchlistProperties::class,
         MarketDataWatchdogProperties::class,
         KisTradingProperties::class,
