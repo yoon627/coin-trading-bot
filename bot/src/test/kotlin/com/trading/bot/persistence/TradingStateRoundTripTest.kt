@@ -54,6 +54,11 @@ class TradingStateRoundTripTest {
         private val required = System.getenv("DB_TESTS_REQUIRED")?.toBoolean() ?: false
 
         private val available = host != null
+
+        private val RETIRED_STATE_COLUMNS = listOf(
+            "halted", "halt_reason", "reconcile_failure_count", "review_reason",
+            "adopt_baseline_volume", "sell_clear_prior_volume", "sell_clear_volume",
+        )
         private val jdbcUrl = "jdbc:postgresql://$host:$port/$name"
 
         @JvmStatic
@@ -166,47 +171,6 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellPriorVolume).isEqualTo(original.pendingSellPriorVolume)
         assertThat(restored.pendingBuyIdentifier).isEqualTo(original.pendingBuyIdentifier)
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
-    }
-
-    /** 앱이 읽고 쓰지 않는 칼럼(halt·확인 필요 사유·pending 해제 기준값). */
-    private suspend fun retiredColumns(userId: Long, ticker: String): List<Any?> =
-        databaseClient.sql(
-            "SELECT halted, halt_reason, review_reason, adopt_baseline_volume, sell_clear_prior_volume, sell_clear_volume, reconcile_failure_count " +
-                "FROM trading_states WHERE user_id = :u AND ticker = :t",
-        )
-            .bind("u", userId).bind("t", ticker)
-            .map { row ->
-                listOf(
-                    row.get("halted", java.lang.Boolean::class.java)!!.booleanValue(),
-                    row.get("halt_reason", String::class.java),
-                    row.get("review_reason", String::class.java),
-                    row.get("adopt_baseline_volume", java.lang.Double::class.java)?.toDouble(),
-                    row.get("sell_clear_prior_volume", java.lang.Double::class.java)?.toDouble(),
-                    row.get("sell_clear_volume", java.lang.Double::class.java)?.toDouble(),
-                    row.get("reconcile_failure_count", Integer::class.java)?.toInt(),
-                )
-            }
-            .one().awaitSingle()
-
-    // 앱은 이 칼럼들을 읽고 쓰지 않는다. 직전 이미지로 되돌려도 그 칼럼이 남긴 값 그대로 읽히고, 새 행은 기본값이다.
-    @Test
-    fun `a save leaves the retired columns of an existing row as they were and a new row gets the defaults`() = runTest {
-        val userId = insertUser("retired-cols")
-        service.upsert(userId, TradingState("KRW-BTC", peakPrice = 1.0))
-        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(false, null, null, null, null, null, 0)
-        databaseClient.sql(
-            "UPDATE trading_states SET halted = TRUE, halt_reason = 'old halt', review_reason = 'old review', " +
-                "adopt_baseline_volume = 0.1, sell_clear_prior_volume = 0.2, sell_clear_volume = 0.3, reconcile_failure_count = 7 " +
-                "WHERE user_id = :u AND ticker = 'KRW-BTC'",
-        )
-            .bind("u", userId).fetch().rowsUpdated().awaitSingle()
-
-        val loaded = service.loadState(userId, "KRW-BTC")!!
-        loaded.peakPrice = 2.0
-        service.upsert(userId, loaded)
-
-        assertThat(retiredColumns(userId, "KRW-BTC")).containsExactly(true, "old halt", "old review", 0.1, 0.2, 0.3, 7)
-        assertThat(service.loadState(userId, "KRW-BTC")!!.peakPrice).isEqualTo(2.0)
     }
 
     /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. 두 번째 저장은 첫 저장의 버전을 들고 온다. */
@@ -339,6 +303,57 @@ class TradingStateRoundTripTest {
         inSchema(schema) { conn -> assertThat(conn.buyStuckColumns(schema)).containsExactlyInAnyOrder("pending_buy_since", "pending_buy_alerted") }
     }
 
+    @Test
+    fun `V39 drops the unused tables and columns, and the down sql refuses unless V39 is last, then restores them as they were`() = withScratchSchema("v39down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V39_down.sql").readText()
+        migrate(schema, "38")
+        val before = inSchema(schema) { conn ->
+            // 운영에만 있는 손으로 만든 백업 테이블
+            conn.update("CREATE TABLE users_bak_20260602 AS SELECT * FROM users")
+            conn.update("INSERT INTO users (username, password) VALUES ('it-v39-$runId', 'x')")
+            conn.update(
+                "INSERT INTO trading_states (user_id, ticker, halted, review_reason) " +
+                    "SELECT id, 'KRW-BTC', TRUE, 'old' FROM users WHERE username = 'it-v39-$runId'",
+            )
+            conn.retiredDefinitions(schema)
+        }
+        assertThat(before.filter { it.startsWith("trading_states.") }).hasSize(RETIRED_STATE_COLUMNS.size)
+        assertThat(before).anyMatch { it.contains("ix_manual_interventions_user_created") }
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V39 이 적용돼 있지 않다")
+
+        migrate(schema, "39")
+        inSchema(schema) { conn ->
+            assertThat(conn.retiredDefinitions(schema)).isEmpty()
+            assertThat(conn.droppedTables(schema)).isEmpty()
+            assertThat(conn.strings("SELECT ticker FROM trading_states")).containsExactly("KRW-BTC")
+
+            conn.update(downSql)
+            assertThat(conn.retiredDefinitions(schema)).containsExactlyElementsOf(before)
+            assertThat(conn.strings("SELECT halted::text || ',' || coalesce(review_reason, 'null') FROM trading_states")).containsExactly("false,null")
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '39'")).isEmpty()
+        }
+
+        migrate(schema, "39")
+        inSchema(schema) { conn -> assertThat(conn.retiredDefinitions(schema)).isEmpty() }
+    }
+
+    // V39_down 이 되살린 정의를 그 앞의 되돌리기 SQL 들이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다.
+    @Test
+    fun `after the V39 down sql the earlier down sqls still run one after another`() = withScratchSchema("v39chain") { schema ->
+        migrate(schema, "39")
+        inSchema(schema) { conn ->
+            for (v in 39 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
+            assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("33")
+            // V34 의 세 칼럼과 V35 의 테이블은 지워지고, V14·V30 의 칼럼은 그 버전의 down 까지 남는다.
+            assertThat(conn.retiredDefinitions(schema).map { it.substringBefore(' ') }).containsExactly(
+                "trading_states.halt_reason",
+                "trading_states.halted",
+                "trading_states.reconcile_failure_count",
+                "trading_states.review_reason",
+            )
+        }
+    }
+
     private fun migrate(schema: String, target: String) {
         Flyway.configure()
             .dataSource(jdbcUrl, user, password)
@@ -372,6 +387,25 @@ class TradingStateRoundTripTest {
     private fun Connection.buyStuckColumns(schema: String): List<String> = strings(
         "SELECT column_name FROM information_schema.columns " +
             "WHERE table_schema = '$schema' AND table_name = 'trading_states' AND column_name IN ('pending_buy_since', 'pending_buy_alerted')",
+    )
+
+    /** V39 가 지우는 trading_states 칼럼과 manual_interventions 의 정의(타입·NULL·기본값·identity), 그리고 그 테이블의 인덱스. */
+    private fun Connection.retiredDefinitions(schema: String): List<String> {
+        val columns = RETIRED_STATE_COLUMNS.joinToString(",") { "'$it'" }
+        return strings(
+            "SELECT table_name || '.' || column_name || ' ' || data_type || coalesce('(' || character_maximum_length || ')', '') || " +
+                "' null=' || is_nullable || ' default=' || coalesce(column_default, '-') || ' identity=' || coalesce(identity_generation, '-') " +
+                "FROM information_schema.columns WHERE table_schema = '$schema' " +
+                "AND ((table_name = 'trading_states' AND column_name IN ($columns)) OR table_name = 'manual_interventions') " +
+                "ORDER BY table_name, column_name",
+        ) + strings(
+            "SELECT replace(indexdef, '$schema.', '') FROM pg_indexes WHERE schemaname = '$schema' AND tablename = 'manual_interventions' ORDER BY indexname",
+        )
+    }
+
+    private fun Connection.droppedTables(schema: String): List<String> = strings(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = '$schema' " +
+            "AND table_name IN ('trade_records_v21_backup', 'trade_executions_v21_backup', 'users_bak_20260602', 'manual_interventions')",
     )
 
     private fun withScratchSchema(label: String, block: (String) -> Unit) {
