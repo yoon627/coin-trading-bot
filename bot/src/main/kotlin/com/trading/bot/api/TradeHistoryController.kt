@@ -29,7 +29,7 @@ class TradeHistoryController(
         if (incomplete.isNotEmpty()) {
             log.warn(
                 "[TRADE HISTORY] user {} 의 {} 체결 줄 {}건이 화면 값이나 체결 시각이 비어 0·생성 시각으로 보인다(orders id {}) — " +
-                    "짝 trade_executions·trade_records 로 채운다",
+                    "그 orders 줄의 값 칼럼·체결 시각을 고친다",
                 userId, exchange, incomplete.size, incomplete.take(SHOWN_IDS).map { it.id },
             )
         }

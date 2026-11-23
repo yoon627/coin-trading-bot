@@ -39,7 +39,7 @@ import org.springframework.stereotype.Component
  * 매일 09:05 KST 에 한 번, 업비트의 봇 주문(identifier `ctb-`) 중 체결됐는데 거래 기록이 없는 것을 사용자별 ERROR 한 줄로 알린다(#341).
  * 매도 기록이 실패한 채 강제 종료되거나, 잔고 흔적 뒤 미접수로 확정한 주문이 실제로는 체결됐으면 거래 기록이 빠지고 엔진은 다시 보지 않는다.
  * 거래 기록은 `orders` 의 업비트 체결 줄이다. 고치지는 않는다 — 체결가·수수료·청산 사유를 사람이 확인해 `exchange_order_id` 를 그 uuid 로
- * trade_executions·trade_records 에 보정 행을 넣고, `deploy/vultr/sql/orders_catchup.sql` 로 orders 에 옮긴다.
+ * orders 에 FILLED 보정 줄을 넣는다(README 체결 기록 대조 절).
  * 엔진 루프·공용 스케줄러를 막지 않게 자체 코루틴에서 돈다. 기동 직후에는 돌지 않고 다음 09:05 를 기다린다.
  */
 @Component

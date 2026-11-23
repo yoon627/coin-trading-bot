@@ -43,22 +43,29 @@ interface OrderRowRepository : R2dbcRepository<OrderRowEntity, Long> {
     )
     fun findRecordedOrderIds(userId: Long, exchange: String, orderIds: Collection<String>): Flux<String>
 
+    /** 이 사용자·거래소의 거래소 주문번호를 가진 줄의 상태. 없으면 비어 끝난다(uq_orders_exchange_order 와 같은 키). */
+    @Query("SELECT status FROM orders WHERE user_id = :userId AND exchange = :exchange AND exchange_order_id = :exchangeOrderId")
+    fun findStatusByExchangeOrderId(userId: Long, exchange: String, exchangeOrderId: String): Mono<String>
+
+    /** 이 사용자·거래소에 [clientOrderId] 를 가진 줄이 있는가(uq_orders_client_order 와 같은 키). */
+    @Query("SELECT COUNT(*) > 0 FROM orders WHERE user_id = :userId AND exchange = :exchange AND client_order_id = :clientOrderId")
+    fun existsByClientOrderId(userId: Long, exchange: String, clientOrderId: String): Mono<Boolean>
+
     /**
-     * 체결된 주문 한 줄을 넣고 id 를 돌려준다. 체결 기록 트랜잭션 안에서 불리므로 고유 키 충돌로 실패하지 않게 대상 없는
+     * 체결된 주문 한 줄을 넣고 id 를 돌려준다. 체결 기록 트랜잭션 안에서 불리므로 고유 키 충돌이 트랜잭션을 중단하지 않게 대상 없는
      * `ON CONFLICT DO NOTHING` 을 쓴다(모든 부분 고유 인덱스를 덮는다). 같은 키 줄이 이미 있으면 아무것도 넣지 않고 비어 끝난다.
-     * 체결 시각은 trade_records.created_at 과 같은 timestamp 로 받아 세션 시간대(= JVM 시간대)로 바꾼다 — 화면 기록과 같은 값이다.
+     * 체결 시각은 TradeRecord.createdAt 을 timestamp 로 받아 세션 시간대(= JVM 시간대)로 바꾼다 — 옛 trade_records.created_at 과 같은 값이다.
      */
     @Query(
         """
         INSERT INTO orders (
             user_id, exchange, market, side, client_order_id, exchange_order_id, status, decision_price, requested_volume,
             filled_volume, filled_funds, avg_fill_price, fee, fee_basis, position_volume_after, book_avg_price,
-            pnl_percent, pnl_amount, reason, strategy, fill_source, trade_execution_id, trade_record_id, completed_at
+            pnl_percent, pnl_amount, reason, strategy, fill_source, completed_at
         ) VALUES (
             :userId, :exchange, :market, :side, :clientOrderId, :exchangeOrderId, 'FILLED', :decisionPrice, :requestedVolume,
             :filledVolume, :filledFunds, :avgFillPrice, :fee, :feeBasis, :positionVolumeAfter, :bookAvgPrice,
-            :pnlPercent, :pnlAmount, :reason, :strategy, :fillSource, :tradeExecutionId, :tradeRecordId,
-            CAST(:recordCreatedAt AS timestamp)
+            :pnlPercent, :pnlAmount, :reason, :strategy, :fillSource, CAST(:recordCreatedAt AS timestamp)
         )
         ON CONFLICT DO NOTHING
         RETURNING id
@@ -85,8 +92,6 @@ interface OrderRowRepository : R2dbcRepository<OrderRowEntity, Long> {
         reason: String?,
         strategy: String?,
         fillSource: String,
-        tradeExecutionId: Long,
-        tradeRecordId: Long?,
         recordCreatedAt: LocalDateTime,
     ): Mono<Long>
 }

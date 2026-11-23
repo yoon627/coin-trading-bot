@@ -32,8 +32,6 @@ data class OrderRowEntity(
     val strategy: String? = null,
     val fillSource: String? = null,
     val note: String? = null,
-    val tradeExecutionId: Long? = null,
-    val tradeRecordId: Long? = null,
     val createdAt: Instant? = null,
     val updatedAt: Instant? = null,
     val completedAt: Instant? = null,

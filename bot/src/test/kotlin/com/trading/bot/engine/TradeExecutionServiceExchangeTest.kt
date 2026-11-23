@@ -1,14 +1,14 @@
 package com.trading.bot.engine
 
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
-import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
-import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
 import com.trading.common.domain.Exchange
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -17,18 +17,19 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import reactor.core.publisher.Mono
 
-/** 감사 행의 거래소와 추정 수수료는 기록이 실어 온 값을 쓰고, 없으면 지금(Upbit) 값이다. */
+/** 기록할 추정 수수료는 기록이 실어 온 거래소 요율을 쓰고, 없으면 지금(Upbit) 값이다. 알림 줄은 기록의 거래소를 쓴다. */
 class TradeExecutionServiceExchangeTest {
 
-    private val executions = mockk<TradeExecutionRepository>()
     private val properties = TradingProperties()
-    private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(any()) } answers { Mono.just(firstArg()) } }
-    private val service = TradeExecutionService(mockk<TradeRecordRepository>(relaxed = true), executions, outbox, mockk<OrderLedger>(relaxed = true), mockk(), properties)
-    private val saved = slot<TradeExecutionEntity>()
+    private val row = slot<TradeNotificationOutboxEntity>()
+    private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(capture(row)) } answers { Mono.just(firstArg()) } }
+    private val ledger = mockk<OrderLedger>()
+    private val service = TradeExecutionService(outbox, ledger, mockk(), properties)
+    private val fee = slot<Double>()
 
     init {
-        every { executions.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
-        every { executions.save(capture(saved)) } answers { Mono.just(firstArg<TradeExecutionEntity>().copy(id = 1L)) }
+        coEvery { ledger.alreadyRecorded(any()) } returns false
+        coEvery { ledger.recordFill(any(), capture(fee), FeeKind.ESTIMATED) } returns 1L
     }
 
     private fun sell(exchange: Exchange = Exchange.UPBIT, estimatedFeeRate: Double? = null) = TradeRecord(
@@ -38,19 +39,18 @@ class TradeExecutionServiceExchangeTest {
     )
 
     @Test
-    fun `the audit row takes the record's exchange and fee rate`() = runTest {
+    fun `the estimate takes the record's fee rate and the notification row its exchange`() = runTest {
         service.saveAudit(sell(Exchange.KIS_PAPER, estimatedFeeRate = 0.0022))
 
-        assertEquals("KIS_PAPER", saved.captured.exchange)
-        assertEquals(700_000.0 * 0.0022, saved.captured.fee, 1e-9)
+        assertEquals(700_000.0 * 0.0022, fee.captured, 1e-9)
+        assertEquals("KIS_PAPER", row.captured.exchange)
     }
 
     @Test
-    fun `without a rate the estimate is half the configured round trip and the exchange is UPBIT`() = runTest {
+    fun `without a rate the estimate is half the configured round trip`() = runTest {
         service.saveAudit(sell())
 
-        assertEquals("UPBIT", saved.captured.exchange)
-        assertEquals(700_000.0 * properties.roundTripFeeRate / 2.0, saved.captured.fee, 1e-9)
+        assertEquals(700_000.0 * properties.roundTripFeeRate / 2.0, fee.captured, 1e-9)
     }
 
     @Test
@@ -58,7 +58,7 @@ class TradeExecutionServiceExchangeTest {
         for (rate in listOf(Double.NaN, Double.POSITIVE_INFINITY, -0.001)) {
             service.saveAudit(sell(Exchange.KIS_PAPER, estimatedFeeRate = rate))
 
-            assertEquals(700_000.0 * properties.roundTripFeeRate / 2.0, saved.captured.fee, 1e-9, "rate=$rate")
+            assertEquals(700_000.0 * properties.roundTripFeeRate / 2.0, fee.captured, 1e-9, "rate=$rate")
         }
     }
 }

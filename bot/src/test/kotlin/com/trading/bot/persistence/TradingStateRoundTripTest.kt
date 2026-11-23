@@ -5,7 +5,6 @@ import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
-import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.UserEntity
 import java.sql.Connection
 import java.sql.DriverManager
@@ -47,9 +46,6 @@ class TradingStateRoundTripTest {
 
     @Autowired
     private lateinit var userRepository: UserRepository
-
-    @Autowired
-    private lateinit var tradeExecutionRepository: TradeExecutionRepository
 
     private val service by lazy { TradingStateService(repository, jacksonObjectMapper()) }
 
@@ -181,16 +177,12 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
-    // 가입·체결 기록은 저장소의 save 로 들어간다. 엔티티와 스키마가 어긋나면 여기서 깨진다.
+    // 가입은 저장소의 save 로 들어간다. 엔티티와 스키마가 어긋나면 여기서 깨진다.
     @Test
-    fun `users and trade executions save through the repositories on the current schema`() = runTest {
+    fun `users save through the repository on the current schema`() = runTest {
         val userId = userRepository.save(UserEntity(username = "it-save-$runId", password = "x")).awaitSingle().id!!
-        tradeExecutionRepository.save(
-            TradeExecutionEntity(userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = "BUY", price = 100.0, volume = 1.0, totalAmount = 100.0),
-        ).awaitSingle()
 
         assertThat(userRepository.findById(userId).awaitSingle().username).isEqualTo("it-save-$runId")
-        assertThat(tradeExecutionRepository.findByUserId(userId, 10, 0).collectList().awaitSingle().map { it.market }).containsExactly("KRW-BTC")
         val unmapped = databaseClient.sql(
             "SELECT table_name || '.' || column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() " +
                 "AND ((table_name = 'users' AND column_name IN ('public_profile', 'public_strategy', 'admin')) " +
@@ -402,12 +394,12 @@ class TradingStateRoundTripTest {
         inSchema(schema) { conn -> assertThat(conn.unmappedDefinitions(schema)).isEmpty() }
     }
 
-    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V42_down → … → V34_down).
+    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V44_down → … → V34_down).
     @Test
     fun `the down sqls from the latest version run one after another`() = withScratchSchema("downchain") { schema ->
-        migrate(schema, "42")
+        migrate(schema, "44")
         inSchema(schema) { conn ->
-            for (v in 42 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
+            for (v in 44 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
             assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("33")
             // V34 의 세 칼럼과 V35 의 테이블은 지워지고, V14·V30 의 칼럼은 그 버전의 down 까지 남는다.
             assertThat(conn.retiredDefinitions(schema).map { it.substringBefore(' ') }).containsExactly(

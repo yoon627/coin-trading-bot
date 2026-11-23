@@ -5,11 +5,8 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
-import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
-import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.UserRepository
-import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.common.config.TradingProperties
 import io.mockk.every
 import io.mockk.mockk
@@ -37,13 +34,6 @@ class TradeNotificationWiringTest {
 
     @Configuration
     class Config {
-        @Bean fun tradeRecordRepository(): TradeRecordRepository = mockk(relaxed = true)
-
-        @Bean fun tradeExecutionRepository(): TradeExecutionRepository = mockk {
-            every { existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
-            every { save(any()) } answers { Mono.just(firstArg<TradeExecutionEntity>().copy(id = 1L)) }
-        }
-
         @Bean fun outboxRepository(): TradeNotificationOutboxRepository = mockk {
             every { save(any()) } answers { Mono.just(firstArg()) }
         }

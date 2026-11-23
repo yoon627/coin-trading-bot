@@ -2,14 +2,10 @@ package com.trading.bot.persistence
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.ci.RepoFiles
-import com.trading.bot.domain.FeeBasis
-import com.trading.bot.domain.TradeRecord
-import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.common.domain.Exchange
 import java.sql.Connection
 import java.sql.DriverManager
-import java.time.LocalDateTime
 import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.runBlocking
@@ -39,13 +35,9 @@ class ExchangeDimensionRoundTripTest {
     private lateinit var stateRepository: TradingStateRepository
 
     @Autowired
-    private lateinit var recordRepository: TradeRecordR2dbcRepository
-
-    @Autowired
     private lateinit var databaseClient: DatabaseClient
 
     private val service by lazy { TradingStateService(stateRepository, jacksonObjectMapper()) }
-    private val records by lazy { TradeRecordRepository(recordRepository) }
 
     companion object {
         private val host = System.getenv("TEST_DB_HOST")
@@ -145,59 +137,6 @@ class ExchangeDimensionRoundTripTest {
         assertThat(kis?.exchange).isEqualTo(Exchange.KIS_PAPER)
         assertThat(kis?.pendingSellUuid).isEqualTo("KIS_PAPER:20261020:0002")
         assertThat(stateRepository.findByUserIdAndExchange(userId, "KIS_PAPER").collectList().awaitSingle()).hasSize(1)
-    }
-
-    @Test
-    fun `trade records keep their exchange`() = runTest {
-        val userId = insertUser("records")
-
-        records.save(
-            TradeRecord(
-                ticker = "KRX-005930", side = TradeSide.BUY, price = 70_000.0, volume = 3.0, totalAmount = 210_000.0,
-                pnlPercent = null, pnlAmount = null, strategy = "combined", fee = FeeBasis.Estimate, orderAmount = 210_000.0,
-                userId = userId, exchange = Exchange.KIS_PAPER,
-            ),
-        )
-        records.save(
-            TradeRecord(
-                ticker = "KRW-BTC", side = TradeSide.BUY, price = 1.0, volume = 1.0, totalAmount = 1.0,
-                pnlPercent = null, pnlAmount = null, strategy = "combined", fee = FeeBasis.Estimate, orderAmount = 1.0, userId = userId,
-            ),
-        )
-
-        val written = Exchange.entries.flatMap { records.findByUserIdAndExchange(userId, it, limit = 100, offset = 0) }
-        assertThat(written.associate { it.ticker to it.exchange })
-            .isEqualTo(mapOf("KRX-005930" to "KIS_PAPER", "KRW-BTC" to "UPBIT"))
-    }
-
-    @Test
-    fun `trade record queries return only the requested exchange of the user`() = runTest {
-        val userId = insertUser("filter")
-        val otherUser = insertUser("filter-other")
-        val start = LocalDateTime.parse("2026-10-20T09:00")
-        fun record(user: Long, ticker: String, side: TradeSide, exchange: Exchange, minute: Long) = TradeRecord(
-            ticker = ticker, side = side, price = 1.0, volume = 1.0, totalAmount = 1.0, pnlPercent = null, pnlAmount = null,
-            strategy = "combined", fee = FeeBasis.Estimate, orderAmount = 1.0, userId = user, exchange = exchange,
-            createdAt = start.plusMinutes(minute),
-        )
-        records.save(record(userId, "KRW-BTC", TradeSide.BUY, Exchange.UPBIT, 0))
-        records.save(record(userId, "KRX-005930", TradeSide.BUY, Exchange.KIS_PAPER, 1))
-        records.save(record(userId, "KRW-BTC", TradeSide.SELL, Exchange.UPBIT, 2))
-        records.save(record(otherUser, "KRW-ETH", TradeSide.BUY, Exchange.UPBIT, 3))
-
-        val upbit = records.findByUserIdAndExchange(userId, Exchange.UPBIT, limit = 100, offset = 0)
-        assertThat(upbit.map { it.side }).containsExactly("SELL", "BUY")
-        assertThat(upbit.map { it.exchange }.distinct()).containsExactly("UPBIT")
-        assertThat(records.findByUserIdAndExchange(userId, Exchange.KIS_PAPER, limit = 100, offset = 0).map { it.ticker })
-            .containsExactly("KRX-005930")
-        assertThat(records.findByUserIdAndExchange(userId, Exchange.UPBIT, limit = 1, offset = 1).map { it.side })
-            .containsExactly("BUY")
-        assertThat(records.countByUserIdAndExchange(userId, Exchange.UPBIT)).isEqualTo(2L)
-        assertThat(records.countByUserIdAndExchange(userId, Exchange.KIS_PAPER)).isEqualTo(1L)
-        assertThat(records.countByUserIdAndExchange(userId, Exchange.KIS)).isEqualTo(0L)
-        assertThat(records.findRecentAscending(userId, Exchange.UPBIT, max = 10).map { it.side }).containsExactly("BUY", "SELL")
-        assertThat(records.findRecentAscending(userId, Exchange.UPBIT, max = 1).map { it.side }).containsExactly("SELL")
-        assertThat(records.findRecentAscending(userId, Exchange.KIS_PAPER, max = 10).map { it.ticker }).containsExactly("KRX-005930")
     }
 
     // --- V29 → V30 경로와 되돌리기 SQL. 실행마다 만든 스키마에서 JDBC 로 돈다. ---

@@ -6,7 +6,6 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.domain.FillSource
 import com.trading.bot.persistence.entity.OrderRowEntity
-import com.trading.bot.persistence.entity.TradeRecordEntity
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -14,7 +13,7 @@ import java.time.ZoneOffset
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 
-/** orders 한 줄에서 지금 화면(`/api/trades`)이 trade_records 에서 내는 것과 같은 값을 만든다. */
+/** orders 한 줄에서 옛 화면(`/api/trades`)이 trade_records 에서 내던 것과 같은 값을 만든다. 기대값은 옛 표가 담던 값이다. */
 class TradeHistoryRowTest {
 
     private val utc: ZoneId = ZoneOffset.UTC
@@ -37,7 +36,7 @@ class TradeHistoryRowTest {
         reason = "TAKE_PROFIT", strategy = "combined", fillSource = fillSource, completedAt = completedAt,
     )
 
-    private fun record(side: String, price: Double, volume: Double, total: Double, orderAmount: Double?) = TradeRecordEntity(
+    private fun record(side: String, price: Double, volume: Double, total: Double, orderAmount: Double?) = TradeHistoryRow(
         id = 3, ticker = "KRW-BTC", side = side, price = price, volume = volume, totalAmount = total, orderAmount = orderAmount,
         pnlPercent = 1.5, pnlAmount = 3.0, reason = "TAKE_PROFIT", strategy = "combined", userId = 4, createdAt = at,
     )
@@ -63,7 +62,7 @@ class TradeHistoryRowTest {
         )
         for ((row, expected) in cases) {
             val projected = row.toHistoryRow(utc)
-            assertThat(projected.withoutId()).describedAs("${row.side} ${row.fillSource}").isEqualTo(expected.toHistoryRow().withoutId())
+            assertThat(projected.withoutId()).describedAs("${row.side} ${row.fillSource}").isEqualTo(expected.withoutId())
             assertThat(projected.incomplete).isFalse()
         }
     }
@@ -87,18 +86,19 @@ class TradeHistoryRowTest {
         assertThat(seoul.createdAt).isEqualTo(at.plusHours(9))
     }
 
-    // 화면이 읽는 JSON 모양: 같은 키, 같은 순서, exchange·출처·incomplete 는 없다.
+    // 화면이 읽는 JSON 모양: 옛 trade_records 응답과 같은 키·순서, exchange·출처·incomplete 는 없다.
     @Test
-    fun `the JSON shape matches what the trades endpoint sends today`() {
+    fun `the JSON shape matches what the trades endpoint sent from trade records`() {
         val mapper = jacksonObjectMapper().registerModule(JavaTimeModule())
             .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-        val today = mapper.readTree(mapper.writeValueAsString(record("SELL", 110.0, 2.0, 220.0, 218.0)))
         val projected = mapper.readTree(
             mapper.writeValueAsString(order("SELL", "ORDER", decisionPrice = 110.0, filledVolume = 2.0, filledFunds = 218.0).toHistoryRow(utc)),
         )
 
-        assertThat(projected.fieldNames().asSequence().toList()).containsExactlyElementsOf(today.fieldNames().asSequence().toList())
-        assertThat(projected.get("created_at")).isEqualTo(today.get("created_at"))
+        assertThat(projected.fieldNames().asSequence().toList()).containsExactly(
+            "id", "ticker", "side", "price", "volume", "total_amount", "order_amount", "pnl_percent", "pnl_amount", "reason", "strategy", "user_id", "created_at",
+        )
+        assertThat(projected.get("created_at").asText()).isEqualTo("2026-11-23T08:58:22.123456")
     }
 }
