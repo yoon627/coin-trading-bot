@@ -94,8 +94,9 @@ class TradeNotificationOutboxRoundTripTest {
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
-            "DELETE FROM orders WHERE user_id IN ($owned)",
+            // 알림 대기열이 orders 를 가리키므로(V42) 먼저 지운다.
             "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
+            "DELETE FROM orders WHERE user_id IN ($owned)",
             "DELETE FROM trade_executions WHERE user_id IN ($owned)",
             "DELETE FROM trade_records WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",

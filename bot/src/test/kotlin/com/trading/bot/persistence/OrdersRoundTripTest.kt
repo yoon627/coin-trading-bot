@@ -96,8 +96,9 @@ class OrdersRoundTripTest {
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
-            "DELETE FROM orders WHERE user_id IN ($owned)",
+            // 알림 대기열이 orders 를 가리키므로(V42) 먼저 지운다.
             "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
+            "DELETE FROM orders WHERE user_id IN ($owned)",
             "DELETE FROM trade_executions WHERE user_id IN ($owned)",
             "DELETE FROM trade_records WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",
@@ -318,6 +319,134 @@ class OrdersRoundTripTest {
         migrate(schema, "41")
         inSchema(schema) { conn -> assertThat(conn.strings("SELECT to_regclass('orders')::text")).containsExactly("orders") }
     }
+
+    // --- V42: 읽기 전환 준비 — 시각·값 맞추기, 빠진 체결 따라잡기, 알림 대기열 연결 ---
+
+    @Test
+    fun `V42 catches up fills written without an orders row, aligns times and missing values with trade records, and links notifications`() =
+        withScratchSchema("v42") { schema ->
+            migrate(schema, "40")
+            val legacy = inSchema(schema) { conn -> seedLegacyTrades(conn) }
+            migrate(schema, "41")
+            val ids = inSchema(schema) { conn -> seedAfterV41(conn) }
+
+            migrate(schema, "42")
+            inSchema(schema) { conn ->
+                // 옛 이미지가 orders 없이 쓴 체결은 따라잡고, 같은 거래소 주문번호 줄이 이미 있는 체결은 건너뛴다.
+                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.lateExecution}")).containsExactly("1")
+                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE exchange_order_id = 'o-orph'")).containsExactly("1")
+                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.orphanExecution}")).containsExactly("0")
+
+                // 연결된 모든 체결의 시각이 화면 기록과 같다.
+                assertThat(
+                    conn.strings(
+                        "SELECT count(*)::text FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id " +
+                            "WHERE o.completed_at IS DISTINCT FROM tr.created_at",
+                    ),
+                ).containsExactly("0")
+                assertThat(conn.strings("SELECT requested_volume::text FROM orders WHERE trade_execution_id = ${ids.balanceSellExecution}"))
+                    .containsExactly("0.7")
+                assertThat(conn.strings("SELECT decision_price::text FROM orders WHERE trade_execution_id = ${legacy.manualBuy}"))
+                    .containsExactly("90")
+                assertThat(
+                    conn.strings(
+                        "SELECT (n.order_id = o.id)::text FROM trade_notification_outbox n JOIN orders o ON o.trade_execution_id = n.trade_execution_id",
+                    ),
+                ).containsExactly("true", "true")
+
+                // 다시 돌려도 바뀌는 것이 없다(2-2b 가 읽기 전환 직전에 다시 돌린다).
+                val before = conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id")
+                conn.update(catchupSql())
+                assertThat(conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id"))
+                    .isEqualTo(before)
+            }
+        }
+
+    @Test
+    fun `the previous image's orders insert and an outbox row without order id still work on V42`() = withScratchSchema("v42compat") { schema ->
+        migrate(schema, "42")
+        inSchema(schema) { conn ->
+            conn.update("INSERT INTO users (username, password) VALUES ('it-compat-$runId', 'x')")
+            val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-compat-$runId'").single()!!.toLong()
+            val te = conn.strings(
+                "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, exchange_order_id) " +
+                    "VALUES ($userId, 'UPBIT', 'KRW-BTC', 'BUY', 1, 1, 1, 'o-compat') RETURNING id::text",
+            ).single()!!.toLong()
+            // 74fe47b4 의 OrderRowRepository.insertFilled 문(완료 시각 now()).
+            conn.update(
+                "INSERT INTO orders (user_id, exchange, market, side, client_order_id, exchange_order_id, status, decision_price, " +
+                    "filled_volume, filled_funds, avg_fill_price, fee, fee_basis, position_volume_after, book_avg_price, " +
+                    "pnl_percent, pnl_amount, reason, strategy, fill_source, trade_execution_id, trade_record_id, completed_at) VALUES (" +
+                    "$userId, 'UPBIT', 'KRW-BTC', 'BUY', NULL, 'o-compat', 'FILLED', NULL, 1, 1, 1, NULL, 'UNRECORDED', 1, 1, " +
+                    "NULL, NULL, NULL, 'combined', 'ORDER', $te, NULL, now()) ON CONFLICT DO NOTHING RETURNING id",
+            )
+            conn.update("INSERT INTO trade_notification_outbox (trade_execution_id, user_id, exchange, payload) VALUES ($te, $userId, 'UPBIT', '{}')")
+            assertThat(conn.strings("SELECT count(*)::text FROM trade_notification_outbox WHERE order_id IS NULL")).containsExactly("1")
+        }
+    }
+
+    @Test
+    fun `the V42 down sql refuses unless V42 is last, then drops the notification link`() = withScratchSchema("v42down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V42_down.sql").readText()
+        migrate(schema, "41")
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V42 이 적용돼 있지 않다")
+
+        migrate(schema, "42")
+        inSchema(schema) { conn ->
+            conn.update(downSql)
+            assertThat(conn.strings("SELECT column_name FROM information_schema.columns WHERE table_schema = '$schema' AND column_name = 'order_id'")).isEmpty()
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '42'")).isEmpty()
+        }
+    }
+
+    private class AfterV41Ids(val lateExecution: Long, val balanceSellExecution: Long, val orphanExecution: Long)
+
+    /**
+     * V41 뒤에 생긴 체결: orders 를 모르는 옛 이미지가 쓴 것, 74fe47b4 가 now() 시각으로 쓴 것(주문 응답 매도와 수량 없는 잔고 매도),
+     * 알림 대기열, 같은 거래소 주문번호의 orders 줄이 이미 있는 것.
+     */
+    private fun seedAfterV41(conn: Connection): AfterV41Ids {
+        val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-legacy-$runId'").single()!!.toLong()
+
+        fun fill(side: String, price: Double, volume: Double, orderAmount: Double?, orderId: String, createdAt: String): Pair<Long, Long> {
+            val tr = conn.strings(
+                "INSERT INTO trade_records (user_id, ticker, side, price, volume, total_amount, strategy, order_amount, created_at) " +
+                    "VALUES ($userId, 'KRW-BTC', '$side', $price, $volume, ${price * volume}, 'combined', $orderAmount, '$createdAt') RETURNING id::text",
+            ).single()!!.toLong()
+            val te = conn.strings(
+                "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, strategy, fee, exchange_order_id) " +
+                    "VALUES ($userId, 'UPBIT', 'KRW-BTC', '$side', $price, $volume, ${price * volume}, 'combined', 0.1, '$orderId') RETURNING id::text",
+            ).single()!!.toLong()
+            return te to tr
+        }
+
+        val (late, _) = fill("SELL", 130.0, 1.0, 129.0, "o-late", "2026-11-23 10:00:00.123456")
+        val (sold, soldRecord) = fill("SELL", 140.0, 2.0, 279.0, "o-new", "2026-11-23 11:00:00.654321")
+        conn.update(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status, decision_price, filled_volume, filled_funds, " +
+                "fill_source, fee_basis, trade_execution_id, trade_record_id, completed_at) VALUES " +
+                "($userId, 'UPBIT', 'KRW-BTC', 'SELL', 'o-new', 'FILLED', 140, 2, 279, 'ORDER', 'MEASURED', $sold, $soldRecord, now())",
+        )
+        val (balance, balanceRecord) = fill("SELL", 150.0, 0.7, null, "o-bal", "2026-11-23 12:00:00.000001")
+        conn.update(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status, decision_price, fill_source, fee_basis, " +
+                "trade_execution_id, trade_record_id, completed_at) VALUES " +
+                "($userId, 'UPBIT', 'KRW-BTC', 'SELL', 'o-bal', 'FILLED', 150, 'BALANCE', 'ESTIMATED', $balance, $balanceRecord, now())",
+        )
+        for (te in listOf(sold, balance)) {
+            conn.update("INSERT INTO trade_notification_outbox (trade_execution_id, user_id, exchange, payload) VALUES ($te, $userId, 'UPBIT', '{}')")
+        }
+        val (orphan, _) = fill("BUY", 60.0, 1.0, 60.0, "o-orph", "2026-11-23 13:00:00")
+        conn.update(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status) VALUES ($userId, 'UPBIT', 'KRW-BTC', 'BUY', 'o-orph', 'OPEN')",
+        )
+        return AfterV41Ids(late, balance, orphan)
+    }
+
+    /** V42 의 따라잡기 부분. 마이그레이션 파일의 표시 사이를 그대로 쓴다. */
+    private fun catchupSql(): String =
+        RepoFiles.file("bot/src/main/resources/db/migration/V42__orders_read.sql").readText()
+            .substringAfter("-- catchup:begin").substringBefore("-- catchup:end")
 
     private class LegacyIds(
         val snapshotBuy: Long,
