@@ -11,6 +11,7 @@ import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -31,6 +32,7 @@ class TradeExecutionServiceTest {
     private lateinit var tradeRecordRepository: TradeRecordRepository
     private lateinit var tradeExecutionRepository: TradeExecutionRepository
     private lateinit var outboxRepository: TradeNotificationOutboxRepository
+    private lateinit var orderLedger: OrderLedger
     private val events = mutableListOf<Any>()
     private lateinit var transactionalOperator: TransactionalOperator
     private lateinit var service: TradeExecutionService
@@ -46,8 +48,10 @@ class TradeExecutionServiceTest {
         every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
         transactionalOperator = mockk()
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
+        orderLedger = mockk()
+        coEvery { orderLedger.recordFill(any(), any(), any(), any(), any()) } returns 11L
         service = TradeExecutionService(
-            tradeRecordRepository, tradeExecutionRepository, outboxRepository, transactionalOperator,
+            tradeRecordRepository, tradeExecutionRepository, outboxRepository, orderLedger, transactionalOperator,
             TradingProperties(), events = { events += it },
         )
     }
@@ -72,6 +76,7 @@ class TradeExecutionServiceTest {
         assertTrue(statePersisted.get())
         coVerify(exactly = 0) { tradeRecordRepository.save(any()) }
         coVerify(exactly = 0) { tradeExecutionRepository.save(any()) }
+        coVerify(exactly = 0) { orderLedger.recordFill(any(), any(), any(), any(), any()) }
         // 이미 알린 체결이라 알림 행도 더 넣지 않는다.
         verify(exactly = 0) { outboxRepository.save(any()) }
         assertTrue(events.isEmpty())
@@ -93,6 +98,55 @@ class TradeExecutionServiceTest {
         assertTrue(recorded)
         coVerify(exactly = 1) { tradeRecordRepository.save(record) }
         coVerify(exactly = 1) { tradeExecutionRepository.save(any()) }
+    }
+
+    // orders 줄은 trade_executions 의 id 를 알아야 하고, 실패하면 알림 행까지 함께 되돌아가야 해 그 사이에 쓴다.
+    @Test
+    fun `commitFill writes the orders row after the execution row and before the notification row with the fee it recorded`() = runTest {
+        val order = mutableListOf<String>()
+        every { tradeExecutionRepository.save(any()) } answers {
+            order += "execution"; Mono.just(firstArg<TradeExecutionEntity>().copy(id = 7L))
+        }
+        coEvery { tradeRecordRepository.save(any()) } returns mockk { every { id } returns 3L }
+        coEvery { orderLedger.recordFill(any(), any(), any(), any(), any()) } coAnswers { order += "orders"; 11L }
+        every { outboxRepository.save(any()) } answers { order += "outbox"; Mono.just(firstArg()) }
+        val record = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.SELL, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, pnlPercent = 1.5, pnlAmount = 750.0, strategy = "combined",
+            exchangeOrderId = "fill-2", userId = 1L,
+            fee = FeeBasis.Measured(25.0),
+            orderAmount = 50000.0,
+        )
+
+        assertTrue(service.commitFill(persistState = {}, record = record))
+
+        assertEquals(listOf("execution", "orders", "outbox"), order)
+        coVerify(exactly = 1) { orderLedger.recordFill(record, 25.0, OrderLedger.FeeKind.MEASURED, 7L, 3L) }
+    }
+
+    // orders 는 모르는 수수료를 NULL 로 적고 근거를 따로 둔다. trade_executions 는 지금처럼 0 을 미기록으로 쓴다.
+    @Test
+    fun `each fee basis is recorded with its kind, and an unknown fee is null in orders and 0 in trade executions`() = runTest {
+        val cases = listOf(
+            FeeBasis.Measured(25.0) to (25.0 to OrderLedger.FeeKind.MEASURED),
+            FeeBasis.Measured(Double.NaN) to (null to OrderLedger.FeeKind.UNRECORDED),
+            FeeBasis.Estimate to (25.0 to OrderLedger.FeeKind.ESTIMATED),
+            FeeBasis.Unrecorded to (null to OrderLedger.FeeKind.UNRECORDED),
+        )
+        for ((basis, expected) in cases) {
+            val executionRow = slot<TradeExecutionEntity>()
+            every { tradeExecutionRepository.save(capture(executionRow)) } answers { Mono.just(firstArg<TradeExecutionEntity>().copy(id = 7L)) }
+            val record = TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.SELL, price = 50000000.0, volume = 0.001,
+                totalAmount = 50000.0, pnlPercent = 1.5, pnlAmount = 750.0, strategy = "combined",
+                exchangeOrderId = "fee-$basis", userId = 1L, fee = basis, orderAmount = 50000.0, estimatedFeeRate = 0.0005,
+            )
+
+            service.commitFill(persistState = {}, record = record)
+
+            coVerify { orderLedger.recordFill(record, expected.first, expected.second, 7L, any()) }
+            assertEquals(expected.first ?: 0.0, executionRow.captured.fee, "$basis")
+        }
     }
 
     @Test

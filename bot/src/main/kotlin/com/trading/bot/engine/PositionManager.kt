@@ -5,6 +5,7 @@ import com.trading.bot.client.UpbitOrderErrorClassifier
 import com.trading.bot.client.newOrderIdentifier
 import com.trading.bot.domain.Account
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.SellReason
@@ -429,7 +430,8 @@ class PositionManager(
             recordLookupFailure(state)
             return when (val recovery = fillAccounting.recoverBuyWithoutOrder(ticker, state, currentPrice)) {
                 // 주문 응답이 없어 수수료와 주문 금액을 알 수 없으므로 추정하지 않고 미기록으로 둔다.
-                is BuyRecovery.Filled -> completeBuy(ticker, state, recovery.fill, FeeBasis.Unrecorded, orderAmount = null)
+                is BuyRecovery.Filled ->
+                    completeBuy(ticker, state, recovery.fill, FeeBasis.Unrecorded, orderAmount = null, fillSource = FillSource.BALANCE)
                 BuyRecovery.NoChange -> {
                     log.warn("reconcile pending kept for {}: order unknown and no balance", ticker)
                     null
@@ -508,7 +510,10 @@ class PositionManager(
             // executed > 0 이면 filled 는 null 이 아니지만 smart cast 를 위해 함께 쓴다.
             filled != null && executed > 0.0 -> {
                 val fill = recordingRead(state) { fillAccounting.buyFill(ticker, state, filled, executed, currentPrice) }
-                completeBuy(ticker, state, fill, filled.feeBasis(), terminalFunds(filled))
+                completeBuy(
+                    ticker, state, fill, filled.feeBasis(), terminalFunds(filled),
+                    orderVolume = executed, executedVwap = filled.filledVwap(), clientOrderId = filled.identifier,
+                )
             }
             else -> {
                 log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
@@ -529,6 +534,10 @@ class PositionManager(
         fill: BuyFill,
         feeBasis: FeeBasis,
         orderAmount: Double?,
+        orderVolume: Double? = null,
+        executedVwap: Double? = null,
+        clientOrderId: String? = null,
+        fillSource: FillSource = FillSource.ORDER,
     ): TradeRecord {
         val strategy = state.pendingBuyStrategy
         val orderUuid = state.pendingBuyUuid // markBought 가 지우기 전에 잡아 둔다. 중복 기록 방지 키다.
@@ -550,6 +559,12 @@ class PositionManager(
             orderAmount = orderAmount,
             exchangeOrderId = orderUuid,
             exchange = state.exchange,
+            orderVolume = orderVolume,
+            executedVwap = executedVwap,
+            positionVolumeAfter = volume,
+            bookAvgPrice = fillPrice,
+            clientOrderId = clientOrderId,
+            fillSource = fillSource,
         )
         // 같은 전이를 저장용 사본과 메모리 원본에 적용하므로 now 를 고정한다.
         val now = LocalDateTime.now(TradingDay.KST)
@@ -1060,6 +1075,7 @@ class PositionManager(
                         executedVwap = filled.filledVwap(),
                         feeBasis = sellFeeBasis(filled),
                         orderAmount = terminalFunds(filled),
+                        clientOrderId = filled.identifier,
                     )
                 } else {
                     // wait·cancel·부분체결은 다음 tick reconcile 이 확정한다.
@@ -1106,11 +1122,13 @@ class PositionManager(
         return when {
             filled != null && executed > 0.0 -> {
                 // buildSellRecord 는 평단이 필요해 전이 전에 만들고, 잔량 계산도 트랜잭션 밖에서 끝낸다.
-                val record = buildSellRecord(
+                val built = buildSellRecord(
                     ticker, state, currentPrice, executed,
                     executedVwap = filled.filledVwap(), feeBasis = sellFeeBasis(filled), orderAmount = terminalFunds(filled),
+                    clientOrderId = filled.identifier,
                 )
                 val (remaining, recoveredAvg) = recordingRead(state) { fillAccounting.sellRemainder(ticker, state, filled, executed) }
+                val record = built.copy(positionVolumeAfter = remaining)
                 val now = LocalDateTime.now(TradingDay.KST)
                 commitFillAndApply(state, record, sellTransition(remaining, recoveredAvg, now))
                 if (remaining > 0.0) {
@@ -1155,7 +1173,10 @@ class PositionManager(
             return null
         }
         // 주문 응답이 없어 매도 대금 기준으로 수수료를 추정한다.
-        val record = buildSellRecord(ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate, orderAmount = null)
+        val record = buildSellRecord(
+            ticker, state, currentPrice, volume, feeBasis = FeeBasis.Estimate, orderAmount = null,
+            positionVolumeAfter = 0.0, fillSource = FillSource.BALANCE,
+        )
         val now = LocalDateTime.now(TradingDay.KST)
         // 커밋이 실패하면 호출부로 올라가고 pending 이 남아 다음 tick 에 다시 시도한다.
         commitFillAndApply(state, record, sellTransition(remaining = 0.0, recoveredAvg = 0.0, now = now))
@@ -1177,8 +1198,12 @@ class PositionManager(
         executedVwap: Double?,
         feeBasis: FeeBasis,
         orderAmount: Double?,
+        clientOrderId: String?,
     ): TradeRecord {
-        val record = buildSellRecord(ticker, state, currentPrice, volume, reason, executedVwap, feeBasis, orderAmount)
+        val record = buildSellRecord(
+            ticker, state, currentPrice, volume, reason, executedVwap, feeBasis, orderAmount,
+            clientOrderId = clientOrderId, positionVolumeAfter = remaining,
+        )
         val now = LocalDateTime.now(TradingDay.KST)
         commitFillAndApply(state, record, sellTransition(remaining, state.avgBuyPrice, now))
         log.info(
@@ -1201,6 +1226,9 @@ class PositionManager(
         executedVwap: Double? = null,
         feeBasis: FeeBasis,
         orderAmount: Double?,
+        clientOrderId: String? = null,
+        positionVolumeAfter: Double? = null,
+        fillSource: FillSource = FillSource.ORDER,
     ): TradeRecord {
         // 재시작 복원 뒤에는 avgBuyPrice 가 0 이라 주문 시점 평단을 쓴다.
         val basisPrice = if (state.avgBuyPrice > 0) state.avgBuyPrice else state.pendingSellAvgPrice ?: 0.0
@@ -1225,6 +1253,13 @@ class PositionManager(
             // 재시작 뒤 reconcile 이 같은 주문을 중복 기록하지 않게 하는 키다.
             exchangeOrderId = state.pendingSellUuid,
             exchange = state.exchange,
+            // 잔고로 확정한 매도의 volume 은 주문 시점 수량이라 이 주문이 체결한 수량은 모른다.
+            orderVolume = volume.takeIf { fillSource == FillSource.ORDER },
+            positionVolumeAfter = positionVolumeAfter,
+            // 0 은 평단을 모른다는 뜻이다(재시작 뒤 주문 시점 평단도 없을 때).
+            bookAvgPrice = basisPrice.takeIf { it > 0.0 },
+            clientOrderId = clientOrderId,
+            fillSource = fillSource,
         )
     }
 

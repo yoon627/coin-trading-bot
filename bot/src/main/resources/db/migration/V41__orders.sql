@@ -84,13 +84,13 @@ WITH tr AS (
      AND tr.side = te.side AND tr.price = te.price AND tr.volume = te.volume AND tr.total_amount = te.total_amount AND tr.rn = te.rn
 )
 INSERT INTO orders (
-    user_id, exchange, market, side, exchange_order_id, status, requested_volume, decision_price,
+    user_id, exchange, market, side, exchange_order_id, status, decision_price,
     filled_volume, filled_funds, avg_fill_price, fee, fee_basis, position_volume_after, book_avg_price,
     pnl_percent, pnl_amount, reason, strategy, fill_source, trade_execution_id, trade_record_id,
     created_at, updated_at, completed_at
 )
 SELECT p.user_id, p.exchange, p.market, p.side, p.exchange_order_id, 'FILLED',
-       CASE WHEN p.side = 'SELL' THEN p.volume END,
+       -- 옛 매도 수량은 체결량이라 주문 수량(requested_volume)은 모른다.
        CASE WHEN p.side = 'SELL' THEN p.price END,
        CASE WHEN NOT p.snapshot THEN p.volume END,
        CASE WHEN p.side = 'BUY' AND NOT p.snapshot THEN p.total_amount ELSE p.tr_order_amount END,

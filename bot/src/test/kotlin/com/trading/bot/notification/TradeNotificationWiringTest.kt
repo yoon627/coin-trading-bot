@@ -3,6 +3,7 @@ package com.trading.bot.notification
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
@@ -46,6 +47,8 @@ class TradeNotificationWiringTest {
         @Bean fun outboxRepository(): TradeNotificationOutboxRepository = mockk {
             every { save(any()) } answers { Mono.just(firstArg()) }
         }
+
+        @Bean fun orderLedger(): OrderLedger = mockk(relaxed = true)
 
         @Bean fun transactionalOperator(): TransactionalOperator = mockk {
             every { transactional(any<Mono<Any>>()) } answers { firstArg() }

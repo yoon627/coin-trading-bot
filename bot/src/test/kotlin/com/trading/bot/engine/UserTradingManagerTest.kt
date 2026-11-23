@@ -486,6 +486,7 @@ class UserTradingManagerTest {
             tradeRecordRepository,
             tradeExecutionRepository,
             outboxRepository,
+            mockk<OrderLedger>(relaxed = true),
             transactionalOperator,
             TradingProperties(),
         )

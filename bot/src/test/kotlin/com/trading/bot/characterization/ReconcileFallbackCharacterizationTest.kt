@@ -2,6 +2,7 @@ package com.trading.bot.characterization
 
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
 import com.trading.bot.engine.PositionManager
@@ -77,6 +78,11 @@ class ReconcileFallbackCharacterizationTest {
         assertEquals(0.0011, record?.volume)
         assertEquals(51_000_000.0, record?.price)
         assertEquals("u-1", record?.exchangeOrderId)
+        // 주문 응답이 없어 이 주문 하나의 수량은 모르고, 장부만 잔고에서 안다.
+        assertEquals(FillSource.BALANCE, record?.fillSource)
+        assertNull(record?.orderVolume)
+        assertEquals(0.0011, record?.positionVolumeAfter)
+        assertEquals(51_000_000.0, record?.bookAvgPrice)
         assertTrue(state.position)
         assertFalse(state.hasPendingBuy())
     }
@@ -104,6 +110,10 @@ class ReconcileFallbackCharacterizationTest {
         assertEquals(0.002, record?.volume)
         assertEquals(50_000_000.0, record?.price) // 판단 가격
         assertEquals("s-1", record?.exchangeOrderId)
+        assertEquals(FillSource.BALANCE, record?.fillSource)
+        // 매도량(volume)은 주문 시점 수량이고 이 주문이 실제로 체결한 수량은 모른다.
+        assertNull(record?.orderVolume)
+        assertEquals(0.0, record?.positionVolumeAfter)
         assertFalse(state.position)
         assertFalse(state.hasPendingSell())
     }

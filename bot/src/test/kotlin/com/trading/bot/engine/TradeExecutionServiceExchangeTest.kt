@@ -23,7 +23,7 @@ class TradeExecutionServiceExchangeTest {
     private val executions = mockk<TradeExecutionRepository>()
     private val properties = TradingProperties()
     private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(any()) } answers { Mono.just(firstArg()) } }
-    private val service = TradeExecutionService(mockk<TradeRecordRepository>(relaxed = true), executions, outbox, mockk(), properties)
+    private val service = TradeExecutionService(mockk<TradeRecordRepository>(relaxed = true), executions, outbox, mockk<OrderLedger>(relaxed = true), mockk(), properties)
     private val saved = slot<TradeExecutionEntity>()
 
     init {

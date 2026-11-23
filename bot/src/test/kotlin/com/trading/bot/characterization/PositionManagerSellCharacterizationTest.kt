@@ -3,6 +3,7 @@ package com.trading.bot.characterization
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitMalformedResponseException
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.OrderTrade
@@ -55,7 +56,7 @@ class PositionManagerSellCharacterizationTest {
             Order(uuid = "s-1", state = "wait")
         }
         coEvery { upbit.getOrder("s-1") } returns Order(
-            uuid = "s-1", state = "done", executedVolume = "0.002", paidFee = "50",
+            uuid = "s-1", state = "done", executedVolume = "0.002", paidFee = "50", identifier = "ctb-from-response",
             // 체결 대금을 판단 가격 × 수량(100,000)과 다르게 둬 orderAmount 가 trades 합인지 가른다.
             trades = listOf(OrderTrade(price = "49975000", volume = "0.002", funds = "99950")),
         )
@@ -89,6 +90,11 @@ class PositionManagerSellCharacterizationTest {
         assertEquals(FeeBasis.Measured(50.0), record?.fee)
         assertEquals(99_950.0, record?.orderAmount)
         assertEquals(49_975_000.0, record?.executedVwap!!, 1e-3)
+        assertEquals(0.002, record?.orderVolume)
+        assertEquals(0.0, record?.positionVolumeAfter)
+        assertEquals(50_000_000.0, record?.bookAvgPrice)
+        assertEquals("ctb-from-response", record?.clientOrderId)
+        assertEquals(FillSource.ORDER, record?.fillSource)
         assertFalse(state.position)
         assertFalse(state.hasPendingSell())
     }
@@ -130,6 +136,9 @@ class PositionManagerSellCharacterizationTest {
         assertEquals(0.0015, record?.volume)
         assertEquals(50_000_000.0, record?.price) // 판단 가격
         assertEquals("TRAILING_STOP", record?.reason)
+        // 부분 체결이면 기록에 체결 뒤 남은 장부가 실린다.
+        assertEquals(0.0015, record?.orderVolume)
+        assertEquals(0.0003, record?.positionVolumeAfter)
         assertTrue(state.position)
         assertEquals(0.0003, state.holdVolume)
         assertFalse(state.hasPendingSell())

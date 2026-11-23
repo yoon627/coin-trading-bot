@@ -1,6 +1,15 @@
 package com.trading.bot.persistence
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.ci.RepoFiles
+import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FillSource
+import com.trading.bot.domain.TradeRecord
+import com.trading.bot.domain.TradeSide
+import com.trading.bot.domain.TradingState
+import com.trading.bot.engine.OrderLedger
+import com.trading.bot.engine.TradeExecutionService
+import com.trading.common.config.TradingProperties
 import java.sql.Connection
 import java.sql.DriverManager
 import java.util.UUID
@@ -18,6 +27,8 @@ import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
+import org.springframework.transaction.ReactiveTransactionManager
+import org.springframework.transaction.reactive.TransactionalOperator
 
 /**
  * 실제 Postgres 로 `orders` 표와 V41 의 옛 체결 옮기기를 본다. 접속 방식은 [TradingStateRoundTripTest] 와 같다.
@@ -27,6 +38,20 @@ import org.springframework.test.context.DynamicPropertySource
 class OrdersRoundTripTest {
 
     @Autowired private lateinit var databaseClient: DatabaseClient
+    @Autowired private lateinit var tradeRecords: TradeRecordR2dbcRepository
+    @Autowired private lateinit var executions: TradeExecutionRepository
+    @Autowired private lateinit var outbox: TradeNotificationOutboxRepository
+    @Autowired private lateinit var states: TradingStateRepository
+    @Autowired private lateinit var orderRows: OrderRowRepository
+    @Autowired private lateinit var transactionManager: ReactiveTransactionManager
+
+    private val stateService by lazy { TradingStateService(states, jacksonObjectMapper()) }
+    private val service by lazy {
+        TradeExecutionService(
+            TradeRecordRepository(tradeRecords), executions, outbox, OrderLedger(orderRows),
+            TransactionalOperator.create(transactionManager), TradingProperties(),
+        )
+    }
 
     companion object {
         private val host = System.getenv("TEST_DB_HOST")
@@ -72,10 +97,155 @@ class OrdersRoundTripTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
             "DELETE FROM orders WHERE user_id IN ($owned)",
+            "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
+            "DELETE FROM trade_executions WHERE user_id IN ($owned)",
+            "DELETE FROM trade_records WHERE user_id IN ($owned)",
+            "DELETE FROM trading_states WHERE user_id IN ($owned)",
             "DELETE FROM users WHERE username LIKE 'it-%-$runId'",
         )) {
             databaseClient.sql(sql).fetch().rowsUpdated().awaitSingle()
         }
+    }
+
+    private suspend fun insertUser(label: String): Long =
+        databaseClient.sql("INSERT INTO users (username, password) VALUES (:u, 'x') RETURNING id")
+            .bind("u", "it-$label-$runId")
+            .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
+            .one().awaitSingle()
+
+    private suspend fun count(table: String, userId: Long): Long =
+        databaseClient.sql("SELECT COUNT(*) AS n FROM $table WHERE user_id = :u").bind("u", userId)
+            .map { row -> row.get("n", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
+
+    private suspend fun orderRow(userId: Long): Map<String, Any?> =
+        databaseClient.sql("SELECT * FROM orders WHERE user_id = :u").bind("u", userId).fetch().one().awaitSingle()
+
+    private fun sellFill(userId: Long, market: String = "KRW-BTC") = TradeRecord(
+        ticker = market, side = TradeSide.SELL, price = 50_000_000.0, volume = 0.002, totalAmount = 100_000.0,
+        pnlPercent = 1.5, pnlAmount = 1_500.0, strategy = "combined", reason = "TAKE_PROFIT",
+        exchangeOrderId = "s-$runId", userId = userId, fee = FeeBasis.Measured(50.0), orderAmount = 99_950.0,
+        executedVwap = 49_975_000.0, orderVolume = 0.002, positionVolumeAfter = 0.0, bookAvgPrice = 49_000_000.0,
+        clientOrderId = "ctb-$runId",
+    )
+
+    // --- 체결 기록 트랜잭션 안의 orders 쓰기 ---
+
+    @Test
+    fun `a committed fill leaves one FILLED orders row with this order's values, linked to its execution and record`() = runTest {
+        val userId = insertUser("fill")
+
+        assertThat(service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId))).isTrue()
+
+        val row = orderRow(userId)
+        val executionId = databaseClient.sql("SELECT id FROM trade_executions WHERE user_id = :u").bind("u", userId)
+            .map { r -> r.get("id", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
+        val recordId = databaseClient.sql("SELECT id FROM trade_records WHERE user_id = :u").bind("u", userId)
+            .map { r -> r.get("id", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
+        assertThat(row["status"]).isEqualTo("FILLED")
+        assertThat(row["trade_execution_id"]).isEqualTo(executionId)
+        assertThat(row["trade_record_id"]).isEqualTo(recordId)
+        assertThat(row).containsEntry("exchange", "UPBIT").containsEntry("market", "KRW-BTC").containsEntry("side", "SELL")
+            .containsEntry("exchange_order_id", "s-$runId").containsEntry("client_order_id", "ctb-$runId")
+            .containsEntry("filled_volume", 0.002).containsEntry("filled_funds", 99_950.0).containsEntry("avg_fill_price", 49_975_000.0)
+            .containsEntry("fee", 50.0).containsEntry("fee_basis", "MEASURED").containsEntry("fill_source", "ORDER")
+            .containsEntry("decision_price", 50_000_000.0).containsEntry("requested_volume", null)
+            .containsEntry("position_volume_after", 0.0).containsEntry("book_avg_price", 49_000_000.0)
+            .containsEntry("pnl_percent", 1.5).containsEntry("pnl_amount", 1_500.0)
+            .containsEntry("reason", "TAKE_PROFIT").containsEntry("strategy", "combined")
+        assertThat(row["completed_at"]).isNotNull()
+    }
+
+    @Test
+    fun `a fill whose state save conflicts leaves no orders row`() = runTest {
+        val userId = insertUser("conflict")
+
+        assertThatThrownBy {
+            kotlinx.coroutines.runBlocking {
+                service.commitFill({ throw TradingStateConflictException("KRW-BTC", "test") }, sellFill(userId))
+            }
+        }.isInstanceOf(TradingStateConflictException::class.java)
+
+        assertThat(count("orders", userId)).isZero()
+        assertThat(count("trade_executions", userId)).isZero()
+    }
+
+    // orders 쓰기의 SQL 오류는 잡지 않는다 — 잡아도 Postgres 가 트랜잭션을 중단해 뒤의 알림 행이 실패한다. 체결 전체가 되돌아가 pending 이 남는다.
+    @Test
+    fun `an SQL error in the orders write rolls back the whole fill`() = runTest {
+        val userId = insertUser("sqlerror")
+        val market = "KRW-FAIL$runId"
+        databaseClient.sql(
+            "CREATE FUNCTION it_fail_orders_$runId() RETURNS trigger AS \$\$ BEGIN " +
+                "IF NEW.market = '$market' THEN RAISE EXCEPTION 'it orders failure'; END IF; RETURN NEW; END \$\$ LANGUAGE plpgsql",
+        ).fetch().rowsUpdated().awaitSingle()
+        databaseClient.sql("CREATE TRIGGER it_fail_orders_$runId BEFORE INSERT ON orders FOR EACH ROW EXECUTE FUNCTION it_fail_orders_$runId()")
+            .fetch().rowsUpdated().awaitSingle()
+        try {
+            assertThatThrownBy {
+                kotlinx.coroutines.runBlocking {
+                    service.commitFill({ stateService.upsert(userId, TradingState(market)) }, sellFill(userId, market))
+                }
+            }.hasStackTraceContaining("it orders failure")
+        } finally {
+            databaseClient.sql("DROP TRIGGER it_fail_orders_$runId ON orders").fetch().rowsUpdated().awaitSingle()
+            databaseClient.sql("DROP FUNCTION it_fail_orders_$runId()").fetch().rowsUpdated().awaitSingle()
+        }
+
+        for (table in listOf("orders", "trade_executions", "trade_records", "trade_notification_outbox", "trading_states")) {
+            assertThat(count(table, userId)).describedAs(table).isZero()
+        }
+    }
+
+    // trade_executions 의 중복 확인을 지난 체결인데 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다 — 체결 기록은 막지 않는다.
+    @Test
+    fun `a fill whose order key already has an orders row commits without a second row`() = runTest {
+        val userId = insertUser("dupkey")
+        databaseClient.sql(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status) VALUES (:u, 'UPBIT', 'KRW-BTC', 'SELL', :o, 'OPEN')",
+        ).bind("u", userId).bind("o", "s-$runId").fetch().rowsUpdated().awaitSingle()
+
+        assertThat(service.commitFill({}, sellFill(userId))).isTrue()
+
+        assertThat(count("orders", userId)).isEqualTo(1)
+        assertThat(orderRow(userId)["status"]).isEqualTo("OPEN")
+        assertThat(count("trade_executions", userId)).isEqualTo(1)
+        assertThat(count("trade_notification_outbox", userId)).isEqualTo(1)
+    }
+
+    // 코드의 enum 이름이 V41 의 CHECK 목록에 없으면 그 값의 체결마다 기록 트랜잭션이 실패해 pending 이 남는다. 모든 조합을 실제로 넣어 본다.
+    @Test
+    fun `every fill source and fee kind the code writes passes the orders CHECK constraints`() = runTest {
+        val userId = insertUser("enums")
+        var n = 0L
+        for (source in FillSource.entries) {
+            for (kind in OrderLedger.FeeKind.entries) {
+                n++
+                val id = orderRows.insertFilled(
+                    userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = TradeSide.entries[(n % 2).toInt()].name,
+                    clientOrderId = null, exchangeOrderId = "e-$runId-$n", decisionPrice = null, filledVolume = null, filledFunds = null,
+                    avgFillPrice = null, fee = null, feeBasis = kind.name, positionVolumeAfter = null, bookAvgPrice = null,
+                    pnlPercent = null, pnlAmount = null, reason = null, strategy = null, fillSource = source.name,
+                    tradeExecutionId = -n, tradeRecordId = null,
+                ).awaitSingle()
+                assertThat(id).isNotNull()
+            }
+        }
+        assertThat(count("orders", userId)).isEqualTo(n)
+    }
+
+    @Test
+    fun `a fill confirmed from the balance leaves a row with unknown fee and volume marked as balance`() = runTest {
+        val userId = insertUser("balance")
+        val record = sellFill(userId).copy(
+            fee = FeeBasis.Unrecorded, orderAmount = null, executedVwap = null, orderVolume = null, clientOrderId = null,
+            fillSource = FillSource.BALANCE,
+        )
+
+        assertThat(service.commitFill({}, record)).isTrue()
+
+        assertThat(orderRow(userId)).containsEntry("fee", null).containsEntry("fee_basis", "UNRECORDED")
+            .containsEntry("fill_source", "BALANCE").containsEntry("filled_volume", null).containsEntry("filled_funds", null)
+            .containsEntry("avg_fill_price", null).containsEntry("client_order_id", null)
     }
 
     // --- V41: 옛 체결 옮기기 ---
@@ -112,7 +282,7 @@ class OrdersRoundTripTest {
 
                 val sold = rows.single { it["trade_execution_id"] == ids.sellWithAmount.toString() }
                 assertThat(sold).containsEntry("fill_source", "BACKFILL")
-                    .containsEntry("filled_volume", "2").containsEntry("requested_volume", "2")
+                    .containsEntry("filled_volume", "2").containsEntry("requested_volume", null)
                     .containsEntry("decision_price", "110").containsEntry("filled_funds", "218").containsEntry("avg_fill_price", "109")
                     .containsEntry("pnl_percent", "9.5").containsEntry("reason", "TAKE_PROFIT").containsEntry("strategy", "combined")
 
