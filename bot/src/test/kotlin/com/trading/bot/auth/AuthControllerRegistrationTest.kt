@@ -7,6 +7,7 @@ import com.trading.bot.security.UserSecretsService
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -32,7 +33,8 @@ class AuthControllerRegistrationTest {
     private val jwtProvider = mockk<JwtProvider>()
     private val secrets = mockk<UserSecretsService>()
     private val controller = AuthController(
-        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(),
+        // 해시를 시험 스케줄러 밖의 실제 스레드로 보내면 advanceUntilIdle 이 동시 가입의 겹침을 붙잡지 못한다.
+        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), Dispatchers.Unconfined,
     )
 
     private fun request() = MockServerHttpRequest.post("http://localhost/api/auth/register").build()
