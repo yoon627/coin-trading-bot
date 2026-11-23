@@ -1151,7 +1151,7 @@ class PositionManager(
         val volume = state.pendingSellVolume ?: state.holdVolume
         if (volume <= 0.0) {
             // 수량 근거 없이 확정하면 수량 0 짜리 SELL 이 기록된다.
-            log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept for manual review", ticker)
+            log.error("reconcile sell for {}: zero balance but no recorded sell volume — pending kept until the order lookup answers", ticker)
             return null
         }
         // 주문 응답이 없어 매도 대금 기준으로 수수료를 추정한다.
