@@ -209,7 +209,7 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `trade_executions` 에 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
 
-- 보정할 때는 그 체결의 거래 기록 행을 `exchange_order_id = <uuid>` 로 넣는다. 그래야 다음 대조에서 빠진다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
+- 보정할 때는 그 체결의 거래 기록 행을 `exchange_order_id = <uuid>` 로 넣는다. 그래야 다음 대조에서 빠진다. `trade_records` 를 손으로 넣거나 고치거나 지우면 `orders` 에도 같은 것을 한다(화면이 `orders` 를 읽게 바뀐 뒤 화면과 맞도록 — V42 절). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
 - 거짓 경보가 나는 경우: 같은 업비트 키를 다른 환경(로컬 실행 등)이 써서 그쪽 DB 에 기록된 주문, 같은 키를 두 사용자가 등록한 경우.
 - 키가 없으면 INFO 로, 만료·잘못된 키·허용 IP 밖(401·403)·복호화 실패면 WARN 으로 그 사용자를 건너뛴다. 키가 있어 시도한 사용자가 모두 실패하면 ERROR 한 줄. 서명 오류(`invalid_query_payload` 등)는 ERROR 다. 키에 "주문조회" 권한이 필요하다.
 
@@ -503,4 +503,23 @@ V41 은 주문마다 한 줄인 `orders` 표를 만들고 옛 체결을 `trade_e
   docker compose stop app
   ./dump_local.sh before-V41-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V41_down.sql
   APP_VERSION=<V41 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V42 (화면 전환 준비: 알림 연결·값 맞추기·따라잡기)
+
+V42 는 화면·대사가 `orders` 를 읽게 바꾸기 전에 `orders` 만으로 지금 화면과 같은 값을 낼 수 있게 맞춘다. 화면은 아직 `trade_records` 를 읽는다.
+
+- 체결 알림 대기열에 `order_id`(→ `orders`)를 더하고 잇는다. `trade_execution_id` 는 옛 표를 지울 때까지 둔다.
+- `orders` 가 없는 체결(롤백 동안 옛 이미지가 쓴 것, 손으로 넣은 정정)을 V41 과 같은 규칙으로 따라잡는다. 같은 거래소 주문번호의 `orders` 줄이 이미 있으면 건너뛴다.
+- 체결 시각을 화면 기록(`trade_records.created_at`)과 같게, 잔고로 확정한 매도의 수량과 옛 수동 매수의 가격을 `trade_executions` 에서 채운다.
+- 기동 로그 `V42 orders:` 에 연결 안 된 `trade_executions`·`trade_records`·알림, 화면 값 규칙(총액 = 가격 × 수량)을 벗어난 줄, 같은 시각 묶음 수가 남는다. 화면을 바꾸기 전에 모두 0 이어야 한다(같은 시각 묶음은 순서만 갈린다).
+- 새 체결은 화면 기록과 같은 시각(같은 `LocalDateTime` 을 같은 방식으로 넘긴다)으로 `orders` 에 남고, 잔고로 확정한 매도는 주문 시점 수량을 `requested_volume` 에 남기며, 체결 알림은 같은 트랜잭션에서 넣은 `orders` 줄을 가리킨다.
+- 따라잡기는 다시 돌려도 바뀌는 것이 없고, 화면을 `orders` 로 바꾸는 마이그레이션이 바꾸기 직전에 한 번 더 돌린다.
+- ⚠️ 체결 시각의 날짜·시간대 바꿈은 JVM 시간대(지금 UTC)를 따른다. 컨테이너 TZ 를 바꾸면 표시 시각이 모두 움직이고, 일광절약 시간대면 겹치는 한 시간의 변환이 Java 와 Postgres 에서 다를 수 있다. `completed_at` 이 틀어졌으면 짝 `trade_records.created_at` 에서 V42 의 `catchup` 부분으로 다시 만든다.
+- V41 이미지로의 롤백은 그대로 뜨고 쓴다(그 이미지는 `order_id` 를 넣지 않고 체결 시각을 `now()` 로 쓴다 — 다음 따라잡기가 맞춘다). 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V42_down.sql` 을 쓴다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./dump_local.sh before-V42-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V42_down.sql
+  APP_VERSION=<V42 이전 SHA> docker compose up -d --pull missing
   ```

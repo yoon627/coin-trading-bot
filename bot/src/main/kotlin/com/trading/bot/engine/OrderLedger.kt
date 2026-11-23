@@ -1,5 +1,7 @@
 package com.trading.bot.engine
 
+import com.trading.bot.domain.FeeKind
+import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.persistence.OrderRowRepository
@@ -13,9 +15,6 @@ class OrderLedger(
     private val repository: OrderRowRepository,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
-
-    /** `orders.fee_basis`. */
-    enum class FeeKind { MEASURED, ESTIMATED, UNRECORDED }
 
     /**
      * 체결 한 건을 FILLED 줄로 남기고 그 id 를 돌려준다. [TradeExecutionService.saveAudit] 가 체결 기록 트랜잭션 안에서만 부른다.
@@ -33,6 +32,8 @@ class OrderLedger(
             exchangeOrderId = record.exchangeOrderId,
             // 매수의 price 는 체결 뒤 장부 평단이라 판단 가격이 아니다.
             decisionPrice = record.price.takeIf { record.side == TradeSide.SELL },
+            // 잔고로 확정한 매도의 volume 은 주문 시점 수량이다. 이 주문이 체결한 수량(filledVolume)은 모른다.
+            requestedVolume = record.volume.takeIf { record.side == TradeSide.SELL && record.fillSource == FillSource.BALANCE },
             filledVolume = record.orderVolume,
             filledFunds = record.orderAmount,
             avgFillPrice = record.executedVwap,
@@ -47,6 +48,8 @@ class OrderLedger(
             fillSource = record.fillSource.name,
             tradeExecutionId = tradeExecutionId,
             tradeRecordId = tradeRecordId,
+            // 화면 기록(trade_records.created_at)과 같은 값·같은 반올림으로 남긴다.
+            recordCreatedAt = record.createdAt,
         ).awaitSingleOrNull()
         if (id == null) {
             log.error(

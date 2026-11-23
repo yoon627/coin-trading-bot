@@ -3,6 +3,7 @@ package com.trading.bot.persistence
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
@@ -96,8 +97,9 @@ class OrdersRoundTripTest {
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
-            "DELETE FROM orders WHERE user_id IN ($owned)",
+            // 알림 대기열이 orders 를 가리키므로(V42) 먼저 지운다.
             "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
+            "DELETE FROM orders WHERE user_id IN ($owned)",
             "DELETE FROM trade_executions WHERE user_id IN ($owned)",
             "DELETE FROM trade_records WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",
@@ -129,6 +131,78 @@ class OrdersRoundTripTest {
     )
 
     // --- 체결 기록 트랜잭션 안의 orders 쓰기 ---
+
+    private suspend fun timesMatchRecord(userId: Long): List<Boolean> =
+        databaseClient.sql(
+            "SELECT o.completed_at = tr.created_at AS same FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id WHERE o.user_id = :u",
+        ).bind("u", userId).map { r -> r.get("same", java.lang.Boolean::class.java)!!.booleanValue() }.all().collectList().awaitSingle()
+
+    // 화면은 trade_records.created_at 을 보여 준다. orders 의 체결 시각이 그와 같아야 화면을 orders 로 바꿔도 시각이 그대로다.
+    // 같은 LocalDateTime 을 같은 방식으로 넘겨야 마이크로초 반올림까지 같다(초 경계·날 경계의 나노초 포함).
+    @Test
+    fun `a fill's orders time equals its trade record time, including nanosecond rounding at a day boundary`() = runTest {
+        val userId = insertUser("time")
+        val times = listOf(
+            java.time.LocalDateTime.of(2026, 11, 23, 23, 59, 59, 999_999_600),
+            java.time.LocalDateTime.of(2026, 11, 24, 0, 0, 0, 500),
+            java.time.LocalDateTime.of(2026, 11, 24, 9, 0, 0, 123_456_789),
+        )
+        times.forEachIndexed { i, at -> service.commitFill({}, sellFill(userId).copy(exchangeOrderId = "t-$runId-$i", clientOrderId = null, createdAt = at)) }
+
+        assertThat(timesMatchRecord(userId)).containsExactly(true, true, true)
+    }
+
+    // 화면을 orders 로 바꿔도 같은 값이 나오는지 — 실제 체결 경로로 쓴 네 종류의 줄로 본다(운영 데이터는 TradeHistoryParityTest).
+    @Test
+    fun `fills written through the real path give the same screen values from orders as from trade records`() = runTest {
+        val userId = insertUser("parity")
+        val buy = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.BUY, price = 100.0, volume = 2.0, totalAmount = 200.0, pnlPercent = null, pnlAmount = null,
+            strategy = "combined", exchangeOrderId = "pb-$runId", userId = userId, fee = FeeBasis.Measured(0.1), orderAmount = 50.0,
+            executedVwap = 100.0, orderVolume = 0.5, positionVolumeAfter = 2.0, bookAvgPrice = 100.0, clientOrderId = "ctb-pb-$runId",
+            createdAt = java.time.LocalDateTime.of(2026, 11, 23, 9, 0, 0, 111_111_111),
+        )
+        val balanceBuy = buy.copy(
+            exchangeOrderId = "pbb-$runId", clientOrderId = null, fee = FeeBasis.Unrecorded, orderAmount = null, executedVwap = null,
+            orderVolume = null, price = 51_000_000.0, volume = 0.0011, totalAmount = 51_000_000.0 * 0.0011, positionVolumeAfter = 0.0011,
+            bookAvgPrice = 51_000_000.0, fillSource = FillSource.BALANCE, createdAt = buy.createdAt.plusMinutes(1),
+        )
+        // 부분 체결 매도: 장부가 남는다.
+        val sell = sellFill(userId).copy(
+            exchangeOrderId = "ps-$runId", clientOrderId = "ctb-ps-$runId", positionVolumeAfter = 0.3, createdAt = buy.createdAt.plusMinutes(2),
+        )
+        val balanceSell = sellFill(userId).copy(
+            exchangeOrderId = "psb-$runId", clientOrderId = null, fee = FeeBasis.Estimate, orderAmount = null, executedVwap = null,
+            orderVolume = null, volume = 0.7, totalAmount = 50_000_000.0 * 0.7, fillSource = FillSource.BALANCE, createdAt = buy.createdAt.plusMinutes(3),
+        )
+        for (record in listOf(buy, balanceBuy, sell, balanceSell)) assertThat(service.commitFill({}, record)).isTrue()
+
+        val records = tradeRecords.findAll().collectList().awaitSingle().filter { it.userId == userId }
+        val orders = orderRows.findAll().collectList().awaitSingle().filter { it.userId == userId }
+        val result = TradeHistoryParity.compare(records, orders, java.time.ZoneId.systemDefault())
+
+        assertThat(result.compared).isEqualTo(4)
+        assertThat(result.differences).isEmpty()
+        assertThat(result.incomplete).isZero()
+    }
+
+    @Test
+    fun `a balance-confirmed sell keeps its order-time volume and the notification row points at its orders row`() = runTest {
+        val userId = insertUser("balsell")
+        val record = sellFill(userId).copy(
+            fee = FeeBasis.Estimate, orderAmount = null, executedVwap = null, orderVolume = null, clientOrderId = null,
+            fillSource = FillSource.BALANCE, volume = 0.7,
+        )
+
+        assertThat(service.commitFill({}, record)).isTrue()
+
+        val row = orderRow(userId)
+        assertThat(row["requested_volume"]).isEqualTo(0.7)
+        assertThat(row["filled_volume"]).isNull()
+        val linked = databaseClient.sql("SELECT order_id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)
+            .map { r -> r.get("order_id", java.lang.Long::class.java)?.toLong() }.one().awaitSingle()
+        assertThat(linked).isEqualTo(row["id"])
+    }
 
     @Test
     fun `a committed fill leaves one FILLED orders row with this order's values, linked to its execution and record`() = runTest {
@@ -218,14 +292,14 @@ class OrdersRoundTripTest {
         val userId = insertUser("enums")
         var n = 0L
         for (source in FillSource.entries) {
-            for (kind in OrderLedger.FeeKind.entries) {
+            for (kind in FeeKind.entries) {
                 n++
                 val id = orderRows.insertFilled(
                     userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = TradeSide.entries[(n % 2).toInt()].name,
                     clientOrderId = null, exchangeOrderId = "e-$runId-$n", decisionPrice = null, filledVolume = null, filledFunds = null,
                     avgFillPrice = null, fee = null, feeBasis = kind.name, positionVolumeAfter = null, bookAvgPrice = null,
                     pnlPercent = null, pnlAmount = null, reason = null, strategy = null, fillSource = source.name,
-                    tradeExecutionId = -n, tradeRecordId = null,
+                    tradeExecutionId = -n, tradeRecordId = null, requestedVolume = null, recordCreatedAt = java.time.LocalDateTime.now(),
                 ).awaitSingle()
                 assertThat(id).isNotNull()
             }
@@ -318,6 +392,134 @@ class OrdersRoundTripTest {
         migrate(schema, "41")
         inSchema(schema) { conn -> assertThat(conn.strings("SELECT to_regclass('orders')::text")).containsExactly("orders") }
     }
+
+    // --- V42: 읽기 전환 준비 — 시각·값 맞추기, 빠진 체결 따라잡기, 알림 대기열 연결 ---
+
+    @Test
+    fun `V42 catches up fills written without an orders row, aligns times and missing values with trade records, and links notifications`() =
+        withScratchSchema("v42") { schema ->
+            migrate(schema, "40")
+            val legacy = inSchema(schema) { conn -> seedLegacyTrades(conn) }
+            migrate(schema, "41")
+            val ids = inSchema(schema) { conn -> seedAfterV41(conn) }
+
+            migrate(schema, "42")
+            inSchema(schema) { conn ->
+                // 옛 이미지가 orders 없이 쓴 체결은 따라잡고, 같은 거래소 주문번호 줄이 이미 있는 체결은 건너뛴다.
+                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.lateExecution}")).containsExactly("1")
+                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE exchange_order_id = 'o-orph'")).containsExactly("1")
+                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.orphanExecution}")).containsExactly("0")
+
+                // 연결된 모든 체결의 시각이 화면 기록과 같다.
+                assertThat(
+                    conn.strings(
+                        "SELECT count(*)::text FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id " +
+                            "WHERE o.completed_at IS DISTINCT FROM tr.created_at",
+                    ),
+                ).containsExactly("0")
+                assertThat(conn.strings("SELECT requested_volume::text FROM orders WHERE trade_execution_id = ${ids.balanceSellExecution}"))
+                    .containsExactly("0.7")
+                assertThat(conn.strings("SELECT decision_price::text FROM orders WHERE trade_execution_id = ${legacy.manualBuy}"))
+                    .containsExactly("90")
+                assertThat(
+                    conn.strings(
+                        "SELECT (n.order_id = o.id)::text FROM trade_notification_outbox n JOIN orders o ON o.trade_execution_id = n.trade_execution_id",
+                    ),
+                ).containsExactly("true", "true")
+
+                // 다시 돌려도 바뀌는 것이 없다(2-2b 가 읽기 전환 직전에 다시 돌린다).
+                val before = conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id")
+                conn.update(catchupSql())
+                assertThat(conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id"))
+                    .isEqualTo(before)
+            }
+        }
+
+    @Test
+    fun `the previous image's orders insert and an outbox row without order id still work on V42`() = withScratchSchema("v42compat") { schema ->
+        migrate(schema, "42")
+        inSchema(schema) { conn ->
+            conn.update("INSERT INTO users (username, password) VALUES ('it-compat-$runId', 'x')")
+            val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-compat-$runId'").single()!!.toLong()
+            val te = conn.strings(
+                "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, exchange_order_id) " +
+                    "VALUES ($userId, 'UPBIT', 'KRW-BTC', 'BUY', 1, 1, 1, 'o-compat') RETURNING id::text",
+            ).single()!!.toLong()
+            // 74fe47b4 의 OrderRowRepository.insertFilled 문(완료 시각 now()).
+            conn.update(
+                "INSERT INTO orders (user_id, exchange, market, side, client_order_id, exchange_order_id, status, decision_price, " +
+                    "filled_volume, filled_funds, avg_fill_price, fee, fee_basis, position_volume_after, book_avg_price, " +
+                    "pnl_percent, pnl_amount, reason, strategy, fill_source, trade_execution_id, trade_record_id, completed_at) VALUES (" +
+                    "$userId, 'UPBIT', 'KRW-BTC', 'BUY', NULL, 'o-compat', 'FILLED', NULL, 1, 1, 1, NULL, 'UNRECORDED', 1, 1, " +
+                    "NULL, NULL, NULL, 'combined', 'ORDER', $te, NULL, now()) ON CONFLICT DO NOTHING RETURNING id",
+            )
+            conn.update("INSERT INTO trade_notification_outbox (trade_execution_id, user_id, exchange, payload) VALUES ($te, $userId, 'UPBIT', '{}')")
+            assertThat(conn.strings("SELECT count(*)::text FROM trade_notification_outbox WHERE order_id IS NULL")).containsExactly("1")
+        }
+    }
+
+    @Test
+    fun `the V42 down sql refuses unless V42 is last, then drops the notification link`() = withScratchSchema("v42down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V42_down.sql").readText()
+        migrate(schema, "41")
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V42 이 적용돼 있지 않다")
+
+        migrate(schema, "42")
+        inSchema(schema) { conn ->
+            conn.update(downSql)
+            assertThat(conn.strings("SELECT column_name FROM information_schema.columns WHERE table_schema = '$schema' AND column_name = 'order_id'")).isEmpty()
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '42'")).isEmpty()
+        }
+    }
+
+    private class AfterV41Ids(val lateExecution: Long, val balanceSellExecution: Long, val orphanExecution: Long)
+
+    /**
+     * V41 뒤에 생긴 체결: orders 를 모르는 옛 이미지가 쓴 것, 74fe47b4 가 now() 시각으로 쓴 것(주문 응답 매도와 수량 없는 잔고 매도),
+     * 알림 대기열, 같은 거래소 주문번호의 orders 줄이 이미 있는 것.
+     */
+    private fun seedAfterV41(conn: Connection): AfterV41Ids {
+        val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-legacy-$runId'").single()!!.toLong()
+
+        fun fill(side: String, price: Double, volume: Double, orderAmount: Double?, orderId: String, createdAt: String): Pair<Long, Long> {
+            val tr = conn.strings(
+                "INSERT INTO trade_records (user_id, ticker, side, price, volume, total_amount, strategy, order_amount, created_at) " +
+                    "VALUES ($userId, 'KRW-BTC', '$side', $price, $volume, ${price * volume}, 'combined', $orderAmount, '$createdAt') RETURNING id::text",
+            ).single()!!.toLong()
+            val te = conn.strings(
+                "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, strategy, fee, exchange_order_id) " +
+                    "VALUES ($userId, 'UPBIT', 'KRW-BTC', '$side', $price, $volume, ${price * volume}, 'combined', 0.1, '$orderId') RETURNING id::text",
+            ).single()!!.toLong()
+            return te to tr
+        }
+
+        val (late, _) = fill("SELL", 130.0, 1.0, 129.0, "o-late", "2026-11-23 10:00:00.123456")
+        val (sold, soldRecord) = fill("SELL", 140.0, 2.0, 279.0, "o-new", "2026-11-23 11:00:00.654321")
+        conn.update(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status, decision_price, filled_volume, filled_funds, " +
+                "fill_source, fee_basis, trade_execution_id, trade_record_id, completed_at) VALUES " +
+                "($userId, 'UPBIT', 'KRW-BTC', 'SELL', 'o-new', 'FILLED', 140, 2, 279, 'ORDER', 'MEASURED', $sold, $soldRecord, now())",
+        )
+        val (balance, balanceRecord) = fill("SELL", 150.0, 0.7, null, "o-bal", "2026-11-23 12:00:00.000001")
+        conn.update(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status, decision_price, fill_source, fee_basis, " +
+                "trade_execution_id, trade_record_id, completed_at) VALUES " +
+                "($userId, 'UPBIT', 'KRW-BTC', 'SELL', 'o-bal', 'FILLED', 150, 'BALANCE', 'ESTIMATED', $balance, $balanceRecord, now())",
+        )
+        for (te in listOf(sold, balance)) {
+            conn.update("INSERT INTO trade_notification_outbox (trade_execution_id, user_id, exchange, payload) VALUES ($te, $userId, 'UPBIT', '{}')")
+        }
+        val (orphan, _) = fill("BUY", 60.0, 1.0, 60.0, "o-orph", "2026-11-23 13:00:00")
+        conn.update(
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status) VALUES ($userId, 'UPBIT', 'KRW-BTC', 'BUY', 'o-orph', 'OPEN')",
+        )
+        return AfterV41Ids(late, balance, orphan)
+    }
+
+    /** V42 의 따라잡기 부분. 마이그레이션 파일의 표시 사이를 그대로 쓴다. */
+    private fun catchupSql(): String =
+        RepoFiles.file("bot/src/main/resources/db/migration/V42__orders_read.sql").readText()
+            .substringAfter("-- catchup:begin").substringBefore("-- catchup:end")
 
     private class LegacyIds(
         val snapshotBuy: Long,

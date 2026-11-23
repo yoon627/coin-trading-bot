@@ -57,13 +57,40 @@ data class TradeRecord(
     val fillSource: FillSource = FillSource.ORDER,
 )
 
-/** 체결 값의 출처. */
+/** 체결 값의 출처(`orders.fill_source`). */
 enum class FillSource {
     /** 거래소 주문 응답. */
     ORDER,
 
     /** 주문 조회가 실패해 잔고 변화로 확정했다. 이 주문의 수량·대금·평균가는 모른다. */
     BALANCE,
+
+    // 아래는 옛 기록에서 옮긴 줄의 표시다. 엔진은 쓰지 않는다(읽기 전용).
+
+    /** 옛 매도. */
+    BACKFILL,
+
+    /** 옛 엔진 매수. 가격·수량은 체결 뒤 보유 전체다. */
+    BACKFILL_SNAPSHOT,
+
+    /** 옛 수동 매수. */
+    BACKFILL_MANUAL,
+    ;
+
+    companion object {
+        /** 저장된 값을 읽는다. 모르는 값이면 예외 대신 null 이다. */
+        fun parseOrNull(value: String?): FillSource? = entries.firstOrNull { it.name == value }
+    }
+}
+
+/** 기록한 수수료의 근거(`orders.fee_basis`). */
+enum class FeeKind {
+    MEASURED,
+    ESTIMATED,
+    UNRECORDED,
+
+    /** 옛 기록에서 옮긴 줄. 실측인지 추정인지 모른다. 엔진은 쓰지 않는다. */
+    LEGACY,
 }
 
 enum class TradeSide {

@@ -8,7 +8,9 @@ import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
+import com.trading.bot.notification.TradeNotificationDispatcher
 import com.trading.bot.notification.TradeNotificationPayload
+import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
 import java.sql.Connection
 import java.sql.DriverManager
@@ -43,6 +45,7 @@ class TradeNotificationOutboxRoundTripTest {
     @Autowired private lateinit var outbox: TradeNotificationOutboxRepository
     @Autowired private lateinit var orderRows: OrderRowRepository
     @Autowired private lateinit var states: TradingStateRepository
+    @Autowired private lateinit var users: UserRepository
     @Autowired private lateinit var transactionManager: ReactiveTransactionManager
     @Autowired private lateinit var databaseClient: DatabaseClient
 
@@ -94,8 +97,9 @@ class TradeNotificationOutboxRoundTripTest {
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
-            "DELETE FROM orders WHERE user_id IN ($owned)",
+            // 알림 대기열이 orders 를 가리키므로(V42) 먼저 지운다.
             "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
+            "DELETE FROM orders WHERE user_id IN ($owned)",
             "DELETE FROM trade_executions WHERE user_id IN ($owned)",
             "DELETE FROM trade_records WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",
@@ -157,6 +161,24 @@ class TradeNotificationOutboxRoundTripTest {
         for (table in listOf("trading_states", "trade_records", "trade_executions", "trade_notification_outbox")) {
             assertThat(count(table, userId)).describedAs(table).isZero()
         }
+    }
+
+    // 발송기는 줄 전체를 다시 저장한다. 체결 때 넣은 orders 연결이 그때 지워지면 안 된다(V42).
+    @Test
+    fun `sending a notification keeps its link to the orders row`() = runTest {
+        val userId = insertUser("keeplink")
+        assertThat(service.commitFill({}, fill(userId, "it-k-$runId"))).isTrue()
+        val linked = outbox.findDue(java.time.Instant.now().plusSeconds(1), 100).collectList().awaitSingle().single { it.userId == userId }.orderId
+        assertThat(linked).isNotNull()
+
+        TradeNotificationDispatcher(outbox, users, { _, _ -> null }, io.mockk.mockk(relaxed = true), java.time.Clock.systemUTC()).runPass()
+
+        val after = outbox.findById(
+            databaseClient.sql("SELECT id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)
+                .map { r -> r.get("id", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle(),
+        ).awaitSingle()
+        assertThat(after.status).isNotEqualTo(TradeNotificationOutboxEntity.PENDING)
+        assertThat(after.orderId).isEqualTo(linked)
     }
 
     @Test

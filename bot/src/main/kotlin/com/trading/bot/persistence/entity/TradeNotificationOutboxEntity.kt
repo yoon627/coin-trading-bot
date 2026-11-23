@@ -18,6 +18,8 @@ data class TradeNotificationOutboxEntity(
     val lastError: String? = null,
     val createdAt: Instant,
     val sentAt: Instant? = null,
+    /** 같은 체결 트랜잭션에서 넣은 orders 줄. 넣지 못했으면 null 이다(V42). */
+    val orderId: Long? = null,
 ) {
     companion object {
         const val PENDING = "PENDING"
