@@ -28,6 +28,13 @@ class R2dbcPoolTimeoutTest {
         assertThat(bind(listOf(PROD_YML, BASE_YML)).pool.maxSize).isEqualTo(20)
     }
 
+    @Test
+    fun `기본·prod 프로필 모두 연결을 잡은 쿼리에 10초 서버 시한을 둔다`() {
+        for (files in listOf(listOf(BASE_YML), listOf(PROD_YML, BASE_YML))) {
+            assertThat(bind(files).properties).describedAs("$files").containsEntry("statementTimeout", "10s")
+        }
+    }
+
     /** prod 프로필은 Boot 처럼 prod 파일을 기본 파일 앞에 둔다. */
     private fun bind(files: List<String>): R2dbcProperties {
         val loader = YamlPropertySourceLoader()
