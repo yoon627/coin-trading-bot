@@ -1,5 +1,6 @@
 package com.trading.bot.persistence
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.FeeBasis
@@ -11,6 +12,7 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Exchange
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.ZoneId
@@ -26,6 +28,8 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -38,6 +42,7 @@ import org.springframework.transaction.reactive.TransactionalOperator
  * 마이그레이션 시험은 실행마다 만든 스키마에서 JDBC 로 돈다 — 공유 스키마에서 돌리면 다른 시험의 행이 섞인다.
  */
 @DataR2dbcTest
+@ImportAutoConfiguration(JacksonAutoConfiguration::class)
 class OrdersRoundTripTest {
 
     @Autowired private lateinit var databaseClient: DatabaseClient
@@ -47,6 +52,7 @@ class OrdersRoundTripTest {
     @Autowired private lateinit var states: TradingStateRepository
     @Autowired private lateinit var orderRows: OrderRowRepository
     @Autowired private lateinit var transactionManager: ReactiveTransactionManager
+    @Autowired private lateinit var objectMapper: ObjectMapper
 
     private val stateService by lazy { TradingStateService(states, jacksonObjectMapper()) }
     private val service by lazy {
@@ -135,6 +141,66 @@ class OrdersRoundTripTest {
         clientOrderId = "ctb-$runId",
     )
 
+    // --- 화면 읽기: FILLED 만, 사용자·거래소별, 체결 시각 내림차순(같으면 id), 쪽 나누기는 SQL ---
+
+    /** 체결 시각이 [minute] 분인 orders 줄을 넣고 id 를 돌려준다. [minute] 이 null 이면 체결 시각이 없다. */
+    private suspend fun filledRow(userId: Long, minute: Int?, exchange: String = "UPBIT", status: String = "FILLED", orderId: String? = null): Long =
+        databaseClient.sql(
+            "INSERT INTO orders (user_id, exchange, market, side, status, exchange_order_id, decision_price, filled_volume, fill_source, fee_basis, completed_at) " +
+                "VALUES (:u, :e, 'KRW-BTC', 'SELL', :s, :o, 100, 1, 'ORDER', 'MEASURED', " +
+                "CASE WHEN CAST(:m AS int) IS NULL THEN NULL ELSE TIMESTAMPTZ '2026-11-23 00:00:00+00' + make_interval(mins => CAST(:m AS int)) END) RETURNING id",
+        )
+            .bind("u", userId).bind("e", exchange).bind("s", status)
+            .let { if (orderId == null) it.bindNull("o", String::class.java) else it.bind("o", orderId) }
+            .let { if (minute == null) it.bindNull("m", Integer::class.java) else it.bind("m", minute) }
+            .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
+            .one().awaitSingle()
+
+    @Test
+    fun `the history page reads only this user's FILLED rows on this exchange, newest first, ties by id, rows without a time last`() = runTest {
+        val userId = insertUser("page")
+        val other = insertUser("page-other")
+        val noTime = filledRow(userId, null)
+        val older = filledRow(userId, 1)
+        val tieA = filledRow(userId, 5)
+        val tieB = filledRow(userId, 5)
+        val newest = filledRow(userId, 9)
+        filledRow(userId, 20, status = "OPEN")
+        filledRow(userId, 30, exchange = "KIS_PAPER")
+        filledRow(other, 40)
+
+        val all = orderRows.findFilledPage(userId, "UPBIT", 100, 0).collectList().awaitSingle().map { it.id }
+        assertThat(all).containsExactly(newest, tieB, tieA, older, noTime)
+        assertThat(orderRows.countFilled(userId, "UPBIT").awaitSingle()).isEqualTo(5L)
+        assertThat(orderRows.findFilledPage(userId, "UPBIT", 2, 2).collectList().awaitSingle().map { it.id }).containsExactly(tieA, older)
+        assertThat(orderRows.findFilledPage(userId, "UPBIT", 2, 5).collectList().awaitSingle()).isEmpty()
+        assertThat(orderRows.findFilledPage(userId, "KIS_PAPER", 100, 0).collectList().awaitSingle()).hasSize(1)
+    }
+
+    @Test
+    fun `the round-trip source is the newest rows in ascending order, so a cut drops the oldest`() = runTest {
+        val userId = insertUser("recent")
+        val ids = (1..4).map { filledRow(userId, it) }
+
+        assertThat(orderRows.findFilledRecentAscending(userId, "UPBIT", 3).collectList().awaitSingle().map { it.id })
+            .containsExactlyElementsOf(ids.drop(1))
+        assertThat(orderRows.findFilledRecentAscending(userId, "UPBIT", 10).collectList().awaitSingle().map { it.id })
+            .containsExactlyElementsOf(ids)
+    }
+
+    // --- 매일 대조: 같은 거래소의 FILLED 줄에 있는 주문번호만 기록된 것이다 ---
+
+    @Test
+    fun `an order number counts as recorded only for a FILLED row on the same exchange`() = runTest {
+        val userId = insertUser("recorded")
+        filledRow(userId, 1, orderId = "u-filled-$runId")
+        filledRow(userId, 2, orderId = "u-open-$runId", status = "OPEN")
+        filledRow(userId, 3, orderId = "u-shared-$runId", exchange = "KIS_PAPER")
+
+        val asked = listOf("u-filled-$runId", "u-open-$runId", "u-shared-$runId", "u-none-$runId")
+        assertThat(orderRows.findRecordedOrderIds(userId, "UPBIT", asked).collectList().awaitSingle()).containsExactly("u-filled-$runId")
+    }
+
     // --- 체결 기록 트랜잭션 안의 orders 쓰기 ---
 
     private suspend fun timesMatchRecord(userId: Long): List<Boolean> =
@@ -182,13 +248,12 @@ class OrdersRoundTripTest {
         )
         for (record in listOf(buy, balanceBuy, sell, balanceSell)) assertThat(service.commitFill({}, record)).isTrue()
 
-        val records = tradeRecords.findAll().collectList().awaitSingle().filter { it.userId == userId }
-        val orders = orderRows.findAll().collectList().awaitSingle().filter { it.userId == userId }
-        val result = TradeHistoryParity.compare(records, orders, java.time.ZoneId.systemDefault())
+        val result = TradeHistoryParity(TradeRecordRepository(tradeRecords), orderRows, objectMapper, ZoneId.systemDefault())
+            .compare(userId, Exchange.UPBIT)
 
-        assertThat(result.compared).isEqualTo(4)
+        assertThat(orderRows.countFilled(userId, "UPBIT").awaitSingle()).isEqualTo(4L)
+        assertThat(result.responses).isEqualTo(2)
         assertThat(result.differences).isEmpty()
-        assertThat(result.incomplete).isZero()
     }
 
     @Test

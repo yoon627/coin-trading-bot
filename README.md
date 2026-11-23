@@ -128,7 +128,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
-| GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`) |
+| GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`). `orders` 의 체결 줄을 체결 시각 내림차순으로 읽는다(V43 절) |
 | GET | `/api/kis/keys` | KIS 모의(`KIS_PAPER`)·실전(`KIS`) 키 저장 여부, 마스킹한 계좌(`****5678-01`), 갱신 시각(`updated_at`, UTC ISO-8601) |
 | PUT, DELETE | `/api/kis/keys/{KIS_PAPER\|KIS}` | KIS 키 저장(`app_key`, `app_secret`, `account_number`)·삭제 |
 
@@ -207,9 +207,9 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 ### 체결 기록 대조
 
-매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `trade_executions` 에 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
+매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `orders` 에 업비트 체결 줄(FILLED)이 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
 
-- 보정할 때는 그 체결의 거래 기록 행을 `exchange_order_id = <uuid>` 로 넣는다. 그래야 다음 대조에서 빠진다. `trade_records` 를 손으로 넣거나 고치거나 지우면 `orders` 에도 같은 것을 한다(화면이 `orders` 를 읽게 바뀐 뒤 화면과 맞도록 — V42 절). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
+- 보정할 때는 그 체결의 거래 기록 행(`trade_executions`·`trade_records`)을 `exchange_order_id = <uuid>` 로 넣고 `deploy/vultr/sql/orders_catchup.sql` 로 `orders` 에 옮긴다(V43 절). 그래야 화면에 보이고 다음 대조에서 빠진다. `trade_records` 를 손으로 고치거나 지우면 `orders` 에도 같은 것을 한다(화면은 `orders` 를 읽는다). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
 - 거짓 경보가 나는 경우: 같은 업비트 키를 다른 환경(로컬 실행 등)이 써서 그쪽 DB 에 기록된 주문, 같은 키를 두 사용자가 등록한 경우.
 - 키가 없으면 INFO 로, 만료·잘못된 키·허용 IP 밖(401·403)·복호화 실패면 WARN 으로 그 사용자를 건너뛴다. 키가 있어 시도한 사용자가 모두 실패하면 ERROR 한 줄. 서명 오류(`invalid_query_payload` 등)는 ERROR 다. 키에 "주문조회" 권한이 필요하다.
 
@@ -495,7 +495,7 @@ V41 은 주문마다 한 줄인 `orders` 표를 만들고 옛 체결을 `trade_e
 - 지금은 같은 체결을 `trade_records`(화면)와 `trade_executions`(중복 방지·대사)에 두 번 적는다. 엔진 매수 줄의 가격·수량·총액은 이 주문이 아니라 체결 뒤 보유 전체다. `orders` 는 이 주문의 체결 수량·대금·평균가(`filled_*`·`avg_fill_price`)와 체결 뒤 장부(`position_volume_after`·`book_avg_price`)를 따로 적는다. `fill_source` 가 값의 출처(주문 응답·잔고 복원·옛 기록)다.
 - 옛 엔진 매수는 이 주문 하나의 수량을 알 수 없어 비워 두고(`BACKFILL_SNAPSHOT`), 보유 전체 값을 장부 칼럼에 둔다.
 - 새 체결은 옛 두 표·상태 저장·알림 대기열과 같은 트랜잭션에서 `orders` 에 FILLED 줄로 함께 남는다. 이 쓰기가 SQL 오류를 내면 체결 기록 전체가 되돌아가 지금의 기록 실패처럼 다음에 다시 시도된다. 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다(체결 기록은 막지 않는다). 주문 생애(대기·거절·안 나감)는 아직 남기지 않는다.
-- 아직 아무도 `orders` 를 읽지 않는다. 화면·대사·체결 알림은 지금처럼 옛 두 표를 쓴다.
+- V41 때는 아무도 `orders` 를 읽지 않았다. 화면과 매일 대조는 V43 부터 `orders` 를 읽는다.
 - V40 이미지로의 롤백은 그대로 뜬다(새 표만 더한다). 그동안의 체결은 `orders` 에 남지 않고, 읽는 쪽을 `orders` 로 바꾸는 다음 단계가 마이그레이션의 옮기기 부분을 다시 돌려 메운다.
 - 표 자체를 없애야 할 때만 `deploy/vultr/sql/V41_down.sql` 을 쓴다(V41 이 마지막 적용 버전일 때만 돈다).
   ```bash

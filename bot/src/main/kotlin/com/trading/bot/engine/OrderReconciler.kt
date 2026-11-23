@@ -4,7 +4,7 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.TradingDay
 import com.trading.bot.persistence.BotStateRepository
-import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.OrderRowRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
@@ -38,7 +38,8 @@ import org.springframework.stereotype.Component
 /**
  * 매일 09:05 KST 에 한 번, 업비트의 봇 주문(identifier `ctb-`) 중 체결됐는데 거래 기록이 없는 것을 사용자별 ERROR 한 줄로 알린다(#341).
  * 매도 기록이 실패한 채 강제 종료되거나, 잔고 흔적 뒤 미접수로 확정한 주문이 실제로는 체결됐으면 거래 기록이 빠지고 엔진은 다시 보지 않는다.
- * 고치지는 않는다 — 체결가·수수료·청산 사유를 사람이 확인해 `exchange_order_id` 를 그 uuid 로 보정 행을 넣는다.
+ * 거래 기록은 `orders` 의 업비트 체결 줄이다. 고치지는 않는다 — 체결가·수수료·청산 사유를 사람이 확인해 `exchange_order_id` 를 그 uuid 로
+ * trade_executions·trade_records 에 보정 행을 넣고, `deploy/vultr/sql/orders_catchup.sql` 로 orders 에 옮긴다.
  * 엔진 루프·공용 스케줄러를 막지 않게 자체 코루틴에서 돈다. 기동 직후에는 돌지 않고 다음 09:05 를 기다린다.
  */
 @Component
@@ -48,7 +49,7 @@ class OrderReconciler internal constructor(
     private val secrets: UserSecretsService,
     private val clientFor: (UserEntity) -> UpbitClient,
     private val tradingStates: TradingStateService,
-    private val executions: TradeExecutionRepository,
+    private val orders: OrderRowRepository,
     private val clock: Clock,
     private val timings: Timings = Timings(),
 ) {
@@ -61,8 +62,8 @@ class OrderReconciler internal constructor(
         secrets: UserSecretsService,
         managers: TradingManagers,
         tradingStates: TradingStateService,
-        executions: TradeExecutionRepository,
-    ) : this(botStates, users, secrets, { managers.get(Exchange.UPBIT).createUpbitClient(it) }, tradingStates, executions, Clock.systemUTC())
+        orders: OrderRowRepository,
+    ) : this(botStates, users, secrets, { managers.get(Exchange.UPBIT).createUpbitClient(it) }, tradingStates, orders, Clock.systemUTC())
 
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineName("order-reconciler"))
@@ -137,7 +138,7 @@ class OrderReconciler internal constructor(
             log.info("Order reconcile for user {}: no bot fills to check", userId)
             return true
         }
-        val recorded = executions.findRecordedOrderIds(userId, candidates.map { it.uuid }).collectList().awaitSingle().toSet()
+        val recorded = orders.findRecordedOrderIds(userId, Exchange.UPBIT.name, candidates.map { it.uuid }).collectList().awaitSingle().toSet()
         val missing = candidates.filter { it.uuid !in recorded }
         if (missing.isEmpty()) {
             log.info("Order reconcile for user {}: {} bot fills checked, all recorded", userId, candidates.size)
