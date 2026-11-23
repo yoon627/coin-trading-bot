@@ -4,10 +4,13 @@ import com.trading.bot.api.RequestValidators
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.springframework.core.env.Environment
 import org.springframework.core.env.Profiles
 import org.springframework.http.HttpStatus
@@ -31,6 +34,11 @@ class AuthController(
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
     private val environment: Environment,
+    /**
+     * BCrypt(수십~100ms CPU)를 돌릴 곳. 요청 스레드(netty 이벤트 루프일 수 있다)도, 매매 엔진이 쓰는 Dispatchers.Default(이 서버는
+     * 2개)도 피한다 — 로그인이 몰려도 줄 서는 것은 로그인이다.
+     */
+    private val hashDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
 ) {
     // 동시 요청 둘이 모두 계정 0 개를 보고 가입하지 않도록 확인부터 저장까지 묶는다. 단일 인스턴스 기준이다.
     private val registrationLock = Mutex()
@@ -58,7 +66,7 @@ class AuthController(
             userRepository.save(
                 UserEntity(
                     username = username,
-                    password = passwordEncoder.encode(req.password),
+                    password = hashing { passwordEncoder.encode(req.password) },
                     upbitAccessKey = encryptedAccessKey,
                     upbitSecretKey = encryptedSecretKey,
                 )
@@ -74,7 +82,7 @@ class AuthController(
         val username = requestValidators.normalizeUsername(req.username)
         val user = userRepository.findByUsername(username).awaitSingleOrNull()
             ?: throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")
-        if (!passwordEncoder.matches(req.password, user.password)) {
+        if (!hashing { passwordEncoder.matches(req.password, user.password) }) {
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")
         }
         val token = jwtProvider.generateToken(user.id!!, user.username)
@@ -95,6 +103,8 @@ class AuthController(
         )
         return mapOf("status" to "logged_out")
     }
+
+    private suspend fun <T> hashing(block: () -> T): T = withContext(hashDispatcher) { block() }
 
     private fun writeAuthCookie(request: ServerHttpRequest, response: ServerHttpResponse, token: String) {
         response.addCookie(
