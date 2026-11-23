@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.TradePnl
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.notification.TradeNotificationPayload
@@ -68,12 +69,14 @@ class TradeExecutionService(
             )
         ).awaitSingle()
         val executionId = requireNotNull(execution.id) { "saved trade_executions row has no id" }
-        orderLedger.recordFill(record, fee, feeKind, executionId, tradeRecord.id)
-        // 체결과 같은 트랜잭션이라 이 삽입이 실패하면 체결도 되돌아간다. 그래서 실패할 경로(직렬화·길이 제한·FK)를 두지 않았다.
+        val orderRowId = orderLedger.recordFill(record, fee, feeKind, executionId, tradeRecord.id)
+        // 체결과 같은 트랜잭션이라 이 삽입이 실패하면 체결도 되돌아간다. 그래서 실패할 경로(직렬화·길이 제한)를 두지 않았고,
+        // FK 가 가리키는 줄(trade_executions·orders)은 같은 트랜잭션에서 방금 넣은 줄뿐이다.
         val now = clock.instant()
         outboxRepository.save(
             TradeNotificationOutboxEntity(
                 tradeExecutionId = executionId,
+                orderId = orderRowId,
                 userId = userId,
                 exchange = record.exchange.name,
                 payload = notificationPayload,
@@ -85,16 +88,16 @@ class TradeExecutionService(
     }
 
     /** 기록할 수수료와 그 근거. 모르면 null 이다. */
-    private fun fee(record: TradeRecord): Pair<Double?, OrderLedger.FeeKind> = when (val basis = record.fee) {
+    private fun fee(record: TradeRecord): Pair<Double?, FeeKind> = when (val basis = record.fee) {
         // NaN 이 한 번 들어가면 SUM(fee) 가 계속 NaN 이 되므로 DB 직전에서 다시 거른다.
         is FeeBasis.Measured -> basis.amount.takeIf { it.isFinite() && it >= 0.0 }
-            ?.let { it to OrderLedger.FeeKind.MEASURED } ?: (null to OrderLedger.FeeKind.UNRECORDED)
+            ?.let { it to FeeKind.MEASURED } ?: (null to FeeKind.UNRECORDED)
         // 거래소마다 매수·매도 비용이 다르면 생성부가 편도 요율을 싣는다.
         FeeBasis.Estimate -> (
             record.estimatedFeeRate?.takeIf { it.isFinite() && it >= 0.0 }?.let { record.totalAmount * it }
                 ?: TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
-            ) to OrderLedger.FeeKind.ESTIMATED
-        FeeBasis.Unrecorded -> null to OrderLedger.FeeKind.UNRECORDED
+            ) to FeeKind.ESTIMATED
+        FeeBasis.Unrecorded -> null to FeeKind.UNRECORDED
     }
 
     /**

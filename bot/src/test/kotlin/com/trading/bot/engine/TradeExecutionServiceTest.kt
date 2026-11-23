@@ -1,6 +1,7 @@
 package com.trading.bot.engine
 
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.notification.TradeNotificationPayload
@@ -121,17 +122,35 @@ class TradeExecutionServiceTest {
         assertTrue(service.commitFill(persistState = {}, record = record))
 
         assertEquals(listOf("execution", "orders", "outbox"), order)
-        coVerify(exactly = 1) { orderLedger.recordFill(record, 25.0, OrderLedger.FeeKind.MEASURED, 7L, 3L) }
+        coVerify(exactly = 1) { orderLedger.recordFill(record, 25.0, FeeKind.MEASURED, 7L, 3L) }
+    }
+
+    // 알림 대기열 줄은 같은 트랜잭션에서 방금 넣은 orders 줄을 가리킨다. orders 줄을 넣지 못했으면 비워 둔다.
+    @Test
+    fun `the notification row points at the orders row the same commit wrote`() = runTest {
+        val rows = mutableListOf<TradeNotificationOutboxEntity>()
+        every { outboxRepository.save(capture(rows)) } answers { Mono.just(firstArg()) }
+        coEvery { orderLedger.recordFill(any(), any(), any(), any(), any()) } returnsMany listOf(11L, null)
+        fun record(id: String) = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.SELL, price = 50000000.0, volume = 0.001,
+            totalAmount = 50000.0, pnlPercent = 1.5, pnlAmount = 750.0, strategy = "combined",
+            exchangeOrderId = id, userId = 1L, fee = FeeBasis.Estimate, orderAmount = 50000.0,
+        )
+
+        service.commitFill(persistState = {}, record = record("link-1"))
+        service.commitFill(persistState = {}, record = record("link-2"))
+
+        assertEquals(listOf(11L, null), rows.map { it.orderId })
     }
 
     // orders 는 모르는 수수료를 NULL 로 적고 근거를 따로 둔다. trade_executions 는 지금처럼 0 을 미기록으로 쓴다.
     @Test
     fun `each fee basis is recorded with its kind, and an unknown fee is null in orders and 0 in trade executions`() = runTest {
         val cases = listOf(
-            FeeBasis.Measured(25.0) to (25.0 to OrderLedger.FeeKind.MEASURED),
-            FeeBasis.Measured(Double.NaN) to (null to OrderLedger.FeeKind.UNRECORDED),
-            FeeBasis.Estimate to (25.0 to OrderLedger.FeeKind.ESTIMATED),
-            FeeBasis.Unrecorded to (null to OrderLedger.FeeKind.UNRECORDED),
+            FeeBasis.Measured(25.0) to (25.0 to FeeKind.MEASURED),
+            FeeBasis.Measured(Double.NaN) to (null to FeeKind.UNRECORDED),
+            FeeBasis.Estimate to (25.0 to FeeKind.ESTIMATED),
+            FeeBasis.Unrecorded to (null to FeeKind.UNRECORDED),
         )
         for ((basis, expected) in cases) {
             val executionRow = slot<TradeExecutionEntity>()

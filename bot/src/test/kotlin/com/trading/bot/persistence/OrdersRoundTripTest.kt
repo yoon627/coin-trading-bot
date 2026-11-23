@@ -3,6 +3,7 @@ package com.trading.bot.persistence
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
@@ -131,6 +132,44 @@ class OrdersRoundTripTest {
 
     // --- 체결 기록 트랜잭션 안의 orders 쓰기 ---
 
+    private suspend fun timesMatchRecord(userId: Long): List<Boolean> =
+        databaseClient.sql(
+            "SELECT o.completed_at = tr.created_at AS same FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id WHERE o.user_id = :u",
+        ).bind("u", userId).map { r -> r.get("same", java.lang.Boolean::class.java)!!.booleanValue() }.all().collectList().awaitSingle()
+
+    // 화면은 trade_records.created_at 을 보여 준다. orders 의 체결 시각이 그와 같아야 화면을 orders 로 바꿔도 시각이 그대로다.
+    // 같은 LocalDateTime 을 같은 방식으로 넘겨야 마이크로초 반올림까지 같다(초 경계·날 경계의 나노초 포함).
+    @Test
+    fun `a fill's orders time equals its trade record time, including nanosecond rounding at a day boundary`() = runTest {
+        val userId = insertUser("time")
+        val times = listOf(
+            java.time.LocalDateTime.of(2026, 11, 23, 23, 59, 59, 999_999_600),
+            java.time.LocalDateTime.of(2026, 11, 24, 0, 0, 0, 500),
+            java.time.LocalDateTime.of(2026, 11, 24, 9, 0, 0, 123_456_789),
+        )
+        times.forEachIndexed { i, at -> service.commitFill({}, sellFill(userId).copy(exchangeOrderId = "t-$runId-$i", clientOrderId = null, createdAt = at)) }
+
+        assertThat(timesMatchRecord(userId)).containsExactly(true, true, true)
+    }
+
+    @Test
+    fun `a balance-confirmed sell keeps its order-time volume and the notification row points at its orders row`() = runTest {
+        val userId = insertUser("balsell")
+        val record = sellFill(userId).copy(
+            fee = FeeBasis.Estimate, orderAmount = null, executedVwap = null, orderVolume = null, clientOrderId = null,
+            fillSource = FillSource.BALANCE, volume = 0.7,
+        )
+
+        assertThat(service.commitFill({}, record)).isTrue()
+
+        val row = orderRow(userId)
+        assertThat(row["requested_volume"]).isEqualTo(0.7)
+        assertThat(row["filled_volume"]).isNull()
+        val linked = databaseClient.sql("SELECT order_id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)
+            .map { r -> r.get("order_id", java.lang.Long::class.java)?.toLong() }.one().awaitSingle()
+        assertThat(linked).isEqualTo(row["id"])
+    }
+
     @Test
     fun `a committed fill leaves one FILLED orders row with this order's values, linked to its execution and record`() = runTest {
         val userId = insertUser("fill")
@@ -219,14 +258,14 @@ class OrdersRoundTripTest {
         val userId = insertUser("enums")
         var n = 0L
         for (source in FillSource.entries) {
-            for (kind in OrderLedger.FeeKind.entries) {
+            for (kind in FeeKind.entries) {
                 n++
                 val id = orderRows.insertFilled(
                     userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = TradeSide.entries[(n % 2).toInt()].name,
                     clientOrderId = null, exchangeOrderId = "e-$runId-$n", decisionPrice = null, filledVolume = null, filledFunds = null,
                     avgFillPrice = null, fee = null, feeBasis = kind.name, positionVolumeAfter = null, bookAvgPrice = null,
                     pnlPercent = null, pnlAmount = null, reason = null, strategy = null, fillSource = source.name,
-                    tradeExecutionId = -n, tradeRecordId = null,
+                    tradeExecutionId = -n, tradeRecordId = null, requestedVolume = null, recordCreatedAt = java.time.LocalDateTime.now(),
                 ).awaitSingle()
                 assertThat(id).isNotNull()
             }
