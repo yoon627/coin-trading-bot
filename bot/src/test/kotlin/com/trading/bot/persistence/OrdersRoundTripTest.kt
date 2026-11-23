@@ -152,6 +152,40 @@ class OrdersRoundTripTest {
         assertThat(timesMatchRecord(userId)).containsExactly(true, true, true)
     }
 
+    // 화면을 orders 로 바꿔도 같은 값이 나오는지 — 실제 체결 경로로 쓴 네 종류의 줄로 본다(운영 데이터는 TradeHistoryParityTest).
+    @Test
+    fun `fills written through the real path give the same screen values from orders as from trade records`() = runTest {
+        val userId = insertUser("parity")
+        val buy = TradeRecord(
+            ticker = "KRW-BTC", side = TradeSide.BUY, price = 100.0, volume = 2.0, totalAmount = 200.0, pnlPercent = null, pnlAmount = null,
+            strategy = "combined", exchangeOrderId = "pb-$runId", userId = userId, fee = FeeBasis.Measured(0.1), orderAmount = 50.0,
+            executedVwap = 100.0, orderVolume = 0.5, positionVolumeAfter = 2.0, bookAvgPrice = 100.0, clientOrderId = "ctb-pb-$runId",
+            createdAt = java.time.LocalDateTime.of(2026, 11, 23, 9, 0, 0, 111_111_111),
+        )
+        val balanceBuy = buy.copy(
+            exchangeOrderId = "pbb-$runId", clientOrderId = null, fee = FeeBasis.Unrecorded, orderAmount = null, executedVwap = null,
+            orderVolume = null, price = 51_000_000.0, volume = 0.0011, totalAmount = 51_000_000.0 * 0.0011, positionVolumeAfter = 0.0011,
+            bookAvgPrice = 51_000_000.0, fillSource = FillSource.BALANCE, createdAt = buy.createdAt.plusMinutes(1),
+        )
+        // 부분 체결 매도: 장부가 남는다.
+        val sell = sellFill(userId).copy(
+            exchangeOrderId = "ps-$runId", clientOrderId = "ctb-ps-$runId", positionVolumeAfter = 0.3, createdAt = buy.createdAt.plusMinutes(2),
+        )
+        val balanceSell = sellFill(userId).copy(
+            exchangeOrderId = "psb-$runId", clientOrderId = null, fee = FeeBasis.Estimate, orderAmount = null, executedVwap = null,
+            orderVolume = null, volume = 0.7, totalAmount = 50_000_000.0 * 0.7, fillSource = FillSource.BALANCE, createdAt = buy.createdAt.plusMinutes(3),
+        )
+        for (record in listOf(buy, balanceBuy, sell, balanceSell)) assertThat(service.commitFill({}, record)).isTrue()
+
+        val records = tradeRecords.findAll().collectList().awaitSingle().filter { it.userId == userId }
+        val orders = orderRows.findAll().collectList().awaitSingle().filter { it.userId == userId }
+        val result = TradeHistoryParity.compare(records, orders, java.time.ZoneId.systemDefault())
+
+        assertThat(result.compared).isEqualTo(4)
+        assertThat(result.differences).isEmpty()
+        assertThat(result.incomplete).isZero()
+    }
+
     @Test
     fun `a balance-confirmed sell keeps its order-time volume and the notification row points at its orders row`() = runTest {
         val userId = insertUser("balsell")
