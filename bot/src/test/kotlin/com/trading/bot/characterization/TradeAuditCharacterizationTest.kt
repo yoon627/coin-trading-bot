@@ -4,6 +4,7 @@ import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
@@ -33,7 +34,7 @@ class TradeAuditCharacterizationTest {
     private val tradeExecutionRepository = mockk<TradeExecutionRepository>()
     private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(any()) } answers { Mono.just(firstArg()) } }
     private val service = TradeExecutionService(
-        tradeRecordRepository, tradeExecutionRepository, outbox, mockk(), TradingProperties(),
+        tradeRecordRepository, tradeExecutionRepository, outbox, mockk<OrderLedger>(relaxed = true), mockk(), TradingProperties(),
     )
     private val saved = slot<TradeExecutionEntity>()
 

@@ -46,7 +46,25 @@ data class TradeRecord(
     val exchange: Exchange = Exchange.UPBIT,
     /** [FeeBasis.Estimate] 일 때 체결 대금에 곱하는 편도 요율. null 이면 sink 가 설정의 왕복 요율 절반을 쓴다. */
     val estimatedFeeRate: Double? = null,
+    /** 이 주문 하나의 체결 수량. 엔진 매수의 [volume] 은 체결 뒤 보유 전체라 따로 싣는다. 주문 응답이 없으면 모른다. */
+    val orderVolume: Double? = null,
+    /** 체결 뒤 봇 장부 수량. */
+    val positionVolumeAfter: Double? = null,
+    /** 매수는 체결 뒤 장부 평단, 매도는 판 기준 평단. */
+    val bookAvgPrice: Double? = null,
+    /** 봇이 보내기 전에 정한 주문 식별자. 주문 응답에 있을 때만 싣는다. */
+    val clientOrderId: String? = null,
+    val fillSource: FillSource = FillSource.ORDER,
 )
+
+/** 체결 값의 출처. */
+enum class FillSource {
+    /** 거래소 주문 응답. */
+    ORDER,
+
+    /** 주문 조회가 실패해 잔고 변화로 확정했다. 이 주문의 수량·대금·평균가는 모른다. */
+    BALANCE,
+}
 
 enum class TradeSide {
     BUY, SELL

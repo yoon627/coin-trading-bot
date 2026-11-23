@@ -25,6 +25,7 @@ class TradeExecutionService(
     private val tradeRecordRepository: TradeRecordRepository,
     private val tradeExecutionRepository: TradeExecutionRepository,
     private val outboxRepository: TradeNotificationOutboxRepository,
+    private val orderLedger: OrderLedger,
     private val transactionalOperator: TransactionalOperator,
     private val tradingProperties: TradingProperties,
     private val events: ApplicationEventPublisher = ApplicationEventPublisher {},
@@ -46,7 +47,8 @@ class TradeExecutionService(
             log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", userId, record.ticker, orderId)
             return false
         }
-        tradeRecordRepository.save(record)
+        val tradeRecord = tradeRecordRepository.save(record)
+        val (fee, feeKind) = fee(record)
         val execution = tradeExecutionRepository.save(
             TradeExecutionEntity(
                 userId = userId,
@@ -56,16 +58,8 @@ class TradeExecutionService(
                 price = record.price,
                 volume = record.volume,
                 totalAmount = record.totalAmount,
-                // 저장된 행만 보고는 실측 수수료인지 추정치인지 구분할 수 없다.
-                fee = when (val basis = record.fee) {
-                    // NaN 이 한 번 들어가면 SUM(fee) 가 계속 NaN 이 되므로 DB 직전에서 다시 거른다.
-                    is FeeBasis.Measured -> basis.amount.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-                    // 거래소마다 매수·매도 비용이 다르면 생성부가 편도 요율을 싣는다.
-                    FeeBasis.Estimate -> record.estimatedFeeRate?.takeIf { it.isFinite() && it >= 0.0 }?.let { record.totalAmount * it }
-                        ?: TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
-                    // 0 은 미기록을 뜻한다(V21 스키마 규약).
-                    FeeBasis.Unrecorded -> 0.0
-                },
+                // 저장된 행만 보고는 실측 수수료인지 추정치인지 구분할 수 없다. 0 은 미기록을 뜻한다(V21 스키마 규약).
+                fee = fee ?: 0.0,
                 pnlPercent = record.pnlPercent,
                 pnlAmount = record.pnlAmount,
                 reason = record.reason,
@@ -73,11 +67,13 @@ class TradeExecutionService(
                 exchangeOrderId = record.exchangeOrderId,
             )
         ).awaitSingle()
+        val executionId = requireNotNull(execution.id) { "saved trade_executions row has no id" }
+        orderLedger.recordFill(record, fee, feeKind, executionId, tradeRecord.id)
         // 체결과 같은 트랜잭션이라 이 삽입이 실패하면 체결도 되돌아간다. 그래서 실패할 경로(직렬화·길이 제한·FK)를 두지 않았다.
         val now = clock.instant()
         outboxRepository.save(
             TradeNotificationOutboxEntity(
-                tradeExecutionId = requireNotNull(execution.id) { "saved trade_executions row has no id" },
+                tradeExecutionId = executionId,
                 userId = userId,
                 exchange = record.exchange.name,
                 payload = notificationPayload,
@@ -86,6 +82,19 @@ class TradeExecutionService(
             )
         ).awaitSingle()
         return true
+    }
+
+    /** 기록할 수수료와 그 근거. 모르면 null 이다. */
+    private fun fee(record: TradeRecord): Pair<Double?, OrderLedger.FeeKind> = when (val basis = record.fee) {
+        // NaN 이 한 번 들어가면 SUM(fee) 가 계속 NaN 이 되므로 DB 직전에서 다시 거른다.
+        is FeeBasis.Measured -> basis.amount.takeIf { it.isFinite() && it >= 0.0 }
+            ?.let { it to OrderLedger.FeeKind.MEASURED } ?: (null to OrderLedger.FeeKind.UNRECORDED)
+        // 거래소마다 매수·매도 비용이 다르면 생성부가 편도 요율을 싣는다.
+        FeeBasis.Estimate -> (
+            record.estimatedFeeRate?.takeIf { it.isFinite() && it >= 0.0 }?.let { record.totalAmount * it }
+                ?: TradePnl.estimatedFee(record.totalAmount, tradingProperties.roundTripFeeRate)
+            ) to OrderLedger.FeeKind.ESTIMATED
+        FeeBasis.Unrecorded -> null to OrderLedger.FeeKind.UNRECORDED
     }
 
     /**

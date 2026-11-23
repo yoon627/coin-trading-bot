@@ -3,6 +3,7 @@ package com.trading.bot.characterization
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.client.UpbitMalformedResponseException
 import com.trading.bot.domain.FeeBasis
+import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.OrderRequest
 import com.trading.bot.domain.OrderTrade
@@ -80,7 +81,8 @@ class PositionManagerBuyCharacterizationTest {
             durableAtSend = saved.lastOrNull()
             Order(uuid = "u-1", state = "wait")
         }
-        coEvery { upbit.getOrder("u-1") } returns doneOrder()
+        // 거래소는 보낸 식별자를 주문 응답에 돌려준다.
+        coEvery { upbit.getOrder("u-1") } coAnswers { doneOrder().copy(identifier = sent.single().identifier) }
         val state = TradingState("KRW-BTC")
 
         val record = manager().buy("KRW-BTC", state, 52_000_000.0, "test")
@@ -127,6 +129,13 @@ class PositionManagerBuyCharacterizationTest {
         assertEquals(FeeBasis.Measured(26.0), record?.fee)
         assertEquals(52_345.0, record?.orderAmount)
         assertEquals("test", record?.strategy)
+        // 이 주문 하나의 값(orders)과 체결 뒤 장부를 따로 싣는다.
+        assertEquals(0.001, record?.orderVolume)
+        assertEquals(52_345_000.0, record?.executedVwap!!, 1e-3)
+        assertEquals(0.001, record?.positionVolumeAfter)
+        assertEquals(52_345_000.0, record?.bookAvgPrice)
+        assertEquals(identifier, record?.clientOrderId)
+        assertEquals(FillSource.ORDER, record?.fillSource)
         assertTrue(state.position)
         assertEquals(52_345_000.0, state.avgBuyPrice)
         assertEquals(0.001, state.holdVolume)

@@ -6,6 +6,7 @@ import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
+import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.common.config.TradingProperties
@@ -40,6 +41,7 @@ class TradeNotificationOutboxRoundTripTest {
     @Autowired private lateinit var tradeRecords: TradeRecordR2dbcRepository
     @Autowired private lateinit var executions: TradeExecutionRepository
     @Autowired private lateinit var outbox: TradeNotificationOutboxRepository
+    @Autowired private lateinit var orderRows: OrderRowRepository
     @Autowired private lateinit var states: TradingStateRepository
     @Autowired private lateinit var transactionManager: ReactiveTransactionManager
     @Autowired private lateinit var databaseClient: DatabaseClient
@@ -47,7 +49,7 @@ class TradeNotificationOutboxRoundTripTest {
     private val transactionalOperator by lazy { TransactionalOperator.create(transactionManager) }
     private val stateService by lazy { TradingStateService(states, jacksonObjectMapper()) }
     private val service by lazy {
-        TradeExecutionService(TradeRecordRepository(tradeRecords), executions, outbox, transactionalOperator, TradingProperties())
+        TradeExecutionService(TradeRecordRepository(tradeRecords), executions, outbox, OrderLedger(orderRows), transactionalOperator, TradingProperties())
     }
 
     companion object {
@@ -92,6 +94,7 @@ class TradeNotificationOutboxRoundTripTest {
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
+            "DELETE FROM orders WHERE user_id IN ($owned)",
             "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
             "DELETE FROM trade_executions WHERE user_id IN ($owned)",
             "DELETE FROM trade_records WHERE user_id IN ($owned)",
