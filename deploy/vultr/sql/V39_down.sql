@@ -8,8 +8,8 @@
 -- 되살린 칼럼을 다시 지운다 — 앱을 멈춘 뒤 돌리고, 그다음에는 V39 이전 이미지만 띄운다.
 -- V39 가 마지막 적용 버전일 때만 쓴다.
 --
--- 실행: 서버 /opt/app 에서 앱을 멈추고(docker compose stop app) 이 파일을 /tmp 로 올린 뒤, 백업이 성공했을 때만 돌린다
---   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
+-- 실행: 서버 /opt/app 에서 앱을 멈추고(docker compose stop app) 이 파일을 /tmp 로 올린 뒤, 서버 디스크 덤프가 성공했을 때만 돌린다
+--   ./dump_local.sh before-V39-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
 -- 그다음 V39 이전 이미지로 올린다(APP_VERSION=<V39 이전 SHA> docker compose up -d --pull missing).
 
 BEGIN;

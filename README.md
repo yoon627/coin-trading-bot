@@ -329,7 +329,7 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
    - 0행이면 마이그레이션이 실패해 Postgres 트랜잭션 DDL 로 V30 전체가 되돌려진 것이다. 봇이 멈춰 있는 동안 보유 포지션의 손절도 돌지 않으므로 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 먼저 되살리고, 원인을 고친 이미지로 다시 배포한다.
    - V30 이 적용돼 있으면 고친 이미지로 앞으로 배포한다.
 
-V30 이후에는 V30 이전 이미지로 롤백하지 않는다. 옛 코드는 거래소 축을 몰라 KIS 행까지 Upbit 상태로 읽는다. 불가피하면 앱을 멈추고 `./backup.sh` 를 돌린 뒤 아래로 KIS 행을 먼저 지우고, `V30_down.sql` 을 실행한 다음 옛 이미지를 올린다. `bot_state` 는 V17 부터 거래소 축이 있어 옛 이미지도 거래소로 걸러 읽으므로 지우지 않는다. `trade_executions` 의 KIS 체결 감사 행은 지우기 전에 복사해 둔다.
+V30 이후에는 V30 이전 이미지로 롤백하지 않는다. 옛 코드는 거래소 축을 몰라 KIS 행까지 Upbit 상태로 읽는다. 불가피하면 앱을 멈추고 `./dump_local.sh before-V30-down` 을 돌린 뒤 아래로 KIS 행을 먼저 지우고, `V30_down.sql` 을 실행한 다음 옛 이미지를 올린다. `bot_state` 는 V17 부터 거래소 축이 있어 옛 이미지도 거래소로 걸러 읽으므로 지우지 않는다. `trade_executions` 의 KIS 체결 감사 행은 지우기 전에 복사해 둔다.
 ```sql
 BEGIN;
 CREATE TABLE v30_rollback_archive_trade_executions AS SELECT * FROM trade_executions WHERE exchange <> 'UPBIT';
@@ -350,13 +350,13 @@ V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V31_down.sql
+  ./dump_local.sh before-V31-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V31_down.sql
   APP_VERSION=<V31 이전 SHA> docker compose up -d --pull missing
   ```
-  `/tmp/V31_down.sql` 은 저장소의 파일을 서버로 올린 것이다. `backup.sh` 가 실패하면 down 은 돌지 않는다. S3 백업을 쓸 수 없으면 `docker compose exec -T postgres pg_dump -U trading -d trading --no-owner | gzip` 으로 덤프를 먼저 남기고 `&&` 뒤 명령만 실행한다.
+  `/tmp/V31_down.sql` 은 저장소의 파일을 서버로 올린 것이다. `dump_local.sh` 는 덤프를 서버의 `/opt/app/backups/manual-*.sql.gz` 에 남기고(이름표마다 최근 5개), 덤프가 끝까지 써지지 않으면 실패해 down 이 돌지 않는다. 외부 사본은 S3 백업(`./backup.sh`)을 설정했을 때만 받을 수 있다.
 - `KIS_TRADING_ENABLED=false` 이면 `/api/kis/keys` 가 없어 사용자가 저장한 키를 API 로 지울 수 없다. 그때 한 사용자의 키를 지우려면 `/opt/app` 에서 아래를 실행한다. 한 환경만 지우면 `<환경>` 에 `KIS_PAPER`(모의) 또는 `KIS`(실전)를 넣고, 두 환경을 모두 지우면 `AND exchange = ...` 를 뺀다. 백업 조건은 위 down 과 같다.
   ```bash
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
+  ./dump_local.sh before-kis-key-delete && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
     -c "DELETE FROM user_broker_keys WHERE user_id = <사용자 id> AND exchange = '<환경>'"
   ```
 
@@ -371,7 +371,7 @@ V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V32_down.sql
+  ./dump_local.sh before-V32-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V32_down.sql
   APP_VERSION=<V32 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -385,7 +385,7 @@ V33 은 `trade_notification_outbox` 테이블만 새로 만든다. 사전 점검
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V33_down.sql
+  ./dump_local.sh before-V33-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V33_down.sql
   APP_VERSION=<V33 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -399,7 +399,7 @@ V34 는 `trading_states` 에 봇 장부 칼럼(`book_volume`·`book_avg_price`·
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V34_down.sql
+  ./dump_local.sh before-V34-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V34_down.sql
   APP_VERSION=<V34 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -414,7 +414,7 @@ V35 는 `manual_interventions` 테이블을 더한다. 예전 pending 수동 해
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V35_down.sql
+  ./dump_local.sh before-V35-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V35_down.sql
   APP_VERSION=<V35 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -427,7 +427,7 @@ V36 은 `error_alert_outbox` 테이블을 더한다(위 ERROR 알림 절).
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V36_down.sql
+  ./dump_local.sh before-V36-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V36_down.sql
   APP_VERSION=<V36 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -440,7 +440,7 @@ V37 은 `trading_states.version`(기존 행 0)을 더한다(위 상태 저장 �
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V37_down.sql
+  ./dump_local.sh before-V37-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V37_down.sql
   APP_VERSION=<V37 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -453,7 +453,7 @@ V38 은 `trading_states.pending_buy_since`·`pending_buy_alerted`(기존 행 nul
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V38_down.sql
+  ./dump_local.sh before-V38-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V38_down.sql
   APP_VERSION=<V38 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -471,7 +471,7 @@ V39 는 코드가 더 쓰지 않는 것을 지운다. 지운 행 수는 기동 �
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
+  ./dump_local.sh before-V39-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
   APP_VERSION=<V39 이전 SHA> docker compose up -d --pull missing
   ```
 
@@ -484,6 +484,6 @@ V40 은 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions
   ```bash
   cd /opt/app
   docker compose stop app
-  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V40_down.sql
+  ./dump_local.sh before-V40-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V40_down.sql
   APP_VERSION=<V40 이전 SHA> docker compose up -d --pull missing
   ```

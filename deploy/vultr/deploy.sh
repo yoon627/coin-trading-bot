@@ -565,10 +565,11 @@ do_deploy() {
     scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/Caddyfile"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/caddy/Caddyfile
     scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/apply_caddyfile.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/apply_caddyfile.sh
     scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/backup.sh"  "${SSH_USER}@${PUBLIC_IP}":/opt/app/backup.sh
+    scp "${SSH_OPTIONS[@]}" "$SCRIPT_DIR/dump_local.sh" "${SSH_USER}@${PUBLIC_IP}":/opt/app/dump_local.sh
     scp "${SSH_OPTIONS[@]}" "$COMPOSE_FILE"          "${SSH_USER}@${PUBLIC_IP}":/opt/app/docker-compose.yml
     scp "${SSH_OPTIONS[@]}" "$tmp_env"               "${SSH_USER}@${PUBLIC_IP}":/opt/app/.env
     rm -f "$tmp_env"; trap - EXIT
-    ssh_inst 'chmod +x /opt/app/backup.sh && chmod 600 /opt/app/.env'
+    ssh_inst 'chmod +x /opt/app/backup.sh /opt/app/dump_local.sh && chmod 600 /opt/app/.env'
 
     # argv 에 두면 ps 로 보이므로 stdin 으로 넘긴다.
     if [[ -n "${GHCR_TOKEN:-}" ]]; then

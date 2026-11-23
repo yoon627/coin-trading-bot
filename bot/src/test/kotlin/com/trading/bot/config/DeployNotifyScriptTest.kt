@@ -128,6 +128,15 @@ class DeployNotifyScriptTest {
         assertThat(sshRemote.readText()).contains("mkdir -p /opt/app/caddy")
     }
 
+    /** README 의 DB 되돌리기 절차가 서버의 `./dump_local.sh` 로 시작한다. */
+    @Test
+    fun `배포가 손 덤프 스크립트를 서버에 올리고 실행 권한을 준다`() {
+        deploy(deployRepo(), remoteRc = 0)
+
+        assertThat(scpCalls.readLines().map { it.substringAfterLast(':') }).contains("/opt/app/dump_local.sh")
+        assertThat(sshRemote.readText()).contains("chmod +x /opt/app/backup.sh /opt/app/dump_local.sh")
+    }
+
     /** 접속 시한만으로는 조용히 끊긴 연결에서 job 시한(20분)까지 알림 없이 기다린다. 긴 원격 배포(`bash -s`)가 빠지면 안 된다. */
     @Test
     fun `배포의 모든 ssh 와 scp 는 접속·무응답 시한을 건다`() {
@@ -139,7 +148,7 @@ class DeployNotifyScriptTest {
         val ssh = sshArgs.readLines()
         val scp = scpArgs.readLines()
         assertThat(ssh).anyMatch { it.contains("bash -s") }
-        assertThat(scp).hasSize(5)
+        assertThat(scp).hasSize(6)
         assertThat(ssh + scp).describedAs((ssh + scp).joinToString("\n")).allSatisfy {
             assertThat(it).contains("-o ConnectTimeout=10", "-o ServerAliveInterval=15", "-o ServerAliveCountMax=8")
         }
@@ -406,7 +415,7 @@ class DeployNotifyScriptTest {
     private fun deployRepo(sameAsLastGood: Boolean = false, migration: Boolean = false, floor: Boolean = false): File {
         val repo = File(dir, "repo").apply { mkdirs() }
         val vultr = File(repo, "deploy/vultr").apply { mkdirs() }
-        for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "apply_caddyfile.sh", "backup.sh")) {
+        for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "apply_caddyfile.sh", "backup.sh", "dump_local.sh")) {
             RepoFiles.file("deploy/vultr/$name").copyTo(File(vultr, name))
         }
         git(repo, "init", "-q")

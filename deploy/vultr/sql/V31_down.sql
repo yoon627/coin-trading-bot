@@ -8,9 +8,9 @@
 -- V31 이 마지막 적용 버전일 때만 쓴다. V32 이후가 적용돼 있으면 V31 행만 빠진 이력은 Flyway validate 가 기동을 막으므로
 -- 아래 DO 블록이 멈춘다.
 --
--- 실행: 서버 /opt/app 에서 앱을 멈추고(docker compose stop app) 이 파일을 /tmp 로 올린 뒤, 백업이 성공했을 때만 돌린다
---   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V31_down.sql
--- backup.sh 가 실패하면(버킷 접근 실패 시 덤프를 남기지 않는다) 진행하지 않는다.
+-- 실행: 서버 /opt/app 에서 앱을 멈추고(docker compose stop app) 이 파일을 /tmp 로 올린 뒤, 서버 디스크 덤프가 성공했을 때만 돌린다
+--   ./dump_local.sh before-V31-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V31_down.sql
+-- dump_local.sh 가 실패하면(덤프가 끝까지 써지지 않으면) 진행하지 않는다.
 -- 그다음 V31 이전 이미지로 올린다(APP_VERSION=<V31 이전 SHA> docker compose up -d --pull missing).
 
 BEGIN;
