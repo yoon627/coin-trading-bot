@@ -90,6 +90,12 @@ class MarketDataStore {
         }
     }.toMap()
 
+    /** 구독에서 빠진 마켓의 시세·봉을 지운다. 남기면 다시 구독됐을 때 멈춘 값이 최신처럼 읽힌다. */
+    fun forget(exchange: Exchange, market: String) {
+        latestTickers.remove("$exchange:$market")
+        candleBuffers.keys.removeIf { it.startsWith("$exchange:$market:") }
+    }
+
     fun getLatestTicker(exchange: Exchange, market: String): NormalizedTicker? {
         return latestTickers["$exchange:$market"]
     }

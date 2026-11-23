@@ -5,7 +5,6 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.config.MarketDataWatchdogProperties
-import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.stream.CandleAggregator
 import com.trading.common.config.PriceEventsProperties
 import com.trading.common.domain.CandleInterval
@@ -45,7 +44,7 @@ class DailyCandleReconcileTest {
     private val feed = mockk<UpbitMarketFeed>(relaxed = true)
     private val store = MarketDataStore()
     private val service = MarketDataIngestionService(
-        feed, store, CandleAggregator(store), mockk<WatchlistProperties>(relaxed = true), MarketDataWatchdogProperties(), PriceEventsProperties(), clock,
+        feed, store, CandleAggregator(store), MarketDataWatchdogProperties(), PriceEventsProperties(), clock,
     )
 
     private val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger

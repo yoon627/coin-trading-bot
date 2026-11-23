@@ -5,9 +5,6 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.trading.bot.config.MarketDataWatchdogProperties
-import com.trading.bot.config.WatchlistProperties
-import com.trading.bot.engine.UserTradingManager
-import com.trading.bot.notification.DiscordErrorLogAppender
 import com.trading.bot.stream.CandleAggregator
 import com.trading.common.config.PriceEventsProperties
 import com.trading.common.domain.CandleInterval
@@ -26,10 +23,11 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
-import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
@@ -37,11 +35,6 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
-import org.springframework.boot.context.event.ApplicationReadyEvent
-import org.springframework.context.event.EventListener
-import org.springframework.core.annotation.AnnotatedElementUtils
-import org.springframework.core.annotation.Order
-import org.springframework.core.annotation.OrderUtils
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MarketDataIngestionServiceTest {
@@ -49,9 +42,10 @@ class MarketDataIngestionServiceTest {
     private val feed = mockk<UpbitMarketFeed>(relaxed = true)
     private val store = mockk<MarketDataStore>(relaxed = true)
     private val aggregator = mockk<CandleAggregator>(relaxed = true)
-    private val watchlist = mockk<WatchlistProperties>(relaxed = true)
+    private val subscription = MarketSubscription().also { every { store.subscription } returns it }
     private val clock = MutableClock(Instant.parse("2026-11-12T03:00:00Z"))
-    private val service = MarketDataIngestionService(feed, store, aggregator, watchlist, MarketDataWatchdogProperties(), PriceEventsProperties(), clock)
+    private val service = MarketDataIngestionService(feed, store, aggregator, MarketDataWatchdogProperties(), PriceEventsProperties(), clock)
+    private val bot = Any()
 
     private class MutableClock(var now: Instant) : Clock() {
         override fun getZone(): ZoneId = ZoneOffset.UTC
@@ -294,31 +288,21 @@ class MarketDataIngestionServiceTest {
         coVerify(exactly = 1) { feed.getCandles("BTC/KRW", CandleInterval.M1, any()) }
     }
 
-    private fun serviceWatching(tickers: String, priceEvents: PriceEventsProperties = PriceEventsProperties()) =
-        MarketDataIngestionService(feed, store, aggregator, WatchlistProperties(tickers), MarketDataWatchdogProperties(), priceEvents)
-
-    // KRW_BTC 같은 항목이 섞이면 구독 메시지를 만들다 예외가 나 모든 마켓의 시세가 끊긴다.
-    @Test
-    fun `형식이 틀린 watchlist 항목은 빼고 나머지 마켓만 구독한다`() {
-        every { feed.marketFlow(any(), any(), any()) } returns emptyFlow()
-        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
-        val service = serviceWatching("KRW-BTC,KRW_BTC,krw-t")
-        try {
-            service.start()
-            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW", "T/KRW"), true, any()) }
-        } finally {
-            service.stop()
-        }
-    }
+    /** 구독 집합을 바로 따르는 서비스(디바운스·재연결 최소 간격 없음). */
+    private fun following(
+        priceEvents: PriceEventsProperties = PriceEventsProperties(),
+        watchdog: MarketDataWatchdogProperties = MarketDataWatchdogProperties(),
+    ) = MarketDataIngestionService(feed, store, aggregator, watchdog, priceEvents, clock, subscriptionDebounceMs = 1, resubscribeMinIntervalMs = 0)
 
     @Test
     fun `스위치를 끄면 trade 를 구독하지 않는다`() {
-        every { feed.marketFlow(any(), any(), any()) } returns emptyFlow()
+        every { feed.marketFlow(any(), any(), any(), any()) } returns emptyFlow()
         coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
-        val service = serviceWatching("KRW-BTC", PriceEventsProperties(enabled = false))
+        val service = following(PriceEventsProperties(enabled = false))
         try {
             service.start()
-            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), false, any()) }
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), false, any(), any()) }
         } finally {
             service.stop()
         }
@@ -328,16 +312,17 @@ class MarketDataIngestionServiceTest {
     @Test
     fun `체결은 저장소 체결 흐름으로만, 시세는 최신가로만 들어간다`() {
         val trade = NormalizedTrade(Exchange.UPBIT, "BTC/KRW", 51_000_000.0, 0.1, Instant.parse("2026-11-12T03:00:00Z"), 7)
-        every { feed.marketFlow(any(), any(), any()) } answers {
+        every { feed.marketFlow(any(), any(), any(), any()) } answers {
             thirdArg<(NormalizedTicker) -> Unit>().invoke(ticker)
             flowOf(trade)
         }
         coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
-        val service = serviceWatching("KRW-BTC")
+        val service = following()
         try {
             service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
             verify(timeout = 5_000) { store.publishTrade(trade) }
-            verify(exactly = 1) { store.updateTicker(ticker) }
+            verify(atLeast = 1) { store.updateTicker(ticker) }
         } finally {
             service.stop()
         }
@@ -364,47 +349,20 @@ class MarketDataIngestionServiceTest {
         }
     }
 
-    @Test
-    fun `빠진 watchlist 항목은 기동 뒤 ERROR 한 줄로 알리고 모두 맞으면 알리지 않는다`() {
-        val errors = errorsWhileReporting(serviceWatching("KRW-BTC,KRW_BTC,K-BTC"))
-        assertEquals(1, errors.size)
-        assertTrue(errors.single().contains("KRW_BTC") && errors.single().contains("K-BTC"), errors.single())
-        assertTrue(errors.single().contains("빼고 시세를 수집합니다"), errors.single())
-        assertTrue(errorsWhileReporting(serviceWatching("KRW-BTC,KRW-T")).isEmpty())
-        // 남는 마켓이 없으면 수집이 꺼진다고 알린다. start() 의 WARN 은 Discord 에 가지 않는다.
-        val allInvalid = errorsWhileReporting(serviceWatching("KRW-BTC KRW-ETH")).single()
-        assertTrue(allInvalid.contains("시세 수집을 끕니다"), allInvalid)
-        // ERROR 는 Discord 로 나가므로 값을 통째로 붙여 넣은 항목은 잘라서 싣는다.
-        val pasted = errorsWhileReporting(serviceWatching("KRW-BTC," + "A".repeat(500))).single()
-        assertTrue(pasted.contains("A".repeat(40)) && !pasted.contains("A".repeat(41)), pasted)
-    }
-
-    // @PostConstruct 는 Discord appender attach 전이라 ERROR 가 Discord 에 가지 않는다.
-    @Test
-    fun `watchlist 보고는 Discord appender 뒤·복원 앞에 도는 ApplicationReadyEvent 리스너다`() {
-        val report = MarketDataIngestionService::class.java.getMethod("reportInvalidWatchlist")
-        val listener = AnnotatedElementUtils.findMergedAnnotation(report, EventListener::class.java)
-        assertEquals(listOf(ApplicationReadyEvent::class.java), listener?.classes?.map { it.java })
-        assertTrue(!report.isAnnotationPresent(PostConstruct::class.java))
-        val appenderOrder = OrderUtils.getOrder(DiscordErrorLogAppender::class.java)!!
-        val reportOrder = AnnotatedElementUtils.findMergedAnnotation(report, Order::class.java)!!.value
-        val restore = UserTradingManager::class.java.getMethod("restoreOnStartup")
-        val restoreOrder = AnnotatedElementUtils.findMergedAnnotation(restore, Order::class.java)!!.value
-        assertTrue(reportOrder in (appenderOrder + 1) until restoreOrder, "appender $appenderOrder < report $reportOrder < restore $restoreOrder")
-    }
-
     // 워치독 재시작이 무수신 기준을 되돌리므로 장애가 길어져도 WARN 만 쌓이고 Discord(ERROR)에는 가지 않았다.
     @Test
     fun `시세가 5분 넘게 안 오면 장애 한 번에 ERROR 한 줄, 다시 받으면 INFO 한 줄을 남긴다`() {
-        every { feed.marketFlow(any(), any(), any()) } returns emptyFlow()
+        every { feed.marketFlow(any(), any(), any(), any()) } returns emptyFlow()
         coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
-        val service = serviceWatching("KRW-BTC")
+        val service = following()
         val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         logger.addAppender(appender)
         fun errors() = appender.list.filter { it.level == Level.ERROR }.map { it.formattedMessage }
         try {
             service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
             val startedAt = System.currentTimeMillis()
 
             service.checkTickerHealth(startedAt + 4 * 60_000)
@@ -431,17 +389,16 @@ class MarketDataIngestionServiceTest {
 
     @Test
     fun `워치독을 꺼도 시세 장애 알림은 낸다`() {
-        every { feed.marketFlow(any(), any(), any()) } returns emptyFlow()
+        every { feed.marketFlow(any(), any(), any(), any()) } returns emptyFlow()
         coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
-        val service = MarketDataIngestionService(
-            feed, store, aggregator, WatchlistProperties("KRW-BTC"), MarketDataWatchdogProperties(enabled = false),
-            PriceEventsProperties(),
-        )
+        val service = following(watchdog = MarketDataWatchdogProperties(enabled = false))
         val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         logger.addAppender(appender)
         try {
             service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
             service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
             assertEquals(1, appender.list.count { it.level == Level.ERROR && it.formattedMessage.contains("[FEED DOWN]") })
             assertTrue(appender.list.none { it.formattedMessage.contains("restarting collection") })
@@ -452,16 +409,205 @@ class MarketDataIngestionServiceTest {
         }
     }
 
-    private fun errorsWhileReporting(service: MarketDataIngestionService): List<String> {
+    // --- 구독 집합을 따른다 ---
+
+    private fun errorLog(block: (() -> List<String>) -> Unit) {
         val logger = LoggerFactory.getLogger(MarketDataIngestionService::class.java) as Logger
         val appender = ListAppender<ILoggingEvent>().apply { start() }
         logger.addAppender(appender)
-        return try {
-            service.reportInvalidWatchlist()
-            appender.list.filter { it.level == Level.ERROR }.map { it.formattedMessage }
+        try {
+            block { appender.list.filter { it.level == Level.ERROR }.map { it.formattedMessage } }
         } finally {
             logger.detachAppender(appender)
             appender.stop()
         }
+    }
+
+    @Test
+    fun `봇이 없으면 연결하지 않고 끊김 알림도 내지 않는다`() = errorLog { errors ->
+        val service = following()
+        try {
+            service.start()
+            Thread.sleep(200)
+            service.checkTickerHealth(System.currentTimeMillis() + 60 * 60_000)
+
+            verify(exactly = 0) { feed.marketFlow(any(), any(), any(), any()) }
+            assertTrue(errors().isEmpty(), errors().toString())
+        } finally {
+            service.stop()
+        }
+    }
+
+    @Test
+    fun `구독 집합이 바뀌면 그 집합으로 다시 연결하고 같은 집합이면 다시 연결하지 않는다`() {
+        every { feed.marketFlow(any(), any(), any(), any()) } returns flow { awaitCancellation() }
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = following()
+        try {
+            service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
+
+            subscription.update(bot, listOf("KRW-ETH", "KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW", "ETH/KRW"), true, any(), any()) }
+
+            runBlocking { service.applySubscription() }
+            verify(exactly = 2) { feed.marketFlow(any(), any(), any(), any()) }
+        } finally {
+            service.stop()
+        }
+    }
+
+    // 누구의 시작·정지든 모든 사용자의 피드를 다시 연결하므로 몰린 변경은 한 번으로 모으고, 재연결 사이에 간격을 둔다.
+    @Test
+    fun `몰린 변경은 한 번의 재연결로 모이고 재연결 사이에 최소 간격을 둔다`() {
+        val connectedAt = java.util.Collections.synchronizedList(mutableListOf<Long>())
+        every { feed.marketFlow(any(), any(), any(), any()) } answers {
+            connectedAt += System.currentTimeMillis()
+            flow { awaitCancellation() }
+        }
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = MarketDataIngestionService(
+            feed, store, aggregator, MarketDataWatchdogProperties(), PriceEventsProperties(), clock,
+            subscriptionDebounceMs = 200, resubscribeMinIntervalMs = 1_000,
+        )
+        try {
+            service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            subscription.update(Any(), listOf("KRW-ETH"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW", "ETH/KRW"), true, any(), any()) }
+            verify(exactly = 1) { feed.marketFlow(any(), any(), any(), any()) }
+
+            subscription.update(bot, listOf("KRW-BTC", "KRW-XRP"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW", "ETH/KRW", "XRP/KRW"), true, any(), any()) }
+            // 연결 시각 사이로 잰다 — 시험 스레드가 늦게 깨어나도 흔들리지 않는다.
+            assertTrue(connectedAt[1] - connectedAt[0] >= 1_000, "최소 간격 전에 다시 연결했다: $connectedAt")
+        } finally {
+            service.stop()
+        }
+    }
+
+    // 워치독 재시작이 집합 변경 재시작과 겹쳐도 옛 집합으로 되돌아가거나 연결이 둘이 되면 안 된다.
+    @Test
+    fun `워치독 재시작과 집합 변경이 겹쳐도 새 집합의 흐름 하나만 남는다`() {
+        val live = java.util.concurrent.atomic.AtomicInteger()
+        val subscribed = java.util.Collections.synchronizedList(mutableListOf<List<String>>())
+        every { feed.marketFlow(any(), any(), any(), any()) } answers {
+            subscribed += firstArg<List<String>>()
+            flow<NormalizedTrade> {
+                live.incrementAndGet()
+                try { awaitCancellation() } finally { live.decrementAndGet() }
+            }
+        }
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = following(watchdog = MarketDataWatchdogProperties(staleMs = 1))
+        try {
+            service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
+
+            Thread.sleep(20)
+            service.checkTickerHealth(System.currentTimeMillis())
+            subscription.update(bot, listOf("KRW-ETH"))
+            service.checkTickerHealth(System.currentTimeMillis())
+
+            val deadline = System.currentTimeMillis() + 5_000
+            while (System.currentTimeMillis() < deadline && (subscribed.last() != listOf("ETH/KRW") || live.get() != 1)) Thread.sleep(20)
+            Thread.sleep(200)
+            assertEquals(listOf("ETH/KRW"), subscribed.last())
+            assertEquals(1, live.get())
+        } finally {
+            service.stop()
+        }
+    }
+
+    // 빈 집합 동안 시각이 멈춰 있어 종목이 다시 생기자마자 [FEED DOWN] 이 나거나, 앞선 장애의 알림 상태가 남아 새 장애를 못 알리면 안 된다.
+    @Test
+    fun `봇이 없다가 다시 생기면 끊김 판단을 처음부터 한다`() = errorLog { errors ->
+        every { feed.marketFlow(any(), any(), any(), any()) } returns flow { awaitCancellation() }
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = following(watchdog = MarketDataWatchdogProperties(enabled = false))
+        try {
+            service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
+            service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
+            assertEquals(1, errors().size, errors().toString())
+
+            subscription.remove(bot)
+            Thread.sleep(200)
+            subscription.update(bot, listOf("KRW-ETH"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("ETH/KRW"), true, any(), any()) }
+
+            service.checkTickerHealth(System.currentTimeMillis() + 4 * 60_000)
+            assertEquals(1, errors().size, errors().toString())
+            service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
+            assertEquals(2, errors().size, errors().toString())
+        } finally {
+            service.stop()
+        }
+    }
+
+    // PING 에 대한 UP 응답도 연결이 살아 있다는 뜻이다 — 거래가 뜸한 마켓만 구독해도 끊김으로 보지 않는다.
+    @Test
+    fun `UP 응답을 받으면 시세처럼 살아 있는 것으로 본다`() = errorLog { errors ->
+        val alive = java.util.concurrent.atomic.AtomicReference<() -> Unit>()
+        every { feed.marketFlow(any(), any(), any(), any()) } answers {
+            alive.set(arg(3))
+            flow { awaitCancellation() }
+        }
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = following(watchdog = MarketDataWatchdogProperties(enabled = false))
+        try {
+            service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
+            service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
+            assertEquals(1, errors().size, errors().toString())
+
+            alive.get().invoke()
+            service.checkTickerHealth(System.currentTimeMillis() + 4 * 60_000)
+            assertEquals(1, errors().size, errors().toString())
+        } finally {
+            service.stop()
+        }
+    }
+
+    // 새 봇의 마켓 일봉이 늦으면 엔진이 그동안 REST 로 받는다. 분봉 주기(60초)를 기다리지 않고 바로 시드하고, 빠진 마켓은 바로 지운다.
+    @Test
+    fun `분봉 수집은 구독이 바뀌면 주기를 기다리지 않고 새 마켓을 시드하고 빠진 마켓을 지운다`() {
+        every { feed.marketFlow(any(), any(), any(), any()) } returns flow { awaitCancellation() }
+        coEvery { feed.getCandles(any(), any(), any()) } returns emptyList()
+        val service = following()
+        try {
+            service.start()
+            subscription.update(bot, listOf("KRW-BTC"))
+            coVerify(timeout = 5_000) { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) }
+
+            subscription.update(bot, listOf("KRW-ETH"))
+            coVerify(timeout = 5_000) { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) }
+            verify(timeout = 5_000) { store.forget(Exchange.UPBIT, "BTC/KRW") }
+        } finally {
+            service.stop()
+        }
+    }
+
+    // 빠졌다 다시 들어온 마켓이 멈춘 오늘 일봉을 '오늘' 로 남기면 매수 판단이 그 값을 쓴다. 빠질 때 지우고 들어오면 다시 시드한다.
+    @Test
+    fun `빠진 마켓은 저장소·집계기·재시도에서 지우고 다시 들어오면 다시 시드한다`() = runBlocking {
+        coEvery { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) } throws RuntimeException("down")
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) } returns emptyList()
+
+        var collected = service.syncCandleMarkets(emptyList(), listOf("BTC/KRW", "ETH/KRW"))
+        collected = service.syncCandleMarkets(collected, listOf("BTC/KRW"))
+        verify { store.forget(Exchange.UPBIT, "ETH/KRW") }
+        verify { aggregator.forget(Exchange.UPBIT, "ETH/KRW") }
+        clock.now = clock.now.plus(1, ChronoUnit.HOURS)
+        service.retryFailedSeeds()
+        coVerify(exactly = 1) { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) }
+
+        service.syncCandleMarkets(collected, listOf("BTC/KRW", "ETH/KRW"))
+        coVerify(exactly = 2) { feed.getCandles("ETH/KRW", CandleInterval.D1, any()) }
+        coVerify(exactly = 1) { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) }
     }
 }

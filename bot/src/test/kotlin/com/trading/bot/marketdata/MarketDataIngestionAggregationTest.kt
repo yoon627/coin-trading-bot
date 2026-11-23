@@ -1,7 +1,6 @@
 package com.trading.bot.marketdata
 
 import com.trading.bot.config.MarketDataWatchdogProperties
-import com.trading.bot.config.WatchlistProperties
 import com.trading.bot.stream.CandleAggregator
 import com.trading.common.config.PriceEventsProperties
 import com.trading.common.domain.CandleInterval
@@ -27,7 +26,7 @@ class MarketDataIngestionAggregationTest {
     private val feed = mockk<UpbitMarketFeed>(relaxed = true)
     private val store = MarketDataStore()
     private val service = MarketDataIngestionService(
-        feed, store, CandleAggregator(store), mockk<WatchlistProperties>(relaxed = true), MarketDataWatchdogProperties(), PriceEventsProperties(),
+        feed, store, CandleAggregator(store), MarketDataWatchdogProperties(), PriceEventsProperties(),
     )
 
     @BeforeEach
