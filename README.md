@@ -463,7 +463,7 @@ V39 는 코드가 더 쓰지 않는 것을 지운다. 지운 행 수는 기동 �
 
 - 테이블: `manual_interventions`(V35), V21 백필 전 값 `trade_records_v21_backup`·`trade_executions_v21_backup`, 손으로 만든 `users_bak_20260602`.
 - `trading_states` 칼럼: `halted`·`halt_reason`·`reconcile_failure_count`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume`.
-- `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 는 앱이 더 매핑하지 않는다(새 행은 DB 기본값). 칼럼은 이 이미지가 마지막 정상 배포가 된 뒤의 마이그레이션(V40)에서 지운다. 그 전 이미지는 이 칼럼을 넣고 읽기 때문이다.
+- 같은 배포에서 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 를 엔티티에서 뺐다. 칼럼은 V40 이 지웠다.
 
 롤백:
 - 자동 롤백(마지막 정상 배포 이미지)은 halt 제거(#372) 이후 이미지라 V39 위에서 그대로 뜬다.
@@ -473,4 +473,17 @@ V39 는 코드가 더 쓰지 않는 것을 지운다. 지운 행 수는 기동 �
   docker compose stop app
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
   APP_VERSION=<V39 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V40 (매핑하지 않는 사용자·체결 칼럼 삭제)
+
+V40 은 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 를 지운다. V39 와 같은 배포부터 앱이 매핑하지 않았다. 기본값이 아니던 행 수는 기동 로그에 `V40 drop:` 으로 남는다.
+
+- V39 이미지로의 롤백은 그대로 뜨고 쓴다(그 이미지는 이 칼럼을 쓰지 않는다).
+- V39 이전 이미지는 이 칼럼을 넣으므로 V40 스키마에서 가입·체결 기록이 실패한다. 그 이미지로 내려가야 하면 앱을 멈추고 `deploy/vultr/sql/V40_down.sql` 로 칼럼(기본값)을 되살린 뒤 V40 이전 이미지만 띄운다. V40 이 든 이미지가 다시 뜨면 V40 이 또 적용돼 되살린 칼럼을 지운다. 더 내려가면 이어서 위 V39 절차를 따른다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V40_down.sql
+  APP_VERSION=<V40 이전 SHA> docker compose up -d --pull missing
   ```

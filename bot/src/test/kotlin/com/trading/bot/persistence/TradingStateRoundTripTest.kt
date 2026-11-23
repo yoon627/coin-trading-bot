@@ -181,19 +181,22 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
-    // 엔티티가 더 매핑하지 않는 칼럼은 다음 마이그레이션에서 지울 때까지 남고, 새 행은 DB 기본값을 받는다.
+    // 가입·체결 기록은 저장소의 save 로 들어간다. 엔티티와 스키마가 어긋나면 여기서 깨진다.
     @Test
-    fun `new users and trade executions get the database defaults for the columns the entities no longer map`() = runTest {
-        val userId = userRepository.save(UserEntity(username = "it-defaults-$runId", password = "x")).awaitSingle().id!!
+    fun `users and trade executions save through the repositories on the current schema`() = runTest {
+        val userId = userRepository.save(UserEntity(username = "it-save-$runId", password = "x")).awaitSingle().id!!
         tradeExecutionRepository.save(
             TradeExecutionEntity(userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = "BUY", price = 100.0, volume = 1.0, totalAmount = 100.0),
         ).awaitSingle()
 
-        val row = databaseClient.sql(
-            "SELECT u.public_profile::text || ',' || u.public_strategy::text || ',' || u.admin::text || ',' || e.order_type || ',' || e.status AS r " +
-                "FROM users u JOIN trade_executions e ON e.user_id = u.id WHERE u.id = :id",
-        ).bind("id", userId).map { r -> r.get("r", String::class.java)!! }.one().awaitSingle()
-        assertThat(row).isEqualTo("false,false,false,MARKET,EXECUTED")
+        assertThat(userRepository.findById(userId).awaitSingle().username).isEqualTo("it-save-$runId")
+        assertThat(tradeExecutionRepository.findByUserId(userId, 10, 0).collectList().awaitSingle().map { it.market }).containsExactly("KRW-BTC")
+        val unmapped = databaseClient.sql(
+            "SELECT table_name || '.' || column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() " +
+                "AND ((table_name = 'users' AND column_name IN ('public_profile', 'public_strategy', 'admin')) " +
+                "OR (table_name = 'trade_executions' AND column_name IN ('order_type', 'status')))",
+        ).map { r -> r.get("c", String::class.java)!! }.all().collectList().awaitSingle()
+        assertThat(unmapped).isEmpty()
     }
 
     /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. 두 번째 저장은 첫 저장의 버전을 들고 온다. */
@@ -360,12 +363,43 @@ class TradingStateRoundTripTest {
         inSchema(schema) { conn -> assertThat(conn.retiredDefinitions(schema)).isEmpty() }
     }
 
-    // V39_down 이 되살린 정의를 그 앞의 되돌리기 SQL 들이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다.
     @Test
-    fun `after the V39 down sql the earlier down sqls still run one after another`() = withScratchSchema("v39chain") { schema ->
+    fun `V40 drops the user and trade execution columns no entity maps, and the down sql restores them as they were`() = withScratchSchema("v40down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V40_down.sql").readText()
         migrate(schema, "39")
+        val before = inSchema(schema) { conn ->
+            conn.update("INSERT INTO users (username, password, admin) VALUES ('it-v40-$runId', 'x', TRUE)")
+            conn.update(
+                "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount) " +
+                    "SELECT id, 'UPBIT', 'KRW-BTC', 'BUY', 100.0, 1.0, 100.0 FROM users WHERE username = 'it-v40-$runId'",
+            )
+            conn.unmappedDefinitions(schema)
+        }
+        assertThat(before).hasSize(5)
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V40 이 적용돼 있지 않다")
+
+        migrate(schema, "40")
         inSchema(schema) { conn ->
-            for (v in 39 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
+            assertThat(conn.unmappedDefinitions(schema)).isEmpty()
+            assertThat(conn.strings("SELECT market FROM trade_executions")).containsExactly("KRW-BTC")
+
+            conn.update(downSql)
+            assertThat(conn.unmappedDefinitions(schema)).containsExactlyElementsOf(before)
+            assertThat(conn.strings("SELECT u.admin::text || ',' || e.order_type || ',' || e.status FROM users u JOIN trade_executions e ON e.user_id = u.id"))
+                .containsExactly("false,MARKET,EXECUTED")
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '40'")).isEmpty()
+        }
+
+        migrate(schema, "40")
+        inSchema(schema) { conn -> assertThat(conn.unmappedDefinitions(schema)).isEmpty() }
+    }
+
+    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V40_down → … → V34_down).
+    @Test
+    fun `the down sqls from the latest version run one after another`() = withScratchSchema("downchain") { schema ->
+        migrate(schema, "40")
+        inSchema(schema) { conn ->
+            for (v in 40 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
             assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("33")
             // V34 의 세 칼럼과 V35 의 테이블은 지워지고, V14·V30 의 칼럼은 그 버전의 down 까지 남는다.
             assertThat(conn.retiredDefinitions(schema).map { it.substringBefore(' ') }).containsExactly(
@@ -425,6 +459,16 @@ class TradingStateRoundTripTest {
             "SELECT replace(indexdef, '$schema.', '') FROM pg_indexes WHERE schemaname = '$schema' AND tablename = 'manual_interventions' ORDER BY indexname",
         )
     }
+
+    /** V40 이 지우는 users·trade_executions 칼럼의 정의(타입·NULL·기본값). */
+    private fun Connection.unmappedDefinitions(schema: String): List<String> = strings(
+        "SELECT table_name || '.' || column_name || ' ' || data_type || coalesce('(' || character_maximum_length || ')', '') || " +
+            "' null=' || is_nullable || ' default=' || coalesce(column_default, '-') " +
+            "FROM information_schema.columns WHERE table_schema = '$schema' " +
+            "AND ((table_name = 'users' AND column_name IN ('public_profile', 'public_strategy', 'admin')) " +
+            "OR (table_name = 'trade_executions' AND column_name IN ('order_type', 'status'))) " +
+            "ORDER BY table_name, column_name",
+    )
 
     private fun Connection.droppedTables(schema: String): List<String> = strings(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = '$schema' " +
