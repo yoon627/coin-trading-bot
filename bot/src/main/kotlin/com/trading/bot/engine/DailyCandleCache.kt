@@ -10,7 +10,7 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 
 /**
- * watchlist 밖 티커의 일봉 REST 캐시. Upbit 레이트리밋은 IP 단위이고 엔진은 사용자마다 하나라서
+ * 시세 저장소에 아직 일봉이 없는 티커(봇 시작 직후 시드 전 등)의 일봉 REST 캐시. Upbit 레이트리밋은 IP 단위이고 엔진은 사용자마다 하나라서
  * 엔진마다 두지 않고 싱글톤으로 둔다. TTL 은 캔들 수집 주기(60초)에 맞췄다.
  */
 @Service

@@ -57,8 +57,6 @@ services:
       - TRADING_SHADOW_EXIT_TRAILING_ARM_PCT
       # 업비트 체결(trade) 구독. 끄면 ticker 만 받는다.
       - TRADING_PRICE_EVENTS_ENABLED
-      # 시세 수집 대상. TRADING_TICKERS 와 별개이며 목록 밖 티커는 REST 로 조회한다.
-      - WATCHLIST_TICKERS
       # WS 무수신 워치독. 재연결이 폭주하면 ENABLED=false 로 끈다.
       - MARKETDATA_WATCHDOG_ENABLED
       - MARKETDATA_WATCHDOG_STALE_MS

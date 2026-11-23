@@ -33,6 +33,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.time.Duration
+import reactor.core.publisher.Mono
 
 /** Upbit ticker·체결(trade)은 WebSocket 한 연결로, 캔들은 REST 로 가져와 정규화한다. */
 @Component
@@ -41,6 +43,7 @@ class UpbitMarketFeed internal constructor(
     private val objectMapper: ObjectMapper,
     private val wsUri: URI,
     private val baseReconnectDelayMs: Long,
+    private val pingIntervalMs: Long = PING_INTERVAL_MS,
 ) {
     // 기본값 파라미터로 두면 같은 타입의 빈이 생겼을 때 조용히 주입되므로 생성자를 따로 둔다.
     @Autowired
@@ -55,7 +58,11 @@ class UpbitMarketFeed internal constructor(
         private const val BASE_RECONNECT_DELAY_MS = 1_000L
         private const val WARN_INTERVAL_MS = 60_000L
 
-        // 수집이 10초 멈춰도 실측 최대(초당 40건) × 기본 watchlist 13종목을 담는다. 그보다 밀리면 오래된 체결부터 버린다.
+        // 업비트는 120초 동안 주고받은 것이 없으면 닫고, PING 을 받아야 약 10초마다 {"status":"UP"} 을 보낸다(문서·2026-11-23 접속 시험).
+        private const val PING_INTERVAL_MS = 30_000L
+        private const val PING = "PING"
+
+        // 수집이 10초 멈춰도 실측 최대(BTC 초당 40건) × 13종목을 담는다 — 종목이 늘어도 체결률은 BTC 가 이끈다. 그보다 밀리면 오래된 체결부터 버린다.
         internal const val TRADE_CHANNEL_CAPACITY = 40 * 13 * 10
     }
 
@@ -85,12 +92,14 @@ class UpbitMarketFeed internal constructor(
 
     /**
      * ticker 는 받는 즉시 [onTicker] 로 넘긴다(netty 스레드) — 지금 손절가의 출처라 체결이 밀려도 잃지 않게 체결 버퍼와 나눈다.
-     * 체결은 상한 있는 버퍼를 거쳐 flow 로 내보낸다.
+     * 체결은 상한 있는 버퍼를 거쳐 flow 로 내보낸다. 구독 뒤 [pingIntervalMs] 마다 PING 을 보내고 UP 응답은 [onAlive] 로 넘긴다 —
+     * 거래가 뜸한 마켓만 구독해도 연결이 살아 있음을 안다.
      */
     fun marketFlow(
         markets: List<String>,
         includeTrades: Boolean,
         onTicker: (NormalizedTicker) -> Unit,
+        onAlive: () -> Unit = {},
     ): Flow<NormalizedTrade> = flow {
         val connected = AtomicBoolean(false)
         val reconnectAttempts = AtomicInteger(0)
@@ -111,10 +120,13 @@ class UpbitMarketFeed internal constructor(
                 .uri(wsUri)
                 .handle { inbound, outbound ->
                     connected.set(true)
+                    // 시세를 한 번이라도 받은 연결에서만 UP 을 생존으로 친다. 구독이 거절되거나 아무것도 오지 않는 연결은 UP 이 와도 끊긴 것이다.
+                    val delivered = AtomicBoolean(false)
                     log.info("Upbit WebSocket connected. Markets: {}", markets)
 
                     val subscriptionMessage = buildSubscriptionMessage(markets, includeTrades)
-                    val sendMono = outbound.sendString(reactor.core.publisher.Flux.just(subscriptionMessage)).then()
+                    val pings = reactor.core.publisher.Flux.interval(Duration.ofMillis(pingIntervalMs)).map { PING }
+                    val sendMono = outbound.sendString(reactor.core.publisher.Flux.just(subscriptionMessage).concatWith(pings)).then()
 
                     val receiveMono = inbound.receive()
                         .asByteArray()
@@ -122,18 +134,29 @@ class UpbitMarketFeed internal constructor(
                         .doOnNext { message ->
                             val event = parseMessage(message) ?: return@doOnNext
                             // handshake 성공만으로는 구독이 받아들여졌는지 알 수 없어 ticker 나 체결을 받은 뒤에 횟수를 되돌린다.
+                            // UP 은 PING 응답일 뿐 구독을 받아들였다는 뜻이 아니라 되돌리지 않는다.
                             // 횟수는 연결이 끝날 때만 늘어 한 연결에서는 처음 받은 메시지에서만 0 이 아니다.
-                            val failed = reconnectAttempts.getAndSet(0)
-                            if (failed > 0) log.info("Upbit WS receiving data; reconnect backoff reset after {} attempts", failed)
+                            if (event !is MarketEvent.Alive) {
+                                val failed = reconnectAttempts.getAndSet(0)
+                                if (failed > 0) log.info("Upbit WS receiving data; reconnect backoff reset after {} attempts", failed)
+                            }
                             when (event) {
-                                is MarketEvent.Ticker -> if (running.get()) onTicker(event.ticker)
-                                is MarketEvent.Trade -> trades.trySend(event.trade)
+                                is MarketEvent.Ticker -> {
+                                    delivered.set(true)
+                                    if (running.get()) onTicker(event.ticker)
+                                }
+                                is MarketEvent.Trade -> {
+                                    delivered.set(true)
+                                    trades.trySend(event.trade)
+                                }
+                                MarketEvent.Alive -> if (running.get() && delivered.get()) onAlive()
                             }
                         }
                         .doOnError { e -> log.warn("Upbit WS receive error: {}", e.message) }
                         .then()
 
-                    sendMono.then(receiveMono)
+                    // PING 은 연결 내내 보내므로 받기와 나란히 돈다. 받기가 끝나면(서버가 닫음) 연결도 끝난다.
+                    Mono.firstWithSignal(receiveMono, sendMono)
                 }
                 .doOnError { e ->
                     log.warn("Upbit WS connection error: {}", e.message)
@@ -229,17 +252,14 @@ class UpbitMarketFeed internal constructor(
     fun drainParseFailures(): Map<String, Long> = parseFailures.drain()
 
     // 업비트는 한 요청에 type 객체를 여러 개 받는다. 연결·요청 한도(초당 5)를 늘리지 않으려고 같은 요청에 싣는다.
+    // ticker 는 구독하자마자 마켓마다 현재 상태(스냅샷)를 한 번 받는다 — 거래가 뜸한 마켓만 구독해도 이 연결이 시세를 받는지 안다.
+    // 체결은 지난 체결을 다시 받지 않게 실시간만 받는다.
     internal fun buildSubscriptionMessage(markets: List<String>, includeTrades: Boolean): String {
         val upbitCodes = markets.map { MarketPair.toUpbitFormat(it) }
         val ticket = mapOf("ticket" to UUID.randomUUID().toString())
-        val types = listOf("ticker").plus(if (includeTrades) listOf("trade") else emptyList()).map { type ->
-            mapOf(
-                "type" to type,
-                "codes" to upbitCodes,
-                "isOnlyRealtime" to true,
-            )
-        }
-        return objectMapper.writeValueAsString(listOf(ticket) + types)
+        val ticker = mapOf("type" to "ticker", "codes" to upbitCodes)
+        val trade = mapOf("type" to "trade", "codes" to upbitCodes, "isOnlyRealtime" to true)
+        return objectMapper.writeValueAsString(listOf(ticket, ticker) + if (includeTrades) listOf(trade) else emptyList())
     }
 
     internal fun parseMessage(message: String, nowMs: Long = System.currentTimeMillis()): MarketEvent? {
@@ -248,6 +268,12 @@ class UpbitMarketFeed internal constructor(
         } catch (e: com.fasterxml.jackson.core.JacksonException) {
             // 연결 ACK 같은 프레임이 흔히 섞여 들어온다.
             log.debug("Skipped non-parsable frame: {}", e.message)
+            return null
+        }
+        if (node["status"]?.asText() == "UP") return MarketEvent.Alive
+        // 구독 요청이 틀리면 업비트는 오류 프레임을 보낸다. 조용히 버리면 시세가 안 오는 이유를 알 수 없다.
+        node["error"]?.let { error ->
+            parseFailures.record(null, nowMs, "error frame ${error["name"]?.asText()}: ${error["message"]?.asText()}")
             return null
         }
         return try {

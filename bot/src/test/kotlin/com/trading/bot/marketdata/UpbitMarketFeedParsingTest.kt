@@ -144,6 +144,25 @@ class UpbitMarketFeedParsingTest {
         val codes = listOf("KRW-BTC", "KRW-ETH")
         assertEquals(listOf("ticker" to codes, "trade" to codes), types(includeTrades = true))
         assertEquals(listOf("ticker" to codes), types(includeTrades = false))
+        // ticker 는 구독 때 스냅샷을 받아 거래가 뜸한 마켓도 이 연결이 시세를 받는지 보이고, 체결은 실시간만 받는다.
+        val request = ObjectMapper().readTree(feed.buildSubscriptionMessage(listOf("BTC/KRW"), true)).filter { it.has("type") }
+        assertEquals(listOf(false, true), request.map { it["isOnlyRealtime"]?.asBoolean() ?: false })
+    }
+
+    @Test
+    fun `an UP frame is a sign of life and an error frame is counted, not dropped silently`() {
+        assertEquals(MarketEvent.Alive, feed.parseMessage("""{"status":"UP"}"""))
+        val logger = LoggerFactory.getLogger(UpbitMarketFeed::class.java) as Logger
+        val appender = ListAppender<ILoggingEvent>().apply { start() }
+        logger.addAppender(appender)
+        try {
+            assertNull(feed.parseMessage("""{"error":{"name":"WRONG_FORMAT","message":"bad"}}""", nowMs = 0))
+            val warn = appender.list.single { it.level == Level.WARN }.formattedMessage
+            assertTrue(warn.contains("WRONG_FORMAT"), warn)
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
     }
 
     @Test

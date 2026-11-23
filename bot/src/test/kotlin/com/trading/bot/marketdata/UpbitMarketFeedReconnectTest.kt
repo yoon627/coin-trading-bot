@@ -108,7 +108,7 @@ class UpbitMarketFeedReconnectTest {
 
         runBlocking {
             withTimeout(10_000) {
-                val job = launch(Dispatchers.IO) { feed(20).marketFlow(listOf("BTC/KRW"), includeTrades = false) { received.add(it) }.collect {} }
+                val job = launch(Dispatchers.IO) { feed(20).marketFlow(listOf("BTC/KRW"), includeTrades = false, onTicker = { received.add(it) }).collect {} }
                 while (reconnects().size < 5 || received.size < 2) delay(20)
                 job.cancelAndJoin()
             }
@@ -132,7 +132,7 @@ class UpbitMarketFeedReconnectTest {
         runBlocking {
             withTimeout(10_000) {
                 val job = launch(Dispatchers.IO) {
-                    feed(20).marketFlow(listOf("BTC/KRW"), includeTrades = true) { tickers.add(it) }.collect { trades.add(it) }
+                    feed(20).marketFlow(listOf("BTC/KRW"), includeTrades = true, onTicker = { tickers.add(it) }).collect { trades.add(it) }
                 }
                 while (trades.isEmpty() || tickers.isEmpty()) delay(20)
                 job.cancelAndJoin()
@@ -159,7 +159,7 @@ class UpbitMarketFeedReconnectTest {
         runBlocking {
             withTimeout(20_000) {
                 val job = launch(Dispatchers.IO) {
-                    feed.marketFlow(listOf("BTC/KRW"), includeTrades = true) { tickers.add(it) }.collect { gate.await() }
+                    feed.marketFlow(listOf("BTC/KRW"), includeTrades = true, onTicker = { tickers.add(it) }).collect { gate.await() }
                 }
                 while (tickers.none { it.price == 42.0 }) delay(20)
                 // 마지막 ticker 뒤에 보낸 것이 없으니 넘친 체결도 이미 버려졌다.
@@ -176,7 +176,7 @@ class UpbitMarketFeedReconnectTest {
 
         runBlocking {
             withTimeout(10_000) {
-                val job = launch(Dispatchers.IO) { feed(200).marketFlow(listOf("BTC/KRW"), includeTrades = false) {}.collect {} }
+                val job = launch(Dispatchers.IO) { feed(200).marketFlow(listOf("BTC/KRW"), includeTrades = false, onTicker = {}).collect {} }
                 // 두 번째 재연결 줄이 찍히면 그 지연만큼 잠든 사이다.
                 while (reconnects().size < 2) delay(10)
                 job.cancelAndJoin()

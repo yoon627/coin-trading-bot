@@ -17,13 +17,16 @@ import java.util.concurrent.ConcurrentSkipListMap
 @Component
 class MarketDataStore {
 
+    /** 시세 수집기가 구독할 마켓. 엔진과 수집기가 이미 이 저장소를 함께 쓰므로 여기에 둔다. */
+    val subscription = MarketSubscription()
+
     private val latestTickers = ConcurrentHashMap<String, NormalizedTicker>()
     private val candleBuffers = ConcurrentHashMap<String, ConcurrentSkipListMap<Instant, NormalizedCandle>>()
 
     companion object {
         private const val MAX_CANDLE_BUFFER_SIZE = 200
 
-        // 실측 최대(BTC 초당 40건) × 60초 × 기본 watchlist 13종목. 구독자가 이만큼 밀리면 오래된 체결부터 버린다.
+        // 실측 최대(BTC 초당 40건) × 60초 × 13종목 — 종목이 늘어도 체결률은 BTC 가 이끈다. 구독자가 이만큼 밀리면 오래된 체결부터 버린다.
         internal const val TRADE_BUFFER_CAPACITY = 40 * 60 * 13
 
         // 재연결 직후 다시 오는 체결을 가릴 만큼만 기억한다(BTC 최대 속도로 약 50초).
@@ -86,6 +89,12 @@ class MarketDataStore {
             if (intake.received > 0) market to intake else null
         }
     }.toMap()
+
+    /** 구독에서 빠진 마켓의 시세·봉을 지운다. 남기면 다시 구독됐을 때 멈춘 값이 최신처럼 읽힌다. */
+    fun forget(exchange: Exchange, market: String) {
+        latestTickers.remove("$exchange:$market")
+        candleBuffers.keys.removeIf { it.startsWith("$exchange:$market:") }
+    }
 
     fun getLatestTicker(exchange: Exchange, market: String): NormalizedTicker? {
         return latestTickers["$exchange:$market"]

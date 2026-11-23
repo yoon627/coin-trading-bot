@@ -1,8 +1,6 @@
 package com.trading.bot.marketdata
 
 import com.trading.bot.config.MarketDataWatchdogProperties
-import com.trading.bot.config.WatchlistProperties
-import com.trading.bot.config.reportableEntries
 import com.trading.bot.stream.CandleAggregator
 import com.trading.common.config.PriceEventsProperties
 import com.trading.common.domain.CandleInterval
@@ -21,18 +19,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
-import org.springframework.boot.context.event.ApplicationReadyEvent
-import org.springframework.context.event.EventListener
-import org.springframework.core.Ordered
-import org.springframework.core.annotation.Order
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,16 +44,20 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * Upbit ticker·체결(WS)과 분봉(REST 폴링)을 받아 MarketDataStore 에 넣는다.
  * 분봉은 CandleAggregator 로도 보내 엔진이 읽는 D1 등 상위 봉을 만든다.
+ * 받는 마켓은 돌고 있는 봇들의 활성 종목([MarketSubscription])이다 — 바뀌면 모아서 새 목록으로 다시 연결한다.
  */
 @Component
 class MarketDataIngestionService(
     private val upbitMarketFeed: UpbitMarketFeed,
     private val marketDataStore: MarketDataStore,
     private val candleAggregator: CandleAggregator,
-    private val watchlistProperties: WatchlistProperties,
     private val watchdogProperties: MarketDataWatchdogProperties,
     private val priceEventsProperties: PriceEventsProperties,
     private val clock: Clock = Clock.systemUTC(),
+    // 기동 때 여러 봇이 잇달아 복원되는 변경을 한 번의 재연결로 모은다.
+    private val subscriptionDebounceMs: Long = 2_000,
+    // 누구의 시작·정지든 모든 사용자의 피드를 다시 연결하므로 재연결 사이를 띄운다(업비트 연결 한도 초당 5).
+    private val resubscribeMinIntervalMs: Long = 15_000,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(
@@ -64,10 +65,15 @@ class MarketDataIngestionService(
             CoroutineExceptionHandler { _, e -> log.error("Market data ingestion coroutine failed: {}", e.message, e) },
     )
 
+    // 지금 연결이 구독하는 마켓. 바꾸는 쪽은 restartMutex 안에서만 쓴다.
     @Volatile
     private var markets: List<String> = emptyList()
 
-    // 워치독이 무수신을 판정하는 기준. 시작·재시작 때 now 로 맞춰 연속 재시작을 막는다.
+    // 구독이 바뀌면 분봉 수집이 기다리지 않고 새 마켓을 시드하게 깨운다.
+    private val marketsChanged = Channel<Unit>(Channel.CONFLATED)
+    private var lastResubscribeAt = 0L
+
+    // 워치독이 무수신을 판정하는 기준(시세·UP 응답). 시작·재시작 때 now 로 맞춰 연속 재시작을 막는다.
     @Volatile
     private var lastTickerAt = 0L
 
@@ -130,37 +136,45 @@ class MarketDataIngestionService(
         private const val TRADE_INTAKE_LOG_INTERVAL_MS = 300_000L
     }
 
+    // 봇 복원은 이보다 늦다(ApplicationReadyEvent). 그때까지 구독할 마켓이 없어 연결하지 않는다.
     @PostConstruct
     fun start() {
-        val m = watchlistProperties.validTickers().map { MarketPair.normalize(Exchange.UPBIT, it) }
-        if (m.isEmpty()) {
-            if (watchlistProperties.tickerList().isEmpty()) {
-                log.warn("No watchlist markets configured; market data ingestion disabled")
-            } else {
-                log.warn("Every watchlist market is malformed; market data ingestion disabled")
-            }
-            return
-        }
-        markets = m
-        lastTickerAt = System.currentTimeMillis()
-        lastDataAt = lastTickerAt
-        log.info("Starting in-process market data ingestion for {} markets (trades={}): {}", m.size, priceEventsProperties.enabled, m)
-        tickerJob = scope.launch { runTickerCollection(m) }
-        scope.launch { collectCandlesPeriodically(m) }
-        if (priceEventsProperties.enabled) scope.launch { logTradeIntakePeriodically(m) }
+        log.info("Starting in-process market data ingestion; markets follow running bots (trades={})", priceEventsProperties.enabled)
+        scope.launch { marketDataStore.subscription.markets.debounce(subscriptionDebounceMs.milliseconds).collect { applySubscription() } }
+        scope.launch { collectCandlesPeriodically() }
+        if (priceEventsProperties.enabled) scope.launch { logTradeIntakePeriodically() }
     }
 
-    // @PostConstruct 는 Discord appender 가 붙기 전이라 그 ERROR 는 Discord 에 가지 않는다.
-    @EventListener(ApplicationReadyEvent::class)
-    @Order(Ordered.HIGHEST_PRECEDENCE + 1)
-    fun reportInvalidWatchlist() {
-        val invalid = watchlistProperties.invalidTickers()
-        if (invalid.isEmpty()) return
-        val outcome = if (watchlistProperties.validTickers().isEmpty()) "를 빼면 남는 마켓이 없어 시세 수집을 끕니다" else "는 빼고 시세를 수집합니다"
-        log.error(
-            "WATCHLIST_TICKERS 의 형식이 틀린 항목 {} {} — 배포 환경(.env·VULTR_DEPLOY_ENV 시크릿)을 고치세요",
-            reportableEntries(invalid), outcome,
-        )
+    /**
+     * 구독 집합이 지금 연결과 다르면 새 목록으로 다시 연결한다. 워치독 재시작과 같은 잠금 안에서 그 순간의 집합을 읽어,
+     * 둘이 겹쳐도 마지막은 새 집합이고 연결은 하나다. 같은 연결에 새 구독을 보내지 않는다 — 지금 피드는 연결 뒤 보내는 길이 없다.
+     */
+    internal suspend fun applySubscription() = restartMutex.withLock {
+        if (shuttingDown.get() || marketDataStore.subscription.markets.value.toList() == markets) return@withLock
+        // 같은 집합이면 기다리지 않는다 — 기다리는 동안 잠금을 쥐어 워치독 재시작이 밀린다.
+        val wait = lastResubscribeAt + resubscribeMinIntervalMs - System.currentTimeMillis()
+        if (markets.isNotEmpty() && wait > 0) delay(wait.milliseconds)
+        val wanted = marketDataStore.subscription.markets.value.toList()
+        if (wanted == markets || shuttingDown.get()) return@withLock
+        tickerJob?.cancelAndJoin()
+        tickerJob = null
+        val wasIdle = markets.isEmpty()
+        markets = wanted
+        val now = System.currentTimeMillis()
+        lastResubscribeAt = now
+        marketsChanged.trySend(Unit)
+        if (wanted.isEmpty()) {
+            log.info("No running bot markets; market data ingestion idle")
+            return@withLock
+        }
+        lastTickerAt = now
+        // 쉬는 동안 멈춘 시각으로 곧바로 [FEED DOWN] 을 내거나, 앞선 장애의 알림 상태 때문에 새 장애를 못 알리지 않게 한다.
+        if (wasIdle) {
+            lastDataAt = now
+            outageAlerted.set(false)
+        }
+        log.info("Subscribing market data for {} markets (trades={}): {}", wanted.size, priceEventsProperties.enabled, wanted)
+        tickerJob = scope.launch { runTickerCollection(wanted) }
     }
 
     @PreDestroy
@@ -174,7 +188,7 @@ class MarketDataIngestionService(
     private suspend fun runTickerCollection(markets: List<String>) {
         while (currentCoroutineContext().isActive) {
             try {
-                upbitMarketFeed.marketFlow(markets, priceEventsProperties.enabled, ::ingestTicker).collect { trade -> ingestTrade(trade) }
+                upbitMarketFeed.marketFlow(markets, priceEventsProperties.enabled, ::ingestTicker, ::markAlive).collect { trade -> ingestTrade(trade) }
                 log.warn("Ticker flow completed unexpectedly; restarting in {}ms", watchdogProperties.restartBackoffMs)
             } catch (e: CancellationException) {
                 throw e
@@ -188,15 +202,34 @@ class MarketDataIngestionService(
         }
     }
 
-    private suspend fun collectCandlesPeriodically(markets: List<String>) {
-        seedDailyCandles(markets)
+    // 시드·지우기·재시도·대조 상태는 이 코루틴만 쓴다. 구독이 바뀌면 주기를 기다리지 않고 깨어 새 마켓부터 시드한다.
+    private suspend fun collectCandlesPeriodically() {
+        var collected = emptyList<String>()
         while (true) {
-            collectCandlesRound(markets)
-            // 뒤 단계가 실패해도 분봉 수집 루프는 이어 간다.
-            guarded("D1 seed retry") { retryFailedSeeds() }
-            guarded("D1 reconcile") { reconcilePreviousDay(markets) }
-            delay(CANDLE_COLLECT_INTERVAL_MS.milliseconds)
+            collected = syncCandleMarkets(collected, markets)
+            if (collected.isNotEmpty()) {
+                collectCandlesRound(collected)
+                // 뒤 단계가 실패해도 분봉 수집 루프는 이어 간다.
+                guarded("D1 seed retry") { retryFailedSeeds() }
+                guarded("D1 reconcile") { reconcilePreviousDay(collected) }
+            }
+            withTimeoutOrNull(CANDLE_COLLECT_INTERVAL_MS.milliseconds) { marketsChanged.receive() }
         }
+    }
+
+    /**
+     * 빠진 마켓은 저장소·집계기·재시도·대조 상태에서 지우고 새로 들어온 마켓(빠졌다 돌아온 마켓 포함)은 시드한다. 지우지 않으면
+     * 돌아온 마켓의 멈춘 오늘 일봉을 엔진이 '오늘' 로 받아 매수 판단에 쓴다.
+     */
+    internal suspend fun syncCandleMarkets(previous: List<String>, current: List<String>): List<String> {
+        (previous - current.toSet()).forEach { market ->
+            seedRetries.remove(market)
+            reconciles.remove(market)
+            marketDataStore.forget(Exchange.UPBIT, market)
+            candleAggregator.forget(Exchange.UPBIT, market)
+        }
+        seedDailyCandles(current.filter { it !in previous })
+        return current
     }
 
     private suspend fun guarded(step: String, block: suspend () -> Unit) {
@@ -256,8 +289,8 @@ class MarketDataIngestionService(
         val m = markets
         if (m.isEmpty()) return
         if (watchdogProperties.enabled && watchdogProperties.isStale(nowMs, lastTickerAt)) {
-            log.warn("No ticker for >{}ms; restarting collection", watchdogProperties.staleMs)
-            restartTickerCollection(m)
+            log.warn("No ticker or keepalive for >{}ms; restarting collection", watchdogProperties.staleMs)
+            restartTickerCollection()
         }
         val since = lastDataAt
         if (since > 0 && nowMs - since > FEED_OUTAGE_ALERT_MS && outageAlerted.compareAndSet(false, true)) {
@@ -267,32 +300,32 @@ class MarketDataIngestionService(
                 return
             }
             log.error(
-                "[FEED DOWN] No Upbit ticker for {}s across {} markets — 엔진은 낡은 시세를 REST 로 대체하고, 수집은 계속 다시 띄운다.",
+                "[FEED DOWN] No Upbit ticker or keepalive for {}s across {} markets — 엔진은 낡은 시세를 REST 로 대체하고, 수집은 계속 다시 띄운다.",
                 (nowMs - since) / 1000, m.size,
             )
         }
     }
 
-    private fun restartTickerCollection(markets: List<String>) {
+    // 같은 마켓으로 새 연결을 연다. 목록은 잠금 안에서 읽는다 — 집합 변경 재시작이 먼저 끝났으면 그 목록이다.
+    private fun restartTickerCollection() {
         scope.launch {
             restartMutex.withLock {
                 if (shuttingDown.get()) return@withLock
                 // mutex 를 기다리는 사이 tick 이 들어왔으면 재시작하지 않는다.
                 if (!watchdogProperties.isStale(System.currentTimeMillis(), lastTickerAt)) return@withLock
+                val current = markets
+                if (current.isEmpty()) return@withLock
                 // 이전 연결이 완전히 닫힌 뒤 새로 연다.
                 tickerJob?.cancelAndJoin()
                 if (shuttingDown.get()) return@withLock
                 lastTickerAt = System.currentTimeMillis()
-                tickerJob = scope.launch { runTickerCollection(markets) }
+                tickerJob = scope.launch { runTickerCollection(current) }
             }
         }
     }
 
     internal fun ingestTicker(ticker: NormalizedTicker) {
-        val now = System.currentTimeMillis()
-        lastTickerAt = now
-        lastDataAt = now
-        if (outageAlerted.compareAndSet(true, false)) log.info("[FEED RECOVERED] Upbit ticker feed is receiving again")
+        markAlive()
         try {
             marketDataStore.updateTicker(ticker)
         } catch (e: Exception) {
@@ -300,7 +333,15 @@ class MarketDataIngestionService(
         }
     }
 
-    // 워치독은 ticker 로만 판단한다 — 체결은 거래가 적은 마켓에서 오래 없을 수 있다.
+    /** 시세나 PING 에 대한 UP 응답을 받았다. UP 은 거래가 없는 마켓만 구독해도 오므로 연결이 살아 있다는 뜻이다. */
+    internal fun markAlive() {
+        val now = System.currentTimeMillis()
+        lastTickerAt = now
+        lastDataAt = now
+        if (outageAlerted.compareAndSet(true, false)) log.info("[FEED RECOVERED] Upbit ticker feed is receiving again")
+    }
+
+    // 워치독은 시세와 UP 응답으로 판단한다 — 체결은 거래가 적은 마켓에서 오래 없을 수 있다.
     private fun ingestTrade(trade: NormalizedTrade) {
         try {
             marketDataStore.publishTrade(trade)
@@ -309,10 +350,10 @@ class MarketDataIngestionService(
         }
     }
 
-    private suspend fun logTradeIntakePeriodically(markets: List<String>) {
+    private suspend fun logTradeIntakePeriodically() {
         while (true) {
             delay(TRADE_INTAKE_LOG_INTERVAL_MS.milliseconds)
-            logTradeIntake(markets)
+            markets.takeIf { it.isNotEmpty() }?.let { logTradeIntake(it) }
         }
     }
 
@@ -351,7 +392,7 @@ class MarketDataIngestionService(
         false
     }
 
-    // 부팅 직후 과거 일봉을 store 에 채운다. D1 은 분봉 집계라 하루에 하나씩만 쌓이기 때문이다.
+    // 구독에 들어온 마켓의 과거 일봉을 store 에 채운다. D1 은 분봉 집계라 하루에 하나씩만 쌓이기 때문이다.
     // 분봉 수집과 같은 코루틴에서 돌아 store 에 쓰는 쪽이 하나로 유지된다.
     // 집계기는 분봉 전용이라 D1 은 store 에 바로 넣는다.
     internal suspend fun seedDailyCandles(markets: List<String>) {

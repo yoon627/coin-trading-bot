@@ -63,6 +63,13 @@ class CandleAggregator(
         for (interval in AGGREGATE_INTERVALS) raiseFloor(prefix(exchange, market, interval), alignToPeriodStart(now, interval))
     }
 
+    /** 구독에서 빠진 마켓의 집계 period 와 바닥을 지운다. 다시 구독되면 시드가 새로 정한다. */
+    fun forget(exchange: Exchange, market: String) {
+        val marketPrefix = "$exchange:$market:"
+        periods.keys.removeIf { it.startsWith(marketPrefix) }
+        newestPeriodStart.keys.removeIf { it.startsWith(marketPrefix) }
+    }
+
     /**
      * 이미 완전한 봉을 그 period 의 확정 집계로 등록한다. [now] 의 분보다 오래된 M1 은 이 봉에 포함돼 있어 무시하고,
      * [now] 의 분만 얹는다. 그 한 분의 volume 이 겹칠 수 있지만 누적되지는 않는다.

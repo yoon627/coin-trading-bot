@@ -22,7 +22,7 @@ import org.springframework.scheduling.config.FixedDelayTask
 import org.springframework.scheduling.config.ScheduledTaskHolder
 
 /**
- * watchlist·워치독 기본값은 설정 클래스에만 있어 `application.yml` 에 키가 없어도 운영 env 가 바인딩돼야 한다.
+ * 워치독 기본값은 설정 클래스에만 있어 `application.yml` 에 키가 없어도 운영 env 가 바인딩돼야 한다.
  * Boot 는 이름이 `-systemEnvironment` 로 끝나는 `SystemEnvironmentPropertySource` 에만 env 매퍼를 써서
  * `withPropertyValues` 로는 흉내낼 수 없다.
  */
@@ -30,7 +30,7 @@ class MarketDataPropertiesBindingTest {
 
     @Configuration
     @EnableScheduling
-    @EnableConfigurationProperties(WatchlistProperties::class, MarketDataWatchdogProperties::class)
+    @EnableConfigurationProperties(MarketDataWatchdogProperties::class)
     @Import(SchedulerConfig::class)
     class Config {
         @Bean
@@ -60,13 +60,11 @@ class MarketDataPropertiesBindingTest {
     @Test
     fun `env overrides bind without yml and unset keys keep class defaults`() {
         runner(
-            "WATCHLIST_TICKERS" to "KRW-BTC, krw-eth",
             "MARKETDATA_WATCHDOG_ENABLED" to "false",
             "MARKETDATA_WATCHDOG_STALE_MS" to "90000",
             "MARKETDATA_WATCHDOG_RESTART_BACKOFF_MS" to "2500",
         ).run { ctx ->
             assertThat(ctx).hasNotFailed()
-            assertThat(ctx.getBean(WatchlistProperties::class.java).tickerList()).containsExactly("KRW-BTC", "KRW-ETH")
             val watchdog = ctx.getBean(MarketDataWatchdogProperties::class.java)
             assertThat(watchdog).isEqualTo(MarketDataWatchdogProperties(enabled = false, staleMs = 90_000, restartBackoffMs = 2_500))
         }

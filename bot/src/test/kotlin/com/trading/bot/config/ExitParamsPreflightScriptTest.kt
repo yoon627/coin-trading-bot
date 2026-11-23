@@ -138,11 +138,8 @@ class ExitParamsPreflightScriptTest {
         }
     }
 
-    // watchlist 는 앱이 형식이 틀린 항목을 빼고 구독하므로 그 필터가 기준이다. 거래 티커는 거르지 않고 그대로 주문에 쓴다.
-    private fun unusableMarket(bound: Any): String? = when (bound) {
-        is WatchlistProperties -> bound.invalidTickers().firstOrNull()
-        else -> tickerListOf(bound).firstOrNull { !usableMarket(it) }
-    }
+    // 거래 티커는 거르지 않고 그대로 주문에 쓴다.
+    private fun unusableMarket(bound: Any): String? = tickerListOf(bound).firstOrNull { !usableMarket(it) }
 
     private fun tickerListOf(bound: Any): List<String> =
         (bound::class.memberFunctions.single { it.name == "tickerList" }.call(bound) as List<*>).map { it.toString() }
@@ -275,7 +272,6 @@ class ExitParamsPreflightScriptTest {
             "TRADING_ROUND_TRIP_FEE_RATE=0.001",
             "TRADING_SHADOW_EXIT_ENABLED=true",
             "TRADING_TICKERS=KRW-BTC, KRW-ETH",
-            "WATCHLIST_TICKERS=KRW-BTC,KRW-ETH",
             "MARKETDATA_WATCHDOG_ENABLED=false",
             "MARKETDATA_WATCHDOG_STALE_MS=60000",
             "DISCORD_ERROR_ALERT_ENABLED=true",
