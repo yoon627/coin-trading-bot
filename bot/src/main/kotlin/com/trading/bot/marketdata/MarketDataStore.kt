@@ -26,7 +26,7 @@ class MarketDataStore {
     companion object {
         private const val MAX_CANDLE_BUFFER_SIZE = 200
 
-        // 실측 최대(BTC 초당 40건) × 60초 × 기본 watchlist 13종목. 구독자가 이만큼 밀리면 오래된 체결부터 버린다.
+        // 실측 최대(BTC 초당 40건) × 60초 × 13종목 — 종목이 늘어도 체결률은 BTC 가 이끈다. 구독자가 이만큼 밀리면 오래된 체결부터 버린다.
         internal const val TRADE_BUFFER_CAPACITY = 40 * 60 * 13
 
         // 재연결 직후 다시 오는 체결을 가릴 만큼만 기억한다(BTC 최대 속도로 약 50초).

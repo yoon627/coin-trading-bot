@@ -35,7 +35,7 @@ class TradingTickersCheckTest {
 
     @Test
     fun `형식이 틀리거나 빈 TRADING_TICKERS 는 기동 뒤 ERROR 한 줄로 알리고 맞으면 알리지 않는다`() {
-        // 엔진은 원래 값을 그대로 주문에 쓰므로 watchlist 와 달리 소문자도 틀린 항목이다.
+        // 엔진은 원래 값을 그대로 주문에 쓰므로 소문자도 틀린 항목이다.
         val invalid = errorsWhileReporting("KRW-BTC,KRW_BTC,krw-eth")
         assertThat(invalid).hasSize(1)
         assertThat(invalid.single()).contains("KRW_BTC", "krw-eth").doesNotContain("KRW-BTC,")

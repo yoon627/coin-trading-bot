@@ -62,11 +62,9 @@ POSITIVE_INTEGER_KEYS=(
     KIS_TRADING_PAPER_MIN_REQUEST_INTERVAL_MS
     KIS_TRADING_LIVE_MIN_REQUEST_INTERVAL_MS
 )
-# 쉼표로 구분한 대문자 마켓 코드. watchlist 의 틀린 항목은 앱이 구독에서 빼 그 마켓의 시세가 없고,
-# TRADING_TICKERS 는 소문자를 그대로 주문에 쓴다.
+# 쉼표로 구분한 대문자 마켓 코드. TRADING_TICKERS 는 소문자를 그대로 주문에 쓴다.
 TICKER_LIST_KEYS=(
     TRADING_TICKERS
-    WATCHLIST_TICKERS
 )
 EXIT_PARAM_KEYS=(
     TRADING_TAKE_PROFIT_PCT

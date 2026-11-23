@@ -1087,7 +1087,7 @@ class TradingEngineTest {
 
     @Test
     fun `runSwing REST fallback also skips buy while newest daily candle is yesterday's`() = runTest {
-        // store 부족(워밍업·watchlist 밖 티커) → REST. 그날 첫 체결 전 Upbit 일봉도 어제 봉이 [0] 이다.
+        // store 부족(워밍업·시드 전) → REST. 그날 첫 체결 전 Upbit 일봉도 어제 봉이 [0] 이다.
         val engine = createEngine(clock = clockAfterBoundary(30))
         every { dailyResetManager.getTradingDate() } returns today
         coEvery { upbitClient.getTicker("KRW-BTC") } returns listOf(Ticker(tradePrice = 100.0))

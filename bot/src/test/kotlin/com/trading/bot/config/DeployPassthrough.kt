@@ -22,7 +22,6 @@ internal object DeployPassthrough {
         TradingProperties::class,
         ShadowExitProperties::class,
         PriceEventsProperties::class,
-        WatchlistProperties::class,
         MarketDataWatchdogProperties::class,
         KisTradingProperties::class,
     )
@@ -39,7 +38,7 @@ internal object DeployPassthrough {
      * 티커 목록으로 검사할 String 프로퍼티. String 은 타입만으로 뜻이 정해지지 않아 손으로 분류하고,
      * 여기 없는 String 은 [ExitParamsPreflightScriptTest] 가 실패시킨다.
      */
-    val TICKER_LIST: Set<KProperty1<*, String>> = setOf(TradingProperties::tickers, WatchlistProperties::tickers)
+    val TICKER_LIST: Set<KProperty1<*, String>> = setOf(TradingProperties::tickers)
 
     /**
      * compose 가 값과 함께(`${…:-기본값}`) 넘겨 [PASSED] 계약 밖이지만 preflight 가 검사하는 프로퍼티. 앱이 바인딩하지 못하는

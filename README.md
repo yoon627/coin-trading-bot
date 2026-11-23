@@ -102,8 +102,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
 | `TRADING_INTERVAL_SECONDS` | `10` | 공용 시계 주기(초). 허용 `[1, 60]` — 바퀴마다 작업자가 체결 확인·일일 리셋·보유일 청산을 하고, 체결이 30초 넘게 없는 종목은 이 주기로 손절·익절·트레일링·매수를 평가한다 |
 | `TRADING_RECONCILE_ALERT_THRESHOLD` | `20` | 미해소 주문(매수·매도)이 이 값 × 매매 주기(초) 넘게 확정되지 않으면 ERROR 로 한 번 알린다(주문 시각·알림 여부는 저장돼 재시작해도 같은 주문을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 허용 `[1, 100]` |
-| `WATCHLIST_TICKERS` | 주요 KRW 13종목 | WebSocket 시세 수집 대상. 형식은 `TRADING_TICKERS`와 같고 배포 preflight 가 막는다. 앱은 형식이 틀린 항목을 구독에서 빼고 기동 뒤 ERROR 로 알린다 |
-| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신 감지·재연결 |
+| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신(시세·PING 응답) 감지·재연결 |
 | `TRADING_PRICE_EVENTS_ENABLED` | `true` | 시세 수집이 업비트 체결(`trade`)도 같은 연결로 받고, 종목 작업자가 체결마다 청산·매수를 판단한다(아래 매매 엔진 절). 끄면 ticker 만 받고 엔진도 체결을 받지 않아 바퀴만 판단한다 — 문제가 생겼을 때 env 로 끄는 비상용(재시작만으로 되돌림) |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |
 | `KIS_TRADING_INVEST_RATIO`, `KIS_TRADING_INTERVAL_SECONDS`, 청산 키 5개(`KIS_TRADING_TAKE_PROFIT_PCT` 등) | 같은 이름의 `TRADING_*` 기본값 | KIS 프로파일. 허용 구간도 `TRADING_*`와 같다 |
@@ -147,7 +146,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - 업비트 private 요청은 계좌마다 어떤 1초 창에서도 주문 10·그 밖 25 를 넘지 않게 기다렸다 보낸다(공식 한도 12·30). 엔진·포트폴리오 화면·잔고 API·09:05 대조가 같은 계좌의 한도를 함께 쓴다. 공개 시세 API 는 따로 센다.
 - 바깥(상태 API·관리자)은 종목 상태를 읽기만 한다. 정지는 모든 작업자가 끝날 때까지(주문 중이면 그 주문이 끝날 때까지) 기다린다.
 
-시세 수집은 ticker 와 함께 업비트 체결(`trade`)을 같은 WebSocket 연결·같은 구독 요청으로 받는다. ticker 는 체결을 건너뛰어(실측: BTC 체결 100건 중 14건이 ticker 에 안 보였다) 체결마다 판단하려면 `trade` 가 필요하다. 받은 체결은 체결 번호(`sequential_id`)로 중복만 거른 뒤 저장소의 체결 흐름에 싣는다(번호가 연속이 아니라 빠진 체결은 알 수 없다). ticker 는 체결과 다른 길로 받는 즉시 저장소에 넣어, 체결이 밀려도 최신 ticker 를 잃지 않는다(밀린 체결은 오래된 것부터 버린다). 5분마다 INFO `[trade intake]` 한 줄에 마켓별 받은 수·중복·피드에서 밀려 버린 수·읽지 못한 프레임 수가 남는다.
+시세 수집 대상은 돌고 있는 업비트 봇들의 활성 종목(사용자 종목 + 청산만 남은 보유)의 합집합이다. 봇이 시작·정지·재시작되거나 엔진이 종목을 정리하면 2초 모아 지금 연결과 다를 때만 새 목록으로 다시 연결한다(재연결 사이 최소 15초 — 누구의 시작·정지든 모든 사용자의 피드를 다시 연결한다). 재연결 몇 초 동안의 체결은 빠지고 시세는 REST 로 이어진다. 봇이 없으면 연결하지 않는다. 형식이 틀린 종목 코드는 구독에서 빼고 WARN 을 남긴다(없는·상장 폐지 코드는 업비트가 무시한다). 구독에서 빠진 마켓은 저장소의 시세·봉을 지우고, 다시 들어오면 일봉을 새로 시드한다. ticker 는 구독 때 마켓마다 현재 상태(스냅샷)를 한 번 받고, 30초마다 PING 을 보내 업비트의 `{"status":"UP"}` 응답도 시세처럼 생존 신호로 본다 — 거래가 뜸한 마켓만 구독해도 무수신 워치독·`[FEED DOWN]` 이 오판하지 않는다. 다만 시세를 한 번도 받지 못한 연결(구독 거절 등)의 UP 은 생존으로 치지 않는다. 업비트의 오류 프레임은 읽지 못한 프레임으로 세고 WARN 을 남긴다. 시세 수집은 ticker 와 함께 업비트 체결(`trade`)을 같은 WebSocket 연결·같은 구독 요청으로 받는다. ticker 는 체결을 건너뛰어(실측: BTC 체결 100건 중 14건이 ticker 에 안 보였다) 체결마다 판단하려면 `trade` 가 필요하다. 받은 체결은 체결 번호(`sequential_id`)로 중복만 거른 뒤 저장소의 체결 흐름에 싣는다(번호가 연속이 아니라 빠진 체결은 알 수 없다). ticker 는 체결과 다른 길로 받는 즉시 저장소에 넣어, 체결이 밀려도 최신 ticker 를 잃지 않는다(밀린 체결은 오래된 것부터 버린다). 5분마다 INFO `[trade intake]` 한 줄에 마켓별 받은 수·중복·피드에서 밀려 버린 수·읽지 못한 프레임 수가 남는다.
 
 체결로 판단한다(`TRADING_PRICE_EVENTS_ENABLED`, 기본 켬). 엔진마다 수집기 하나가 작업자가 뜬 뒤 저장소의 체결 흐름을 구독해 자기 거래소의 체결을 그 종목 작업자에게 넣는다(정리된 종목의 체결은 버린다). 수집기가 엔진이 도는 중에 끝나면 `[ENGINE DEAD] trade collector` 다.
 
@@ -282,7 +281,7 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
-Actions 배포는 `VULTR_DEPLOY_ENV`를 그대로 `deploy/vultr/.env`로 쓰고 서버 `.env`를 다시 만든다. 로컬 `deploy/vultr/.env`만 고치고 로컬에서 배포하면 다음 Actions 배포 때 secret 값으로 되돌아가므로 secret도 함께 고친다. secret만 바꾼 뒤에는 파일 변경이 없어 판정이 배포를 건너뛰므로 `force`로 실행한다. 배포 계층은 `TRADING_*`·`KIS_TRADING_*`·`WATCHLIST_TICKERS`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않아, `.env`에 적은 키만 컨테이너로 넘기고 나머지는 앱 기본값을 쓴다. 앱 기본값에 맡길 키는 secret에서도 지운다. 단 청산 키 5개는 자동매매 배포의 preflight가 요구하므로 지우지 않는다. 넘긴 키 이름은 배포 로그의 `서버 .env override 키:` 줄에서 확인한다.
+Actions 배포는 `VULTR_DEPLOY_ENV`를 그대로 `deploy/vultr/.env`로 쓰고 서버 `.env`를 다시 만든다. 로컬 `deploy/vultr/.env`만 고치고 로컬에서 배포하면 다음 Actions 배포 때 secret 값으로 되돌아가므로 secret도 함께 고친다. secret만 바꾼 뒤에는 파일 변경이 없어 판정이 배포를 건너뛰므로 `force`로 실행한다. 배포 계층은 `TRADING_*`·`KIS_TRADING_*`·`MARKETDATA_WATCHDOG_*` 기본값을 갖지 않아, `.env`에 적은 키만 컨테이너로 넘기고 나머지는 앱 기본값을 쓴다. 앱 기본값에 맡길 키는 secret에서도 지운다. 단 청산 키 5개는 자동매매 배포의 preflight가 요구하므로 지우지 않는다. 넘긴 키 이름은 배포 로그의 `서버 .env override 키:` 줄에서 확인한다.
 
 수동 배포와 운영 명령:
 
