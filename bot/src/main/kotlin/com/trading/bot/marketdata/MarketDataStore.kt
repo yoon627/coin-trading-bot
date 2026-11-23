@@ -17,6 +17,9 @@ import java.util.concurrent.ConcurrentSkipListMap
 @Component
 class MarketDataStore {
 
+    /** 시세 수집기가 구독할 마켓. 엔진과 수집기가 이미 이 저장소를 함께 쓰므로 여기에 둔다. */
+    val subscription = MarketSubscription()
+
     private val latestTickers = ConcurrentHashMap<String, NormalizedTicker>()
     private val candleBuffers = ConcurrentHashMap<String, ConcurrentSkipListMap<Instant, NormalizedCandle>>()
 

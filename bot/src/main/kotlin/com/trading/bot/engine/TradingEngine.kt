@@ -106,6 +106,9 @@ class TradingEngine(
     private val activeRef = AtomicReference<List<String>>(emptyList())
     private val active: List<String> get() = activeRef.get()
 
+    // 실시간 시세는 업비트에만 있다. 다른 거래소 엔진이 저장소를 받아도 업비트 구독에 종목을 올리지 않는다.
+    private val subscription = marketDataStore?.subscription?.takeIf { exchange == Exchange.UPBIT }
+
     // 도는 실행의 작업자. 정리된 작업자는 빠진다.
     private val workers = ConcurrentHashMap<String, TickerWorker>()
 
@@ -119,7 +122,11 @@ class TradingEngine(
         override fun release(ticker: String) {
             states.remove(ticker)
             workers.remove(ticker)
-            activeRef.updateAndGet { tickers -> tickers - ticker }
+            // 같은 바퀴에 두 작업자가 정리하면 늦게 줄인 쪽이 먼저 올려 큰 집합이 남을 수 있어, 줄이기와 올리기를 함께 잠근다.
+            synchronized(activeRef) {
+                val left = activeRef.updateAndGet { tickers -> tickers - ticker }
+                subscription?.update(this@TradingEngine, left)
+            }
             log.info("User {}: released ticker outside the list with nothing left to manage: {}", userId, ticker)
         }
     }
@@ -169,6 +176,8 @@ class TradingEngine(
             val restored = own.filterValues { it.hasEntryTrace() }.keys.filter { it !in requested }
             val active = (tickers + restored).distinct()
             activeRef.set(active)
+            // 청산만 남은 보유도 손절 시세가 필요해 활성 종목 전부를 구독한다.
+            subscription?.update(this, active)
             // 활성 ticker 의 상태만 남긴다. 먼저 채우고 나머지를 빼는 순서는 잠금 없이 읽는 getStates() 에서
             // 계속 활성인 티커가 잠깐 사라지지 않게 하려는 것이다.
             val seeded = own.filterKeys { it in active }
@@ -193,6 +202,7 @@ class TradingEngine(
             loopJob = scope.launch { runLoop() }.also { job -> job.invokeOnCompletion { cause -> if (cause != null) onPartEnded("engine", released = false, cause) } }
         } catch (e: Throwable) {
             running.set(false)
+            subscription?.remove(this)
             throw e
         }
     }
@@ -223,6 +233,7 @@ class TradingEngine(
             // 진행 중인 주문 후처리가 끝날 때까지 기다린다. 기다리지 않고 새 엔진을 띄우면 옛 작업자와 새 작업자가 함께 매매한다.
             job?.cancelAndJoin()
             loopJob = null
+            subscription?.remove(this)
         } else {
             job?.join()
         }

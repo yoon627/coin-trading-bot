@@ -5,7 +5,9 @@ import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.Ticker
 import com.trading.bot.domain.TradingState
 import com.trading.bot.marketdata.MarketDataStore
+import com.trading.bot.marketdata.MarketSubscription
 import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Exchange
 import com.trading.common.strategy.TradingStrategy
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -16,6 +18,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -194,6 +197,49 @@ class TradingEngineTickerSetTest {
         // 잔고도 귀속 불명 락도 없는 행이라 옛 진입 메타도 비운다. 남기면 그 뒤 사람이 다시 산 코인이
         // 다음 기동에 잔류로 실려 옛 buyDate 로 보유상한 매도된다.
         coVerify { positionManager.persistState(match { it.ticker == "KRW-GONE" && it.entryStrategy == null && it.buyDate == null }) }
+    }
+
+    // 시세 수집기는 이 엔진이 올린 종목을 구독한다. 청산만 남은 보유도 손절 시세가 필요해 활성 종목 전부를 올린다.
+    @Test
+    fun `the engine subscribes its active tickers on start, drops a released one, and withdraws on stop`() = runBlocking {
+        val subscription = MarketSubscription()
+        every { marketDataStore.subscription } returns subscription
+        val firstTick = CompletableDeferred<Unit>()
+        coEvery { upbitClient.getTicker(any()) } coAnswers { firstTick.complete(Unit); tickersAt(firstArg(), 100.0) }
+        coEvery { strategy.shouldBuy(any(), any(), any()) } returns false
+        // 정리는 시작 동기화 뒤에 온다. 시작 직후의 구독을 보기 전에 정리되지 않게 그 동기화를 잡아 둔다.
+        val synced = CompletableDeferred<Unit>()
+        coEvery { positionManager.syncPosition("KRW-GONE", any(), any()) } coAnswers { synced.await() }
+        val engine = createEngine()
+
+        engine.start(
+            listOf("KRW-BTC"),
+            linkedMapOf("KRW-GONE" to TradingState("KRW-GONE", entryStrategy = "test_strategy"), "KRW-XRP" to heldEntry("KRW-XRP")),
+        )
+        assertThat(subscription.markets.value).containsExactlyInAnyOrder("BTC/KRW", "GONE/KRW", "XRP/KRW")
+        synced.complete(Unit)
+
+        withTimeout(5_000) { firstTick.await() }
+        withTimeout(5_000) { while ("KRW-GONE" in engine.getActiveTickers()) delay(20) }
+        assertThat(subscription.markets.value).containsExactlyInAnyOrder("BTC/KRW", "XRP/KRW")
+
+        engine.stop()
+        assertThat(subscription.markets.value).isEmpty()
+    }
+
+    @Test
+    fun `an engine for another exchange does not subscribe to the Upbit feed`(): Unit = runBlocking {
+        val subscription = MarketSubscription()
+        every { marketDataStore.subscription } returns subscription
+        val engine = TradingEngine(
+            upbitClient = upbitClient, positionManager = positionManager, dailyResetManager = dailyResetManager, strategy = strategy,
+            tradingProperties = TradingProperties(intervalSeconds = 1), userId = 1L, marketDataStore = marketDataStore, exchange = Exchange.KIS_PAPER,
+        )
+
+        // 업비트 형식이라 거르지 않는 코드여도 다른 거래소 엔진의 것은 올리지 않는다.
+        engine.start(listOf("KRW-BTC"))
+        assertThat(subscription.markets.value).isEmpty()
+        engine.stop()
     }
 
     @Test
