@@ -1,7 +1,8 @@
 package com.trading.bot.persistence
 
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.trading.bot.api.TradeHistoryRow
+import com.trading.bot.api.toHistoryRow
 import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.FeeKind
@@ -12,7 +13,6 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.common.config.TradingProperties
-import com.trading.common.domain.Exchange
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.ZoneId
@@ -28,8 +28,6 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration
-import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -42,22 +40,18 @@ import org.springframework.transaction.reactive.TransactionalOperator
  * 마이그레이션 시험은 실행마다 만든 스키마에서 JDBC 로 돈다 — 공유 스키마에서 돌리면 다른 시험의 행이 섞인다.
  */
 @DataR2dbcTest
-@ImportAutoConfiguration(JacksonAutoConfiguration::class)
 class OrdersRoundTripTest {
 
     @Autowired private lateinit var databaseClient: DatabaseClient
-    @Autowired private lateinit var tradeRecords: TradeRecordR2dbcRepository
-    @Autowired private lateinit var executions: TradeExecutionRepository
     @Autowired private lateinit var outbox: TradeNotificationOutboxRepository
     @Autowired private lateinit var states: TradingStateRepository
     @Autowired private lateinit var orderRows: OrderRowRepository
     @Autowired private lateinit var transactionManager: ReactiveTransactionManager
-    @Autowired private lateinit var objectMapper: ObjectMapper
 
     private val stateService by lazy { TradingStateService(states, jacksonObjectMapper()) }
     private val service by lazy {
         TradeExecutionService(
-            TradeRecordRepository(tradeRecords), executions, outbox, OrderLedger(orderRows),
+            outbox, OrderLedger(orderRows),
             TransactionalOperator.create(transactionManager), TradingProperties(),
         )
     }
@@ -203,15 +197,10 @@ class OrdersRoundTripTest {
 
     // --- 체결 기록 트랜잭션 안의 orders 쓰기 ---
 
-    private suspend fun timesMatchRecord(userId: Long): List<Boolean> =
-        databaseClient.sql(
-            "SELECT o.completed_at = tr.created_at AS same FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id WHERE o.user_id = :u",
-        ).bind("u", userId).map { r -> r.get("same", java.lang.Boolean::class.java)!!.booleanValue() }.all().collectList().awaitSingle()
-
-    // 화면은 trade_records.created_at 을 보여 준다. orders 의 체결 시각이 그와 같아야 화면을 orders 로 바꿔도 시각이 그대로다.
-    // 같은 LocalDateTime 을 같은 방식으로 넘겨야 마이크로초 반올림까지 같다(초 경계·날 경계의 나노초 포함).
+    // 옛 화면은 trade_records.created_at(같은 LocalDateTime 을 timestamp 로 넣은 값)을 보였다. orders 의 체결 시각이 그 값과 같아야
+    // 화면 시각이 그대로다 — 마이크로초 반올림까지(초 경계·날 경계의 나노초 포함).
     @Test
-    fun `a fill's orders time equals its trade record time, including nanosecond rounding at a day boundary`() = runTest {
+    fun `a fill's orders time is its record time stored as a timestamp, including nanosecond rounding at a day boundary`() = runTest {
         val userId = insertUser("time")
         val times = listOf(
             java.time.LocalDateTime.of(2026, 11, 23, 23, 59, 59, 999_999_600),
@@ -220,12 +209,18 @@ class OrdersRoundTripTest {
         )
         times.forEachIndexed { i, at -> service.commitFill({}, sellFill(userId).copy(exchangeOrderId = "t-$runId-$i", clientOrderId = null, createdAt = at)) }
 
-        assertThat(timesMatchRecord(userId)).containsExactly(true, true, true)
+        val same = times.mapIndexed { i, at ->
+            databaseClient.sql("SELECT completed_at = CAST(:at AS timestamp) AS same FROM orders WHERE exchange_order_id = :o")
+                .bind("at", at).bind("o", "t-$runId-$i")
+                .map { r -> r.get("same", java.lang.Boolean::class.java)!!.booleanValue() }.one().awaitSingle()
+        }
+        assertThat(same).containsExactly(true, true, true)
     }
 
-    // 화면을 orders 로 바꿔도 같은 값이 나오는지 — 실제 체결 경로로 쓴 네 종류의 줄로 본다(운영 데이터는 TradeHistoryParityTest).
+    // 옛 trade_records 는 TradeRecord 의 화면 값(가격·수량·총액·주문 대금·손익·사유·전략·시각)을 그대로 적었다. 네 종류의 실제 경로
+    // 줄이 orders 에서 그 값으로 다시 만들어지는지 본다 — 옛 표를 지운 뒤에도 화면 값이 그대로인 근거다.
     @Test
-    fun `fills written through the real path give the same screen values from orders as from trade records`() = runTest {
+    fun `fills written through the real path give the screen values the old trade records held`() = runTest {
         val userId = insertUser("parity")
         val buy = TradeRecord(
             ticker = "KRW-BTC", side = TradeSide.BUY, price = 100.0, volume = 2.0, totalAmount = 200.0, pnlPercent = null, pnlAmount = null,
@@ -248,12 +243,18 @@ class OrdersRoundTripTest {
         )
         for (record in listOf(buy, balanceBuy, sell, balanceSell)) assertThat(service.commitFill({}, record)).isTrue()
 
-        val result = TradeHistoryParity(TradeRecordRepository(tradeRecords), orderRows, objectMapper, ZoneId.systemDefault())
-            .compare(userId, Exchange.UPBIT)
+        val oldScreen = listOf(buy, balanceBuy, sell, balanceSell).map {
+            TradeHistoryRow(
+                id = null, ticker = it.ticker, side = it.side.name, price = it.price, volume = it.volume, totalAmount = it.totalAmount,
+                orderAmount = it.orderAmount, pnlPercent = it.pnlPercent, pnlAmount = it.pnlAmount, reason = it.reason, strategy = it.strategy,
+                userId = it.userId, createdAt = it.createdAt.truncatedTo(java.time.temporal.ChronoUnit.MICROS),
+            )
+        }
 
-        assertThat(orderRows.countFilled(userId, "UPBIT").awaitSingle()).isEqualTo(4L)
-        assertThat(result.responses).isEqualTo(2)
-        assertThat(result.differences).isEmpty()
+        val fromOrders = orderRows.findFilledRecentAscending(userId, "UPBIT", 10).collectList().awaitSingle()
+            .map { it.toHistoryRow(ZoneId.systemDefault()) }
+        assertThat(fromOrders.map { it.incomplete }).containsOnly(false)
+        assertThat(fromOrders.map { it.copy(id = null, fillSource = null) }).containsExactlyElementsOf(oldScreen)
     }
 
     @Test
@@ -275,19 +276,21 @@ class OrdersRoundTripTest {
     }
 
     @Test
-    fun `a committed fill leaves one FILLED orders row with this order's values, linked to its execution and record`() = runTest {
+    fun `a committed fill leaves one FILLED orders row with this order's values and nothing in the old trade tables`() = runTest {
         val userId = insertUser("fill")
 
         assertThat(service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId))).isTrue()
 
         val row = orderRow(userId)
-        val executionId = databaseClient.sql("SELECT id FROM trade_executions WHERE user_id = :u").bind("u", userId)
-            .map { r -> r.get("id", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
-        val recordId = databaseClient.sql("SELECT id FROM trade_records WHERE user_id = :u").bind("u", userId)
-            .map { r -> r.get("id", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
         assertThat(row["status"]).isEqualTo("FILLED")
-        assertThat(row["trade_execution_id"]).isEqualTo(executionId)
-        assertThat(row["trade_record_id"]).isEqualTo(recordId)
+        assertThat(row["trade_execution_id"]).isNull()
+        assertThat(row["trade_record_id"]).isNull()
+        assertThat(count("trade_executions", userId)).isZero()
+        assertThat(count("trade_records", userId)).isZero()
+        assertThat(count("trading_states", userId)).isEqualTo(1)
+        val notification = databaseClient.sql("SELECT order_id, trade_execution_id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)
+            .fetch().one().awaitSingle()
+        assertThat(notification).containsEntry("order_id", row["id"]).containsEntry("trade_execution_id", null)
         assertThat(row).containsEntry("exchange", "UPBIT").containsEntry("market", "KRW-BTC").containsEntry("side", "SELL")
             .containsEntry("exchange_order_id", "s-$runId").containsEntry("client_order_id", "ctb-$runId")
             .containsEntry("filled_volume", 0.002).containsEntry("filled_funds", 99_950.0).containsEntry("avg_fill_price", 49_975_000.0)
@@ -310,7 +313,6 @@ class OrdersRoundTripTest {
         }.isInstanceOf(TradingStateConflictException::class.java)
 
         assertThat(count("orders", userId)).isZero()
-        assertThat(count("trade_executions", userId)).isZero()
     }
 
     // orders 쓰기의 SQL 오류는 잡지 않는다 — 잡아도 Postgres 가 트랜잭션을 중단해 뒤의 알림 행이 실패한다. 체결 전체가 되돌아가 pending 이 남는다.
@@ -335,25 +337,111 @@ class OrdersRoundTripTest {
             databaseClient.sql("DROP FUNCTION it_fail_orders_$runId()").fetch().rowsUpdated().awaitSingle()
         }
 
-        for (table in listOf("orders", "trade_executions", "trade_records", "trade_notification_outbox", "trading_states")) {
+        for (table in listOf("orders", "trade_notification_outbox", "trading_states")) {
             assertThat(count(table, userId)).describedAs(table).isZero()
         }
     }
 
-    // trade_executions 의 중복 확인을 지난 체결인데 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다 — 체결 기록은 막지 않는다.
-    @Test
-    fun `a fill whose order key already has an orders row commits without a second row`() = runTest {
-        val userId = insertUser("dupkey")
+    private suspend fun existingOrder(userId: Long, status: String, exchange: String = "UPBIT", orderId: String? = "s-$runId", clientOrderId: String? = null) {
         databaseClient.sql(
-            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status) VALUES (:u, 'UPBIT', 'KRW-BTC', 'SELL', :o, 'OPEN')",
-        ).bind("u", userId).bind("o", "s-$runId").fetch().rowsUpdated().awaitSingle()
+            "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, client_order_id, status) VALUES (:u, :e, 'KRW-BTC', 'SELL', :o, :c, :s)",
+        ).bind("u", userId).bind("e", exchange).bind("s", status)
+            .let { if (orderId == null) it.bindNull("o", String::class.java) else it.bind("o", orderId) }
+            .let { if (clientOrderId == null) it.bindNull("c", String::class.java) else it.bind("c", clientOrderId) }
+            .fetch().rowsUpdated().awaitSingle()
+    }
+
+    // 재시작 뒤 같은 주문을 다시 확정하면 기록·알림 없이 건너뛰고 상태는 커밋한다(pending 해제).
+    @Test
+    fun `a fill whose order number already has a FILLED row on this exchange is skipped and only the state commits`() = runTest {
+        val userId = insertUser("dupfilled")
+        existingOrder(userId, "FILLED")
+
+        assertThat(service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId))).isFalse()
+
+        assertThat(count("orders", userId)).isEqualTo(1)
+        assertThat(count("trade_notification_outbox", userId)).isZero()
+        assertThat(count("trading_states", userId)).isEqualTo(1)
+    }
+
+    @Test
+    fun `the same order number on another exchange does not count as recorded`() = runTest {
+        val userId = insertUser("otherexchange")
+        existingOrder(userId, "FILLED", exchange = "KIS_PAPER")
 
         assertThat(service.commitFill({}, sellFill(userId))).isTrue()
 
+        assertThat(count("orders", userId)).isEqualTo(2)
+    }
+
+    // 덮을 규칙이 없는 줄(같은 주문번호의 FILLED 아닌 줄)은 지금 생기지 않는다. 생기면 체결 기록 전체를 되돌려 pending 을 남긴다.
+    @Test
+    fun `a fill whose order number has a non-FILLED row rolls back the whole fill`() = runTest {
+        val userId = insertUser("dupopen")
+        existingOrder(userId, "OPEN")
+
+        assertThatThrownBy {
+            kotlinx.coroutines.runBlocking { service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId)) }
+        }.hasStackTraceContaining("orders already has a OPEN row")
+
         assertThat(count("orders", userId)).isEqualTo(1)
-        assertThat(orderRow(userId)["status"]).isEqualTo("OPEN")
-        assertThat(count("trade_executions", userId)).isEqualTo(1)
+        assertThat(count("trade_notification_outbox", userId)).isZero()
+        assertThat(count("trading_states", userId)).isZero()
+    }
+
+    // 두 확인을 지난 뒤에도 넣기가 비면(동시 쓰기 같은 예상 밖) 체결 기록이 어디에도 남지 않으므로 상태 저장까지 되돌린다.
+    @Test
+    fun `a fill whose insert comes back empty rolls back the whole fill`() = runTest {
+        val userId = insertUser("emptyinsert")
+        val market = "KRW-SKIP$runId"
+        databaseClient.sql(
+            "CREATE FUNCTION it_skip_orders_$runId() RETURNS trigger AS \$\$ BEGIN " +
+                "IF NEW.market = '$market' THEN RETURN NULL; END IF; RETURN NEW; END \$\$ LANGUAGE plpgsql",
+        ).fetch().rowsUpdated().awaitSingle()
+        databaseClient.sql("CREATE TRIGGER it_skip_orders_$runId BEFORE INSERT ON orders FOR EACH ROW EXECUTE FUNCTION it_skip_orders_$runId()")
+            .fetch().rowsUpdated().awaitSingle()
+        try {
+            assertThatThrownBy {
+                kotlinx.coroutines.runBlocking {
+                    service.commitFill({ stateService.upsert(userId, TradingState(market)) }, sellFill(userId, market))
+                }
+            }.hasStackTraceContaining("orders row not written")
+        } finally {
+            databaseClient.sql("DROP TRIGGER it_skip_orders_$runId ON orders").fetch().rowsUpdated().awaitSingle()
+            databaseClient.sql("DROP FUNCTION it_skip_orders_$runId()").fetch().rowsUpdated().awaitSingle()
+        }
+
+        for (table in listOf("orders", "trade_notification_outbox", "trading_states")) {
+            assertThat(count(table, userId)).describedAs(table).isZero()
+        }
+    }
+
+    // 되돌리면 그 종목이 확정에서 멈춰 손절이 돌지 않으므로, client_order_id 만 겹치면 그 식별자 없이 기록한다.
+    @Test
+    fun `a fill whose client order id is taken is recorded without it`() = runTest {
+        val userId = insertUser("dupclient")
+        existingOrder(userId, "FILLED", orderId = null, clientOrderId = "ctb-$runId")
+
+        assertThat(service.commitFill({}, sellFill(userId))).isTrue()
+
+        val withoutClientId = databaseClient.sql("SELECT client_order_id IS NULL AS missing FROM orders WHERE user_id = :u AND exchange_order_id = :o")
+            .bind("u", userId).bind("o", "s-$runId").map { r -> r.get("missing", java.lang.Boolean::class.java)!!.booleanValue() }.all().collectList().awaitSingle()
+        assertThat(withoutClientId).containsExactly(true)
         assertThat(count("trade_notification_outbox", userId)).isEqualTo(1)
+    }
+
+    // 손으로 옛 표를 맞추는 파일은 옛 표를 거쳐 들어온 체결만 옮긴다 — 이 이미지가 쓴 줄은 건드리지 않는다.
+    @Test
+    fun `the manual catch-up file leaves fills written only to orders untouched`() = runTest {
+        val userId = insertUser("catchup")
+        assertThat(service.commitFill({}, sellFill(userId))).isTrue()
+        val before = databaseClient.sql("SELECT * FROM orders WHERE user_id = :u").bind("u", userId).fetch().all().collectList().awaitSingle()
+
+        DriverManager.getConnection(jdbcUrl, user, password).use { it.update(RepoFiles.file(MANUAL_CATCHUP).readText()) }
+
+        assertThat(databaseClient.sql("SELECT * FROM orders WHERE user_id = :u").bind("u", userId).fetch().all().collectList().awaitSingle())
+            .isEqualTo(before)
+        assertThat(count("orders", userId)).isEqualTo(1)
     }
 
     // 코드의 enum 이름이 V41 의 CHECK 목록에 없으면 그 값의 체결마다 기록 트랜잭션이 실패해 pending 이 남는다. 모든 조합을 실제로 넣어 본다.
@@ -369,7 +457,7 @@ class OrdersRoundTripTest {
                     clientOrderId = null, exchangeOrderId = "e-$runId-$n", decisionPrice = null, filledVolume = null, filledFunds = null,
                     avgFillPrice = null, fee = null, feeBasis = kind.name, positionVolumeAfter = null, bookAvgPrice = null,
                     pnlPercent = null, pnlAmount = null, reason = null, strategy = null, fillSource = source.name,
-                    tradeExecutionId = -n, tradeRecordId = null, requestedVolume = null, recordCreatedAt = java.time.LocalDateTime.now(),
+                    requestedVolume = null, recordCreatedAt = java.time.LocalDateTime.now(),
                 ).awaitSingle()
                 assertThat(id).isNotNull()
             }

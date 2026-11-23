@@ -94,7 +94,7 @@ class TradeNotificationDispatcherTest {
 
     private fun queue(id: Long, createdAt: Instant = start) {
         rows[id] = TradeNotificationOutboxEntity(
-            id = id, tradeExecutionId = id, userId = 1L, exchange = "UPBIT",
+            id = id, orderId = id, userId = 1L, exchange = "UPBIT",
             payload = jacksonObjectMapper().writeValueAsString(payload("o-$id")), nextAttemptAt = createdAt, createdAt = createdAt,
         )
     }

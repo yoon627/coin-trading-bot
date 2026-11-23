@@ -13,15 +13,11 @@ import com.trading.bot.marketdata.MarketDataStore
 import com.trading.bot.notification.DiscordNotifier
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.persistence.BotStateRepository
-import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
-import com.trading.bot.persistence.TradeRecordRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
-import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
-import com.trading.bot.persistence.entity.TradeRecordEntity
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.config.TradingProperties
@@ -436,8 +432,7 @@ class UserTradingManagerTest {
     @Test
     fun `createEngine wires the atomic commit that carries the trade notification`() = runTest {
         val client = mockk<UpbitClient>()
-        val tradeRecordRepository = mockk<TradeRecordRepository>()
-        val tradeExecutionRepository = mockk<TradeExecutionRepository>()
+        val orderLedger = mockk<OrderLedger>()
         val outboxRepository = mockk<TradeNotificationOutboxRepository>()
         val transactionalOperator = mockk<TransactionalOperator>()
         val auditNotifier = mockk<DiscordNotifier>()
@@ -450,28 +445,8 @@ class UserTradingManagerTest {
         every { outboxRepository.save(capture(outboxRow)) } answers { Mono.just(firstArg()) }
 
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
-        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "fill-1") } returns Mono.just(false)
-        every { tradeExecutionRepository.save(any()) } returns Mono.just(
-            TradeExecutionEntity(
-                id = 7L,
-                userId = 1L,
-                exchange = "UPBIT",
-                market = "KRW-BTC",
-                side = "BUY",
-                price = 51_000_000.0,
-                volume = 0.01,
-                totalAmount = 510_000.0,
-                exchangeOrderId = "fill-1",
-            )
-        )
-        coEvery { tradeRecordRepository.save(any()) } returns TradeRecordEntity(
-            ticker = "KRW-BTC",
-            side = "BUY",
-            price = 51_000_000.0,
-            volume = 0.01,
-            totalAmount = 510_000.0,
-            userId = 1L,
-        )
+        coEvery { orderLedger.alreadyRecorded(any()) } returns false
+        coEvery { orderLedger.recordFill(any(), any(), any()) } returns 7L
         coEvery { tradingStateService.upsert(1L, any()) } returns 0L
         coEvery { client.getOrder("fill-1") } returns Order(
             uuid = "fill-1",
@@ -483,10 +458,8 @@ class UserTradingManagerTest {
         )
 
         val actualTradeExecutionService = TradeExecutionService(
-            tradeRecordRepository,
-            tradeExecutionRepository,
             outboxRepository,
-            mockk<OrderLedger>(relaxed = true),
+            orderLedger,
             transactionalOperator,
             TradingProperties(),
         )
@@ -510,10 +483,9 @@ class UserTradingManagerTest {
 
         assertTrue(record != null)
         assertTrue(state.position)
-        coVerify(exactly = 1) { tradeRecordRepository.save(any()) }
-        verify(exactly = 1) { tradeExecutionRepository.save(any()) }
+        coVerify(exactly = 1) { orderLedger.recordFill(any(), any(), any()) }
         // 엔진은 Discord 를 직접 부르지 않고 같은 커밋에 알림 행을 남긴다.
-        assertEquals(7L, outboxRow.captured.tradeExecutionId)
+        assertEquals(7L, outboxRow.captured.orderId)
         assertEquals("fill-1", TradeNotificationPayload.fromJson(outboxRow.captured.payload).exchangeOrderId)
         verify { auditNotifier wasNot Called }
     }

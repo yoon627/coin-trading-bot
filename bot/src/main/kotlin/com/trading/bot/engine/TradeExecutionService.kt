@@ -6,10 +6,7 @@ import com.trading.bot.domain.TradePnl
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.notification.TradeNotificationQueued
-import com.trading.bot.persistence.TradeExecutionRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
-import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
 import java.time.Clock
@@ -23,8 +20,6 @@ import org.springframework.transaction.reactive.TransactionalOperator
 
 @Service
 class TradeExecutionService(
-    private val tradeRecordRepository: TradeRecordRepository,
-    private val tradeExecutionRepository: TradeExecutionRepository,
     private val outboxRepository: TradeNotificationOutboxRepository,
     private val orderLedger: OrderLedger,
     private val transactionalOperator: TransactionalOperator,
@@ -39,45 +34,20 @@ class TradeExecutionService(
      * 이미 기록된 주문이면 건너뛰고 false 를 돌려준다. [notificationPayload] 는 트랜잭션 전에 만든 JSON 이다.
      */
     internal suspend fun saveAudit(record: TradeRecord, notificationPayload: String = TradeNotificationPayload.toJson(record)): Boolean {
-        val userId = record.userId ?: 0
-        // 재시작 뒤 같은 주문을 다시 reconcile 해도 이중으로 기록·알림하지 않는다.
-        val orderId = record.exchangeOrderId
-        if (orderId != null &&
-            tradeExecutionRepository.existsByUserIdAndExchangeOrderId(userId, orderId).awaitSingle()
-        ) {
-            log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", userId, record.ticker, orderId)
+        // 재시작 뒤 같은 주문을 다시 확정해도 이중으로 기록·알림하지 않는다.
+        if (orderLedger.alreadyRecorded(record)) {
+            log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", record.userId, record.ticker, record.exchangeOrderId)
             return false
         }
-        val tradeRecord = tradeRecordRepository.save(record)
         val (fee, feeKind) = fee(record)
-        val execution = tradeExecutionRepository.save(
-            TradeExecutionEntity(
-                userId = userId,
-                exchange = record.exchange.name,
-                market = record.ticker,
-                side = record.side.name,
-                price = record.price,
-                volume = record.volume,
-                totalAmount = record.totalAmount,
-                // 저장된 행만 보고는 실측 수수료인지 추정치인지 구분할 수 없다. 0 은 미기록을 뜻한다(V21 스키마 규약).
-                fee = fee ?: 0.0,
-                pnlPercent = record.pnlPercent,
-                pnlAmount = record.pnlAmount,
-                reason = record.reason,
-                strategy = record.strategy,
-                exchangeOrderId = record.exchangeOrderId,
-            )
-        ).awaitSingle()
-        val executionId = requireNotNull(execution.id) { "saved trade_executions row has no id" }
-        val orderRowId = orderLedger.recordFill(record, fee, feeKind, executionId, tradeRecord.id)
+        val orderRowId = orderLedger.recordFill(record, fee, feeKind)
         // 체결과 같은 트랜잭션이라 이 삽입이 실패하면 체결도 되돌아간다. 그래서 실패할 경로(직렬화·길이 제한)를 두지 않았고,
-        // FK 가 가리키는 줄(trade_executions·orders)은 같은 트랜잭션에서 방금 넣은 줄뿐이다.
+        // FK 가 가리키는 orders 줄은 같은 트랜잭션에서 방금 넣은 줄이다.
         val now = clock.instant()
         outboxRepository.save(
             TradeNotificationOutboxEntity(
-                tradeExecutionId = executionId,
                 orderId = orderRowId,
-                userId = userId,
+                userId = record.userId,
                 exchange = record.exchange.name,
                 payload = notificationPayload,
                 nextAttemptAt = now,

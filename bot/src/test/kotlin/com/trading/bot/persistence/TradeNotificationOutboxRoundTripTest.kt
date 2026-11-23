@@ -40,8 +40,6 @@ import org.springframework.transaction.reactive.TransactionalOperator
 @DataR2dbcTest
 class TradeNotificationOutboxRoundTripTest {
 
-    @Autowired private lateinit var tradeRecords: TradeRecordR2dbcRepository
-    @Autowired private lateinit var executions: TradeExecutionRepository
     @Autowired private lateinit var outbox: TradeNotificationOutboxRepository
     @Autowired private lateinit var orderRows: OrderRowRepository
     @Autowired private lateinit var states: TradingStateRepository
@@ -52,7 +50,7 @@ class TradeNotificationOutboxRoundTripTest {
     private val transactionalOperator by lazy { TransactionalOperator.create(transactionManager) }
     private val stateService by lazy { TradingStateService(states, jacksonObjectMapper()) }
     private val service by lazy {
-        TradeExecutionService(TradeRecordRepository(tradeRecords), executions, outbox, OrderLedger(orderRows), transactionalOperator, TradingProperties())
+        TradeExecutionService(outbox, OrderLedger(orderRows), transactionalOperator, TradingProperties())
     }
 
     companion object {
@@ -126,7 +124,7 @@ class TradeNotificationOutboxRoundTripTest {
             .map { row -> row.get("n", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
 
     @Test
-    fun `a committed fill leaves exactly one notification row pointing at its execution`() = runTest {
+    fun `a committed fill leaves exactly one notification row pointing at its orders row`() = runTest {
         val userId = insertUser("commit")
 
         assertThat(service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, fill(userId, "it-o-$runId"))).isTrue()
@@ -134,9 +132,9 @@ class TradeNotificationOutboxRoundTripTest {
         assertThat(service.commitFill({}, fill(userId, "it-o-$runId"))).isFalse()
 
         val row = outbox.findDue(java.time.Instant.now().plusSeconds(1), 100).collectList().awaitSingle().single { it.userId == userId }
-        val executionId = databaseClient.sql("SELECT id FROM trade_executions WHERE user_id = :u").bind("u", userId)
+        val orderId = databaseClient.sql("SELECT id FROM orders WHERE user_id = :u").bind("u", userId)
             .map { r -> r.get("id", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()
-        assertThat(row.tradeExecutionId).isEqualTo(executionId)
+        assertThat(row.orderId).isEqualTo(orderId)
         assertThat(TradeNotificationPayload.fromJson(row.payload).exchangeOrderId).isEqualTo("it-o-$runId")
         assertThat(count("trade_notification_outbox", userId)).isEqualTo(1)
     }
@@ -158,7 +156,7 @@ class TradeNotificationOutboxRoundTripTest {
             }
         }.hasMessageContaining("after the outbox insert")
 
-        for (table in listOf("trading_states", "trade_records", "trade_executions", "trade_notification_outbox")) {
+        for (table in listOf("trading_states", "orders", "trade_notification_outbox")) {
             assertThat(count(table, userId)).describedAs(table).isZero()
         }
     }

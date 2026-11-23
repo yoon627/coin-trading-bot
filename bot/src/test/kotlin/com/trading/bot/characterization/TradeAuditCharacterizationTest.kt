@@ -6,15 +6,11 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
-import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.OrderRowRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
-import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.common.config.TradingProperties
-import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -25,23 +21,29 @@ import org.junit.jupiter.api.Test
 import reactor.core.publisher.Mono
 
 /**
- * 거래 감사 기록(trade_executions)의 Upbit 고정값을 고정한다. exchange 는 "UPBIT", 실측 수수료는 그대로, paid_fee 없는 매도의 수수료는
- * 대금 × 0.001 / 2 로 추정하고, 이미 기록된 거래소 주문 id 는 저장하지 않고 건너뛴다.
+ * 체결 기록(orders 줄)의 Upbit 고정값을 고정한다. exchange 는 "UPBIT", 실측 수수료는 그대로, paid_fee 없는 매도의 수수료는
+ * 대금 × 0.001 / 2 로 추정하고, 같은 사용자·거래소에 이미 체결로 기록된 거래소 주문 id 는 쓰지 않고 건너뛴다.
  */
 class TradeAuditCharacterizationTest {
 
-    private val tradeRecordRepository = mockk<TradeRecordRepository>(relaxed = true)
-    private val tradeExecutionRepository = mockk<TradeExecutionRepository>()
+    private val orders = mockk<OrderRowRepository>()
     private val outbox = mockk<TradeNotificationOutboxRepository> { every { save(any()) } answers { Mono.just(firstArg()) } }
-    private val service = TradeExecutionService(
-        tradeRecordRepository, tradeExecutionRepository, outbox, mockk<OrderLedger>(relaxed = true), mockk(), TradingProperties(),
-    )
-    private val saved = slot<TradeExecutionEntity>()
+    private val service = TradeExecutionService(outbox, OrderLedger(orders), mockk(), TradingProperties())
+    private val written = mutableListOf<Map<String, Any?>>()
 
     @BeforeEach
     fun setup() {
-        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(any(), any()) } returns Mono.just(false)
-        every { tradeExecutionRepository.save(capture(saved)) } answers { Mono.just(saved.captured.copy(id = 1L)) }
+        every { orders.findStatusByExchangeOrderId(any(), any(), any()) } returns Mono.empty()
+        every { orders.existsByClientOrderId(any(), any(), any()) } returns Mono.just(false)
+        every {
+            orders.insertFilled(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any(), any(),
+            )
+        } answers {
+            written += mapOf("exchange" to args[1], "market" to args[2], "side" to args[3], "exchangeOrderId" to args[5], "fee" to args[11])
+            Mono.just(1L)
+        }
     }
 
     private fun sell(fee: FeeBasis, orderId: String = "s-1") = TradeRecord(
@@ -51,15 +53,11 @@ class TradeAuditCharacterizationTest {
     )
 
     @Test
-    fun `every audit row is written with exchange UPBIT and a measured fee as is`() = runTest {
+    fun `every fill row is written with exchange UPBIT and a measured fee as is`() = runTest {
         // 추정치(100,000 × 0.001 / 2 = 50)와 다른 값이라야 실측을 그대로 쓰는지 가른다.
         assertTrue(service.saveAudit(sell(FeeBasis.Measured(37.0))))
 
-        assertEquals("UPBIT", saved.captured.exchange)
-        assertEquals("KRW-BTC", saved.captured.market)
-        assertEquals("SELL", saved.captured.side)
-        assertEquals("s-1", saved.captured.exchangeOrderId)
-        assertEquals(37.0, saved.captured.fee)
+        assertEquals(mapOf("exchange" to "UPBIT", "market" to "KRW-BTC", "side" to "SELL", "exchangeOrderId" to "s-1", "fee" to 37.0), written.single())
     }
 
     @Test
@@ -69,16 +67,16 @@ class TradeAuditCharacterizationTest {
         service.saveAudit(sell(feeBasis))
 
         assertEquals(FeeBasis.Estimate, feeBasis)
-        assertEquals(100_000.0 * 0.001 / 2, saved.captured.fee)
+        assertEquals(100_000.0 * 0.001 / 2, written.single()["fee"])
     }
 
     @Test
-    fun `an exchange order id already recorded for the user is skipped without any write`() = runTest {
-        every { tradeExecutionRepository.existsByUserIdAndExchangeOrderId(1L, "s-1") } returns Mono.just(true)
+    fun `an exchange order id already filled for the user on that exchange is skipped without any write`() = runTest {
+        every { orders.findStatusByExchangeOrderId(1L, "UPBIT", "s-1") } returns Mono.just("FILLED")
 
         assertFalse(service.saveAudit(sell(FeeBasis.Estimate)))
 
-        coVerify(exactly = 0) { tradeRecordRepository.save(any()) }
-        verify(exactly = 0) { tradeExecutionRepository.save(any()) }
+        assertTrue(written.isEmpty())
+        verify(exactly = 0) { outbox.save(any()) }
     }
 }
