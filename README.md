@@ -487,3 +487,19 @@ V40 은 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions
   ./dump_local.sh before-V40-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V40_down.sql
   APP_VERSION=<V40 이전 SHA> docker compose up -d --pull missing
   ```
+
+### V41 (주문 표 `orders`)
+
+V41 은 주문마다 한 줄인 `orders` 표를 만들고 옛 체결을 `trade_executions` 기준으로 옮긴다. 옮긴 수와 짝을 못 찾은 수는 기동 로그에 `V41 orders:` 로 남는다.
+
+- 지금은 같은 체결을 `trade_records`(화면)와 `trade_executions`(중복 방지·대사)에 두 번 적는다. 엔진 매수 줄의 가격·수량·총액은 이 주문이 아니라 체결 뒤 보유 전체다. `orders` 는 이 주문의 체결 수량·대금·평균가(`filled_*`·`avg_fill_price`)와 체결 뒤 장부(`position_volume_after`·`book_avg_price`)를 따로 적는다. `fill_source` 가 값의 출처(주문 응답·잔고 복원·옛 기록)다.
+- 옛 엔진 매수는 이 주문 하나의 수량을 알 수 없어 비워 두고(`BACKFILL_SNAPSHOT`), 보유 전체 값을 장부 칼럼에 둔다.
+- 아직 아무도 `orders` 를 읽지 않는다. 화면·대사·체결 알림은 지금처럼 옛 두 표를 쓴다.
+- V40 이미지로의 롤백은 그대로 뜬다(새 표만 더한다). 그동안의 체결은 `orders` 에 남지 않고, 읽는 쪽을 `orders` 로 바꾸는 다음 단계가 마이그레이션의 옮기기 부분을 다시 돌려 메운다.
+- 표 자체를 없애야 할 때만 `deploy/vultr/sql/V41_down.sql` 을 쓴다(V41 이 마지막 적용 버전일 때만 돈다).
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./dump_local.sh before-V41-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V41_down.sql
+  APP_VERSION=<V41 이전 SHA> docker compose up -d --pull missing
+  ```

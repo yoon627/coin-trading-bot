@@ -402,12 +402,12 @@ class TradingStateRoundTripTest {
         inSchema(schema) { conn -> assertThat(conn.unmappedDefinitions(schema)).isEmpty() }
     }
 
-    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V40_down → … → V34_down).
+    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V41_down → … → V34_down).
     @Test
     fun `the down sqls from the latest version run one after another`() = withScratchSchema("downchain") { schema ->
-        migrate(schema, "40")
+        migrate(schema, "41")
         inSchema(schema) { conn ->
-            for (v in 40 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
+            for (v in 41 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
             assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("33")
             // V34 의 세 칼럼과 V35 의 테이블은 지워지고, V14·V30 의 칼럼은 그 버전의 down 까지 남는다.
             assertThat(conn.retiredDefinitions(schema).map { it.substringBefore(' ') }).containsExactly(
