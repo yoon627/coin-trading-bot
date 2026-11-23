@@ -1,10 +1,9 @@
 package com.trading.bot.api
 
-import com.trading.bot.persistence.entity.TradeRecordEntity
 import java.time.Duration
 import java.time.LocalDateTime
 
-/** 매수→매도 한 쌍. `trade_records` 에는 BUY/SELL 을 잇는 키가 없어 조회 시점에 조립한다. */
+/** 매수→매도 한 쌍. 거래 기록에는 BUY/SELL 을 잇는 키가 없어 조회 시점에 조립한다. */
 data class TradeRoundTrip(
     val ticker: String,
     val entryAt: LocalDateTime?,
@@ -59,7 +58,7 @@ private const val ESTIMATE_TOLERANCE_RATIO = 0.0025
  * `strategy` 가 없는 행은 출처를 알 수 없어 증분으로 본다.
  * 엔진이 `strategy` 없이 매수를 기록하면 증분으로 합산돼 매수량이 부풀려진다.
  */
-private fun TradeRecordEntity.isSnapshotBuy(): Boolean =
+private fun TradeHistoryRow.isSnapshotBuy(): Boolean =
     strategy != null && !strategy.equals(MANUAL_STRATEGY, ignoreCase = true)
 
 /**
@@ -81,7 +80,7 @@ private data class BuySide(
         get() = maxOf(VOLUME_EPSILON, estimatedVolume * ESTIMATE_TOLERANCE_RATIO)
 
     companion object {
-        fun of(buys: List<TradeRecordEntity>): BuySide {
+        fun of(buys: List<TradeHistoryRow>): BuySide {
             val lastSnapshot = buys.indexOfLast { it.isSnapshotBuy() }
             val snapshot = buys.getOrNull(lastSnapshot)
             // 시세 조회 실패로 수량 0·금액만 남은 과거 행은 빼야 평단이 부풀지 않는다.
@@ -102,14 +101,14 @@ private data class BuySide(
  * [records] 는 시간 오름차순이어야 한다. [truncatedHead] 면 각 티커의 첫 그룹은 매수가 잘렸을 수 있어 `partial` 로 표시한다.
  */
 fun assembleRoundTrips(
-    records: List<TradeRecordEntity>,
+    records: List<TradeHistoryRow>,
     truncatedHead: Boolean = false,
 ): List<TradeRoundTrip> {
     val result = mutableListOf<TradeRoundTrip>()
 
     records.groupBy { it.ticker }.forEach { (ticker, rows) ->
-        var buys = mutableListOf<TradeRecordEntity>()
-        var sells = mutableListOf<TradeRecordEntity>()
+        var buys = mutableListOf<TradeHistoryRow>()
+        var sells = mutableListOf<TradeHistoryRow>()
         var isFirstGroup = true
 
         fun flush(closed: Boolean, carriedVolume: Double? = null) {
@@ -128,7 +127,7 @@ fun assembleRoundTrips(
          * 이 매수가 넘겨받는 현재 그룹의 잔량. 엔진 매수는 그 시점 전체 보유량이라 넘겨받지 않으면 같은 코인이 두 그룹에 잡힌다.
          * 스냅샷이 잔량보다 작으면 잔량이 거래소 밖으로 빠진 것이라 넘기지 않는다.
          */
-        fun carriedBy(buy: TradeRecordEntity): Double? {
+        fun carriedBy(buy: TradeHistoryRow): Double? {
             if (!buy.isSnapshotBuy()) return null
             val side = BuySide.of(buys)
             val remaining = side.volume - sells.sumOf { it.volume }
@@ -156,8 +155,8 @@ fun assembleRoundTrips(
 
 private fun roundTrip(
     ticker: String,
-    buys: List<TradeRecordEntity>,
-    sells: List<TradeRecordEntity>,
+    buys: List<TradeHistoryRow>,
+    sells: List<TradeHistoryRow>,
     closed: Boolean,
     headCut: Boolean,
     carriedVolume: Double?,
@@ -216,10 +215,10 @@ private fun roundTrip(
 }
 
 /** 부분합은 전체 손익이 아니므로 하나라도 값이 없으면 null 이다. */
-private fun netPnlAmount(sells: List<TradeRecordEntity>): Double? =
+private fun netPnlAmount(sells: List<TradeHistoryRow>): Double? =
     if (sells.all { it.pnlAmount != null }) sells.sumOf { it.pnlAmount!! } else null
 
-private fun weightedPnlPercent(sells: List<TradeRecordEntity>): Double? {
+private fun weightedPnlPercent(sells: List<TradeHistoryRow>): Double? {
     val known = sells.filter { it.pnlPercent != null && it.volume > 0 }
     if (known.isEmpty()) return null
     val volume = known.sumOf { it.volume }

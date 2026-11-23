@@ -26,7 +26,7 @@ class TradeHistoryController(
         val sanitizedOffset = offset.coerceAtLeast(0)
         val records = tradeRecordRepository.findByUserIdAndExchange(userId, target, sanitizedLimit, sanitizedOffset)
         val total = tradeRecordRepository.countByUserIdAndExchange(userId, target)
-        return mapOf("total" to total, "limit" to sanitizedLimit, "offset" to sanitizedOffset, "records" to records)
+        return mapOf("total" to total, "limit" to sanitizedLimit, "offset" to sanitizedOffset, "records" to records.map { it.toHistoryRow() })
     }
 
     /**
@@ -45,7 +45,7 @@ class TradeHistoryController(
         val truncated = fetched.size > MAX_SOURCE_RECORDS
         // 오름차순이라 버리는 한 건은 가장 오래된 행이다.
         val records = if (truncated) fetched.takeLast(MAX_SOURCE_RECORDS) else fetched
-        val roundTrips = assembleRoundTrips(records, truncatedHead = truncated)
+        val roundTrips = assembleRoundTrips(records.map { it.toHistoryRow() }, truncatedHead = truncated)
         return mapOf(
             "total" to roundTrips.size,
             "limit" to sanitizedLimit,
