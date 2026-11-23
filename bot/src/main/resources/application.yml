@@ -14,11 +14,15 @@ spring:
     username: ${DB_USER:trading}
     password: ${DB_PASSWORD:trading}
     # 시한이 없으면 풀이 고갈되거나 새 연결이 만들어지지 않을 때 매매 tick·봇 복원·health 가 오류 없이 무한히 기다린다
-    # (R2dbcPoolTimeoutTest). 이미 연결을 잡은 쿼리는 묶지 않는다(statement_timeout 없음).
+    # (R2dbcPoolTimeoutTest). 이 풀 시한은 연결을 얻는 단계만 묶는다.
     # r2dbc-pool 1.0.2 는 시한을 건 획득을 한 번 더 시도해(acquireRetry 1, Boot 로는 못 바꾼다) 호출자는 최악 약 2×max-acquire-time 을 기다린다.
     pool:
       max-acquire-time: 5s
       max-create-connection-time: 3s
+    # 연결을 잡은 쿼리(잠금 대기 포함)는 서버가 10초에 끊는다(연결마다 세션 statement_timeout). 끝나지 않는 쿼리가 그 종목
+    # 작업자의 손절 판단까지 멈추지 않게 한다. 서버가 응답하지 않거나 연결이 끊긴 경우는 이 시한이 듣지 않는다.
+    properties:
+      statementTimeout: 10s
   flyway:
     enabled: true
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:trading}

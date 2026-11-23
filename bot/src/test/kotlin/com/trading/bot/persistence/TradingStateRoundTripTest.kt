@@ -248,6 +248,14 @@ class TradingStateRoundTripTest {
             .isInstanceOf(TradingStateConflictException::class.java)
     }
 
+    // 연결을 잡은 쿼리가 끝나지 않으면 그 종목 작업자(손절 판단 포함)가 같이 멈추므로 서버가 끊게 한다.
+    @Test
+    fun `the app's connections ask the server to cancel a statement after 10 seconds`() = runTest {
+        val timeout = databaseClient.sql("SHOW statement_timeout").map { row -> row.get(0, String::class.java)!! }.one().awaitSingle()
+
+        assertThat(timeout).isEqualTo("10s")
+    }
+
     /**
      * `exchange_order_id IS NOT NULL` 부분 unique index 는 reconcile 이 같은 주문을 두 번 기록하는 것을 막고,
      * `exchange_order_id` 가 NULL 인 기록은 여러 건 받는다.
