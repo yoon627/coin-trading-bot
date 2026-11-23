@@ -405,11 +405,11 @@ V34 는 `trading_states` 에 봇 장부 칼럼(`book_volume`·`book_avg_price`·
 
 ### V35 (수동 개입 기록)
 
-V35 는 `manual_interventions` 테이블을 더한다. 예전 pending 수동 해제·halt 해제가 상태 저장과 같은 트랜잭션에 한 행(사용자·거래소·종목·action·해제 전 값 JSON)을 남겼다. 지금 앱은 이 테이블을 쓰지 않는다 — pending 해제·halt 해제 API 와 사람 확인 필요 상태를 없앴다(미해소 주문은 위 대사로만 확정한다). 남은 행과 테이블은 그대로 둔다.
+V35 는 `manual_interventions` 테이블을 더한다. 예전 pending 수동 해제·halt 해제가 상태 저장과 같은 트랜잭션에 한 행(사용자·거래소·종목·action·해제 전 값 JSON)을 남겼다. 지금 앱은 이 테이블을 쓰지 않는다 — pending 해제·halt 해제 API 와 사람 확인 필요 상태를 없앴다(미해소 주문은 위 대사로만 확정한다). 테이블은 V39 가 지웠다.
 
-앱은 `trading_states` 의 `halted`·`halt_reason`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume` 을 읽고 쓰지 않는다. 칼럼은 직전 이미지로의 롤백을 위해 그대로 둔다(그 이미지는 칼럼 값을 다시 읽고, pending 해제·halt 해제 API 도 다시 생긴다).
+앱은 `trading_states` 의 `halted`·`halt_reason`·`reconcile_failure_count`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume` 을 읽고 쓰지 않는다. 칼럼은 V39 가 지웠다.
 
-- V34 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 테이블은 그대로 둔다.
+- V39 이전 스키마에서는 V34 이미지로의 롤백이 그대로 떴다(Flyway `*:future`). V39 뒤에는 아래 V39 절의 되돌리기를 먼저 한다.
 - 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V35_down.sql` 을 쓴다(V35 가 마지막 적용 버전일 때만 돈다, 기록이 사라진다). V35 를 쓰는 옛 이미지가 떠 있는 동안 돌리면 그 이미지의 해제가 모두 503 이 되므로 앱을 멈춘 뒤 돌린다.
   ```bash
   cd /opt/app
@@ -446,13 +446,31 @@ V37 은 `trading_states.version`(기존 행 0)을 더한다(위 상태 저장 �
 
 ### V38 (막힌 매수 알림 시각)
 
-V38 은 `trading_states.pending_buy_since`·`pending_buy_alerted`(기존 행 null·false)를 더한다(위 미해소 주문 대사 4). 매수 알림이 조회 실패 횟수 대신 주문 시각부터의 경과 시간으로 바뀌어 `reconcile_failure_count` 는 더 읽고 쓰지 않는다(칼럼은 롤백을 위해 둔다).
+V38 은 `trading_states.pending_buy_since`·`pending_buy_alerted`(기존 행 null·false)를 더한다(위 미해소 주문 대사 4). 매수 알림이 조회 실패 횟수 대신 주문 시각부터의 경과 시간으로 바뀌어 `reconcile_failure_count` 는 더 읽고 쓰지 않는다(칼럼은 V39 가 지웠다).
 
-- V37 이미지로의 롤백은 그대로 뜬다(칼럼이 nullable·기본값이고 옛 이미지는 건드리지 않는다). 롤백한 동안 생긴 매수 pending 은 시작 시각이 없어 다시 올리면 그때부터 잰다. 롤백 순간 매수 pending 이 열려 있었고 옛 이미지가 그것을 확정한 뒤 같은 종목에 새로 샀다면, 다시 올렸을 때 그 새 pending 이 옛 시각·알림 여부를 물려받아 바로 알리거나 알리지 않는다(주문에는 영향 없음). 옛 이미지는 `reconcile_failure_count` 를 V38 전 마지막 값부터 다시 센다.
+- V39 이전 스키마에서는 V37 이미지로의 롤백이 그대로 뜬다(V39 뒤 #372 이전 이미지는 아래 V39 절. 칼럼이 nullable·기본값이고 옛 이미지는 건드리지 않는다). 롤백한 동안 생긴 매수 pending 은 시작 시각이 없어 다시 올리면 그때부터 잰다. 롤백 순간 매수 pending 이 열려 있었고 옛 이미지가 그것을 확정한 뒤 같은 종목에 새로 샀다면, 다시 올렸을 때 그 새 pending 이 옛 시각·알림 여부를 물려받아 바로 알리거나 알리지 않는다(주문에는 영향 없음). 옛 이미지는 `reconcile_failure_count` 를 V38 전 마지막 값부터 다시 센다.
 - 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V38_down.sql` 을 쓴다(V38 이 마지막 적용 버전일 때만 돈다). V38 이미지가 떠 있는 동안 돌리면 상태 저장이 모두 실패하므로 앱을 멈춘 뒤 돌린다.
   ```bash
   cd /opt/app
   docker compose stop app
   ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V38_down.sql
   APP_VERSION=<V38 이전 SHA> docker compose up -d --pull missing
+  ```
+
+### V39 (쓰지 않는 테이블·칼럼 삭제)
+
+V39 는 코드가 더 쓰지 않는 것을 지운다. 지운 행 수는 기동 로그에 `V39 drop:` 으로 남는다.
+
+- 테이블: `manual_interventions`(V35), V21 백필 전 값 `trade_records_v21_backup`·`trade_executions_v21_backup`, 손으로 만든 `users_bak_20260602`.
+- `trading_states` 칼럼: `halted`·`halt_reason`·`reconcile_failure_count`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume`.
+- `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 는 앱이 더 매핑하지 않는다(새 행은 DB 기본값). 칼럼은 이 이미지가 마지막 정상 배포가 된 뒤의 마이그레이션(V40)에서 지운다. 그 전 이미지는 이 칼럼을 넣고 읽기 때문이다.
+
+롤백:
+- 자동 롤백(마지막 정상 배포 이미지)은 halt 제거(#372) 이후 이미지라 V39 위에서 그대로 뜬다.
+- **#372 이전 이미지로는 그대로 내려갈 수 없다.** 그 이미지는 지운 칼럼을 쓴다. 꼭 내려가야 하면 앱을 멈추고 `deploy/vultr/sql/V39_down.sql` 로 칼럼(기본값)과 빈 `manual_interventions` 를 되살린 뒤, V39 이전 이미지만 띄운다. V39 가 든 이미지가 다시 뜨면 V39 가 또 적용돼 되살린 칼럼을 지운다. 지운 값은 배포 전 덤프에만 있다. 그 아래 버전으로 더 내려가면 V38·V37… 의 down 을 차례로 돌린다.
+  ```bash
+  cd /opt/app
+  docker compose stop app
+  ./backup.sh && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
+  APP_VERSION=<V39 이전 SHA> docker compose up -d --pull missing
   ```
