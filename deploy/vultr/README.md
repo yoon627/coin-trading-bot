@@ -65,7 +65,7 @@ install -m 600 .env.example .env   # 시크릿이 들어가므로 600
 Actions 를 수동 실행해 배포한다. 이미지는 대상 커밋 SHA 로 고정하고,
 헬스체크(180s, 실행 중이던 봇의 복원 완료 포함)가 실패하면 직전 정상 SHA 로 자동 롤백한다. 결과는 Discord 로 알린다
 (성공은 일반 webhook, 롤백·실패는 에러 webhook).
-직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V30(거래소 축) 마이그레이션이 없으면 자동 롤백하지 않고
+직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V42(orders 맞춤) 마이그레이션이 없으면 자동 롤백하지 않고
 수동 개입을 안내한다. 스키마를 바꾸는 배포의 사전 점검·되돌리기 절차는 루트 README 의 배포 절에 있다.
 
 `Caddyfile` 은 서버의 `/opt/app/caddy/Caddyfile` 로 올라가고 caddy 는 그 디렉터리를 `/etc/caddy` 로 마운트한다
