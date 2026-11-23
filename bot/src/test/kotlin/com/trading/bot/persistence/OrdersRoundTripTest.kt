@@ -543,6 +543,63 @@ class OrdersRoundTripTest {
         }
     }
 
+    // --- V44: 알림 대기열이 옛 체결 표 없이 ---
+
+    @Test
+    fun `after V44 a notification row needs no trade execution, and the previous image's fill statements still work`() =
+        withScratchSchema("v44") { schema ->
+            migrate(schema, "44")
+            inSchema(schema) { conn ->
+                conn.update("INSERT INTO users (username, password) VALUES ('it-v44-$runId', 'x')")
+                val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-v44-$runId'").single()!!.toLong()
+                val order = conn.strings(
+                    "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status, fill_source, fee_basis) " +
+                        "VALUES ($userId, 'UPBIT', 'KRW-BTC', 'BUY', 'o-new', 'FILLED', 'ORDER', 'MEASURED') RETURNING id::text",
+                ).single()!!.toLong()
+                conn.update("INSERT INTO trade_notification_outbox (order_id, user_id, exchange, payload) VALUES ($order, $userId, 'UPBIT', '{}')")
+
+                // 26bb5ad4 의 체결 쓰기: 옛 두 표 → orders(옛 id 와 함께) → 대기열(trade_execution_id 와 order_id).
+                val te = conn.strings(
+                    "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, exchange_order_id) " +
+                        "VALUES ($userId, 'UPBIT', 'KRW-BTC', 'SELL', 1, 1, 1, 'o-old') RETURNING id::text",
+                ).single()!!.toLong()
+                val tr = conn.strings(
+                    "INSERT INTO trade_records (user_id, ticker, side, price, volume, total_amount) VALUES ($userId, 'KRW-BTC', 'SELL', 1, 1, 1) RETURNING id::text",
+                ).single()!!.toLong()
+                val oldOrder = conn.strings(
+                    "INSERT INTO orders (user_id, exchange, market, side, exchange_order_id, status, fill_source, fee_basis, trade_execution_id, trade_record_id, completed_at) " +
+                        "VALUES ($userId, 'UPBIT', 'KRW-BTC', 'SELL', 'o-old', 'FILLED', 'ORDER', 'MEASURED', $te, $tr, CAST('2026-11-23 12:00:00' AS timestamp)) " +
+                        "ON CONFLICT DO NOTHING RETURNING id::text",
+                ).single()!!.toLong()
+                conn.update(
+                    "INSERT INTO trade_notification_outbox (trade_execution_id, order_id, user_id, exchange, payload) VALUES ($te, $oldOrder, $userId, 'UPBIT', '{}')",
+                )
+
+                assertThat(conn.strings("SELECT (trade_execution_id IS NULL)::text FROM trade_notification_outbox ORDER BY id")).containsExactly("true", "false")
+            }
+        }
+
+    @Test
+    fun `the V44 down sql refuses while notification rows without a trade execution exist`() = withScratchSchema("v44down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V44_down.sql").readText()
+        migrate(schema, "44")
+        inSchema(schema) { conn ->
+            conn.update("INSERT INTO users (username, password) VALUES ('it-v44down-$runId', 'x')")
+            val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-v44down-$runId'").single()!!.toLong()
+            conn.update("INSERT INTO trade_notification_outbox (user_id, exchange, payload) VALUES ($userId, 'UPBIT', '{}')")
+        }
+        // 멈춘 down 은 그 연결의 트랜잭션을 중단 상태로 남기므로 연결을 따로 쓴다.
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("trade_execution_id 없는 알림 줄 1")
+
+        inSchema(schema) { conn ->
+            conn.update("DELETE FROM trade_notification_outbox")
+            conn.update(downSql)
+            assertThat(conn.strings("SELECT is_nullable FROM information_schema.columns WHERE table_schema = '$schema' AND table_name = 'trade_notification_outbox' AND column_name = 'trade_execution_id'"))
+                .containsExactly("NO")
+            assertThat(conn.strings("SELECT version FROM flyway_schema_history WHERE version = '44'")).isEmpty()
+        }
+    }
+
     /** 옛 이미지가 orders 없이 쓴 체결은 따라잡고, 같은 거래소 주문번호 줄이 이미 있는 체결은 건너뛴다. 값·시각·알림 연결이 맞는다. */
     private fun assertCaughtUp(conn: Connection, legacy: LegacyIds, ids: AfterV41Ids) {
         assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.lateExecution}")).containsExactly("1")
