@@ -5,6 +5,8 @@ import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
+import com.trading.bot.persistence.entity.TradeExecutionEntity
+import com.trading.bot.persistence.entity.UserEntity
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.Instant
@@ -42,6 +44,12 @@ class TradingStateRoundTripTest {
 
     @Autowired
     private lateinit var databaseClient: DatabaseClient
+
+    @Autowired
+    private lateinit var userRepository: UserRepository
+
+    @Autowired
+    private lateinit var tradeExecutionRepository: TradeExecutionRepository
 
     private val service by lazy { TradingStateService(repository, jacksonObjectMapper()) }
 
@@ -171,6 +179,21 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellPriorVolume).isEqualTo(original.pendingSellPriorVolume)
         assertThat(restored.pendingBuyIdentifier).isEqualTo(original.pendingBuyIdentifier)
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
+    }
+
+    // 엔티티가 더 매핑하지 않는 칼럼은 다음 마이그레이션에서 지울 때까지 남고, 새 행은 DB 기본값을 받는다.
+    @Test
+    fun `new users and trade executions get the database defaults for the columns the entities no longer map`() = runTest {
+        val userId = userRepository.save(UserEntity(username = "it-defaults-$runId", password = "x")).awaitSingle().id!!
+        tradeExecutionRepository.save(
+            TradeExecutionEntity(userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = "BUY", price = 100.0, volume = 1.0, totalAmount = 100.0),
+        ).awaitSingle()
+
+        val row = databaseClient.sql(
+            "SELECT u.public_profile::text || ',' || u.public_strategy::text || ',' || u.admin::text || ',' || e.order_type || ',' || e.status AS r " +
+                "FROM users u JOIN trade_executions e ON e.user_id = u.id WHERE u.id = :id",
+        ).bind("id", userId).map { r -> r.get("r", String::class.java)!! }.one().awaitSingle()
+        assertThat(row).isEqualTo("false,false,false,MARKET,EXECUTED")
     }
 
     /** upsert 는 (user, ticker) 유니크를 위반하지 않고 갱신돼 두 번 불러도 행이 하나다. 두 번째 저장은 첫 저장의 버전을 들고 온다. */

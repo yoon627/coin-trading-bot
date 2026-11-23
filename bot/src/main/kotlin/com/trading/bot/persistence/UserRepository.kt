@@ -4,12 +4,10 @@ import com.trading.bot.persistence.entity.UserEntity
 import org.springframework.data.r2dbc.repository.Modifying
 import org.springframework.data.r2dbc.repository.Query
 import org.springframework.data.r2dbc.repository.R2dbcRepository
-import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 interface UserRepository : R2dbcRepository<UserEntity, Long> {
     fun findByUsername(username: String): Mono<UserEntity>
-    fun findByAdminTrue(): Flux<UserEntity>
 
     // 행 전체를 save 하면 동시에 저장한 다른 설정이 옛 값으로 덮이므로 자기 컬럼만 바꾼다.
     @Modifying

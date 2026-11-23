@@ -463,6 +463,7 @@ V39 는 코드가 더 쓰지 않는 것을 지운다. 지운 행 수는 기동 �
 
 - 테이블: `manual_interventions`(V35), V21 백필 전 값 `trade_records_v21_backup`·`trade_executions_v21_backup`, 손으로 만든 `users_bak_20260602`.
 - `trading_states` 칼럼: `halted`·`halt_reason`·`reconcile_failure_count`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume`.
+- `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 는 앱이 더 매핑하지 않는다(새 행은 DB 기본값). 칼럼은 이 이미지가 마지막 정상 배포가 된 뒤의 마이그레이션(V40)에서 지운다. 그 전 이미지는 이 칼럼을 넣고 읽기 때문이다.
 
 롤백:
 - 자동 롤백(마지막 정상 배포 이미지)은 halt 제거(#372) 이후 이미지라 V39 위에서 그대로 뜬다.

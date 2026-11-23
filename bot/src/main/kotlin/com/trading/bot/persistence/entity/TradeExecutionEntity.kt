@@ -11,7 +11,6 @@ data class TradeExecutionEntity(
     val exchange: String,
     val market: String,
     val side: String,
-    val orderType: String = "MARKET",
     val price: Double,
     val volume: Double,
     val totalAmount: Double,
@@ -21,7 +20,6 @@ data class TradeExecutionEntity(
     val reason: String? = null,
     val strategy: String? = null,
     val exchangeOrderId: String? = null,
-    val status: String = "EXECUTED",
     val executedAt: Instant = Instant.now(),
     val createdAt: Instant = Instant.now(),
 )
