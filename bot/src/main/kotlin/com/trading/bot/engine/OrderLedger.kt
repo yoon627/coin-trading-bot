@@ -9,7 +9,7 @@ import kotlinx.coroutines.reactor.awaitSingleOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
-/** 봇이 보낸 주문을 `orders` 에 한 줄씩 남긴다. 지금은 체결만 남기고 읽는 곳은 없다. */
+/** 봇이 보낸 주문을 `orders` 에 한 줄씩 남긴다. 지금은 체결만 남기고, 거래 기록 화면·왕복 손익·매일 대조가 이 줄을 읽는다. */
 @Service
 class OrderLedger(
     private val repository: OrderRowRepository,
@@ -20,7 +20,8 @@ class OrderLedger(
      * 체결 한 건을 FILLED 줄로 남기고 그 id 를 돌려준다. [TradeExecutionService.saveAudit] 가 체결 기록 트랜잭션 안에서만 부른다.
      * SQL 오류는 잡지 않는다 — Postgres 는 문장 하나가 실패하면 트랜잭션 전체를 중단하므로 잡아도 뒤의 쓰기가 실패한다.
      * 같은 주문 키의 줄이 이미 있어 넣지 못하면 ERROR 를 남기고 null 을 돌려준다. 체결 기록의 원본이 trade_executions 인 동안은
-     * 이 때문에 체결을 막지 않는다.
+     * 이 때문에 체결을 막지 않는다 — 그 체결은 화면에서 빠진다. 충돌한 줄이 같은 거래소 주문번호면 매일 대조도 기록된 것으로 보므로
+     * 이 ERROR 가 유일한 알림이다.
      */
     suspend fun recordFill(record: TradeRecord, fee: Double?, feeKind: FeeKind, tradeExecutionId: Long, tradeRecordId: Long?): Long? {
         val id = repository.insertFilled(
@@ -53,7 +54,9 @@ class OrderLedger(
         ).awaitSingleOrNull()
         if (id == null) {
             log.error(
-                "orders row not written — a row with the same order key exists: userId={}, market={}, side={}, orderId={}, clientOrderId={}",
+                "orders row not written — a row with the same order key exists, so this fill is missing from trade history and round-trip PnL " +
+                    "(the fill itself is recorded in trade_executions; fix the conflicting orders row, then run deploy/vultr/sql/orders_catchup.sql): " +
+                    "userId={}, market={}, side={}, orderId={}, clientOrderId={}",
                 record.userId, record.ticker, record.side, record.exchangeOrderId, record.clientOrderId,
             )
         }

@@ -128,7 +128,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
-| GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`) |
+| GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`). `orders` 의 체결 줄을 체결 시각 내림차순으로 읽는다(V43 절) |
 | GET | `/api/kis/keys` | KIS 모의(`KIS_PAPER`)·실전(`KIS`) 키 저장 여부, 마스킹한 계좌(`****5678-01`), 갱신 시각(`updated_at`, UTC ISO-8601) |
 | PUT, DELETE | `/api/kis/keys/{KIS_PAPER\|KIS}` | KIS 키 저장(`app_key`, `app_secret`, `account_number`)·삭제 |
 
@@ -207,9 +207,9 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 ### 체결 기록 대조
 
-매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `trade_executions` 에 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
+매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `orders` 에 업비트 체결 줄(FILLED)이 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
 
-- 보정할 때는 그 체결의 거래 기록 행을 `exchange_order_id = <uuid>` 로 넣는다. 그래야 다음 대조에서 빠진다. `trade_records` 를 손으로 넣거나 고치거나 지우면 `orders` 에도 같은 것을 한다(화면이 `orders` 를 읽게 바뀐 뒤 화면과 맞도록 — V42 절). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
+- 보정할 때는 그 체결의 거래 기록 행(`trade_executions`·`trade_records`)을 `exchange_order_id = <uuid>` 로 넣고 `deploy/vultr/sql/orders_catchup.sql` 로 `orders` 에 옮긴다(V43 절). 그래야 화면에 보이고 다음 대조에서 빠진다. `trade_records` 를 손으로 고치거나 지우면 `orders` 에도 같은 것을 한다(화면은 `orders` 를 읽는다). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
 - 거짓 경보가 나는 경우: 같은 업비트 키를 다른 환경(로컬 실행 등)이 써서 그쪽 DB 에 기록된 주문, 같은 키를 두 사용자가 등록한 경우.
 - 키가 없으면 INFO 로, 만료·잘못된 키·허용 IP 밖(401·403)·복호화 실패면 WARN 으로 그 사용자를 건너뛴다. 키가 있어 시도한 사용자가 모두 실패하면 ERROR 한 줄. 서명 오류(`invalid_query_payload` 등)는 ERROR 다. 키에 "주문조회" 권한이 필요하다.
 
@@ -278,7 +278,7 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 - push 배포는 main 이 이미 앞서 있으면(문서만 다른 경우 빼고) 배포하지 않고 최신 커밋의 실행에 맡긴다 — 테스트·빌드가 끝난 순서로 줄을 서서 옛 커밋이 엔진을 한 번 더 재시작하거나 옛 커밋 거부로 실패하지 않게 한다. 자동 배포를 보류하면 배포 webhook 으로도 알린다(보류가 풀릴 때까지 뒤 push 도 같은 이유로 보류된다). secret(`VULTR_DEPLOY_ENV`)만 바꾼 것은 판정에 보이지 않아 다음 자동 배포에 함께 들어간다 — 바로 반영하려면 force 로 수동 실행한다.
 - 헬스체크(`/actuator/health`)는 웹·DB 와 함께 실행 중이던 봇의 복원이 끝났는지 본다. 복원 중이면 503(OUT_OF_SERVICE), 재시도를 다 쓰고 복원하지 못한 봇이 있으면 503(DOWN)이다. 그 봇을 손으로 시작하거나 멈추면 다시 200 이 된다. bot state 조회 자체가 끝까지 실패했으면 재시작 전까지 503 이고, `TRADING_AUTO_START=false` 면 복원하지 않으므로 언제나 200 이다.
 - 배포 결과(성공·자동 롤백·실패)를 Discord 로 알린다. 모두 `DISCORD_DEPLOY_WEBHOOK_URL`(배포 webhook, `VULTR_DEPLOY_ENV` 시크릿에 넣는다)로 간다. 배포 webhook 이 없으면 롤백·실패만 `DISCORD_ERROR_WEBHOOK_URL` 로 가고 성공은 보내지 않는다. 거래 webhook(`DISCORD_WEBHOOK_URL`)은 체결 알림 전용이라 배포 알림을 보내지 않는다. 원격 배포 전에 멈춘 실패(설정 검사·preflight·업로드, Actions 의 준비 스텝)는 알리지 않는다 — 운영 컨테이너를 건드리기 전이고 Actions 실패로 보인다.
-- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌지 못할 수 있어 자동 롤백하지 않는다. 다만 롤백 호환 검사(아래 "스키마 변경 규칙")를 통과하면 자동 롤백한다. 어느 쪽이든 새 앱을 띄우기 전에 DB 를 덤프한다. 롤백 대상 SHA 에 V30(거래소 축) 마이그레이션이 없어도 자동 롤백하지 않는다.
+- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌지 못할 수 있어 자동 롤백하지 않는다. 다만 롤백 호환 검사(아래 "스키마 변경 규칙")를 통과하면 자동 롤백한다. 어느 쪽이든 새 앱을 띄우기 전에 DB 를 덤프한다. 롤백 대상 SHA 에 V42(orders 맞춤) 마이그레이션이 없어도 자동 롤백하지 않는다(아래 V43 절).
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
@@ -304,7 +304,7 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
 - **contract**: 옛 칼럼·제약을 지우는 마이그레이션은 직전 이미지로 돌아갈 일이 없을 만큼 지난 뒤 따로 낸다. 이 배포만 되돌릴 수 없고, 바뀌는 동작이 없어야 한다.
 - 한 마이그레이션에서 더하고 지우는 것을 함께 하지 않는다(V30 이 그렇게 했고, V30 이전 이미지로는 롤백하지 않는다).
 
-롤백 호환 검사: Actions 배포는 마이그레이션이 바뀌었으면 runner 의 임시 Postgres(운영과 같은 이미지)에 새 이미지를 띄워 마이그레이션한 뒤, 직전 정상 이미지를 그 스키마 위에 띄워 기동과 봇 복원 조회(`bot_state`)가 healthy 로 끝나는지 본다(`deploy/vultr/rollback_compat.sh`, 더미 시크릿·빈 DB·자동 시작 켬 — 복원할 봇이 없어 주문은 나가지 않는다). 통과하면 그 배포도 헬스체크 실패 때 직전 이미지로 자동 롤백하고, 실패하거나 검사하지 못하면 경고만 남기고 자동 롤백 없이 배포한다. 빈 DB 라 쓰기 경로(체결·주문 기록 INSERT)와 옛 코드가 새 데이터를 잘못 읽는 비호환은 잡지 못하므로 위 규칙이 먼저다 — 특히 기본값 없는 NOT NULL 칼럼 추가는 검사를 통과해도 롤백한 옛 코드의 쓰기를 깬다. V30 이전 이미지로는 검사와 상관없이 자동 롤백하지 않는다. 수동 실행의 `rollback_check` 를 켜면 마이그레이션이 없어도 검사만 돌려 볼 수 있다.
+롤백 호환 검사: Actions 배포는 마이그레이션이 바뀌었으면 runner 의 임시 Postgres(운영과 같은 이미지)에 새 이미지를 띄워 마이그레이션한 뒤, 직전 정상 이미지를 그 스키마 위에 띄워 기동과 봇 복원 조회(`bot_state`)가 healthy 로 끝나는지 본다(`deploy/vultr/rollback_compat.sh`, 더미 시크릿·빈 DB·자동 시작 켬 — 복원할 봇이 없어 주문은 나가지 않는다). 통과하면 그 배포도 헬스체크 실패 때 직전 이미지로 자동 롤백하고, 실패하거나 검사하지 못하면 경고만 남기고 자동 롤백 없이 배포한다. 빈 DB 라 쓰기 경로(체결·주문 기록 INSERT)와 옛 코드가 새 데이터를 잘못 읽는 비호환은 잡지 못하므로 위 규칙이 먼저다 — 특히 기본값 없는 NOT NULL 칼럼 추가는 검사를 통과해도 롤백한 옛 코드의 쓰기를 깬다. V42 이전 이미지로는 검사와 상관없이 자동 롤백하지 않는다. 수동 실행의 `rollback_check` 를 켜면 마이그레이션이 없어도 검사만 돌려 볼 수 있다.
 
 `deploy.sh` 는 직전 정상 배포와 비교해 `db/migration/` 이 바뀌었거나 비교할 수 없으면, 새 이미지를 받은 뒤 새 앱을 띄우기 직전에 서버에서 DB 를 `/opt/app/backups/pre-deploy-<SHA 12자리>-<UTC 시각>.sql.gz` 로 덤프한다(배포 계정 전용, 최근 5개 보존). 멈춰 있는 postgres 는 먼저 띄운다. postgres 를 띄우지 못하거나 덤프가 완전하지 않으면 앱 컨테이너를 바꾸지 않고 배포를 멈춘다(postgres 정의가 바뀐 배포면 postgres 는 이미 새로 만들어졌을 수 있다) — 이때 서버의 `.env`·compose 파일은 이미 새 배포 것이라 `docker compose up` 을 손으로 돌리면 덤프 없이 마이그레이션된다. 같은 디스크라 호스트 유실에는 쓸모가 없다 — 오프사이트 백업은 따로 둔다.
 
@@ -343,7 +343,7 @@ COMMIT;
 
 V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 직전 백업은 배포가 서버 디스크에 남기는 마이그레이션 전 덤프(위 "스키마 변경 규칙")로 한다.
 
-- V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 `deploy.sh` 의 자동 롤백 하한은 V30 그대로다.
+- V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 V31 때 `deploy.sh` 의 자동 롤백 하한은 V30 그대로였다(지금은 V42 — 아래 V43 절).
 - 다만 V31 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 V31 적용 여부와 관계없이 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백해도 되고, `V31_down.sql` 은 필요 없다.
 - V30 이전으로 내려가야 하면 (V32 가 적용돼 있으면 `V32_down.sql` 부터) `V31_down.sql` 을 먼저 돌리고 위 V30 절차를 따른다. `V30_down.sql` 은 V30 뒤에 적용된 마이그레이션이 있으면 멈춘다.
 - 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V31_down.sql` 을 쓴다. 저장된 KIS 앱키·앱시크릿·계좌번호가 모두 사라져 사용자가 다시 넣어야 한다. V31 이 마지막 적용 버전일 때만 돌고, 아니면 아무것도 바꾸지 않고 멈춘다. 테이블과 `flyway_schema_history` 의 V31 행을 한 트랜잭션으로 지우므로, 이후 V31 이 든 이미지를 올리면 테이블을 다시 만든다.
@@ -495,7 +495,7 @@ V41 은 주문마다 한 줄인 `orders` 표를 만들고 옛 체결을 `trade_e
 - 지금은 같은 체결을 `trade_records`(화면)와 `trade_executions`(중복 방지·대사)에 두 번 적는다. 엔진 매수 줄의 가격·수량·총액은 이 주문이 아니라 체결 뒤 보유 전체다. `orders` 는 이 주문의 체결 수량·대금·평균가(`filled_*`·`avg_fill_price`)와 체결 뒤 장부(`position_volume_after`·`book_avg_price`)를 따로 적는다. `fill_source` 가 값의 출처(주문 응답·잔고 복원·옛 기록)다.
 - 옛 엔진 매수는 이 주문 하나의 수량을 알 수 없어 비워 두고(`BACKFILL_SNAPSHOT`), 보유 전체 값을 장부 칼럼에 둔다.
 - 새 체결은 옛 두 표·상태 저장·알림 대기열과 같은 트랜잭션에서 `orders` 에 FILLED 줄로 함께 남는다. 이 쓰기가 SQL 오류를 내면 체결 기록 전체가 되돌아가 지금의 기록 실패처럼 다음에 다시 시도된다. 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다(체결 기록은 막지 않는다). 주문 생애(대기·거절·안 나감)는 아직 남기지 않는다.
-- 아직 아무도 `orders` 를 읽지 않는다. 화면·대사·체결 알림은 지금처럼 옛 두 표를 쓴다.
+- V41 때는 아무도 `orders` 를 읽지 않았다. 화면과 매일 대조는 V43 부터 `orders` 를 읽는다.
 - V40 이미지로의 롤백은 그대로 뜬다(새 표만 더한다). 그동안의 체결은 `orders` 에 남지 않고, 읽는 쪽을 `orders` 로 바꾸는 다음 단계가 마이그레이션의 옮기기 부분을 다시 돌려 메운다.
 - 표 자체를 없애야 할 때만 `deploy/vultr/sql/V41_down.sql` 을 쓴다(V41 이 마지막 적용 버전일 때만 돈다).
   ```bash
@@ -523,3 +523,17 @@ V42 는 화면·대사가 `orders` 를 읽게 바꾸기 전에 `orders` 만으�
   ./dump_local.sh before-V42-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V42_down.sql
   APP_VERSION=<V42 이전 SHA> docker compose up -d --pull missing
   ```
+
+### V43 (화면·대사가 `orders` 를 읽는다)
+
+V43 은 표를 바꾸지 않고 V42 의 따라잡기를 한 번 더 돌린다. 같은 배포에서 거래 기록 화면(`/api/trades`·`/roundtrips`)과 매일 체결 대조가 `orders` 의 FILLED 줄을 읽기 시작한다. 옛 두 표는 아직 쓰고, 지우는 것은 다음 단계다.
+
+- 기동 로그 `V43 orders:` 에 V42 의 연결 안 된 수와 함께 체결 시각 없는 FILLED(화면 맨 뒤), 짝 `trade_records` 없는 FILLED(옛 화면에 없던 줄), 화면 값 칼럼이 비어 0 으로 보이는 줄, 같은 시각 묶음 수가 남는다. 배포 전 운영 덤프로 모두 0 인지 보고, 같은 결과 검증(`TradeHistoryParityTest`)이 모든 쪽과 왕복 응답에서 차이 0 인지 본다. 같은 주문 키 충돌로 `orders` 에 못 들어간 체결은 쓸 때의 ERROR 가 알린다(같은 거래소 주문번호 충돌이면 매일 대조는 기록된 것으로 본다).
+- 자동 롤백 하한은 V42 다(`deploy.sh` 의 `ROLLBACK_FLOOR_MIGRATION`). V42 이전 이미지는 체결을 `orders` 에 맞춰 쓰지 않아(시각 `now()`, 알림 연결 없음, 더 옛 이미지는 `orders` 를 모른다) 화면 기록이 어긋난다.
+- 손으로 V42 이전 이미지로 롤백했다가 다시 올렸으면 V43 은 이미 적용돼 다시 돌지 않는다. 그 사이의 체결은 `deploy/vultr/sql/orders_catchup.sql`(V42·V43 의 따라잡기와 같은 SQL, 끝에 같은 수를 NOTICE 로 남긴다)로 맞춘다. 앱은 돌아도 된다. 시각 바꿈은 UTC(운영 JVM 시간대)로 고정돼 있다.
+  ```bash
+  # 로컬에서: scp deploy/vultr/sql/orders_catchup.sql <서버>:/tmp/
+  cd /opt/app
+  ./dump_local.sh before-orders-catchup && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/orders_catchup.sql
+  ```
+- V42 이미지(`dd70e9c7`)로의 롤백은 그대로 뜬다(V43 은 표를 바꾸지 않고, 그 이미지는 옛 표를 읽는다). V43 기록을 지워야 할 때만 `deploy/vultr/sql/V43_down.sql` 을 쓴다(V43 이 마지막 적용 버전일 때만 돈다). V43 파일을 `git revert` 로 지우지 않는다 — 적용된 V43 이 없는 빌드도 뜨지만(Flyway 는 모르는 뒤 버전을 건너뛴다), 나중에 다른 내용의 V43 을 넣으면 체크섬 검증이 막는다. 고친 이미지로 앞으로 간다.

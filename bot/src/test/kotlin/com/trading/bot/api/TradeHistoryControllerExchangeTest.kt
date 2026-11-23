@@ -1,12 +1,13 @@
 package com.trading.bot.api
 
-import com.trading.bot.persistence.TradeRecordRepository
-import com.trading.bot.persistence.entity.TradeRecordEntity
+import com.trading.bot.persistence.OrderRowRepository
+import com.trading.bot.persistence.entity.OrderRowEntity
 import com.trading.common.domain.Exchange
-import io.mockk.coEvery
-import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
-import java.time.LocalDateTime
+import io.mockk.verify
+import java.time.Instant
+import java.time.ZoneOffset
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -14,32 +15,35 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.test.web.reactive.server.WebTestClient
 import org.springframework.web.server.WebFilter
+import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 
 /** 거래소 파라미터의 기본값은 WebFlux 바인딩을 거쳐야 정해지므로 HTTP 요청으로 본다. */
 class TradeHistoryControllerExchangeTest {
 
-    private val repository = mockk<TradeRecordRepository>()
+    private val repository = mockk<OrderRowRepository>()
     private val max = TradeHistoryController.MAX_SOURCE_RECORDS
 
-    private fun row(id: Long, ticker: String, side: String, exchange: Exchange) = TradeRecordEntity(
-        id = id, ticker = ticker, side = side, price = 100.0, volume = 1.0, totalAmount = 100.0, userId = 1L,
-        createdAt = LocalDateTime.parse("2026-01-01T00:00").plusMinutes(id), exchange = exchange.name,
+    private fun row(id: Long, ticker: String, side: String, exchange: Exchange) = OrderRowEntity(
+        id = id, userId = 1L, exchange = exchange.name, market = ticker, side = side, status = "FILLED", decisionPrice = 100.0,
+        filledVolume = 1.0, positionVolumeAfter = 1.0, bookAvgPrice = 100.0, fillSource = "ORDER",
+        completedAt = Instant.parse("2026-01-01T00:00:00Z").plusSeconds(60 * id),
     )
 
     private val upbitRows = listOf(row(1, "KRW-BTC", "BUY", Exchange.UPBIT), row(2, "KRW-BTC", "SELL", Exchange.UPBIT))
     private val paperRows = listOf(row(3, "KRX-005930", "BUY", Exchange.KIS_PAPER))
 
     init {
-        coEvery { repository.findByUserIdAndExchange(1L, Exchange.UPBIT, 100, 0) } returns upbitRows.reversed()
-        coEvery { repository.countByUserIdAndExchange(1L, Exchange.UPBIT) } returns 2L
-        coEvery { repository.findRecentAscending(1L, Exchange.UPBIT, max + 1) } returns upbitRows
-        coEvery { repository.findByUserIdAndExchange(1L, Exchange.KIS_PAPER, 100, 0) } returns paperRows
-        coEvery { repository.countByUserIdAndExchange(1L, Exchange.KIS_PAPER) } returns 1L
-        coEvery { repository.findRecentAscending(1L, Exchange.KIS_PAPER, max + 1) } returns paperRows
+        every { repository.findFilledPage(1L, "UPBIT", 100, 0) } answers { Flux.fromIterable(upbitRows.reversed()) }
+        every { repository.countFilled(1L, "UPBIT") } answers { Mono.just(2L) }
+        every { repository.findFilledRecentAscending(1L, "UPBIT", max + 1) } answers { Flux.fromIterable(upbitRows) }
+        every { repository.findFilledPage(1L, "KIS_PAPER", 100, 0) } answers { Flux.fromIterable(paperRows) }
+        every { repository.countFilled(1L, "KIS_PAPER") } answers { Mono.just(1L) }
+        every { repository.findFilledRecentAscending(1L, "KIS_PAPER", max + 1) } answers { Flux.fromIterable(paperRows) }
     }
 
     private val client: WebTestClient = WebTestClient
-        .bindToController(TradeHistoryController(repository, RequestValidators()))
+        .bindToController(TradeHistoryController(repository, RequestValidators(), ZoneOffset.UTC))
         .webFilter<WebTestClient.ControllerSpec>(
             WebFilter { exchange, chain ->
                 chain.filter(exchange).contextWrite(
@@ -74,8 +78,8 @@ class TradeHistoryControllerExchangeTest {
         client.get().uri("/api/trades/roundtrips?exchange=KIS_PAPER").exchange().expectStatus().isOk.expectBody()
             .jsonPath("$.round_trips[0].ticker").isEqualTo("KRX-005930")
 
-        coVerify(exactly = 0) { repository.findByUserIdAndExchange(any(), Exchange.UPBIT, any(), any()) }
-        coVerify(exactly = 0) { repository.findRecentAscending(any(), Exchange.UPBIT, any()) }
+        verify(exactly = 0) { repository.findFilledPage(any(), "UPBIT", any(), any()) }
+        verify(exactly = 0) { repository.findFilledRecentAscending(any(), "UPBIT", any()) }
     }
 
     @Test
@@ -85,8 +89,8 @@ class TradeHistoryControllerExchangeTest {
             client.get().uri("/api/trades/roundtrips?exchange=$it").exchange().expectStatus().isBadRequest
         }
 
-        coVerify(exactly = 0) { repository.findByUserIdAndExchange(any(), any(), any(), any()) }
-        coVerify(exactly = 0) { repository.countByUserIdAndExchange(any(), any()) }
-        coVerify(exactly = 0) { repository.findRecentAscending(any(), any(), any()) }
+        verify(exactly = 0) { repository.findFilledPage(any(), any(), any(), any()) }
+        verify(exactly = 0) { repository.countFilled(any(), any()) }
+        verify(exactly = 0) { repository.findFilledRecentAscending(any(), any(), any()) }
     }
 }

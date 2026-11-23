@@ -1,5 +1,6 @@
 package com.trading.bot.persistence
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.FeeBasis
@@ -11,8 +12,11 @@ import com.trading.bot.domain.TradingState
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Exchange
 import java.sql.Connection
 import java.sql.DriverManager
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.test.runTest
@@ -24,6 +28,8 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -36,6 +42,7 @@ import org.springframework.transaction.reactive.TransactionalOperator
  * 마이그레이션 시험은 실행마다 만든 스키마에서 JDBC 로 돈다 — 공유 스키마에서 돌리면 다른 시험의 행이 섞인다.
  */
 @DataR2dbcTest
+@ImportAutoConfiguration(JacksonAutoConfiguration::class)
 class OrdersRoundTripTest {
 
     @Autowired private lateinit var databaseClient: DatabaseClient
@@ -45,6 +52,7 @@ class OrdersRoundTripTest {
     @Autowired private lateinit var states: TradingStateRepository
     @Autowired private lateinit var orderRows: OrderRowRepository
     @Autowired private lateinit var transactionManager: ReactiveTransactionManager
+    @Autowired private lateinit var objectMapper: ObjectMapper
 
     private val stateService by lazy { TradingStateService(states, jacksonObjectMapper()) }
     private val service by lazy {
@@ -89,6 +97,9 @@ class OrdersRoundTripTest {
         }
 
         private const val V41 = "bot/src/main/resources/db/migration/V41__orders.sql"
+        private const val V42 = "bot/src/main/resources/db/migration/V42__orders_read.sql"
+        private const val V43 = "bot/src/main/resources/db/migration/V43__orders_read_switch.sql"
+        private const val MANUAL_CATCHUP = "deploy/vultr/sql/orders_catchup.sql"
     }
 
     private val runId = UUID.randomUUID().toString().take(8)
@@ -129,6 +140,66 @@ class OrdersRoundTripTest {
         executedVwap = 49_975_000.0, orderVolume = 0.002, positionVolumeAfter = 0.0, bookAvgPrice = 49_000_000.0,
         clientOrderId = "ctb-$runId",
     )
+
+    // --- 화면 읽기: FILLED 만, 사용자·거래소별, 체결 시각 내림차순(같으면 id), 쪽 나누기는 SQL ---
+
+    /** 체결 시각이 [minute] 분인 orders 줄을 넣고 id 를 돌려준다. [minute] 이 null 이면 체결 시각이 없다. */
+    private suspend fun filledRow(userId: Long, minute: Int?, exchange: String = "UPBIT", status: String = "FILLED", orderId: String? = null): Long =
+        databaseClient.sql(
+            "INSERT INTO orders (user_id, exchange, market, side, status, exchange_order_id, decision_price, filled_volume, fill_source, fee_basis, completed_at) " +
+                "VALUES (:u, :e, 'KRW-BTC', 'SELL', :s, :o, 100, 1, 'ORDER', 'MEASURED', " +
+                "CASE WHEN CAST(:m AS int) IS NULL THEN NULL ELSE TIMESTAMPTZ '2026-11-23 00:00:00+00' + make_interval(mins => CAST(:m AS int)) END) RETURNING id",
+        )
+            .bind("u", userId).bind("e", exchange).bind("s", status)
+            .let { if (orderId == null) it.bindNull("o", String::class.java) else it.bind("o", orderId) }
+            .let { if (minute == null) it.bindNull("m", Integer::class.java) else it.bind("m", minute) }
+            .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
+            .one().awaitSingle()
+
+    @Test
+    fun `the history page reads only this user's FILLED rows on this exchange, newest first, ties by id, rows without a time last`() = runTest {
+        val userId = insertUser("page")
+        val other = insertUser("page-other")
+        val noTime = filledRow(userId, null)
+        val older = filledRow(userId, 1)
+        val tieA = filledRow(userId, 5)
+        val tieB = filledRow(userId, 5)
+        val newest = filledRow(userId, 9)
+        filledRow(userId, 20, status = "OPEN")
+        filledRow(userId, 30, exchange = "KIS_PAPER")
+        filledRow(other, 40)
+
+        val all = orderRows.findFilledPage(userId, "UPBIT", 100, 0).collectList().awaitSingle().map { it.id }
+        assertThat(all).containsExactly(newest, tieB, tieA, older, noTime)
+        assertThat(orderRows.countFilled(userId, "UPBIT").awaitSingle()).isEqualTo(5L)
+        assertThat(orderRows.findFilledPage(userId, "UPBIT", 2, 2).collectList().awaitSingle().map { it.id }).containsExactly(tieA, older)
+        assertThat(orderRows.findFilledPage(userId, "UPBIT", 2, 5).collectList().awaitSingle()).isEmpty()
+        assertThat(orderRows.findFilledPage(userId, "KIS_PAPER", 100, 0).collectList().awaitSingle()).hasSize(1)
+    }
+
+    @Test
+    fun `the round-trip source is the newest rows in ascending order, so a cut drops the oldest`() = runTest {
+        val userId = insertUser("recent")
+        val ids = (1..4).map { filledRow(userId, it) }
+
+        assertThat(orderRows.findFilledRecentAscending(userId, "UPBIT", 3).collectList().awaitSingle().map { it.id })
+            .containsExactlyElementsOf(ids.drop(1))
+        assertThat(orderRows.findFilledRecentAscending(userId, "UPBIT", 10).collectList().awaitSingle().map { it.id })
+            .containsExactlyElementsOf(ids)
+    }
+
+    // --- 매일 대조: 같은 거래소의 FILLED 줄에 있는 주문번호만 기록된 것이다 ---
+
+    @Test
+    fun `an order number counts as recorded only for a FILLED row on the same exchange`() = runTest {
+        val userId = insertUser("recorded")
+        filledRow(userId, 1, orderId = "u-filled-$runId")
+        filledRow(userId, 2, orderId = "u-open-$runId", status = "OPEN")
+        filledRow(userId, 3, orderId = "u-shared-$runId", exchange = "KIS_PAPER")
+
+        val asked = listOf("u-filled-$runId", "u-open-$runId", "u-shared-$runId", "u-none-$runId")
+        assertThat(orderRows.findRecordedOrderIds(userId, "UPBIT", asked).collectList().awaitSingle()).containsExactly("u-filled-$runId")
+    }
 
     // --- 체결 기록 트랜잭션 안의 orders 쓰기 ---
 
@@ -177,13 +248,12 @@ class OrdersRoundTripTest {
         )
         for (record in listOf(buy, balanceBuy, sell, balanceSell)) assertThat(service.commitFill({}, record)).isTrue()
 
-        val records = tradeRecords.findAll().collectList().awaitSingle().filter { it.userId == userId }
-        val orders = orderRows.findAll().collectList().awaitSingle().filter { it.userId == userId }
-        val result = TradeHistoryParity.compare(records, orders, java.time.ZoneId.systemDefault())
+        val result = TradeHistoryParity(TradeRecordRepository(tradeRecords), orderRows, objectMapper, ZoneId.systemDefault())
+            .compare(userId, Exchange.UPBIT)
 
-        assertThat(result.compared).isEqualTo(4)
+        assertThat(orderRows.countFilled(userId, "UPBIT").awaitSingle()).isEqualTo(4L)
+        assertThat(result.responses).isEqualTo(2)
         assertThat(result.differences).isEmpty()
-        assertThat(result.incomplete).isZero()
     }
 
     @Test
@@ -404,36 +474,104 @@ class OrdersRoundTripTest {
             val ids = inSchema(schema) { conn -> seedAfterV41(conn) }
 
             migrate(schema, "42")
+            inSchema(schema) { conn -> assertCaughtUp(conn, legacy, ids) }
+        }
+
+    // --- V43: 읽기 전환 직전의 따라잡기 다시 돌리기 ---
+
+    @Test
+    fun `V43 catches up fills an image without orders wrote after V42, and the manual catch-up file changes nothing after it`() =
+        withScratchSchema("v43") { schema ->
+            migrate(schema, "40")
+            val legacy = inSchema(schema) { conn -> seedLegacyTrades(conn) }
+            migrate(schema, "42")
+            // V42 아래 이미지로 손으로 롤백한 동안의 쓰기.
+            val ids = inSchema(schema) { conn -> seedAfterV41(conn) }
+
+            migrate(schema, "43")
             inSchema(schema) { conn ->
-                // 옛 이미지가 orders 없이 쓴 체결은 따라잡고, 같은 거래소 주문번호 줄이 이미 있는 체결은 건너뛴다.
-                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.lateExecution}")).containsExactly("1")
-                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE exchange_order_id = 'o-orph'")).containsExactly("1")
-                assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.orphanExecution}")).containsExactly("0")
-
-                // 연결된 모든 체결의 시각이 화면 기록과 같다.
-                assertThat(
-                    conn.strings(
-                        "SELECT count(*)::text FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id " +
-                            "WHERE o.completed_at IS DISTINCT FROM tr.created_at",
-                    ),
-                ).containsExactly("0")
-                assertThat(conn.strings("SELECT requested_volume::text FROM orders WHERE trade_execution_id = ${ids.balanceSellExecution}"))
-                    .containsExactly("0.7")
-                assertThat(conn.strings("SELECT decision_price::text FROM orders WHERE trade_execution_id = ${legacy.manualBuy}"))
-                    .containsExactly("90")
-                assertThat(
-                    conn.strings(
-                        "SELECT (n.order_id = o.id)::text FROM trade_notification_outbox n JOIN orders o ON o.trade_execution_id = n.trade_execution_id",
-                    ),
-                ).containsExactly("true", "true")
-
-                // 다시 돌려도 바뀌는 것이 없다(2-2b 가 읽기 전환 직전에 다시 돌린다).
+                assertCaughtUp(conn, legacy, ids)
+                // 손 따라잡기 파일은 운영 JVM 과 같은 UTC 로 시각을 바꾼다 — Flyway(JVM 시간대)와 같을 때만 비교가 뜻이 있다.
+                assumeTrue(ZoneId.systemDefault().normalized() == ZoneOffset.UTC, "JVM 시간대가 UTC 가 아니다")
                 val before = conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id")
-                conn.update(catchupSql())
+                conn.update(RepoFiles.file(MANUAL_CATCHUP).readText())
                 assertThat(conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id"))
                     .isEqualTo(before)
             }
         }
+
+    @Test
+    fun `V42, V43 and the manual catch-up file run the same catch-up, and V43 and the manual file report the same counts`() {
+        val blocks = listOf(V42, V43, MANUAL_CATCHUP).map { marked(it, "catchup") }
+        assertThat(blocks[0]).contains("INSERT INTO orders")
+        assertThat(blocks).containsOnly(blocks[0])
+        assertThat(marked(MANUAL_CATCHUP, "report")).isEqualTo(marked(V43, "report").replace("'V43 orders:", "'orders catchup:"))
+    }
+
+    @Test
+    fun `the V43 report counts filled rows without a time, without a trade record, or with empty history columns`() =
+        withScratchSchema("v43report") { schema ->
+            migrate(schema, "43")
+            inSchema(schema) { conn ->
+                conn.update("INSERT INTO users (username, password) VALUES ('it-report-$runId', 'x')")
+                val userId = conn.strings("SELECT id::text FROM users WHERE username = 'it-report-$runId'").single()!!.toLong()
+                conn.update(
+                    "INSERT INTO orders (user_id, exchange, market, side, status, decision_price, filled_volume, fill_source, fee_basis) VALUES " +
+                        "($userId, 'UPBIT', 'KRW-BTC', 'SELL', 'FILLED', 100, 1, 'ORDER', 'MEASURED'), " +
+                        "($userId, 'UPBIT', 'KRW-BTC', 'BUY', 'OPEN', NULL, NULL, 'ORDER', 'MEASURED')",
+                )
+                conn.update(
+                    "INSERT INTO orders (user_id, exchange, market, side, status, book_avg_price, fill_source, fee_basis, completed_at) VALUES " +
+                        "($userId, 'UPBIT', 'KRW-BTC', 'BUY', 'FILLED', 100, 'ORDER', 'MEASURED', now())",
+                )
+
+                assertThat(conn.notices(marked(V43, "report"))).singleElement().asString()
+                    .contains("filled without time=1,", "filled without record=2,", "incomplete history rows=2,")
+            }
+        }
+
+    @Test
+    fun `the V43 down sql refuses unless V43 is last, then removes only its history row`() = withScratchSchema("v43down") { schema ->
+        val downSql = RepoFiles.file("deploy/vultr/sql/V43_down.sql").readText()
+        migrate(schema, "42")
+        assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V43 이 적용돼 있지 않다")
+
+        migrate(schema, "43")
+        inSchema(schema) { conn ->
+            conn.update(downSql)
+            assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("42")
+        }
+    }
+
+    /** 옛 이미지가 orders 없이 쓴 체결은 따라잡고, 같은 거래소 주문번호 줄이 이미 있는 체결은 건너뛴다. 값·시각·알림 연결이 맞는다. */
+    private fun assertCaughtUp(conn: Connection, legacy: LegacyIds, ids: AfterV41Ids) {
+        assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.lateExecution}")).containsExactly("1")
+        assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE exchange_order_id = 'o-orph'")).containsExactly("1")
+        assertThat(conn.strings("SELECT count(*)::text FROM orders WHERE trade_execution_id = ${ids.orphanExecution}")).containsExactly("0")
+
+        // 연결된 모든 체결의 시각이 화면 기록과 같다.
+        assertThat(
+            conn.strings(
+                "SELECT count(*)::text FROM orders o JOIN trade_records tr ON tr.id = o.trade_record_id " +
+                    "WHERE o.completed_at IS DISTINCT FROM tr.created_at",
+            ),
+        ).containsExactly("0")
+        assertThat(conn.strings("SELECT requested_volume::text FROM orders WHERE trade_execution_id = ${ids.balanceSellExecution}"))
+            .containsExactly("0.7")
+        assertThat(conn.strings("SELECT decision_price::text FROM orders WHERE trade_execution_id = ${legacy.manualBuy}"))
+            .containsExactly("90")
+        assertThat(
+            conn.strings(
+                "SELECT (n.order_id = o.id)::text FROM trade_notification_outbox n JOIN orders o ON o.trade_execution_id = n.trade_execution_id",
+            ),
+        ).containsExactly("true", "true")
+
+        // 다시 돌려도 바뀌는 것이 없다.
+        val before = conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id")
+        conn.update(marked(V42, "catchup"))
+        assertThat(conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id"))
+            .isEqualTo(before)
+    }
 
     @Test
     fun `the previous image's orders insert and an outbox row without order id still work on V42`() = withScratchSchema("v42compat") { schema ->
@@ -516,10 +654,12 @@ class OrdersRoundTripTest {
         return AfterV41Ids(late, balance, orphan)
     }
 
-    /** V42 의 따라잡기 부분. 마이그레이션 파일의 표시 사이를 그대로 쓴다. */
-    private fun catchupSql(): String =
-        RepoFiles.file("bot/src/main/resources/db/migration/V42__orders_read.sql").readText()
-            .substringAfter("-- catchup:begin").substringBefore("-- catchup:end")
+    /** SQL 파일의 `-- <label>:begin`·`-- <label>:end` 표시 사이를 그대로 쓴다. */
+    private fun marked(path: String, label: String): String {
+        val text = RepoFiles.file(path).readText()
+        check(text.contains("-- $label:begin") && text.contains("-- $label:end")) { "$path 에 $label 표시가 없다" }
+        return text.substringAfter("-- $label:begin").substringBefore("-- $label:end")
+    }
 
     private class LegacyIds(
         val snapshotBuy: Long,
@@ -592,6 +732,13 @@ class OrdersRoundTripTest {
     private fun Connection.update(sql: String) {
         createStatement().use { it.execute(sql) }
     }
+
+    /** 문이 RAISE NOTICE 로 남긴 메시지들. */
+    private fun Connection.notices(sql: String): List<String> =
+        createStatement().use { st ->
+            st.execute(sql)
+            generateSequence(st.warnings) { it.nextWarning }.mapNotNull { it.message }.toList()
+        }
 
     private fun Connection.strings(sql: String): List<String?> =
         createStatement().use { st -> st.executeQuery(sql).use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } } }

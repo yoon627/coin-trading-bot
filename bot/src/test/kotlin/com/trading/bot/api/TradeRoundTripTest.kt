@@ -36,7 +36,7 @@ class TradeRoundTripTest {
         strategy = strategy,
         userId = 1L,
         createdAt = LocalDateTime.parse(at),
-    )
+    ).toHistoryRow()
 
     @Test
     fun `단일 매수-매도가 한 라운드트립으로 조립된다`() {
@@ -776,7 +776,7 @@ class TradeRoundTripTest {
                     strategy = "manual",
                     userId = 1L,
                     createdAt = LocalDateTime.parse("2026-08-01T11:00"),
-                ),
+                ).toHistoryRow(),
                 rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T12:00", pnlPercent = 10.0),
             )
         )

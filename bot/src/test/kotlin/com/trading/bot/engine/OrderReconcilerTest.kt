@@ -8,7 +8,7 @@ import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.Order
 import com.trading.bot.domain.TradingState
 import com.trading.bot.persistence.BotStateRepository
-import com.trading.bot.persistence.TradeExecutionRepository
+import com.trading.bot.persistence.OrderRowRepository
 import com.trading.bot.persistence.TradingStateService
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.BotStateEntity
@@ -41,8 +41,8 @@ class OrderReconcilerTest {
     private val secrets = mockk<UserSecretsService>()
     private val client = mockk<UpbitClient>()
     private val states = mockk<TradingStateService>()
-    private val executions = mockk<TradeExecutionRepository>()
-    private val reconciler = OrderReconciler(botStates, users, secrets, { client }, states, executions, Clock.fixed(now, ZoneOffset.UTC))
+    private val orders = mockk<OrderRowRepository>()
+    private val reconciler = OrderReconciler(botStates, users, secrets, { client }, states, orders, Clock.fixed(now, ZoneOffset.UTC))
 
     private val logger = LoggerFactory.getLogger(OrderReconciler::class.java) as Logger
     private val logs = ListAppender<ILoggingEvent>().apply { start() }
@@ -67,7 +67,7 @@ class OrderReconcilerTest {
     private fun logged(level: Level) = logs.list.filter { it.level == level }.map { it.formattedMessage }
 
     private fun recorded(vararg uuids: String) {
-        every { executions.findRecordedOrderIds(1L, any()) } returns Flux.fromArray(uuids)
+        every { orders.findRecordedOrderIds(1L, "UPBIT", any()) } returns Flux.fromArray(uuids)
     }
 
     @Test
@@ -109,7 +109,7 @@ class OrderReconcilerTest {
         coVerifyOrder {
             client.getClosedOrders("done", any(), any())
             states.loadStates(1L, Exchange.UPBIT)
-            executions.findRecordedOrderIds(1L, any())
+            orders.findRecordedOrderIds(1L, "UPBIT", any())
         }
     }
 
@@ -154,7 +154,7 @@ class OrderReconcilerTest {
         every { botStates.findByExchange("UPBIT") } answers { runs.incrementAndGet(); Flux.empty() }
         val asked = mutableListOf<Instant>()
         val waiting = OrderReconciler(
-            botStates, users, secrets, { client }, states, executions, Clock.fixed(now, ZoneOffset.UTC),
+            botStates, users, secrets, { client }, states, orders, Clock.fixed(now, ZoneOffset.UTC),
             OrderReconciler.Timings(untilNextRun = { asked += it; java.time.Duration.ofHours(1) }),
         )
 
@@ -173,7 +173,7 @@ class OrderReconcilerTest {
             if (runs.incrementAndGet() == 1) throw IllegalStateException("db down") else Flux.empty()
         }
         val looping = OrderReconciler(
-            botStates, users, secrets, { client }, states, executions, Clock.fixed(now, ZoneOffset.UTC),
+            botStates, users, secrets, { client }, states, orders, Clock.fixed(now, ZoneOffset.UTC),
             OrderReconciler.Timings(untilNextRun = { java.time.Duration.ofMillis(20) }),
         )
 

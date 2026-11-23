@@ -310,7 +310,7 @@ class DeployNotifyScriptTest {
     /** 롤백 호환 검사가 이 두 커밋으로 통과했을 때만 마이그레이션 배포에도 자동 롤백을 허용한다. */
     @Test
     fun `롤백 호환 검사를 통과한 마이그레이션 배포만 자동 롤백 대상이다`() {
-        val repo = deployRepo(migration = true, floor = true)
+        val repo = deployRepo(migration = true, lastGoodMigrations = listOf("V42__orders_read.sql"))
         val state = File(repo, "deploy/vultr/.state")
         val initialState = state.readText()
         val lastGood = state.readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
@@ -329,10 +329,10 @@ class DeployNotifyScriptTest {
         assertThat(gateWith("$target..$target")).contains("MIGRATION_GATE='blocked'")
     }
 
-    /** 검사를 통과해도 V30 이전 이미지로는 자동 롤백하지 않는다 — 하한이 호환 검사보다 먼저다. */
+    /** 검사를 통과해도 V42 이전 이미지(옛 하한 V30 은 있다)로는 자동 롤백하지 않는다 — 하한이 호환 검사보다 먼저다. */
     @Test
-    fun `롤백 호환 검사를 통과해도 V30 하한 아래로는 자동 롤백하지 않는다`() {
-        val repo = deployRepo(migration = true)
+    fun `롤백 호환 검사를 통과해도 V42 하한 아래로는 자동 롤백하지 않는다`() {
+        val repo = deployRepo(migration = true, lastGoodMigrations = listOf("V30__exchange_dimension.sql"))
         val lastGood = File(repo, "deploy/vultr/.state").readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
         val target = git(repo, "rev-parse", "HEAD").trim()
 
@@ -412,15 +412,16 @@ class DeployNotifyScriptTest {
      * deploy.sh 가 `git rev-parse --show-toplevel` 로 저장소를 찾으므로 배포 파일을 임시 git 저장소에 둔다. 서버는 가짜 ssh 가
      * 대신한다 — 원격 배포 스크립트(`bash -s`)는 받은 결과 코드로 끝나고 나머지 명령은 성공한다.
      */
-    private fun deployRepo(sameAsLastGood: Boolean = false, migration: Boolean = false, floor: Boolean = false): File {
+    private fun deployRepo(sameAsLastGood: Boolean = false, migration: Boolean = false, lastGoodMigrations: List<String> = emptyList()): File {
         val repo = File(dir, "repo").apply { mkdirs() }
         val vultr = File(repo, "deploy/vultr").apply { mkdirs() }
         for (name in listOf("deploy.sh", NOTIFY.substringAfterLast('/'), "preflight_exit_params.sh", "docker-compose.prod.yml", "Caddyfile", "apply_caddyfile.sh", "backup.sh", "dump_local.sh")) {
             RepoFiles.file("deploy/vultr/$name").copyTo(File(vultr, name))
         }
         git(repo, "init", "-q")
-        if (floor) {
-            File(repo, "bot/src/main/resources/db/migration").apply { mkdirs() }.resolve("V30__exchange_dimension.sql").writeText("SELECT 1;\n")
+        if (lastGoodMigrations.isNotEmpty()) {
+            val migrations = File(repo, "bot/src/main/resources/db/migration").apply { mkdirs() }
+            lastGoodMigrations.forEach { migrations.resolve(it).writeText("SELECT 1;\n") }
             git(repo, "add", "bot")
         }
         git(repo, "add", "deploy")
