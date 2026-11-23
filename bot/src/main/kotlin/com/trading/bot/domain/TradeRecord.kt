@@ -16,7 +16,7 @@ sealed interface FeeBasis {
 }
 
 /**
- * 체결 이벤트. `trade_records`·`trade_executions` 와 Discord 알림이 함께 쓴다.
+ * 체결 이벤트. `orders` 의 체결 줄과 Discord 알림이 함께 쓴다.
  * 매도 시점 평단은 청산과 함께 사라지고 엔진 매수의 `totalAmount` 는 포지션 전체 원가라, 손익과 수수료는 sink 가 유도하지 않고 여기 싣는다.
  * 손익·전략·수수료·주문 대금은 생성부가 빠뜨리지 않도록 기본값을 두지 않는다.
  */

@@ -5,7 +5,6 @@ import com.trading.bot.ci.RepoFiles
 import com.trading.bot.domain.ExitParamsSnapshot
 import com.trading.bot.domain.SellReason
 import com.trading.bot.domain.TradingState
-import com.trading.bot.persistence.entity.TradeExecutionEntity
 import com.trading.bot.persistence.entity.UserEntity
 import java.sql.Connection
 import java.sql.DriverManager
@@ -47,9 +46,6 @@ class TradingStateRoundTripTest {
 
     @Autowired
     private lateinit var userRepository: UserRepository
-
-    @Autowired
-    private lateinit var tradeExecutionRepository: TradeExecutionRepository
 
     private val service by lazy { TradingStateService(repository, jacksonObjectMapper()) }
 
@@ -181,16 +177,12 @@ class TradingStateRoundTripTest {
         assertThat(restored.pendingSellIdentifier).isEqualTo(original.pendingSellIdentifier)
     }
 
-    // 가입·체결 기록은 저장소의 save 로 들어간다. 엔티티와 스키마가 어긋나면 여기서 깨진다.
+    // 가입은 저장소의 save 로 들어간다. 엔티티와 스키마가 어긋나면 여기서 깨진다.
     @Test
-    fun `users and trade executions save through the repositories on the current schema`() = runTest {
+    fun `users save through the repository on the current schema`() = runTest {
         val userId = userRepository.save(UserEntity(username = "it-save-$runId", password = "x")).awaitSingle().id!!
-        tradeExecutionRepository.save(
-            TradeExecutionEntity(userId = userId, exchange = "UPBIT", market = "KRW-BTC", side = "BUY", price = 100.0, volume = 1.0, totalAmount = 100.0),
-        ).awaitSingle()
 
         assertThat(userRepository.findById(userId).awaitSingle().username).isEqualTo("it-save-$runId")
-        assertThat(tradeExecutionRepository.findByUserId(userId, 10, 0).collectList().awaitSingle().map { it.market }).containsExactly("KRW-BTC")
         val unmapped = databaseClient.sql(
             "SELECT table_name || '.' || column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() " +
                 "AND ((table_name = 'users' AND column_name IN ('public_profile', 'public_strategy', 'admin')) " +

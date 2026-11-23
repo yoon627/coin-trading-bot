@@ -209,7 +209,7 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `orders` 에 업비트 체결 줄(FILLED)이 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
 
-- 보정할 때는 그 체결의 거래 기록 행(`trade_executions`·`trade_records`)을 `exchange_order_id = <uuid>` 로 넣고 `deploy/vultr/sql/orders_catchup.sql` 로 `orders` 에 옮긴다(V43 절). 그래야 화면에 보이고 다음 대조에서 빠진다. `trade_records` 를 손으로 고치거나 지우면 `orders` 에도 같은 것을 한다(화면은 `orders` 를 읽는다). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
+- 보정할 때는 그 체결을 `orders` 에 `status = 'FILLED'`, `exchange = 'UPBIT'`, `exchange_order_id = <uuid>` 인 줄로 넣는다(V44 부터 체결 기록은 `orders` 뿐이다). 화면 값 칼럼을 채운다 — 매도는 `decision_price`·`filled_volume`(또는 `requested_volume`)·`filled_funds`, 매수는 `book_avg_price`·`position_volume_after`·`filled_funds`, 그리고 `fill_source`·`fee_basis`·`completed_at`. 그래야 화면에 보이고 다음 대조에서 빠진다(같은 주문번호 줄이 있으면 엔진도 그 체결을 다시 기록하지 않는다). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
 - 거짓 경보가 나는 경우: 같은 업비트 키를 다른 환경(로컬 실행 등)이 써서 그쪽 DB 에 기록된 주문, 같은 키를 두 사용자가 등록한 경우.
 - 키가 없으면 INFO 로, 만료·잘못된 키·허용 IP 밖(401·403)·복호화 실패면 WARN 으로 그 사용자를 건너뛴다. 키가 있어 시도한 사용자가 모두 실패하면 ERROR 한 줄. 서명 오류(`invalid_query_payload` 등)는 ERROR 다. 키에 "주문조회" 권한이 필요하다.
 
@@ -492,9 +492,9 @@ V40 은 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions
 
 V41 은 주문마다 한 줄인 `orders` 표를 만들고 옛 체결을 `trade_executions` 기준으로 옮긴다. 옮긴 수와 짝을 못 찾은 수는 기동 로그에 `V41 orders:` 로 남는다.
 
-- 지금은 같은 체결을 `trade_records`(화면)와 `trade_executions`(중복 방지·대사)에 두 번 적는다. 엔진 매수 줄의 가격·수량·총액은 이 주문이 아니라 체결 뒤 보유 전체다. `orders` 는 이 주문의 체결 수량·대금·평균가(`filled_*`·`avg_fill_price`)와 체결 뒤 장부(`position_volume_after`·`book_avg_price`)를 따로 적는다. `fill_source` 가 값의 출처(주문 응답·잔고 복원·옛 기록)다.
+- V41 때는 같은 체결을 `trade_records`(화면)와 `trade_executions`(중복 방지·대사)에 두 번 적었다(V44 부터는 `orders` 에만 적는다 — 아래 V44 절). 엔진 매수 줄의 가격·수량·총액은 이 주문이 아니라 체결 뒤 보유 전체다. `orders` 는 이 주문의 체결 수량·대금·평균가(`filled_*`·`avg_fill_price`)와 체결 뒤 장부(`position_volume_after`·`book_avg_price`)를 따로 적는다. `fill_source` 가 값의 출처(주문 응답·잔고 복원·옛 기록)다.
 - 옛 엔진 매수는 이 주문 하나의 수량을 알 수 없어 비워 두고(`BACKFILL_SNAPSHOT`), 보유 전체 값을 장부 칼럼에 둔다.
-- 새 체결은 옛 두 표·상태 저장·알림 대기열과 같은 트랜잭션에서 `orders` 에 FILLED 줄로 함께 남는다. 이 쓰기가 SQL 오류를 내면 체결 기록 전체가 되돌아가 지금의 기록 실패처럼 다음에 다시 시도된다. 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다(체결 기록은 막지 않는다). 주문 생애(대기·거절·안 나감)는 아직 남기지 않는다.
+- V41 의 새 체결은 옛 두 표·상태 저장·알림 대기열과 같은 트랜잭션에서 `orders` 에 FILLED 줄로 함께 남았다. 이 쓰기가 SQL 오류를 내면 체결 기록 전체가 되돌아가 지금의 기록 실패처럼 다음에 다시 시도된다. 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다(체결 기록은 막지 않는다). 주문 생애(대기·거절·안 나감)는 아직 남기지 않는다.
 - V41 때는 아무도 `orders` 를 읽지 않았다. 화면과 매일 대조는 V43 부터 `orders` 를 읽는다.
 - V40 이미지로의 롤백은 그대로 뜬다(새 표만 더한다). 그동안의 체결은 `orders` 에 남지 않고, 읽는 쪽을 `orders` 로 바꾸는 다음 단계가 마이그레이션의 옮기기 부분을 다시 돌려 메운다.
 - 표 자체를 없애야 할 때만 `deploy/vultr/sql/V41_down.sql` 을 쓴다(V41 이 마지막 적용 버전일 때만 돈다).
@@ -542,11 +542,16 @@ V43 은 표를 바꾸지 않고 V42 의 따라잡기를 한 번 더 돌린다. �
 
 V44 는 체결 알림 대기열의 `trade_execution_id` 를 비울 수 있게만 바꾼다(외래 키·UNIQUE·칼럼은 그대로). 같은 배포부터 체결 기록은 `orders` 와 알림 대기열에만 남고 `trade_records`·`trade_executions` 에는 쓰지 않는다. 두 표는 다음 단계에서 지운다.
 
+- 중복 확인: 같은 사용자·거래소·거래소 주문번호의 `orders` 줄이 FILLED 면 이미 기록된 체결로 보고 기록·알림 없이 건너뛴다(상태 저장은 커밋). FILLED 가 아니면(지금은 생기지 않는다) 체결 기록 전체를 되돌린다 — pending 이 남고 매 tick ERROR 가 난다. 그 줄을 확인해 지우거나 고친다.
+- 같은 `client_order_id` 의 줄이 이미 있으면 그 식별자 없이 기록하고 ERROR 를 남긴다. 되돌리면 그 종목이 체결 확정에서 멈춰 손절이 돌지 않는다.
+- 주문번호 없는 체결(잔고로 확정한 매도 등)은 중복 확인 없이 기록한다. pending 해제가 같은 트랜잭션이라 다시 기록되지 않는다.
+
 - 자동 롤백 하한은 V43 이다(`deploy.sh` 의 `ROLLBACK_FLOOR_MIGRATION`). V43 이전 이미지는 거래 기록 화면을 `trade_records` 에서 읽어 그 뒤의 체결이 빠진다.
-- 직전 이미지(V43, `26bb5ad4`)로의 롤백은 그대로 뜨고 쓴다(그 이미지는 옛 두 표와 `orders` 에 함께 쓴다). 다만 이 배포가 쓴 알림 줄 중 아직 안 보낸 것(`status = 'PENDING'`, `trade_execution_id` 없음)이 남아 있으면 그 이미지의 알림 발송기가 그 줄을 읽지 못해 알림이 모두 멈춘다(로그에 발송 실패가 이어진다). 그 줄을 넘긴다 — 그 체결의 알림은 가지 않지만 기록은 `orders` 에 있다.
+- 직전 이미지(V43, `26bb5ad4`)로의 롤백은 그대로 뜨고 쓴다(그 이미지는 옛 두 표와 `orders` 에 함께 쓴다). 다만 이 배포가 쓴 알림 줄 중 아직 안 보낸 것(`status = 'PENDING'`, `trade_execution_id` 없음)이 남아 있으면 그 이미지의 알림 발송기가 그 줄을 읽지 못해 알림이 모두 멈춘다(로그에 발송 실패가 이어진다). 자동 롤백이 성공하면 `deploy.sh` 가 그런 줄 수를 WARN 으로 찍는다. 그 줄을 넘긴다 — 그 체결의 알림은 가지 않지만 기록은 `orders` 에 있다. 롤백한 이미지는 중복 확인을 `trade_executions` 로 하므로, 재시작 대조로 같은 주문을 다시 확정하면 옛 표·알림이 한 번 더 생기고 `orders` 충돌 ERROR 가 날 수 있다(드물다).
   ```bash
   cd /opt/app
   docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
     -c "UPDATE trade_notification_outbox SET status = 'SKIPPED' WHERE status = 'PENDING' AND trade_execution_id IS NULL"
   ```
+- V44 뒤에는 V43 NOTICE·`orders_catchup.sql` 의 `filled without record` 가 0 이 아니다 — 새 체결은 `trade_records` 짝이 없다(정상).
 - NOT NULL 을 다시 걸어야 할 때만 `deploy/vultr/sql/V44_down.sql` 을 쓴다(V44 가 마지막 적용 버전이고 `trade_execution_id` 없는 알림 줄이 없을 때만 돈다).

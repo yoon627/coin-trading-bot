@@ -3,7 +3,6 @@ package com.trading.bot.api
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.trading.bot.persistence.entity.TradeRecordEntity
 import java.time.LocalDateTime
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -24,7 +23,9 @@ class TradeRoundTripTest {
         pnlAmount: Double? = null,
         reason: String? = null,
         strategy: String? = null,
-    ) = TradeRecordEntity(
+    ) = TradeHistoryRow(
+        id = null,
+        orderAmount = null,
         ticker = ticker,
         side = side,
         price = price,
@@ -36,7 +37,7 @@ class TradeRoundTripTest {
         strategy = strategy,
         userId = 1L,
         createdAt = LocalDateTime.parse(at),
-    ).toHistoryRow()
+    )
 
     @Test
     fun `단일 매수-매도가 한 라운드트립으로 조립된다`() {
@@ -767,7 +768,12 @@ class TradeRoundTripTest {
         val rts = assembleRoundTrips(
             listOf(
                 rec("KRW-BTC", "BUY", 100.0, 1.0, "2026-08-01T10:00", strategy = "combined"),
-                TradeRecordEntity(
+                TradeHistoryRow(
+                    id = null,
+                    orderAmount = null,
+                    pnlPercent = null,
+                    pnlAmount = null,
+                    reason = null,
                     ticker = "KRW-BTC",
                     side = "BUY",
                     price = 0.0,
@@ -776,7 +782,7 @@ class TradeRoundTripTest {
                     strategy = "manual",
                     userId = 1L,
                     createdAt = LocalDateTime.parse("2026-08-01T11:00"),
-                ).toHistoryRow(),
+                ),
                 rec("KRW-BTC", "SELL", 110.0, 1.0, "2026-08-01T12:00", pnlPercent = 10.0),
             )
         )

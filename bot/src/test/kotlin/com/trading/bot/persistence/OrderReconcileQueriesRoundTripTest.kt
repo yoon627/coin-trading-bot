@@ -15,11 +15,10 @@ import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 
-/** 체결 기록 대조(#341)가 쓰는 쿼리를 실제 Postgres 로 본다 — `IN (:ids)` 컬렉션 바인딩은 이 코드에서 처음 쓴다. 접속 방식은 [TradingStateRoundTripTest] 와 같다. */
+/** 체결 기록 대조(#341)가 쓰는 봇 상태 쿼리를 실제 Postgres 로 본다(기록된 주문번호 쿼리는 OrdersRoundTripTest). 접속 방식은 [TradingStateRoundTripTest] 와 같다. */
 @DataR2dbcTest
 class OrderReconcileQueriesRoundTripTest {
 
-    @Autowired private lateinit var executions: TradeExecutionRepository
     @Autowired private lateinit var botStates: BotStateRepository
     @Autowired private lateinit var databaseClient: DatabaseClient
 
@@ -63,7 +62,7 @@ class OrderReconcileQueriesRoundTripTest {
     @AfterEach
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
-        for (sql in listOf("DELETE FROM trade_executions WHERE user_id IN ($owned)", "DELETE FROM bot_state WHERE user_id IN ($owned)", "DELETE FROM users WHERE username LIKE 'it-%-$runId'")) {
+        for (sql in listOf("DELETE FROM bot_state WHERE user_id IN ($owned)", "DELETE FROM users WHERE username LIKE 'it-%-$runId'")) {
             databaseClient.sql(sql).fetch().rowsUpdated().awaitSingle()
         }
     }
@@ -73,27 +72,6 @@ class OrderReconcileQueriesRoundTripTest {
             .bind("u", "it-$label-$runId")
             .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
             .one().awaitSingle()
-
-    private suspend fun execution(userId: Long, orderId: String?) {
-        databaseClient.sql(
-            "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, exchange_order_id) " +
-                "VALUES (:u, 'UPBIT', 'KRW-BTC', 'SELL', 1, 1, 1, :o)",
-        ).bind("u", userId).let { if (orderId == null) it.bindNull("o", String::class.java) else it.bind("o", orderId) }
-            .fetch().rowsUpdated().awaitSingle()
-    }
-
-    @Test
-    fun `recorded order ids come back only for the given user and ids`() = runTest {
-        val userId = insertUser("rec")
-        val other = insertUser("other")
-        execution(userId, "o-1")
-        execution(userId, null)
-        execution(other, "o-2")
-
-        val found = executions.findRecordedOrderIds(userId, listOf("o-1", "o-2", "o-3")).collectList().awaitSingle()
-
-        assertThat(found).containsExactly("o-1")
-    }
 
     @Test
     fun `bot state rows are listed by exchange whether running or not`() = runTest {
