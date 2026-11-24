@@ -97,7 +97,6 @@ class OrdersRoundTripTest {
         private const val V41 = "bot/src/main/resources/db/migration/V41__orders.sql"
         private const val V42 = "bot/src/main/resources/db/migration/V42__orders_read.sql"
         private const val V43 = "bot/src/main/resources/db/migration/V43__orders_read_switch.sql"
-        private const val MANUAL_CATCHUP = "deploy/vultr/sql/orders_catchup.sql"
     }
 
     private val runId = UUID.randomUUID().toString().take(8)
@@ -109,8 +108,6 @@ class OrdersRoundTripTest {
             // 알림 대기열이 orders 를 가리키므로(V42) 먼저 지운다.
             "DELETE FROM trade_notification_outbox WHERE user_id IN ($owned)",
             "DELETE FROM orders WHERE user_id IN ($owned)",
-            "DELETE FROM trade_executions WHERE user_id IN ($owned)",
-            "DELETE FROM trade_records WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",
             "DELETE FROM users WHERE username LIKE 'it-%-$runId'",
         )) {
@@ -338,21 +335,17 @@ class OrdersRoundTripTest {
     }
 
     @Test
-    fun `a committed fill leaves one FILLED orders row with this order's values and nothing in the old trade tables`() = runTest {
+    fun `a committed fill leaves one FILLED orders row with this order's values`() = runTest {
         val userId = insertUser("fill")
 
         assertThat(service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId))).isTrue()
 
         val row = orderRow(userId)
         assertThat(row["status"]).isEqualTo("FILLED")
-        assertThat(row["trade_execution_id"]).isNull()
-        assertThat(row["trade_record_id"]).isNull()
-        assertThat(count("trade_executions", userId)).isZero()
-        assertThat(count("trade_records", userId)).isZero()
         assertThat(count("trading_states", userId)).isEqualTo(1)
-        val notification = databaseClient.sql("SELECT order_id, trade_execution_id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)
+        val notification = databaseClient.sql("SELECT order_id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)
             .fetch().one().awaitSingle()
-        assertThat(notification).containsEntry("order_id", row["id"]).containsEntry("trade_execution_id", null)
+        assertThat(notification).containsEntry("order_id", row["id"])
         assertThat(row).containsEntry("exchange", "UPBIT").containsEntry("market", "KRW-BTC").containsEntry("side", "SELL")
             .containsEntry("exchange_order_id", "s-$runId").containsEntry("client_order_id", "ctb-$runId")
             .containsEntry("filled_volume", 0.002).containsEntry("filled_funds", 99_950.0).containsEntry("avg_fill_price", 49_975_000.0)
@@ -619,20 +612,6 @@ class OrdersRoundTripTest {
         assertThat(orderRow(cancelled)).containsEntry("status", "CANCELLED")
     }
 
-    // 손으로 옛 표를 맞추는 파일은 옛 표를 거쳐 들어온 체결만 옮긴다 — 이 이미지가 쓴 줄은 건드리지 않는다.
-    @Test
-    fun `the manual catch-up file leaves fills written only to orders untouched`() = runTest {
-        val userId = insertUser("catchup")
-        assertThat(service.commitFill({}, sellFill(userId))).isTrue()
-        val before = databaseClient.sql("SELECT * FROM orders WHERE user_id = :u").bind("u", userId).fetch().all().collectList().awaitSingle()
-
-        DriverManager.getConnection(jdbcUrl, user, password).use { it.update(RepoFiles.file(MANUAL_CATCHUP).readText()) }
-
-        assertThat(databaseClient.sql("SELECT * FROM orders WHERE user_id = :u").bind("u", userId).fetch().all().collectList().awaitSingle())
-            .isEqualTo(before)
-        assertThat(count("orders", userId)).isEqualTo(1)
-    }
-
     // 코드의 enum 이름이 V41 의 CHECK 목록에 없으면 그 값의 체결마다 기록 트랜잭션이 실패해 pending 이 남는다. 모든 조합을 실제로 넣어 본다.
     @Test
     fun `every fill source and fee kind the code writes passes the orders CHECK constraints`() = runTest {
@@ -757,7 +736,7 @@ class OrdersRoundTripTest {
     // --- V43: 읽기 전환 직전의 따라잡기 다시 돌리기 ---
 
     @Test
-    fun `V43 catches up fills an image without orders wrote after V42, and the manual catch-up file changes nothing after it`() =
+    fun `V43 catches up fills an image without orders wrote after V42`() =
         withScratchSchema("v43") { schema ->
             migrate(schema, "40")
             val legacy = inSchema(schema) { conn -> seedLegacyTrades(conn) }
@@ -766,23 +745,14 @@ class OrdersRoundTripTest {
             val ids = inSchema(schema) { conn -> seedAfterV41(conn) }
 
             migrate(schema, "43")
-            inSchema(schema) { conn ->
-                assertCaughtUp(conn, legacy, ids)
-                // 손 따라잡기 파일은 운영 JVM 과 같은 UTC 로 시각을 바꾼다 — Flyway(JVM 시간대)와 같을 때만 비교가 뜻이 있다.
-                assumeTrue(ZoneId.systemDefault().normalized() == ZoneOffset.UTC, "JVM 시간대가 UTC 가 아니다")
-                val before = conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id")
-                conn.update(RepoFiles.file(MANUAL_CATCHUP).readText())
-                assertThat(conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id"))
-                    .isEqualTo(before)
-            }
+            inSchema(schema) { conn -> assertCaughtUp(conn, legacy, ids) }
         }
 
     @Test
-    fun `V42, V43 and the manual catch-up file run the same catch-up, and V43 and the manual file report the same counts`() {
-        val blocks = listOf(V42, V43, MANUAL_CATCHUP).map { marked(it, "catchup") }
+    fun `V42 and V43 run the same catch-up`() {
+        val blocks = listOf(V42, V43).map { marked(it, "catchup") }
         assertThat(blocks[0]).contains("INSERT INTO orders")
         assertThat(blocks).containsOnly(blocks[0])
-        assertThat(marked(MANUAL_CATCHUP, "report")).isEqualTo(marked(V43, "report").replace("'V43 orders:", "'orders catchup:"))
     }
 
     @Test
@@ -906,6 +876,106 @@ class OrdersRoundTripTest {
         assertThat(conn.rows("SELECT * FROM orders ORDER BY id") to conn.rows("SELECT * FROM trade_notification_outbox ORDER BY id"))
             .isEqualTo(before)
     }
+
+    // --- V47: 옛 거래 표와 연결 칼럼 지우기 ---
+
+    /** orders 로 옮겨진(이어진) 옛 체결 한 쌍과 그 체결을 가리키는 알림 줄. */
+    private fun Connection.seedLinkedLegacyFill(label: String) {
+        update("INSERT INTO users (username, password) VALUES ('it-$label-$runId', 'x')")
+        val userId = strings("SELECT id::text FROM users WHERE username = 'it-$label-$runId'").single()!!.toLong()
+        update("INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount) VALUES ($userId, 'UPBIT', 'KRW-BTC', 'BUY', 100, 1, 100)")
+        update("INSERT INTO trade_records (ticker, side, price, volume, total_amount, user_id) VALUES ('KRW-BTC', 'BUY', 100, 1, 100, $userId)")
+        update(
+            "INSERT INTO orders (user_id, exchange, market, side, status, fill_source, fee_basis, trade_execution_id, trade_record_id) " +
+                "SELECT $userId, 'UPBIT', 'KRW-BTC', 'BUY', 'FILLED', 'ORDER', 'MEASURED', " +
+                "(SELECT max(id) FROM trade_executions), (SELECT max(id) FROM trade_records)",
+        )
+        update(
+            "INSERT INTO trade_notification_outbox (user_id, exchange, payload, trade_execution_id, order_id) " +
+                "SELECT $userId, 'UPBIT', '{}', (SELECT max(id) FROM trade_executions), (SELECT max(id) FROM orders)",
+        )
+    }
+
+    private fun Connection.legacyObjects(): List<String> = strings(
+        "SELECT table_name || coalesce('.' || column_name, '') FROM (" +
+            "SELECT table_name, NULL AS column_name FROM information_schema.tables WHERE table_schema = current_schema() " +
+            "AND table_name IN ('trade_records', 'trade_executions') UNION ALL " +
+            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema() " +
+            "AND column_name IN ('trade_execution_id', 'trade_record_id')) o ORDER BY 1",
+    ).filterNotNull()
+
+    /** 지우는 표·칼럼의 정의 — 칼럼(형·NULL·기본값·identity), 색인 정의, 제약 이름·종류. down 이 V46 그대로 되살렸는지 본다. */
+    private fun Connection.legacyDefinitions(): List<String> = strings(
+        "SELECT table_name || '.' || column_name || ' ' || data_type || coalesce('(' || character_maximum_length || ')', '') || ' ' || " +
+            "is_nullable || ' ' || coalesce(column_default, '-') || ' ' || is_identity FROM information_schema.columns " +
+            "WHERE table_schema = current_schema() AND (table_name IN ('trade_records', 'trade_executions') " +
+            "OR column_name IN ('trade_execution_id', 'trade_record_id')) " +
+            "UNION ALL SELECT 'index ' || indexname || ' ' || regexp_replace(indexdef, '\\S+\\.', '', 'g') FROM pg_indexes " +
+            "WHERE schemaname = current_schema() AND (tablename IN ('trade_records', 'trade_executions') " +
+            "OR indexdef LIKE '%trade_execution_id%') " +
+            "UNION ALL SELECT 'constraint ' || conname || ' ' || contype::text FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace " +
+            "WHERE n.nspname = current_schema() AND (conrelid::regclass::text IN ('trade_records', 'trade_executions') " +
+            "OR conname LIKE '%trade_execution%') ORDER BY 1",
+    ).filterNotNull()
+
+    @Test
+    fun `V47 drops the legacy trade tables and link columns once every legacy row is linked, and the down sql restores the empty structure`() =
+        withScratchSchema("v47") { schema ->
+            val downSql = RepoFiles.file("deploy/vultr/sql/V47_down.sql").readText()
+            migrate(schema, "46")
+            val (before, definitions) = inSchema(schema) { conn ->
+                conn.seedLinkedLegacyFill("v47")
+                conn.legacyObjects() to conn.legacyDefinitions()
+            }
+            assertThat(definitions).hasSizeGreaterThan(40)
+            assertThat(before).containsExactly(
+                "orders.trade_execution_id", "orders.trade_record_id", "trade_executions", "trade_notification_outbox.trade_execution_id", "trade_records",
+            )
+            assertThatThrownBy { inSchema(schema) { it.update(downSql) } }.hasMessageContaining("V47 이 적용돼 있지 않다")
+
+            migrate(schema, "47")
+            inSchema(schema) { conn ->
+                assertThat(conn.legacyObjects()).isEmpty()
+                assertThat(conn.strings("SELECT count(*)::text FROM orders")).containsExactly("1")
+                assertThat(conn.strings("SELECT count(*)::text FROM trade_notification_outbox WHERE order_id IS NOT NULL")).containsExactly("1")
+
+                conn.update(downSql)
+                assertThat(conn.legacyObjects()).containsExactlyElementsOf(before)
+                assertThat(conn.legacyDefinitions()).containsExactlyElementsOf(definitions)
+                assertThat(conn.strings("SELECT count(*)::text FROM trade_executions")).containsExactly("0")
+                assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("46")
+            }
+
+            // 비어 있으니 다시 적용된다.
+            migrate(schema, "47")
+            inSchema(schema) { conn -> assertThat(conn.legacyObjects()).isEmpty() }
+        }
+
+    // V44 이전 이미지로 손 롤백한 동안의 체결은 옛 표에만 있다 — 지우면 그 기록을 잃는다.
+    @Test
+    fun `V47 refuses while a legacy row is not linked to orders, and changes nothing`() =
+        withScratchSchema("v47guard") { schema ->
+            migrate(schema, "46")
+            inSchema(schema) { conn ->
+                conn.update("INSERT INTO users (username, password) VALUES ('it-v47g-$runId', 'x')")
+                conn.update(
+                    "INSERT INTO trade_records (ticker, side, price, volume, total_amount, user_id) " +
+                        "SELECT 'KRW-BTC', 'SELL', 100, 1, 100, id FROM users WHERE username = 'it-v47g-$runId'",
+                )
+            }
+            assertThatThrownBy { migrate(schema, "47") }.hasMessageContaining("trade_records=1")
+            inSchema(schema) { conn ->
+                assertThat(conn.legacyObjects()).hasSize(5)
+                assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL AND success"))
+                    .containsExactly("46")
+                conn.update("DELETE FROM trade_records")
+                conn.update(
+                    "INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount) " +
+                        "SELECT id, 'UPBIT', 'KRW-BTC', 'SELL', 100, 1, 100 FROM users WHERE username = 'it-v47g-$runId'",
+                )
+            }
+            assertThatThrownBy { migrate(schema, "47") }.hasMessageContaining("trade_executions=1,")
+        }
 
     @Test
     fun `the previous image's orders insert and an outbox row without order id still work on V42`() = withScratchSchema("v42compat") { schema ->
