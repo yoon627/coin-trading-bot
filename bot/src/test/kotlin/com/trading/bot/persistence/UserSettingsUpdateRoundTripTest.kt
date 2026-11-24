@@ -1,5 +1,8 @@
 package com.trading.bot.persistence
 
+import com.trading.bot.config.AppProperties
+import com.trading.bot.security.SecretKeyMaterialProvider
+import com.trading.bot.security.SecretsCrypto
 import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.test.runTest
@@ -11,6 +14,7 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
+import org.springframework.mock.env.MockEnvironment
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
@@ -103,5 +107,39 @@ class UserSettingsUpdateRoundTripTest {
         val row = users.findById(id).awaitSingle()
         assertThat(row.discordWebhookUrl).isNull()
         assertThat(row.upbitAccessKey).isEqualTo("old-ak")
+    }
+
+    private suspend fun insertUser(suffix: String, webhook: String?): Long =
+        databaseClient.sql("INSERT INTO users (username, password, discord_webhook_url) VALUES (:u, 'x', :w) RETURNING id")
+            .bind("u", "it-$suffix-$runId")
+            .let { if (webhook == null) it.bindNull("w", String::class.java) else it.bind("w", webhook) }
+            .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
+            .one().awaitSingle()
+
+    // 기동 때의 평문 암호화는 평문 행만 고르고, 그사이 사용자가 새로 저장한 값은 덮지 않는다.
+    @Test
+    fun `plain webhooks are found and replaced only while unchanged`() = runTest {
+        val plain = insertUser("plain", "https://discord.com/api/webhooks/1/plain")
+        val encrypted = insertUser("enc", "enc:abc")
+        val none = insertUser("none", null)
+        val blank = insertUser("blank", "")
+
+        val found = users.findWithPlainWebhook().collectList().awaitSingle().mapNotNull { it.id }
+        assertThat(found).contains(plain).doesNotContain(encrypted, none, blank)
+
+        assertThat(users.replaceWebhookIfUnchanged(plain, "https://discord.com/api/webhooks/1/other", "enc:x").awaitSingle()).isEqualTo(0)
+        assertThat(users.replaceWebhookIfUnchanged(plain, "https://discord.com/api/webhooks/1/plain", "enc:new").awaitSingle()).isEqualTo(1)
+        assertThat(users.findById(plain).awaitSingle().discordWebhookUrl).isEqualTo("enc:new")
+        assertThat(users.findAnyEncryptedSecret().awaitSingle()).startsWith("enc:")
+    }
+
+    // 저장 상한(UTF-8 300 바이트)의 webhook 을 실제 암호화하면 컬럼(VARCHAR(500))에 든다.
+    @Test
+    fun `the longest storable webhook fits the column once encrypted`() = runTest {
+        val id = insertUser("long", null)
+        val base = "https://discord.com/api/webhooks/1/"
+        val crypto = SecretsCrypto(SecretKeyMaterialProvider(AppProperties(encryptionSecret = "encrypt-secret"), MockEnvironment()))
+
+        assertThat(users.updateDiscordWebhookUrl(id, crypto.encrypt(base + "a".repeat(300 - base.length))).awaitSingle()).isEqualTo(1)
     }
 }

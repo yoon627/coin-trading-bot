@@ -33,7 +33,7 @@ class TradingControllerExchangeTest {
     private val upbit = mockk<UserTradingManager>(relaxed = true)
     private val paper = mockk<UserTradingManager>(relaxed = true)
     private val userRepository = mockk<UserRepository>()
-    private val userSecretsService = mockk<UserSecretsService>()
+    private val userSecretsService = mockk<UserSecretsService> { every { encryptWebhook(any()) } answers { firstArg<String?>()?.let { "enc:$it" } } }
 
     private val status = mapOf("running" to true, "tickers" to listOf("KRW-BTC"))
 

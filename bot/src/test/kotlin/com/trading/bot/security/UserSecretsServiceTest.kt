@@ -4,6 +4,7 @@ import com.trading.bot.config.AppProperties
 import com.trading.bot.persistence.entity.UserEntity
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.springframework.mock.env.MockEnvironment
 
@@ -33,5 +34,14 @@ class UserSecretsServiceTest {
         assertNull(service.discordWebhookOf(null))
         assertNull(service.discordWebhookOf(user(null)))
         assertNull(service.discordWebhookOf(user("")))
+    }
+
+    @Test
+    fun `a saved webhook is stored encrypted and reads back`() {
+        val stored = service.encryptWebhook(webhook)!!
+
+        assertTrue(stored.startsWith("enc:"))
+        assertEquals(webhook, service.discordWebhookOf(user(stored)))
+        assertNull(service.encryptWebhook(null))
     }
 }

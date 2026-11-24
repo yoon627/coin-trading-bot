@@ -8,7 +8,7 @@ Upbit 현물 자동매매 봇. Kotlin 2.1, Spring Boot 3.4 WebFlux, R2DBC, Postg
 
 - Upbit WebSocket ticker와 REST 캔들로 시세 수집
 - 일봉 기반 `combined` 전략으로 자동 매수, 손절·익절·트레일링 스탑·보유 기간 상한으로 청산
-- 사용자별 Upbit API 키 암호화 저장(AES-GCM)
+- 사용자별 Upbit API 키·Discord webhook 암호화 저장(AES-GCM, `APP_ENCRYPTION_SECRET`). 암호화 전에 평문으로 저장된 webhook 은 기동 때 암호문으로 바꾼다(그사이 새로 저장된 값은 덮지 않는다). webhook 주소는 UTF-8 300바이트까지 받는다. 암호화된 webhook 은 #401 이전 이미지가 읽지 못한다 — 그보다 옛 이미지로 수동 롤백하면 설정 화면에서 webhook 을 다시 저장한다
 - 포트폴리오, 거래 이력, 라운드트립 조회
 - JWT httpOnly 쿠키 인증, IP 기준 rate limit(인증 경로 분당 30회, 그 외 API 분당 60회)
 - Discord 거래 알림과 서버 오류 알림
@@ -26,7 +26,7 @@ bot/      Spring Boot 애플리케이션
   marketdata/   시세 수집과 인메모리 저장소
   stream/       분봉을 상위 봉으로 집계
   persistence/  R2DBC 엔티티와 repository
-  security/     API 키 암호화
+  security/     API 키·webhook 암호화
   notification/ Discord 알림
   resources/db/migration/  Flyway 마이그레이션
 deploy/vultr/  운영 배포 스크립트와 prod Compose
