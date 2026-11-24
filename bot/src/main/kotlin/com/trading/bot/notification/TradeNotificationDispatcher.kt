@@ -8,6 +8,7 @@ import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity.Companio
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity.Companion.SENT
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity.Companion.SKIPPED
 import com.trading.bot.persistence.entity.UserEntity
+import com.trading.bot.security.UserSecretsService
 import jakarta.annotation.PreDestroy
 import java.time.Clock
 import java.time.Duration
@@ -43,6 +44,7 @@ import org.springframework.stereotype.Component
 class TradeNotificationDispatcher internal constructor(
     private val outboxRepository: TradeNotificationOutboxRepository,
     private val userRepository: UserRepository,
+    private val userSecrets: UserSecretsService,
     private val balances: TradeBalanceLookup,
     private val notifier: DiscordNotifier,
     private val clock: Clock,
@@ -51,9 +53,10 @@ class TradeNotificationDispatcher internal constructor(
     constructor(
         outboxRepository: TradeNotificationOutboxRepository,
         userRepository: UserRepository,
+        userSecrets: UserSecretsService,
         balances: TradeBalanceLookup,
         notifier: DiscordNotifier,
-    ) : this(outboxRepository, userRepository, balances, notifier, Clock.systemUTC())
+    ) : this(outboxRepository, userRepository, userSecrets, balances, notifier, Clock.systemUTC())
 
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -152,9 +155,16 @@ class TradeNotificationDispatcher internal constructor(
             retry(row, now, "user lookup failed: ${e.javaClass.simpleName}")
             return false
         }
+        // 복호화하지 못하면(키 교체 실수 등) 전역 webhook 으로 새지 않게 이 행만 다시 시도하고 다른 알림은 계속 보낸다.
+        val webhook = try {
+            userSecrets.discordWebhookOf(user)
+        } catch (e: Exception) {
+            retry(row, now, "user webhook unreadable: ${e.javaClass.simpleName}")
+            return true
+        }
         // 늦게 가는 알림에 지금 잔고를 실으면 체결 직후 잔고로 읽힌다.
         val balance = if (user != null && Duration.between(row.createdAt, now) <= FRESH_BALANCE) balanceOf(user, row.exchange) else null
-        return when (val result = notifier.deliverTrade(payload, balance, user?.discordWebhookUrl, user?.username)) {
+        return when (val result = notifier.deliverTrade(payload, balance, webhook, user?.username)) {
             TradeDelivery.Sent -> {
                 sentThisProcess += id
                 save(sent(row, clock.instant()))

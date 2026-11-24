@@ -8,7 +8,11 @@ import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
 import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
+import com.trading.bot.config.AppProperties
 import com.trading.bot.notification.TradeNotificationDispatcher
+import com.trading.bot.security.SecretKeyMaterialProvider
+import com.trading.bot.security.SecretsCrypto
+import com.trading.bot.security.UserSecretsService
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
 import com.trading.common.config.TradingProperties
@@ -18,6 +22,7 @@ import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.mono
 import kotlinx.coroutines.test.runTest
+import org.springframework.mock.env.MockEnvironment
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.flywaydb.core.Flyway
@@ -169,7 +174,14 @@ class TradeNotificationOutboxRoundTripTest {
         val linked = outbox.findDue(java.time.Instant.now().plusSeconds(1), 100).collectList().awaitSingle().single { it.userId == userId }.orderId
         assertThat(linked).isNotNull()
 
-        TradeNotificationDispatcher(outbox, users, { _, _ -> null }, io.mockk.mockk(relaxed = true), java.time.Clock.systemUTC()).runPass()
+        TradeNotificationDispatcher(
+            outbox,
+            users,
+            UserSecretsService(SecretsCrypto(SecretKeyMaterialProvider(AppProperties(encryptionSecret = "encrypt-secret"), MockEnvironment()))),
+            { _, _ -> null },
+            io.mockk.mockk(relaxed = true),
+            java.time.Clock.systemUTC(),
+        ).runPass()
 
         val after = outbox.findById(
             databaseClient.sql("SELECT id FROM trade_notification_outbox WHERE user_id = :u").bind("u", userId)

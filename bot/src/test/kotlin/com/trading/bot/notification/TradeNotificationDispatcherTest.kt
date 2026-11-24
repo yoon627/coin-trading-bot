@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.trading.bot.config.AppProperties
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity
@@ -13,6 +14,9 @@ import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity.Companio
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity.Companion.SENT
 import com.trading.bot.persistence.entity.TradeNotificationOutboxEntity.Companion.SKIPPED
 import com.trading.bot.persistence.entity.UserEntity
+import com.trading.bot.security.SecretKeyMaterialProvider
+import com.trading.bot.security.SecretsCrypto
+import com.trading.bot.security.UserSecretsService
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -33,6 +37,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
+import org.springframework.mock.env.MockEnvironment
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
@@ -72,7 +77,10 @@ class TradeNotificationDispatcherTest {
     private var balance: () -> Double? = { 900000.0 }
     private val balances = TradeBalanceLookup { _, _ -> balanceLookups++; balance() }
     private val notifier = mockk<DiscordNotifier>()
-    private val dispatcher = TradeNotificationDispatcher(outbox, users, balances, notifier, clock)
+    private val crypto = SecretsCrypto(
+        SecretKeyMaterialProvider(AppProperties(jwtSecret = "test-secret", encryptionSecret = "encrypt-secret"), MockEnvironment()),
+    )
+    private val dispatcher = TradeNotificationDispatcher(outbox, users, UserSecretsService(crypto), balances, notifier, clock)
 
     private val logger = LoggerFactory.getLogger(TradeNotificationDispatcher::class.java) as Logger
     private val logs = ListAppender<ILoggingEvent>().apply { start() }
@@ -106,6 +114,57 @@ class TradeNotificationDispatcherTest {
     private fun pass() = runBlocking { dispatcher.runPass() }
 
     private fun errors() = logs.list.filter { it.level == Level.ERROR }.map { it.formattedMessage }
+
+    // 저장된 webhook 은 암호문이다 — 알림은 복호화한 주소로 간다.
+    @Test
+    fun `an encrypted user webhook is delivered to the decrypted url`() {
+        every { users.findById(1L) } returns Mono.just(user.copy(discordWebhookUrl = crypto.encrypt(user.discordWebhookUrl!!)))
+        queue(1)
+        delivers(TradeDelivery.Sent)
+
+        pass()
+
+        coVerify { notifier.deliverTrade(any(), any(), "https://discord.com/api/webhooks/1/user-token", "owner") }
+        assertEquals(SENT, rows.getValue(1).status)
+    }
+
+    // 다른 키로 암호화된 값(키 교체 실수 등)은 알림을 버리지 않고 사용자 조회 실패처럼 다시 시도한다.
+    @Test
+    fun `an undecryptable webhook keeps the row pending for a retry`() {
+        val other = SecretsCrypto(
+            SecretKeyMaterialProvider(AppProperties(jwtSecret = "test-secret", encryptionSecret = "other-secret"), MockEnvironment()),
+        )
+        every { users.findById(1L) } returns Mono.just(user.copy(discordWebhookUrl = other.encrypt(user.discordWebhookUrl!!)))
+        queue(1)
+        delivers(TradeDelivery.Sent)
+
+        pass()
+
+        coVerify(exactly = 0) { notifier.deliverTrade(any(), any(), any(), any()) }
+        assertEquals(PENDING, rows.getValue(1).status)
+        assertTrue(rows.getValue(1).nextAttemptAt.isAfter(start))
+        assertEquals("user webhook unreadable: AEADBadTagException", rows.getValue(1).lastError)
+        assertTrue(errors().isEmpty())
+    }
+
+    // 한 사용자의 webhook 이 깨져도 같은 회차의 다른 알림은 나간다.
+    @Test
+    fun `an undecryptable webhook does not hold back other rows in the pass`() {
+        val other = SecretsCrypto(
+            SecretKeyMaterialProvider(AppProperties(jwtSecret = "test-secret", encryptionSecret = "other-secret"), MockEnvironment()),
+        )
+        every { users.findById(1L) } returns Mono.just(user.copy(discordWebhookUrl = other.encrypt(user.discordWebhookUrl!!)))
+        every { users.findById(2L) } returns Mono.just(user.copy(id = 2L))
+        queue(1)
+        queue(2)
+        rows[2] = rows.getValue(2).copy(userId = 2L)
+        delivers(TradeDelivery.Sent)
+
+        pass()
+
+        assertEquals(PENDING, rows.getValue(1).status)
+        assertEquals(SENT, rows.getValue(2).status)
+    }
 
     @Test
     fun `unsent rows go out oldest first with the user's webhook and are marked sent`() {
