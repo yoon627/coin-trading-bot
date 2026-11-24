@@ -554,3 +554,18 @@ V44 는 체결 알림 대기열의 `trade_execution_id` 를 비울 수 있게만
   ```
 - V44 뒤에는 V43 NOTICE·`orders_catchup.sql` 의 `filled without record` 가 0 이 아니다 — 새 체결은 `trade_records` 짝이 없다(정상).
 - NOT NULL 을 다시 걸어야 할 때만 `deploy/vultr/sql/V44_down.sql` 을 쓴다(V44 가 마지막 적용 버전이고 `trade_execution_id` 없는 알림 줄이 없을 때만 돈다).
+
+### 주문 생애 (스키마 변경 없음)
+
+체결 말고도 봇이 보낸 주문의 진행을 `orders` 의 같은 줄에 남긴다. 체결 기록(위 V44 절)은 이 줄을 FILLED 로 바꾼다.
+
+- 매수: 상태 저장이 끝나고 보내기 전에 `PENDING`(식별자 `client_order_id`, 판단 가격·요청 금액/수량), 거래소가 받으면 `OPEN`(주문번호를 잇는다), 체결 없이 끝나면 `CANCELLED`(`exchange_state`), 거래소가 거절하면 `REJECTED`(`note` 에 오류 이름), 식별자 조회로 거래소에 없다고 확정되면 `NOT_PLACED`. 결과를 모르는 주문은 `PENDING` 그대로다.
+- 매도: 손절 앞에 DB 를 기다리지 않게 보내기 전에는 쓰지 않는다. 첫 줄이 `OPEN`·`REJECTED`·`NOT_PLACED`, 접수 줄이 빠졌으면 `CANCELLED` 다.
+- 상태는 앞으로만 간다 — 체결되거나 끝난 줄은 늦게 온 쓰기가 되돌리지 않는다. 같은 식별자·주문번호의 줄은 하나다. 접수 쓰기가 빠진 대기 줄은 끝날 때 식별자로 찾아 주문번호를 채운다. 다만 거래소 응답에 식별자가 없으면 그 대기 줄을 찾지 못해 끝난 줄이 따로 하나 생긴다.
+- 이 쓰기는 최선이다. DB 가 던지거나 2초 안에 끝나지 않으면 WARN 만 남기고 매매는 그대로 간다. 그래서 줄이 빠지거나 `PENDING`·`OPEN` 에 남을 수 있다(봇을 멈춘 사이 끝난 주문 포함). 화면·왕복 손익·매일 대조는 FILLED 만 읽어 영향이 없다.
+- 롤백: `13492492`(체결이 대기·접수 줄을 FILLED 로 바꾸는 이미지)보다 오래된 이미지는 그 줄이 있으면 같은 식별자 충돌로 그 주문의 체결 기록을 매번 되돌린다(그 종목이 확정에서 멈춘다). 그런 이미지로 되돌렸으면 끝나지 않은 줄을 지운다 — 알림 대기열은 FILLED 줄만 가리켜 먼저 비울 것이 없다. 자동 롤백은 마지막 정상 이미지(`13492492` 이후)로만 가므로 이 정리는 손으로 더 오래된 이미지를 띄울 때만 필요하다.
+  ```bash
+  cd /opt/app
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
+    -c "DELETE FROM orders WHERE status IN ('PENDING', 'OPEN')"
+  ```
