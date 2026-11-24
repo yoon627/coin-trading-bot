@@ -18,6 +18,7 @@ const Icon = ({ d, size = 20, stroke = 'currentColor' }) => (
 
 const Icons = {
   dashboard: 'M3 13 L 12 4 L 21 13 M5 11 V 20 H 19 V 11',
+  market: ['M3 17 L 9 11 L 13 15 L 21 7','M15 7 H 21 V 13'],
   bot: ['M12 2 V 5','M5 8 H 19 V 18 H 5 Z','M9 13 H 9.01','M15 13 H 15.01','M9 17 H 15'],
   orders: ['M4 6 H 20','M4 12 H 20','M4 18 H 14'],
   bell: ['M6 8 A 6 6 0 0 1 18 8 V 13 L 20 16 H 4 L 6 13 Z','M10 19 A 2 2 0 0 0 14 19'],
@@ -88,6 +89,7 @@ function Badge({ children, tone = 'neutral', dot, style }) {
 function Sidebar({ active, onSelect, user, onLogout }) {
   const items = [
     { id: 'dashboard', label: '대시보드', icon: 'dashboard' },
+    { id: 'market', label: '시세판', icon: 'market' },
     { id: 'bot', label: '봇 / 전략', icon: 'bot' },
     { id: 'orders', label: '주문·내역', icon: 'orders' },
     { id: 'wallet', label: '지갑', icon: 'wallet' },

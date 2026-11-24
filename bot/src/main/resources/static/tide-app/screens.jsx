@@ -411,6 +411,60 @@ function WalletPage({ user, setActive }) {
   );
 }
 
+// 한 줄. 가격이 같으면 다시 그리지 않는다(300줄이 1초마다 바뀐 몇 줄만 그린다).
+const MarketRow = React.memo(function MarketRow({ r, first }) {
+  const prev = React.useRef(r.p);
+  const dir = r.p > prev.current ? 'up' : r.p < prev.current ? 'down' : null;
+  prev.current = r.p;
+  const tone = r.r > 0 ? 'var(--up)' : r.r < 0 ? 'var(--down)' : 'var(--ink-600)';
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 1fr', alignItems: 'center', padding: '10px 24px', borderTop: first ? 'none' : '1px solid var(--ink-100)', gap: 12 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 600 }}>{r.m.replace('KRW-', '')}<span style={{ fontSize: 11, color: 'var(--ink-400)', marginLeft: 6 }}>{r.m}</span></div>
+      <div className="num" style={{ textAlign: 'right' }}><span key={r.p} className={dir ? 'flash-' + dir : undefined} style={{ fontSize: 13.5, fontWeight: 600, color: tone, padding: '2px 4px' }}>{r.p.toLocaleString(undefined, { maximumFractionDigits: 8 })}</span></div>
+      <div className="num" style={{ fontSize: 13, textAlign: 'right', color: tone }}>{fmtPct(r.r * 100)}</div>
+      <div className="num" style={{ fontSize: 12.5, textAlign: 'right', color: 'var(--ink-600)' }}>{Math.round(r.v / 1e6).toLocaleString()}백만</div>
+    </div>
+  );
+}, (a, b) => a.r.p === b.r.p && a.r.r === b.r.r && a.r.v === b.r.v && a.first === b.first);
+
+function MarketPage({ user, setActive }) {
+  const { rows, status, lastAt } = useMarketStream();
+  const [query, setQuery] = React.useState('');
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
+
+  const list = React.useMemo(() => {
+    const q = query.trim().toUpperCase();
+    return [...rows.values()].filter(r => !q || r.m.includes(q)).sort((a, b) => b.v - a.v);
+  }, [rows, query]);
+
+  // delta 는 1초마다 오므로 10초 넘게 아무것도 오지 않으면 시세가 멈춘 것으로 보인다.
+  const delayed = status === 'live' && lastAt && now - lastAt > 10000;
+  const badge = status === 'live' && !delayed ? <Badge tone="live" dot>실시간</Badge>
+    : status === 'live' ? <Badge tone="warn" dot>지연</Badge>
+    : status === 'retrying' ? <Badge tone="warn" dot>다시 연결 중</Badge>
+    : <Badge dot>연결 중</Badge>;
+
+  return (
+    <Shell active="market" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
+           title="시세판" subtitle="Upbit 원화 마켓 · 1초마다 갱신"
+           actions={badge}>
+      <Card padding={0}>
+        <div style={{ padding: '14px 24px', borderBottom: '1px solid var(--ink-100)', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Icon d={Icons.search} size={16} stroke="var(--ink-400)"/>
+          <input className="tide-input" value={query} onChange={e => setQuery(e.target.value)} placeholder="코인 검색 (예: BTC)" style={{ flex: 1, border: 'none', outline: 'none', fontSize: 14, fontFamily: 'inherit' }}/>
+          <span style={{ fontSize: 12, color: 'var(--ink-500)' }}>{list.length}개 · 거래대금 순</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 1fr', padding: '8px 24px', gap: 12, fontSize: 11.5, color: 'var(--ink-500)', borderBottom: '1px solid var(--ink-100)' }}>
+          <div>마켓</div><div style={{ textAlign: 'right' }}>현재가</div><div style={{ textAlign: 'right' }}>24시간</div><div style={{ textAlign: 'right' }}>거래대금</div>
+        </div>
+        {!rows.size ? <Empty icon="market" title={status === 'live' ? '시세 준비 중' : '연결 중'} message="업비트 시세를 받는 중입니다"/> :
+          list.map((r, i) => <MarketRow key={r.m} r={r} first={i === 0}/>)}
+      </Card>
+    </Shell>
+  );
+}
+
 function SettingsPage({ user, setActive, refreshUser }) {
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
@@ -494,6 +548,7 @@ function SettingsPage({ user, setActive, refreshUser }) {
 }
 
 window.Dashboard = Dashboard;
+window.MarketPage = MarketPage;
 window.BotPage = BotPage;
 window.OrdersPage = OrdersPage;
 window.WalletPage = WalletPage;

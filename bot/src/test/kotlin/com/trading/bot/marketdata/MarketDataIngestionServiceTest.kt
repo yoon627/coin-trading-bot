@@ -582,6 +582,9 @@ class MarketDataIngestionServiceTest {
             service.start()
             subscription.update(bot, listOf("KRW-BTC"))
             verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW"), true, any(), any()) }
+            // mockk 는 호출을 먼저 기록하고 답을 돌려 콜백이 조금 늦게 들어온다.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (alive.get() == null && System.currentTimeMillis() < deadline) Thread.sleep(10)
             service.checkTickerHealth(System.currentTimeMillis() + 6 * 60_000)
             assertEquals(1, errors().size, errors().toString())
 

@@ -27,17 +27,22 @@ class RateLimitFilter(
 
         // 클라이언트 IP 별 무차별 대입 상한이다.
         private const val MAX_AUTH_REQUESTS_PER_MINUTE = 30
+
+        // 시세판 스트림 (재)연결. API 몫과 나눠, 재연결이 몰려도 다른 화면의 폴링을 막지 않는다.
+        private const val MAX_STREAM_REQUESTS_PER_MINUTE = 20
+        private const val STREAM_PATH = "/api/market/stream"
     }
 
     override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
         val path = exchange.request.path.value()
         if (isExcluded(path)) return chain.filter(exchange)
 
-        val isAuthEndpoint = path.startsWith("/api/auth")
-        val limit = if (isAuthEndpoint) MAX_AUTH_REQUESTS_PER_MINUTE else MAX_REQUESTS_PER_MINUTE
-
-        // 한 카운터를 나눠 쓰면 일반 폴링이 인증 한도를 소모하므로 따로 센다.
-        val bucket = if (isAuthEndpoint) "auth" else "api"
+        // 한 카운터를 나눠 쓰면 일반 폴링이 인증·스트림 한도를 소모하므로 따로 센다.
+        val (bucket, limit) = when {
+            path.startsWith("/api/auth") -> "auth" to MAX_AUTH_REQUESTS_PER_MINUTE
+            path == STREAM_PATH -> "stream" to MAX_STREAM_REQUESTS_PER_MINUTE
+            else -> "api" to MAX_REQUESTS_PER_MINUTE
+        }
         return if (isRateLimited("$bucket:${clientIp(exchange)}", limit)) reject(exchange, limit) else chain.filter(exchange)
     }
 

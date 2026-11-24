@@ -81,6 +81,21 @@ class RateLimitFilterTest {
         assertEquals(1, send("/api/auth/login", HttpMethod.POST).chainCalls)
     }
 
+    // 배포로 스트림이 모두 끊겨 다시 붙어도 다른 화면의 폴링이 429 가 되지 않고, 반대로 폴링이 스트림 몫을 쓰지 않는다.
+    @Test
+    fun `시세판 스트림은 분당 20회를 따로 센다`() {
+        repeat(20) { assertEquals(1, send("/api/market/stream").chainCalls, "${it + 1}번째는 한도 안") }
+
+        val rejected = send("/api/market/stream")
+        assertTrue(rejected.limited)
+        assertEquals("20", rejected.header("X-RateLimit-Limit"))
+        assertEquals(1, send().chainCalls)
+
+        clock.now = clock.now.plusSeconds(60)
+        repeat(61) { send() }
+        assertEquals(1, send("/api/market/stream").chainCalls)
+    }
+
     // Caddy 가 X-Forwarded-For 를 자신이 본 peer IP 로 덮어쓴다. 체인이면 첫 항목이 클라이언트다.
     @Test
     fun `클라이언트는 X-Forwarded-For 의 첫 값으로 가른다`() {
