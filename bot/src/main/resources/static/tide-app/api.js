@@ -88,12 +88,29 @@ function useAPI(fn, deps = [], intervalMs = null) {
 
 // 시세판 SSE. 200 스트림이 끊기면 브라우저가 retry 대로 다시 붙지만, 503·429·502·401 처럼 200 이 아닌 응답 뒤에는
 // 스스로 다시 붙지 않아(EventSource 규칙) 1~3초에서 시작해 30초까지 늘려 가며(지터) 손수 다시 연다. 먼저 로그인을 확인한다 — 401 이면 로그인 화면으로 간다.
-function useMarketStream() {
+// 받은 시세를 지금 믿을 수 있는가. delta 는 1초마다 오므로 10초 넘게 아무것도 오지 않았거나 연결이 끊겼으면
+// 받아 둔 값은 멈춘 값이다 — 그때는 null 을 돌려 화면이 서버 값(/api/portfolio)을 쓰게 한다.
+const STREAM_FRESH_MS = 10000;
+function freshRows(status, lastAt, rows, now) {
+  return status === 'live' && lastAt && now - lastAt <= STREAM_FRESH_MS ? rows : null;
+}
+
+// enabled 가 false 면(업비트 키가 없는 사용자) 연결하지 않는다 — 사용자당 스트림 자리를 쓰지 않게.
+function useMarketStream(enabled = true) {
   const [rows, setRows] = React.useState(() => new Map());
   const [status, setStatus] = React.useState('connecting');
   const [lastAt, setLastAt] = React.useState(null);
+  // 갱신이 멈춰도 '멈췄다' 를 알아채도록 1초마다 다시 본다.
+  const [now, setNow] = React.useState(Date.now());
 
   React.useEffect(() => {
+    if (!enabled) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [enabled]);
+
+  React.useEffect(() => {
+    if (!enabled) return undefined;
     let es = null, timer = null, wait = 2000, closed = false;
     const apply = (data, replace) => {
       setLastAt(Date.now());
@@ -124,12 +141,33 @@ function useMarketStream() {
     };
     open();
     return () => { closed = true; clearTimeout(timer); if (es) es.close(); };
-  }, []);
+  }, [enabled]);
 
-  return { rows, status, lastAt };
+  return { rows, status, lastAt, fresh: enabled ? freshRows(status, lastAt, rows, now) : null };
+}
+
+// /api/portfolio 의 보유 목록에 시세판 실시간 가격을 덧씌운다. 식은 서버(PortfolioController)와 같다.
+// 시세판에 없는 코인(목록 밖·스트림 없음)은 서버가 준 값을 그대로 둔다.
+function liveHoldings(portfolio, rows) {
+  if (!portfolio) return portfolio;
+  let total = portfolio.krw_balance || 0;
+  const holdings = (portfolio.holdings || []).map(h => {
+    const live = rows && rows.get(h.market);
+    if (!live) { total += h.eval_amount || 0; return h; }
+    const price = live.p;
+    const evalAmount = price * h.balance;
+    const investAmount = h.avg_buy_price * h.balance;
+    total += evalAmount;
+    return { ...h, current_price: price, eval_amount: evalAmount,
+      pnl_percent: h.avg_buy_price > 0 ? (price - h.avg_buy_price) / h.avg_buy_price * 100 : 0,
+      pnl_amount: evalAmount - investAmount };
+  });
+  return { ...portfolio, holdings, total_eval: total };
 }
 
 window.TideAPI = TideAPI;
+window.liveHoldings = liveHoldings;
+window.freshRows = freshRows;
 window.useMarketStream = useMarketStream;
 window.fmtKRW = fmtKRW; window.fmtPct = fmtPct; window.fmtNum = fmtNum;
 window.useAPI = useAPI;
