@@ -257,6 +257,64 @@ class OrdersRoundTripTest {
         assertThat(fromOrders.map { it.copy(id = null, fillSource = null) }).containsExactlyElementsOf(oldScreen)
     }
 
+    // 생애 줄(접수된 주문)이 먼저 있으면 체결은 그 줄을 FILLED 로 바꾼다. 바꾼 줄의 화면 값이 넣은 줄과 같아야 화면이 그대로다.
+    @Test
+    fun `fills over open lifecycle rows update those rows and give the same screen values as inserted fills`() = runTest {
+        val inserted = insertUser("parity-insert")
+        val updated = insertUser("parity-update")
+        fun fills(userId: Long, tag: String): List<TradeRecord> {
+            val buy = TradeRecord(
+                ticker = "KRW-BTC", side = TradeSide.BUY, price = 100.0, volume = 2.0, totalAmount = 200.0, pnlPercent = null, pnlAmount = null,
+                strategy = "combined", exchangeOrderId = "ub-$tag-$runId", userId = userId, fee = FeeBasis.Measured(0.1), orderAmount = 50.0,
+                executedVwap = 100.0, orderVolume = 0.5, positionVolumeAfter = 2.0, bookAvgPrice = 100.0, clientOrderId = "ctb-ub-$tag-$runId",
+                createdAt = java.time.LocalDateTime.of(2026, 11, 24, 9, 0, 0),
+            )
+            return listOf(
+                buy,
+                buy.copy(
+                    exchangeOrderId = "ubb-$tag-$runId", clientOrderId = null, fee = FeeBasis.Unrecorded, orderAmount = null, executedVwap = null,
+                    orderVolume = null, price = 51_000_000.0, volume = 0.0011, totalAmount = 51_000_000.0 * 0.0011, positionVolumeAfter = 0.0011,
+                    bookAvgPrice = 51_000_000.0, fillSource = FillSource.BALANCE, createdAt = buy.createdAt.plusMinutes(1),
+                ),
+                sellFill(userId).copy(exchangeOrderId = "us-$tag-$runId", clientOrderId = "ctb-us-$tag-$runId", positionVolumeAfter = 0.3, createdAt = buy.createdAt.plusMinutes(2)),
+                sellFill(userId).copy(
+                    exchangeOrderId = "usb-$tag-$runId", clientOrderId = null, fee = FeeBasis.Estimate, orderAmount = null, executedVwap = null,
+                    orderVolume = null, volume = 0.7, totalAmount = 50_000_000.0 * 0.7, fillSource = FillSource.BALANCE, createdAt = buy.createdAt.plusMinutes(3),
+                ),
+            )
+        }
+        for (record in fills(inserted, "i")) assertThat(service.commitFill({}, record)).isTrue()
+        for (record in fills(updated, "u")) {
+            // 접수 때 남는 줄: 판단 가격·요청 수량이 있는 OPEN 줄. 잔고 확정 체결도 주문번호로 찾는다.
+            databaseClient.sql(
+                "INSERT INTO orders (user_id, exchange, market, side, client_order_id, exchange_order_id, status, decision_price, requested_volume, requested_funds) " +
+                    "VALUES (:u, 'UPBIT', :m, :s, :c, :o, 'OPEN', 1.0, 9.0, 9.0)",
+            ).bind("u", updated).bind("m", record.ticker).bind("s", record.side.name).bind("o", record.exchangeOrderId!!)
+                .let { if (record.clientOrderId == null) it.bindNull("c", String::class.java) else it.bind("c", record.clientOrderId!!) }
+                .fetch().rowsUpdated().awaitSingle()
+            assertThat(service.commitFill({}, record)).isTrue()
+        }
+
+        fun screen(userId: Long) = orderRows.findFilledRecentAscending(userId, "UPBIT", 10).collectList().block()!!
+            .map { it.toHistoryRow(ZoneId.systemDefault()).copy(id = null, userId = null) }
+        assertThat(count("orders", updated)).isEqualTo(4)
+        assertThat(screen(updated)).isEqualTo(screen(inserted))
+        assertThat(databaseClient.sql("SELECT count(*) AS n FROM orders WHERE user_id = :u AND requested_funds = 9.0 AND updated_at > created_at")
+            .bind("u", updated).map { r -> r.get("n", java.lang.Long::class.java)!!.toLong() }.one().awaitSingle()).isEqualTo(4L)
+    }
+
+    // 보내기 전에 남는 매수 줄(식별자만)은 체결이 주문번호를 채우며 FILLED 로 바꾼다.
+    @Test
+    fun `a fill finds a pending row by its client order id and fills in the order number`() = runTest {
+        val userId = insertUser("pending")
+        existingOrder(userId, "PENDING", orderId = null, clientOrderId = "ctb-$runId")
+
+        assertThat(service.commitFill({}, sellFill(userId))).isTrue()
+
+        assertThat(orderRow(userId)).containsEntry("status", "FILLED").containsEntry("exchange_order_id", "s-$runId")
+            .containsEntry("client_order_id", "ctb-$runId")
+    }
+
     @Test
     fun `a balance-confirmed sell keeps its order-time volume and the notification row points at its orders row`() = runTest {
         val userId = insertUser("balsell")
@@ -374,19 +432,61 @@ class OrdersRoundTripTest {
         assertThat(count("orders", userId)).isEqualTo(2)
     }
 
-    // 덮을 규칙이 없는 줄(같은 주문번호의 FILLED 아닌 줄)은 지금 생기지 않는다. 생기면 체결 기록 전체를 되돌려 pending 을 남긴다.
+    // 생애 줄을 FILLED 로 바꾸지 못하면(예상 밖) 체결 기록이 어디에도 남지 않으므로 상태 저장까지 되돌린다.
     @Test
-    fun `a fill whose order number has a non-FILLED row rolls back the whole fill`() = runTest {
-        val userId = insertUser("dupopen")
+    fun `a fill whose row update comes back empty rolls back the whole fill`() = runTest {
+        val userId = insertUser("emptyupdate")
         existingOrder(userId, "OPEN")
+        databaseClient.sql(
+            "CREATE FUNCTION it_skip_fill_$runId() RETURNS trigger AS \$\$ BEGIN " +
+                "IF NEW.user_id = $userId THEN RETURN NULL; END IF; RETURN NEW; END \$\$ LANGUAGE plpgsql",
+        ).fetch().rowsUpdated().awaitSingle()
+        databaseClient.sql("CREATE TRIGGER it_skip_fill_$runId BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION it_skip_fill_$runId()")
+            .fetch().rowsUpdated().awaitSingle()
+        try {
+            assertThatThrownBy {
+                kotlinx.coroutines.runBlocking { service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId)) }
+            }.hasStackTraceContaining("orders row not written")
+        } finally {
+            databaseClient.sql("DROP TRIGGER it_skip_fill_$runId ON orders").fetch().rowsUpdated().awaitSingle()
+            databaseClient.sql("DROP FUNCTION it_skip_fill_$runId()").fetch().rowsUpdated().awaitSingle()
+        }
 
-        assertThatThrownBy {
-            kotlinx.coroutines.runBlocking { service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId)) }
-        }.hasStackTraceContaining("orders already has a OPEN row")
-
-        assertThat(count("orders", userId)).isEqualTo(1)
+        assertThat(orderRow(userId)["status"]).isEqualTo("OPEN")
         assertThat(count("trade_notification_outbox", userId)).isZero()
         assertThat(count("trading_states", userId)).isZero()
+    }
+
+    // 끝난 줄(취소·거절·안 나감)에 체결이 오면 체결이 사실이라 FILLED 로 바꾼다. 엔진에서는 생기지 않아 생기면 장부를 봐야 한다.
+    @Test
+    fun `a fill over a closed lifecycle row turns it into FILLED with the state`() = runTest {
+        for (status in listOf("CANCELLED", "REJECTED", "NOT_PLACED")) {
+            val userId = insertUser("closed-${status.lowercase()}")
+            // 거절·안 나감은 주문번호가 없다 — 식별자로 찾아 주문번호를 채운다.
+            if (status == "CANCELLED") existingOrder(userId, status) else existingOrder(userId, status, orderId = null, clientOrderId = "ctb-$runId")
+
+            assertThat(service.commitFill({ stateService.upsert(userId, TradingState("KRW-BTC")) }, sellFill(userId))).describedAs(status).isTrue()
+
+            assertThat(count("orders", userId)).describedAs(status).isEqualTo(1)
+            assertThat(orderRow(userId)).describedAs(status).containsEntry("status", "FILLED").containsEntry("exchange_order_id", "s-$runId")
+            assertThat(count("trade_notification_outbox", userId)).describedAs(status).isEqualTo(1)
+            assertThat(count("trading_states", userId)).describedAs(status).isEqualTo(1)
+        }
+    }
+
+    // 매수의 판단 가격·요청 수량은 생애 줄에만 있다. 체결이 값을 주지 않으면 덮지 않는다(화면은 읽지 않는다).
+    @Test
+    fun `a buy fill keeps the decision price and requested volume its lifecycle row carried`() = runTest {
+        val userId = insertUser("keepdecision")
+        databaseClient.sql(
+            "INSERT INTO orders (user_id, exchange, market, side, client_order_id, status, decision_price, requested_volume) " +
+                "VALUES (:u, 'UPBIT', 'KRW-BTC', 'BUY', :c, 'PENDING', 50000000, 0.002)",
+        ).bind("u", userId).bind("c", "ctb-$runId").fetch().rowsUpdated().awaitSingle()
+        val buy = sellFill(userId).copy(side = TradeSide.BUY, pnlPercent = null, pnlAmount = null, reason = null)
+
+        assertThat(service.commitFill({}, buy)).isTrue()
+
+        assertThat(orderRow(userId)).containsEntry("status", "FILLED").containsEntry("decision_price", 50_000_000.0).containsEntry("requested_volume", 0.002)
     }
 
     // 두 확인을 지난 뒤에도 넣기가 비면(동시 쓰기 같은 예상 밖) 체결 기록이 어디에도 남지 않으므로 상태 저장까지 되돌린다.
@@ -416,11 +516,22 @@ class OrdersRoundTripTest {
         }
     }
 
-    // 되돌리면 그 종목이 확정에서 멈춰 손절이 돌지 않으므로, client_order_id 만 겹치면 그 식별자 없이 기록한다.
+    // 같은 ctb- 식별자는 같은 주문이다(주문마다 새로 만든다). 주문번호가 비었으면 그 줄이 이 주문의 기록이다.
     @Test
-    fun `a fill whose client order id is taken is recorded without it`() = runTest {
-        val userId = insertUser("dupclient")
+    fun `a fill whose client order id already has a FILLED row without an order number is skipped`() = runTest {
+        val userId = insertUser("dupclient-same")
         existingOrder(userId, "FILLED", orderId = null, clientOrderId = "ctb-$runId")
+
+        assertThat(service.commitFill({}, sellFill(userId))).isFalse()
+        assertThat(count("orders", userId)).isEqualTo(1)
+    }
+
+    // 식별자만 같고 주문번호가 다른 줄은 다른 주문이다. 덮으면 그 주문의 번호를 바꾸고, 건너뛰면 이 체결이 화면에서 빠진다.
+    // 되돌리면 그 종목이 확정에서 멈춰 손절이 돌지 않으므로 그 식별자 없이 기록한다.
+    @Test
+    fun `a fill whose client order id belongs to another order number is recorded without it`() = runTest {
+        val userId = insertUser("dupclient")
+        existingOrder(userId, "FILLED", orderId = "other-$runId", clientOrderId = "ctb-$runId")
 
         assertThat(service.commitFill({}, sellFill(userId))).isTrue()
 

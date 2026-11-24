@@ -496,6 +496,10 @@ class MarketDataIngestionServiceTest {
 
             subscription.update(bot, listOf("KRW-BTC", "KRW-XRP"))
             verify(timeout = 5_000) { feed.marketFlow(listOf("BTC/KRW", "ETH/KRW", "XRP/KRW"), true, any(), any()) }
+            // mockk 는 호출을 먼저 기록하고 답을 돌려 시각이 조금 늦게 들어온다.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (connectedAt.size < 2 && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            assertTrue(connectedAt.size >= 2, "두 번째 연결 시각이 없다: $connectedAt")
             // 연결 시각 사이로 잰다 — 시험 스레드가 늦게 깨어나도 흔들리지 않는다.
             assertTrue(connectedAt[1] - connectedAt[0] >= 1_000, "최소 간격 전에 다시 연결했다: $connectedAt")
         } finally {

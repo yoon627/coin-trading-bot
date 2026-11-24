@@ -445,8 +445,7 @@ class UserTradingManagerTest {
         every { outboxRepository.save(capture(outboxRow)) } answers { Mono.just(firstArg()) }
 
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
-        coEvery { orderLedger.alreadyRecorded(any()) } returns false
-        coEvery { orderLedger.recordFill(any(), any(), any()) } returns 7L
+        coEvery { orderLedger.recordFill(any(), any(), any()) } returns OrderLedger.FillRecord.Recorded(7L)
         coEvery { tradingStateService.upsert(1L, any()) } returns 0L
         coEvery { client.getOrder("fill-1") } returns Order(
             uuid = "fill-1",

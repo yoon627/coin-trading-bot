@@ -8,6 +8,7 @@ import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.UserRepository
 import com.trading.common.config.TradingProperties
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
@@ -38,7 +39,7 @@ class TradeNotificationWiringTest {
             every { save(any()) } answers { Mono.just(firstArg()) }
         }
 
-        @Bean fun orderLedger(): OrderLedger = mockk(relaxed = true)
+        @Bean fun orderLedger(): OrderLedger = mockk { coEvery { recordFill(any(), any(), any()) } returns OrderLedger.FillRecord.Recorded(1L) }
 
         @Bean fun transactionalOperator(): TransactionalOperator = mockk {
             every { transactional(any<Mono<Any>>()) } answers { firstArg() }

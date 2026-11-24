@@ -8,6 +8,7 @@ import com.trading.bot.engine.OrderLedger
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.persistence.OrderRowRepository
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
+import com.trading.bot.persistence.entity.OrderRowEntity
 import com.trading.common.config.TradingProperties
 import io.mockk.every
 import io.mockk.mockk
@@ -33,8 +34,8 @@ class TradeAuditCharacterizationTest {
 
     @BeforeEach
     fun setup() {
-        every { orders.findStatusByExchangeOrderId(any(), any(), any()) } returns Mono.empty()
-        every { orders.existsByClientOrderId(any(), any(), any()) } returns Mono.just(false)
+        every { orders.findByExchangeOrderId(any(), any(), any()) } returns Mono.empty()
+        every { orders.findByClientOrderId(any(), any(), any()) } returns Mono.empty()
         every {
             orders.insertFilled(
                 any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
@@ -72,7 +73,8 @@ class TradeAuditCharacterizationTest {
 
     @Test
     fun `an exchange order id already filled for the user on that exchange is skipped without any write`() = runTest {
-        every { orders.findStatusByExchangeOrderId(1L, "UPBIT", "s-1") } returns Mono.just("FILLED")
+        every { orders.findByExchangeOrderId(1L, "UPBIT", "s-1") } returns
+            Mono.just(OrderRowEntity(id = 3, userId = 1, exchange = "UPBIT", market = "KRW-BTC", side = "SELL", status = "FILLED", exchangeOrderId = "s-1"))
 
         assertFalse(service.saveAudit(sell(FeeBasis.Estimate)))
 

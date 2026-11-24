@@ -28,8 +28,7 @@ class TradeExecutionServiceExchangeTest {
     private val fee = slot<Double>()
 
     init {
-        coEvery { ledger.alreadyRecorded(any()) } returns false
-        coEvery { ledger.recordFill(any(), capture(fee), FeeKind.ESTIMATED) } returns 1L
+        coEvery { ledger.recordFill(any(), capture(fee), FeeKind.ESTIMATED) } returns OrderLedger.FillRecord.Recorded(1L)
     }
 
     private fun sell(exchange: Exchange = Exchange.UPBIT, estimatedFeeRate: Double? = null) = TradeRecord(

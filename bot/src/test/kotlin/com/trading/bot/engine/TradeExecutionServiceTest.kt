@@ -40,8 +40,7 @@ class TradeExecutionServiceTest {
         transactionalOperator = mockk()
         every { transactionalOperator.transactional(any<Mono<Any>>()) } answers { firstArg() }
         orderLedger = mockk()
-        coEvery { orderLedger.alreadyRecorded(any()) } returns false
-        coEvery { orderLedger.recordFill(any(), any(), any()) } returns 11L
+        coEvery { orderLedger.recordFill(any(), any(), any()) } returns OrderLedger.FillRecord.Recorded(11L)
         service = TradeExecutionService(outboxRepository, orderLedger, transactionalOperator, TradingProperties(), events = { events += it })
     }
 
@@ -56,14 +55,13 @@ class TradeExecutionServiceTest {
         // 재시작 후 같은 주문 uuid 를 다시 기록하려 하면 저장을 건너뛰고 false 를 돌려 호출자가 알림을 보내지 않는다.
         // pending 해소는 그래도 커밋돼야 다음 tick 이 같은 주문을 또 붙잡지 않는다.
         val duplicate = record("dup-1", side = TradeSide.BUY)
-        coEvery { orderLedger.alreadyRecorded(duplicate) } returns true
+        coEvery { orderLedger.recordFill(duplicate, any(), any()) } returns OrderLedger.FillRecord.AlreadyRecorded
         val statePersisted = AtomicBoolean(false)
 
         val recorded = service.commitFill(persistState = { statePersisted.set(true) }, record = duplicate)
 
         assertFalse(recorded)
         assertTrue(statePersisted.get())
-        coVerify(exactly = 0) { orderLedger.recordFill(any(), any(), any()) }
         // 이미 알린 체결이라 알림 행도 더 넣지 않는다.
         verify(exactly = 0) { outboxRepository.save(any()) }
         assertTrue(events.isEmpty())
@@ -73,7 +71,7 @@ class TradeExecutionServiceTest {
     @Test
     fun `commitFill writes the orders row before the notification row, which points at it`() = runTest {
         val order = mutableListOf<String>()
-        coEvery { orderLedger.recordFill(any(), any(), any()) } coAnswers { order += "orders"; 11L }
+        coEvery { orderLedger.recordFill(any(), any(), any()) } coAnswers { order += "orders"; OrderLedger.FillRecord.Recorded(11L) }
         val row = slot<TradeNotificationOutboxEntity>()
         every { outboxRepository.save(capture(row)) } answers { order += "outbox"; Mono.just(firstArg()) }
         val fill = record("fill-2", fee = FeeBasis.Measured(25.0))

@@ -43,13 +43,50 @@ interface OrderRowRepository : R2dbcRepository<OrderRowEntity, Long> {
     )
     fun findRecordedOrderIds(userId: Long, exchange: String, orderIds: Collection<String>): Flux<String>
 
-    /** 이 사용자·거래소의 거래소 주문번호를 가진 줄의 상태. 없으면 비어 끝난다(uq_orders_exchange_order 와 같은 키). */
-    @Query("SELECT status FROM orders WHERE user_id = :userId AND exchange = :exchange AND exchange_order_id = :exchangeOrderId")
-    fun findStatusByExchangeOrderId(userId: Long, exchange: String, exchangeOrderId: String): Mono<String>
+    /** 이 사용자·거래소의 거래소 주문번호를 가진 줄(uq_orders_exchange_order 와 같은 키). 상태는 가리지 않는다. */
+    @Query("SELECT * FROM orders WHERE user_id = :userId AND exchange = :exchange AND exchange_order_id = :exchangeOrderId")
+    fun findByExchangeOrderId(userId: Long, exchange: String, exchangeOrderId: String): Mono<OrderRowEntity>
 
-    /** 이 사용자·거래소에 [clientOrderId] 를 가진 줄이 있는가(uq_orders_client_order 와 같은 키). */
-    @Query("SELECT COUNT(*) > 0 FROM orders WHERE user_id = :userId AND exchange = :exchange AND client_order_id = :clientOrderId")
-    fun existsByClientOrderId(userId: Long, exchange: String, clientOrderId: String): Mono<Boolean>
+    /** 이 사용자·거래소의 [clientOrderId] 를 가진 줄(uq_orders_client_order 와 같은 키). 상태는 가리지 않는다. */
+    @Query("SELECT * FROM orders WHERE user_id = :userId AND exchange = :exchange AND client_order_id = :clientOrderId")
+    fun findByClientOrderId(userId: Long, exchange: String, clientOrderId: String): Mono<OrderRowEntity>
+
+    /**
+     * 생애 줄(대기·접수, 또는 끝난 줄)을 체결로 바꾸고 id 를 돌려준다. 체결이 정하는 칼럼은 [insertFilled] 와 같은 값으로 덮어써
+     * 화면 값이 넣은 줄과 같다. 판단 가격·요청 수량은 체결이 값을 줄 때만 바꾼다(매수의 판단 가격은 생애 줄에만 있다 — 화면은 읽지 않는다).
+     * 요청 금액·식별자·만든 시각·note 는 남긴다. 주문번호는 비었을 때만 채운다. 이미 FILLED 면 비어 끝난다.
+     */
+    @Query(
+        """
+        UPDATE orders SET
+            exchange_order_id = COALESCE(exchange_order_id, :exchangeOrderId), status = 'FILLED', decision_price = COALESCE(:decisionPrice, decision_price),
+            requested_volume = COALESCE(:requestedVolume, requested_volume), filled_volume = :filledVolume, filled_funds = :filledFunds, avg_fill_price = :avgFillPrice,
+            fee = :fee, fee_basis = :feeBasis, position_volume_after = :positionVolumeAfter, book_avg_price = :bookAvgPrice,
+            pnl_percent = :pnlPercent, pnl_amount = :pnlAmount, reason = :reason, strategy = :strategy, fill_source = :fillSource,
+            completed_at = CAST(:recordCreatedAt AS timestamp), updated_at = now()
+        WHERE id = :id AND status <> 'FILLED'
+        RETURNING id
+        """,
+    )
+    fun fillRow(
+        id: Long,
+        exchangeOrderId: String?,
+        decisionPrice: Double?,
+        requestedVolume: Double?,
+        filledVolume: Double?,
+        filledFunds: Double?,
+        avgFillPrice: Double?,
+        fee: Double?,
+        feeBasis: String,
+        positionVolumeAfter: Double?,
+        bookAvgPrice: Double?,
+        pnlPercent: Double?,
+        pnlAmount: Double?,
+        reason: String?,
+        strategy: String?,
+        fillSource: String,
+        recordCreatedAt: LocalDateTime,
+    ): Mono<Long>
 
     /**
      * 체결된 주문 한 줄을 넣고 id 를 돌려준다. 체결 기록 트랜잭션 안에서 불리므로 고유 키 충돌이 트랜잭션을 중단하지 않게 대상 없는
