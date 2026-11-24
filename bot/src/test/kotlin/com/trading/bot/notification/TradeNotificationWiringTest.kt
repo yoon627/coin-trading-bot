@@ -8,6 +8,7 @@ import com.trading.bot.engine.TradeExecutionService
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
 import com.trading.bot.persistence.UserRepository
 import com.trading.common.config.TradingProperties
+import com.trading.bot.security.UserSecretsService
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -48,6 +49,7 @@ class TradeNotificationWiringTest {
         @Bean fun tradingProperties() = TradingProperties()
 
         @Bean fun userRepository(): UserRepository = mockk(relaxed = true)
+        @Bean fun userSecretsService(): UserSecretsService = mockk(relaxed = true)
 
         @Bean fun balances() = TradeBalanceLookup { _, _ -> null }
 
