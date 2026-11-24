@@ -499,10 +499,10 @@ preflight_domain() {
     fi
 }
 
-# 이 마이그레이션이 없는 이미지는 자동 롤백 대상이 될 수 없다. 체결 기록이 orders 에만 남으므로(V44 뒤), V43 이전 이미지는
-# 거래 기록 화면을 trade_records 에서 읽어 그 뒤의 체결이 화면에서 빠진다(더 옛 이미지는 orders 에 맞춰 쓰지도 않는다).
-# V43 파일은 화면을 orders 로 바꾼 #387 머지 커밋과 함께 들어왔다. V30(거래소 축)·V42 하한도 이 안에 든다.
-ROLLBACK_FLOOR_MIGRATION="bot/src/main/resources/db/migration/V43__orders_read_switch.sql"
+# 이 마이그레이션이 없는 이미지는 자동 롤백 대상이 될 수 없다. V47 이 옛 거래 표를 지웠으므로, V44 이전 이미지는 체결 기록에서
+# 그 표에 쓰다 실패한다. V44 파일은 옛 표 쓰기를 멈춘 2-3a 머지 커밋과 함께 들어왔다(그 PR 의 중간 커밋 546ddcaf 는 V44 가 있어도
+# 옛 표에 쓴다 — LAST_GOOD 는 main 머지에서만 오므로 손 APP_VERSION 으로만 닿는다). V30(거래소 축)·V42·V43 하한도 이 안에 든다.
+ROLLBACK_FLOOR_MIGRATION="bot/src/main/resources/db/migration/V44__outbox_execution_optional.sql"
 
 # migration 이 끼면 자동 롤백하지 않는다. 옛 앱이 새 스키마 위에서 뜰 수 있다.
 do_deploy() {
@@ -532,7 +532,7 @@ do_deploy() {
         migration_gate="blocked"
     elif ! git -C "$repo_root" cat-file -e "${last_good}:${ROLLBACK_FLOOR_MIGRATION}" 2>/dev/null; then
         migration_gate="below-floor"
-        log "자동 롤백 제외: 직전 정상 SHA(${last_good:0:12}) 트리에 ${ROLLBACK_FLOOR_MIGRATION##*/} 가 없다 — V43 이전 이미지로는 롤백하지 않는다"
+        log "자동 롤백 제외: 직전 정상 SHA(${last_good:0:12}) 트리에 ${ROLLBACK_FLOOR_MIGRATION##*/} 가 없다 — V44 이전 이미지로는 롤백하지 않는다"
     elif [[ -n "$(git -C "$repo_root" diff --name-only "$last_good" "$target_sha" -- bot/src/main/resources/db/migration/)" ]]; then
         # rollback_compat.sh 가 이 두 이미지로 통과시켰으면(Actions 가 ROLLBACK_COMPAT 로 넘긴다) 옛 이미지가 새 스키마에서 뜬다.
         if [[ "${ROLLBACK_COMPAT:-}" == "${last_good}..${target_sha}" ]]; then
@@ -701,7 +701,7 @@ if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
         echo "자동 롤백 제외: 마지막 정상 배포와 같은 커밋이다 — 이미지·설정이 같으면 compose 가 컨테이너를 다시 만들지 않는다."
         echo "  봇 복원 실패라면 그 사용자의 봇을 멈추거나 서버에서 'cd /opt/app && docker compose restart app' 으로 다시 띄운다."
     elif [ "$MIGRATION_GATE" = "below-floor" ]; then
-        echo "자동 롤백 제외: 직전 정상 SHA 에 V43(화면이 orders 를 읽음) 마이그레이션이 없다 — 그 이미지는 옛 표로 화면을 그려 그 뒤의 체결이 빠진다."
+        echo "자동 롤백 제외: 직전 정상 SHA 에 V44(옛 거래 표 쓰기를 멈춤) 마이그레이션이 없다 — 그 이미지는 V47 이 지운 옛 표에 체결을 쓰다 실패한다."
     else
         echo "자동 롤백 제외: DB migration 포함 배포 — 신규 스키마가 이미 적용됐을 수 있어 구버전 앱 자동 복귀는 위험."
     fi
@@ -709,8 +709,7 @@ if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
     echo "  1) docker compose logs app  로 원인 확인"
     echo "  2) DB migration 적용 여부 점검, 필요 시 백업 복원"
     echo "  3) 수동 롤백: cd /opt/app && APP_VERSION=<이전정상SHA> docker compose up -d --pull missing"
-    echo "     V42 이전 이미지로 롤백했다가 다시 올리면 deploy/vultr/sql/orders_catchup.sql 로 orders 를 맞춘다(README V43 절)."
-    echo "     롤백한 이미지가 체결 알림을 못 보내면 README V44 절의 runbook 으로 trade_execution_id 없는 PENDING 알림 줄을 넘긴다."
+    echo "     V44 이전 이미지로는 롤백하지 않는다 — V47 이 그 이미지가 쓰는 옛 거래 표를 지웠다(README V47 절)."
     echo "     V30 이전 이미지로는 롤백하지 않는다 — 불가피하면 README 의 절차로 KIS 행을 먼저 지운다."
     echo "     이번 배포의 마이그레이션이 적용되지 않았으면(flyway_schema_history 에 새 버전 없음) 직전 이미지로 수동 롤백해도 된다."
     exit 1
@@ -726,12 +725,6 @@ if health_ok; then
     chmod 600 /opt/app/.last-good-sha
     sed -i "s|^APP_VERSION=.*|APP_VERSION=${LAST_GOOD_SHA}|" .env || true
     echo "롤백 성공: $LAST_GOOD_SHA 로 복구됨."
-    # V44 이후 이미지가 쓴 알림 줄(trade_execution_id 없음)은 V43 이미지가 읽지 못해 체결 알림이 모두 멈춘다(로그는 WARN 뿐이다).
-    stalled="$(timeout -k 5 15 docker compose exec -T postgres psql -tA -U trading -d trading \
-        -c "SELECT count(*) FROM trade_notification_outbox WHERE status = 'PENDING' AND trade_execution_id IS NULL" </dev/null 2>/dev/null || true)"
-    if [ -n "$stalled" ] && [ "$stalled" != "0" ]; then
-        echo "WARN: 롤백한 이미지가 읽지 못하는 체결 알림 줄 ${stalled}개 — 그대로 두면 체결 알림이 모두 멈춘다. README V44 절 runbook 으로 넘긴다."
-    fi
     docker compose ps || true
     exit 2
 fi
@@ -754,7 +747,7 @@ REMOTE
         2)
             log "자동 롤백됨 → 이전 정상 SHA(${last_good:0:12}) 로 복구 (LAST_GOOD 유지)"
             echo "  원인 조사 후 재배포하세요. App: https://$domain"
-            notify_deploy rollback "운영 배포 자동 롤백: ${target_sha:0:12} 이 헬스체크(봇 복원 포함)를 통과하지 못해 ${last_good:0:12} 로 되돌렸다 — 원격 로그에 체결 알림 줄 WARN 이 있으면 README V44 절${run_url}"
+            notify_deploy rollback "운영 배포 자동 롤백: ${target_sha:0:12} 이 헬스체크(봇 복원 포함)를 통과하지 못해 ${last_good:0:12} 로 되돌렸다${run_url}"
             exit 2
             ;;
         4)

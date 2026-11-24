@@ -22,7 +22,6 @@ import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.data.r2dbc.DataR2dbcTest
-import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -94,12 +93,11 @@ class TradingStateRoundTripTest {
     /** 외부 DB 에 기존 데이터가 있을 수 있어 픽스처를 실행마다 유니크하게 만든다. */
     private val runId = UUID.randomUUID().toString().take(8)
 
-    /** FK 가 cascade 가 아니라 자식(trade_executions·trading_states) → 부모(users) 순서로 지운다. */
+    /** FK 가 cascade 가 아니라 자식(trading_states) → 부모(users) 순서로 지운다. */
     @AfterEach
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
-            "DELETE FROM trade_executions WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",
             "DELETE FROM users WHERE username LIKE 'it-%-$runId'",
         )) {
@@ -185,8 +183,7 @@ class TradingStateRoundTripTest {
         assertThat(userRepository.findById(userId).awaitSingle().username).isEqualTo("it-save-$runId")
         val unmapped = databaseClient.sql(
             "SELECT table_name || '.' || column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() " +
-                "AND ((table_name = 'users' AND column_name IN ('public_profile', 'public_strategy', 'admin')) " +
-                "OR (table_name = 'trade_executions' AND column_name IN ('order_type', 'status')))",
+                "AND table_name = 'users' AND column_name IN ('public_profile', 'public_strategy', 'admin')",
         ).map { r -> r.get("c", String::class.java)!! }.all().collectList().awaitSingle()
         assertThat(unmapped).isEmpty()
     }
@@ -246,40 +243,6 @@ class TradingStateRoundTripTest {
         val timeout = databaseClient.sql("SHOW statement_timeout").map { row -> row.get(0, String::class.java)!! }.one().awaitSingle()
 
         assertThat(timeout).isEqualTo("10s")
-    }
-
-    /**
-     * `exchange_order_id IS NOT NULL` 부분 unique index 는 reconcile 이 같은 주문을 두 번 기록하는 것을 막고,
-     * `exchange_order_id` 가 NULL 인 기록은 여러 건 받는다.
-     */
-    @Test
-    fun `partial unique index blocks duplicate order ids but allows many nulls`() = runTest {
-        val userId = insertUser("partial")
-        val orderId = "order-$runId"
-
-        insertExecution(userId, orderId = null)
-        insertExecution(userId, orderId = null)
-        insertExecution(userId, orderId = orderId)
-
-        val nulls = databaseClient.sql(
-            "SELECT count(*) c FROM trade_executions WHERE user_id = :u AND exchange_order_id IS NULL",
-        ).bind("u", userId).map { row -> row.get("c", java.lang.Long::class.java)!!.toLong() }
-            .one().awaitSingle()
-        assertThat(nulls).isEqualTo(2)
-
-        assertThatThrownBy { kotlinx.coroutines.runBlocking { insertExecution(userId, orderId = orderId) } }
-            .isInstanceOf(DataIntegrityViolationException::class.java)
-    }
-
-    private suspend fun insertExecution(userId: Long, orderId: String?) {
-        databaseClient.sql(
-            """
-            INSERT INTO trade_executions (user_id, exchange, market, side, price, volume, total_amount, exchange_order_id)
-            VALUES (:u, 'UPBIT', 'KRW-BTC', 'BUY', 100.0, 1.0, 100.0, :o)
-            """.trimIndent(),
-        ).bind("u", userId)
-            .let { spec -> if (orderId == null) spec.bindNull("o", String::class.java) else spec.bind("o", orderId) }
-            .fetch().rowsUpdated().awaitSingle()
     }
 
     // --- V36 → V37 경로와 되돌리기 SQL. 실행마다 만든 스키마에서 JDBC 로 돈다 — 공유 스키마에서 돌리면 다른 시험의 칼럼이 사라진다. ---
@@ -394,12 +357,12 @@ class TradingStateRoundTripTest {
         inSchema(schema) { conn -> assertThat(conn.unmappedDefinitions(schema)).isEmpty() }
     }
 
-    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V44_down → … → V34_down).
+    // 각 down 이 되살린 정의를 그 앞의 down 이 다시 지울 수 있어야 더 옛 이미지로 내려갈 수 있다(V47_down → … → V34_down).
     @Test
     fun `the down sqls from the latest version run one after another`() = withScratchSchema("downchain") { schema ->
-        migrate(schema, "44")
+        migrate(schema, "47")
         inSchema(schema) { conn ->
-            for (v in 44 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
+            for (v in 47 downTo 34) conn.update(RepoFiles.file("deploy/vultr/sql/V${v}_down.sql").readText())
             assertThat(conn.strings("SELECT max(version::int)::text FROM flyway_schema_history WHERE version IS NOT NULL")).containsExactly("33")
             // V34 의 세 칼럼과 V35 의 테이블은 지워지고, V14·V30 의 칼럼은 그 버전의 down 까지 남는다.
             assertThat(conn.retiredDefinitions(schema).map { it.substringBefore(' ') }).containsExactly(

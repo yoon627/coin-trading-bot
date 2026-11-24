@@ -323,7 +323,7 @@ class DeployNotifyScriptTest {
     /** 롤백 호환 검사가 이 두 커밋으로 통과했을 때만 마이그레이션 배포에도 자동 롤백을 허용한다. */
     @Test
     fun `롤백 호환 검사를 통과한 마이그레이션 배포만 자동 롤백 대상이다`() {
-        val repo = deployRepo(migration = true, lastGoodMigrations = listOf("V43__orders_read_switch.sql"))
+        val repo = deployRepo(migration = true, lastGoodMigrations = listOf("V44__outbox_execution_optional.sql"))
         val state = File(repo, "deploy/vultr/.state")
         val initialState = state.readText()
         val lastGood = state.readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
@@ -342,10 +342,10 @@ class DeployNotifyScriptTest {
         assertThat(gateWith("$target..$target")).contains("MIGRATION_GATE='blocked'")
     }
 
-    /** 검사를 통과해도 V43 이전 이미지(옛 하한 V42 는 있다)로는 자동 롤백하지 않는다 — 하한이 호환 검사보다 먼저다. */
+    /** 검사를 통과해도 V44 이전 이미지(옛 하한 V43 은 있다)로는 자동 롤백하지 않는다 — 하한이 호환 검사보다 먼저다. */
     @Test
-    fun `롤백 호환 검사를 통과해도 V43 하한 아래로는 자동 롤백하지 않는다`() {
-        val repo = deployRepo(migration = true, lastGoodMigrations = listOf("V42__orders_read.sql"))
+    fun `롤백 호환 검사를 통과해도 V44 하한 아래로는 자동 롤백하지 않는다`() {
+        val repo = deployRepo(migration = true, lastGoodMigrations = listOf("V43__orders_read_switch.sql"))
         val lastGood = File(repo, "deploy/vultr/.state").readLines().first { it.startsWith("LAST_GOOD_SHA=") }.substringAfter('=')
         val target = git(repo, "rev-parse", "HEAD").trim()
 

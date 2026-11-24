@@ -81,7 +81,6 @@ class ExchangeDimensionRoundTripTest {
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
         for (sql in listOf(
-            "DELETE FROM trade_records WHERE user_id IN ($owned)",
             "DELETE FROM trading_states WHERE user_id IN ($owned)",
             "DELETE FROM users WHERE username LIKE 'it-%-$runId'",
         )) {
