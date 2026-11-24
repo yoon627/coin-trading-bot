@@ -57,6 +57,8 @@ services:
       - TRADING_SHADOW_EXIT_TRAILING_ARM_PCT
       # 업비트 체결(trade) 구독. 끄면 ticker 만 받는다.
       - TRADING_PRICE_EVENTS_ENABLED
+      # 시세판 전용 업비트 연결(KRW 전체 ticker). 문제가 생기면 false 로 끈다 — 봇 연결과 따로다.
+      - MARKETDATA_BOARD_ENABLED
       # WS 무수신 워치독. 재연결이 폭주하면 ENABLED=false 로 끈다.
       - MARKETDATA_WATCHDOG_ENABLED
       - MARKETDATA_WATCHDOG_STALE_MS
