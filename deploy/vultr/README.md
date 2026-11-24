@@ -63,8 +63,11 @@ install -m 600 .env.example .env   # 시크릿이 들어가므로 600
 새 버전은 `main` push(머지) 때 `deploy-vultr` job 이 `./deploy.sh deploy` 를 실행해 나간다. 운영 compose 의 app 밖
 (postgres·caddy·볼륨 등)이 바뀐 push 는 자동 배포하지 않고 경고·배포 webhook 알림을 남기므로, 봇을 멈출지 정한 뒤 main 에서
 Actions 를 수동 실행해 배포한다. 이미지는 대상 커밋 SHA 로 고정하고,
-헬스체크(180s, 실행 중이던 봇의 복원 완료 포함)가 실패하면 직전 정상 SHA 로 자동 롤백한다. 결과는 Discord 로 알린다
-(성공은 일반 webhook, 롤백·실패는 에러 webhook).
+헬스체크(180s, 실행 중이던 봇의 복원 완료 포함)가 실패하면 직전 정상 SHA 로 자동 롤백한다. 결과는 Discord 배포 webhook
+(`DISCORD_DEPLOY_WEBHOOK_URL`, 없으면 롤백·실패만 에러 webhook)으로 알린다. main push·수동 실행이 test·이미지 빌드에서
+실패하거나 취소되면, 또 배포 job 이 원격 배포 결과를 알리기 전에(운영 조회·판정·업로드 등) 실패하거나 시한·취소로 끝나면
+그것도 같은 webhook 으로 알린다(`notify_ci.sh` — PR 실행은 알리지 않는다). 같은 concurrency 그룹에서 대기하다
+다음 실행에 밀려나 시작도 하지 않은 배포 job 은 알리지 않는다.
 직전 정상 SHA 와의 차이에 DB migration 이 있거나, 직전 정상 SHA 트리에 V43(화면이 orders 를 읽음) 마이그레이션이 없으면 자동 롤백하지 않고
 수동 개입을 안내한다. 스키마를 바꾸는 배포의 사전 점검·되돌리기 절차는 루트 README 의 배포 절에 있다.
 
@@ -159,7 +162,7 @@ job 동작:
   운영 컨테이너 조회 SSH 가 실패하면 판정하지 않고 멈춘다.
 - 배포 SSH·scp(수동 `status`·`logs`·`stop`·`start`·`mem`·`destroy` 의 최종 백업 포함, `ssh` 제외)는 응답 없이 약
   120초면 끊는다. 원격 배포 중 끊기면 결과 불명으로 알린다(8절). 준비 대기에서 끊기면 다시 시도하고, 업로드·로그인에서
-  끊기면 Discord 알림 없이 run 만 실패한다. 운영 조회(Prepare) 스텝은 3분 시한이고(SSH 두 번이 각각 최악 약 130초라 이것이 실효 상한이다)
+  끊기면 배포 job 의 실패 알림으로 알린다. 운영 조회(Prepare) 스텝은 3분 시한이고(SSH 두 번이 각각 최악 약 130초라 이것이 실효 상한이다)
   시한에 걸리면 조회 실패 문구 없이 스텝 시간 초과로 끝난다. 전체 시한은 job 의 20분이다.
 - 임시 `.env`·`.state`·SSH 키는 끝나면 runner 에서 지운다.
 - 수동 배포와 Actions 배포를 동시에 돌리지 않는다.
