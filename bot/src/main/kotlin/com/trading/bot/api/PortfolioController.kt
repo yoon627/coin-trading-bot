@@ -20,6 +20,7 @@ class PortfolioController(
     private val userRepository: UserRepository,
     private val userSecretsService: UserSecretsService,
     private val requestValidators: RequestValidators,
+    private val boardPrices: BoardPrices,
 ) {
     @GetMapping
     suspend fun getPortfolio(@RequestParam(required = false) exchange: String? = null): Map<String, Any> {
@@ -46,18 +47,21 @@ class PortfolioController(
         var totalEval = krwBalance
 
         if (coins.isNotEmpty()) {
-            val markets = coins.map { "KRW-${it.currency}" }.joinToString(",")
-            val tickers = try {
-                client.getTicker(markets)
-            } catch (_: Exception) {
-                emptyList()
+            // 시세판이 든 시세는 사용자마다 업비트에 다시 묻지 않는다. 없는 코인만 한 번에 묻는다.
+            val prices = coins.map { "KRW-${it.currency}" }.associateWith { boardPrices.price(it) }.toMutableMap()
+            val missing = prices.filterValues { it == null }.keys
+            if (missing.isNotEmpty()) {
+                val tickers = try {
+                    client.getTicker(missing.joinToString(","))
+                } catch (_: Exception) {
+                    emptyList()
+                }
+                tickers.forEach { prices[it.market] = it.tradePrice }
             }
-            val priceMap = tickers.associateBy { it.market }
 
             for (coin in coins) {
                 val market = "KRW-${coin.currency}"
-                val ticker = priceMap[market]
-                val currentPrice = ticker?.tradePrice ?: 0.0
+                val currentPrice = prices[market] ?: 0.0
                 val avgPrice = coin.avgBuyPriceDouble()
                 val balance = coin.balanceDouble()
                 val evalAmount = currentPrice * balance

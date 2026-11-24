@@ -1,6 +1,9 @@
 package com.trading.bot.marketdata
 
 import com.trading.common.domain.NormalizedTicker
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import org.springframework.stereotype.Component
@@ -11,7 +14,7 @@ import org.springframework.stereotype.Component
  * 읽은 버전 이하의 변경은 그때 이미 보인다.
  */
 @Component
-class MarketBoardStore {
+class MarketBoardStore(private val clock: Clock = Clock.systemUTC()) {
     // ticker 가 null 이면 목록에서 빠진 마켓(묘비). 다시 들어오면 덮는다.
     private class Entry(val ticker: NormalizedTicker?, val seq: Long)
 
@@ -23,12 +26,19 @@ class MarketBoardStore {
     private val published = AtomicLong()
     private val writeLock = Any()
 
+    @Volatile
+    private var lastUpdateAt: Instant? = null
+
     // netty 스레드에서 불린다 — 넣고 번호만 올린다.
     fun update(ticker: NormalizedTicker) = synchronized(writeLock) {
         val seq = published.get() + 1
         entries[ticker.market] = Entry(ticker, seq)
         published.set(seq)
+        lastUpdateAt = clock.instant()
     }
+
+    /** 시세판 전체가 [age] 안에 시세를 받았는가. 마켓별 시각이 아니다 — 거래가 뜸한 마켓은 스냅샷만 와도 유효하다. */
+    fun updatedWithin(age: Duration): Boolean = lastUpdateAt?.let { !Duration.between(it, clock.instant()).minus(age).isPositive } ?: false
 
     fun retain(markets: Collection<String>) = synchronized(writeLock) {
         val keep = markets.toSet()
