@@ -26,11 +26,16 @@ function ApiKeyWarning({ go }) {
 }
 
 function Dashboard({ user, setActive }) {
-  const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
-  const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 5000);
   const hasKeys = user?.has_upbit_keys;
+  // 체결·봇 상태는 신호를 받는 즉시 다시 읽는다. 신호가 붙어 있으면 polling 은 놓친 것만 메우면 되므로 늘린다.
+  const eventsLive = useUserEventsLive(!!hasKeys);
+  const portfolio = useAPI(() => TideAPI.portfolio(), [], eventsLive ? 30000 : 10000);
+  const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], eventsLive ? 15000 : 5000);
+  // 잔고는 체결로만 바뀐다 — 상태 신호(고점 저장 등)마다 업비트 계정을 묻지 않는다.
+  useUserEventReload(!!hasKeys, ['trade'], portfolio.reload);
+  useUserEventReload(!!hasKeys, ['trade', 'state'], status.reload);
   const market = useMarketStream(!!hasKeys);
-  // 수량·평단은 10초마다 서버에서, 가격은 시세판 스트림에서 1초마다(멈췄으면 서버 값).
+  // 수량·평단은 체결 신호를 받으면 곧바로 서버에서(신호가 없으면 10초마다), 가격은 시세판 스트림에서 1초마다(멈췄으면 서버 값).
   const p = liveHoldings(portfolio.data, market.fresh);
 
   return (
@@ -317,7 +322,9 @@ function TradingParamsCard({ setToast, onSaved }) {
 }
 
 function BotPage({ user, setActive }) {
-  const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
+  const eventsLive = useUserEventsLive(!!user?.has_upbit_keys);
+  const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], eventsLive ? 15000 : 3000);
+  useUserEventReload(!!user?.has_upbit_keys, ['trade', 'state'], status.reload);
   // 감시 목록은 서버에 저장된 것을 보여 주고, 고치면 잠시 뒤 저장한다(연달아 고치면 마지막 것만). 도는 봇은 저장할 때 그 목록으로
   // 바뀌고(엔진을 다시 띄우는 몇 초는 매매하지 않는다), 멈춘 봇은 다음 시작이 그 목록으로 뜬다.
   const [tickers, setTickers] = React.useState(null);
@@ -489,8 +496,11 @@ const RT_GRID = '110px 1.4fr 1.4fr 96px 120px 100px 92px';
 
 function OrdersPage({ user, setActive }) {
   const [tab, setTab] = React.useState('roundtrips');
-  const trades = useAPI(() => TideAPI.trades().catch(() => null), [], 10000);
-  const rt = useAPI(() => TideAPI.roundTrips().catch(() => null), [], 10000);
+  const eventsLive = useUserEventsLive(!!user?.has_upbit_keys);
+  const trades = useAPI(() => TideAPI.trades().catch(() => null), [], eventsLive ? 30000 : 10000);
+  const rt = useAPI(() => TideAPI.roundTrips().catch(() => null), [], eventsLive ? 30000 : 10000);
+  useUserEventReload(!!user?.has_upbit_keys, ['trade'], trades.reload);
+  useUserEventReload(!!user?.has_upbit_keys, ['trade'], rt.reload);
   const list = trades.data?.records || [];
   const rtList = rt.data?.round_trips || [];
 
@@ -625,7 +635,9 @@ function OrdersPage({ user, setActive }) {
 }
 
 function WalletPage({ user, setActive }) {
-  const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
+  const eventsLive = useUserEventsLive(!!user?.has_upbit_keys);
+  const portfolio = useAPI(() => TideAPI.portfolio(), [], eventsLive ? 30000 : 10000);
+  useUserEventReload(!!user?.has_upbit_keys, ['trade'], portfolio.reload);
   const market = useMarketStream(!!user?.has_upbit_keys);
   const p = liveHoldings(portfolio.data, market.fresh);
 
@@ -662,7 +674,7 @@ function WalletPage({ user, setActive }) {
   );
 }
 
-// 표의 가격이 스트림에서 오는지. 아니면 10초마다 오는 서버 값이다 — 숫자와 같은 조건(freshRows)으로 정한다.
+// 표의 가격이 스트림에서 오는지. 아니면 주기적으로 다시 읽는 서버 값이다 — 숫자와 같은 조건(freshRows)으로 정한다.
 function LiveBadge({ live }) {
   return live ? <Badge tone="live" dot>실시간</Badge> : <Badge dot>10초 갱신</Badge>;
 }

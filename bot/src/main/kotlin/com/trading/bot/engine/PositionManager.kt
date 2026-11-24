@@ -81,6 +81,8 @@ class PositionManager(
     private val entriesPaused: () -> Boolean = { false },
     /** 체결이 아닌 주문 생애를 orders 에 남긴다. 최선이라 실패해도 매매 흐름은 같다. 운영은 OrderLedger 를 준다. */
     private val lifecycle: OrderLifecycle = OrderLifecycle.NONE,
+    /** 상태가 저장됐다(화면 신호). 손절 경로 안이라 던지지 않는 것을 준다. */
+    private val stateSaved: () -> Unit = {},
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -726,6 +728,7 @@ class PositionManager(
             }
         }
         state.peakPersistFailed = false
+        stateSaved()
     }
 
     /**

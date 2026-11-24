@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.events.UserEventHub
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
@@ -121,6 +122,31 @@ class UserTradingManagerTest {
         manager.restoreAllRunningBots()
 
         coVerify(exactly = 1) { mockEngine.start(any(), any()) } // 재시도에서 실제로 기동돼야 한다
+    }
+
+    // 재배포 뒤 복원처럼 API 없이 바뀐 상태도 화면이 곧바로 보게 — 신호는 사용자 잠금이 풀릴 때 낸다.
+    @Test
+    fun `a control path signals only that user's screens when it lets go of the user lock`() = runTest {
+        val hub = UserEventHub()
+        val signaling = spyk(
+            UserTradingManager(
+                userRepository, botStateRepository, tradeExecutionService, discordNotifier,
+                strategy, TradingProperties(autoStart = true), upbitWebClient,
+                userSecretsService, marketDataStore, tradingStateService, userEvents = hub,
+            ),
+        )
+        every { signaling.createEngine(any()) } returns mockEngine
+        every { botStateRepository.findByRunningTrueAndExchange("UPBIT") } returns Flux.just(runningState(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.just(runningState(1L))
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { mockEngine.isRunning() } returns false
+        coEvery { tradingStateService.loadStates(1L) } returns emptyMap()
+
+        signaling.restoreAllRunningBots()
+
+        coVerify(exactly = 1) { mockEngine.start(any(), any()) }
+        assertTrue(hub.versions(1L)[UserEventHub.Kind.STATE.ordinal] >= 1L)
+        assertEquals(0L, hub.versions(2L)[UserEventHub.Kind.STATE.ordinal])
     }
 
     // 옛 엔진을 멈추기 전의 실패. 저장은 됐고 엔진은 이전 설정으로 계속 돈다. 저장 실패(500)로 읽히지 않게 알린다.

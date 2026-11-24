@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.events.UserEventHub
 import com.trading.bot.exchange.UpbitMarketRules
 import com.trading.bot.exchange.UpbitTradingCalendar
 import com.trading.bot.persistence.UserTradingParamsService
@@ -74,6 +75,7 @@ class UserTradingManager(
     runtime: ExchangeRuntime? = null,
     private val priceEventsProperties: PriceEventsProperties = PriceEventsProperties(),
     private val userTradingParams: UserTradingParamsService? = null,
+    private val userEvents: UserEventHub? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
@@ -117,7 +119,17 @@ class UserTradingManager(
             restoreProgress
         }
 
-    private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { Mutex() }
+    // 제어 경로(시작·정지·복원·교체·매수 중지·키 저장 재기동)는 모두 이 잠금을 거친다 — 풀릴 때 화면에 상태 신호를 낸다.
+    private fun lockFor(userId: Long): Mutex = userLocks.computeIfAbsent(userId) { NotifyingMutex(Mutex()) { stateChanged(userId) } }
+
+    private fun stateChanged(userId: Long) = userEvents?.publish(userId, UserEventHub.Kind.STATE)
+
+    private class NotifyingMutex(private val delegate: Mutex, private val onUnlock: () -> Unit) : Mutex by delegate {
+        override fun unlock(owner: Any?) {
+            delegate.unlock(owner)
+            onUnlock()
+        }
+    }
 
     // DiscordErrorLogAppender 가 붙은 뒤에 복원해야 복원 중 에러가 Discord 로 간다.
     @EventListener(ApplicationReadyEvent::class)
@@ -846,6 +858,7 @@ class UserTradingManager(
             entriesPaused = { entriesPaused(userId) },
             clock = clock,
             lifecycle = tradeExecutionService.orderLifecycle,
+            stateSaved = { stateChanged(userId) },
         )
         val dailyResetManager = DailyResetManager(profile, userId = user.id!!, calendar = parts.calendar)
 
@@ -866,6 +879,7 @@ class UserTradingManager(
             calendar = parts.calendar,
             rules = parts.rules,
             priceEvents = priceEventsProperties,
+            statusChanged = { stateChanged(userId) },
         )
     }
 

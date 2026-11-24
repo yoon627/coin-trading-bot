@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.events.UserEventHub
 import java.time.Clock
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Component
 class EngineLivenessMonitor(
     private val managers: TradingManagers,
     private val clock: Clock = Clock.systemUTC(),
+    private val userEvents: UserEventHub? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -30,14 +32,17 @@ class EngineLivenessMonitor(
             when {
                 !engine.isLoopAlive() -> stalled.remove(engine)
                 engine.isStalled(now) -> if (stalled.add(engine)) {
+                    userEvents?.publish(userId, UserEventHub.Kind.STATE)
                     log.error(
                         "[ENGINE STALLED] {} trading loop for user {} has made no progress since {} — 손절·청산 평가가 멈췄다. " +
                             "봇을 정지한 뒤 다시 시작하고, 정지가 끝나지 않으면 컨테이너를 재시작한다",
                         manager.exchange, userId, engine.lastProgressAt(),
                     )
                 }
-                stalled.remove(engine) ->
+                stalled.remove(engine) -> {
+                    userEvents?.publish(userId, UserEventHub.Kind.STATE)
                     log.info("{} trading loop for user {} recovered (last progress {})", manager.exchange, userId, engine.lastProgressAt())
+                }
             }
         }
     }
