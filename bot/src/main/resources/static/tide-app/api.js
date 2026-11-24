@@ -1,18 +1,37 @@
 // JWT 는 /api/auth/login 이 httpOnly 쿠키로 내려주므로 Authorization 헤더를 붙이지 않는다.
 
+// 접근 JWT 가 만료되면(401) 로그인 유지 쿠키(refresh)로 새로 받는다. 이 탭의 동시 요청은 한 번의 갱신을 함께 기다리고,
+// 탭끼리는 navigator.locks 로 줄 세운다 — 같은 토큰으로 두 탭이 동시에 바꾸면 서버가 한쪽을 거절한다.
+let refreshing = null;
+function refreshSession() {
+  if (!refreshing) {
+    const call = () => fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' }).then(r => r.ok, () => false);
+    const run = typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request('tide-refresh', call) : call();
+    // 잠금 요청이 거절돼도(드물다) 갱신 실패로 보고 원래 요청을 한 번 다시 보내는 길로 간다.
+    refreshing = Promise.resolve(run).catch(() => false).finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
+
 const TideAPI = {
   async _fetch(path, opts = {}) {
-    const res = await fetch(path, {
+    const send = () => fetch(path, {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       ...opts,
     });
+    let res = await send();
     // /api/auth/* 의 401 은 세션 만료가 아니라 인증 실패라 아래에서 서버 메시지를 그대로 올린다.
     if (res.status === 401 && !path.startsWith('/api/auth/')) {
-      if (!location.pathname.endsWith('login.html')) {
-        location.href = '/login.html';
+      // 갱신이 거절돼도 한 번은 다시 보낸다 — 다른 탭이 방금 바꾼 새 쿠키가 이미 저장소에 있을 수 있다. 요청마다 갱신·재시도는 한 번뿐이다.
+      await refreshSession();
+      res = await send();
+      if (res.status === 401) {
+        if (!location.pathname.endsWith('login.html')) {
+          location.href = '/login.html';
+        }
+        throw new Error('Unauthorized');
       }
-      throw new Error('Unauthorized');
     }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -24,11 +43,11 @@ const TideAPI = {
     return ct.includes('json') ? res.json() : res.text();
   },
 
-  login: (username, password) => TideAPI._fetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  login: (username, password, remember = false) => TideAPI._fetch('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password, remember }) }),
   // 서버가 SNAKE_CASE 로 역직렬화하므로 camelCase 로 보내면 키가 조용히 버려진다.
-  register: (username, password, upbitAccessKey, upbitSecretKey) =>
+  register: (username, password, upbitAccessKey, upbitSecretKey, remember = false) =>
     TideAPI._fetch('/api/auth/register', { method: 'POST', body: JSON.stringify({
-      username, password,
+      username, password, remember,
       upbit_access_key: upbitAccessKey,
       upbit_secret_key: upbitSecretKey,
     }) }),

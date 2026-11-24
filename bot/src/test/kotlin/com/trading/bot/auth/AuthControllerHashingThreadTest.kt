@@ -31,10 +31,13 @@ class AuthControllerHashingThreadTest {
         override fun encode(rawPassword: CharSequence): String = "hash".also { hashedOn += Thread.currentThread() }
         override fun matches(rawPassword: CharSequence, encodedPassword: String): Boolean = true.also { hashedOn += Thread.currentThread() }
     }
-    private val jwtProvider = mockk<JwtProvider> { every { generateToken(any(), any()) } returns "jwt" }
+    private val jwtProvider = mockk<JwtProvider> {
+        every { generateToken(any(), any()) } returns "jwt"
+        every { expiration } returns java.time.Duration.ofHours(1)
+    }
     private val secrets = mockk<UserSecretsService> { every { encryptUpbitKeys(null, null) } returns (null to null) }
     private val controller = AuthController(
-        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), hashThread.asCoroutineDispatcher(),
+        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), refreshTokens(), hashThread.asCoroutineDispatcher(),
     )
     private val user = UserEntity(id = 1, username = "owner", password = "hash")
 

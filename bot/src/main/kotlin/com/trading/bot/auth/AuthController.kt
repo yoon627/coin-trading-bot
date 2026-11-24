@@ -4,6 +4,7 @@ import com.trading.bot.api.RequestValidators
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.reactor.awaitSingle
@@ -11,10 +12,13 @@ import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 import org.springframework.core.env.Environment
 import org.springframework.core.env.Profiles
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseCookie
+import org.springframework.http.ResponseEntity
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -34,12 +38,15 @@ class AuthController(
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
     private val environment: Environment,
+    private val refreshTokens: RefreshTokenService,
     /**
      * BCrypt(수십~100ms CPU)를 돌릴 곳. 요청 스레드(netty 이벤트 루프일 수 있다)도, 매매 엔진이 쓰는 Dispatchers.Default(이 서버는
      * 2개)도 피한다 — 로그인이 몰려도 줄 서는 것은 로그인이다.
      */
     private val hashDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
 ) {
+    private val log = LoggerFactory.getLogger(javaClass)
+
     // 동시 요청 둘이 모두 계정 0 개를 보고 가입하지 않도록 확인부터 저장까지 묶는다. 단일 인스턴스 기준이다.
     private val registrationLock = Mutex()
 
@@ -72,9 +79,7 @@ class AuthController(
                 )
             ).awaitSingle()
         }
-        val token = jwtProvider.generateToken(user.id!!, user.username)
-        writeAuthCookie(request, response, token)
-        return AuthResponse(token = token, username = user.username)
+        return signIn(user, req.remember, request, response)
     }
 
     @PostMapping("/login")
@@ -85,38 +90,96 @@ class AuthController(
         if (!hashing { passwordEncoder.matches(req.password, user.password) }) {
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials")
         }
-        val token = jwtProvider.generateToken(user.id!!, user.username)
-        writeAuthCookie(request, response, token)
-        return AuthResponse(token = token, username = user.username)
+        return signIn(user, req.remember, request, response)
     }
 
+    /**
+     * 접근 JWT 가 만료되면 화면이 부른다. refresh 쿠키를 새 토큰으로 바꾸고 새 접근 JWT 를 쿠키로 내린다(본문에 토큰을 넣지 않는다).
+     * 다른 탭이 같은 토큰으로 방금 바꿨으면 401 만 — 쿠키를 건드리면 그 탭이 받은 새 쿠키를 지운다.
+     */
+    @PostMapping("/refresh")
+    suspend fun refresh(request: ServerHttpRequest): ResponseEntity<Map<String, String>> {
+        val presented = request.cookies.getFirst(REFRESH_COOKIE)?.value?.takeIf { it.isNotBlank() }
+            ?: return rejected(request)
+        // 행만 믿지 않는다 — 사용자를 다시 읽고, 못 읽으면 바꾸기가 되돌려진다(RefreshTokenService).
+        return when (val result = refreshTokens.refresh(presented) { userRepository.findById(it).awaitSingleOrNull() }) {
+            is RefreshTokenService.Refresh.Rotated -> {
+                val user = result.user
+                ResponseEntity.ok()
+                    .header(HttpHeaders.SET_COOKIE, authCookie(request, jwtProvider.generateToken(user.id!!, user.username)).toString())
+                    .header(HttpHeaders.SET_COOKIE, refreshCookie(request, result.token, result.lifetime).toString())
+                    .body(mapOf("status" to "refreshed"))
+            }
+            RefreshTokenService.Refresh.Concurrent -> ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
+            RefreshTokenService.Refresh.Rejected -> rejected(request)
+        }
+    }
+
+    // 접근 JWT 가 이미 만료돼도 refresh 쿠키로 그 로그인(계열)을 끊는다. 쿠키는 내릴 때와 같은 Path 로 지워야 지워진다.
     @PostMapping("/logout")
-    fun logout(request: ServerHttpRequest, response: ServerHttpResponse): Map<String, String> {
-        response.addCookie(
-            ResponseCookie.from("token", "")
-                .httpOnly(true)
-                .secure(shouldMarkSecure(request))
-                .path("/")
-                .sameSite("Lax")
-                .maxAge(Duration.ZERO)
-                .build()
-        )
+    suspend fun logout(request: ServerHttpRequest, response: ServerHttpResponse): Map<String, String> {
+        // 서버에서 끊지 못해도 이 브라우저의 쿠키는 지운다. 끊지 못한 로그인은 ERROR(Discord)로 알린다.
+        revokePresented(request, "logout")
+        response.addCookie(cleared(request, TOKEN_COOKIE, "/", "Lax"))
+        response.addCookie(cleared(request, REFRESH_COOKIE, REFRESH_PATH, "Strict"))
         return mapOf("status" to "logged_out")
     }
 
+    private suspend fun signIn(user: UserEntity, remember: Boolean, request: ServerHttpRequest, response: ServerHttpResponse): AuthResponse {
+        // 이 브라우저에 남은 옛 로그인을 끊는다 — 그 토큰이 새어 나갔어도 다시 로그인하면 더는 쓰이지 않는다.
+        revokePresented(request, "login")
+        val token = jwtProvider.generateToken(user.id!!, user.username)
+        val issued = refreshTokens.issue(user.id, remember)
+        response.addCookie(authCookie(request, token))
+        response.addCookie(refreshCookie(request, issued.token, issued.lifetime))
+        return AuthResponse(token = token, username = user.username)
+    }
+
+    private suspend fun revokePresented(request: ServerHttpRequest, during: String) {
+        val presented = request.cookies.getFirst(REFRESH_COOKIE)?.value?.takeIf { it.isNotBlank() } ?: return
+        try {
+            refreshTokens.revoke(presented)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.error("[AUTH] {} 중 이전 로그인 유지 토큰을 서버에서 끊지 못했다 — 그 토큰은 만료까지 쓰일 수 있다: {}", during, e.message)
+        }
+    }
+
+    private fun rejected(request: ServerHttpRequest): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+            .header(HttpHeaders.SET_COOKIE, cleared(request, REFRESH_COOKIE, REFRESH_PATH, "Strict").toString())
+            .build()
+
     private suspend fun <T> hashing(block: () -> T): T = withContext(hashDispatcher) { block() }
 
-    private fun writeAuthCookie(request: ServerHttpRequest, response: ServerHttpResponse, token: String) {
-        response.addCookie(
-            ResponseCookie.from("token", token)
-                .httpOnly(true)
-                .secure(shouldMarkSecure(request))
-                .path("/")
-                .sameSite("Lax")
-                .maxAge(Duration.ofDays(1))
-                .build()
-        )
-    }
+    private fun authCookie(request: ServerHttpRequest, token: String): ResponseCookie =
+        ResponseCookie.from(TOKEN_COOKIE, token)
+            .httpOnly(true)
+            .secure(shouldMarkSecure(request))
+            .path("/")
+            .sameSite("Lax")
+            .maxAge(jwtProvider.expiration)
+            .build()
+
+    // 다른 API 요청에 실리지 않게 /api/auth 로만, 다른 사이트에서 보내지지 않게 Strict 로 둔다.
+    private fun refreshCookie(request: ServerHttpRequest, token: String, lifetime: Duration): ResponseCookie =
+        ResponseCookie.from(REFRESH_COOKIE, token)
+            .httpOnly(true)
+            .secure(shouldMarkSecure(request))
+            .path(REFRESH_PATH)
+            .sameSite("Strict")
+            .maxAge(lifetime)
+            .build()
+
+    private fun cleared(request: ServerHttpRequest, name: String, path: String, sameSite: String): ResponseCookie =
+        ResponseCookie.from(name, "")
+            .httpOnly(true)
+            .secure(shouldMarkSecure(request))
+            .path(path)
+            .sameSite(sameSite)
+            .maxAge(Duration.ZERO)
+            .build()
 
     // prod 에서는 프록시가 X-Forwarded-Proto 를 빠뜨려도 JWT 가 평문으로 나가지 않도록 항상 Secure 로 둔다.
     // cookie-force-insecure 는 TLS 없는 임시 테스트 서버용이며 켜 두는 동안 JWT 가 평문으로 오간다.
@@ -135,6 +198,12 @@ data class AuthRequest(
     val password: String,
     val upbitAccessKey: String? = null,
     val upbitSecretKey: String? = null,
+    // 켜면 마지막 사용부터 30일, 끄면 로그인부터 24시간 다시 로그인하지 않는다(RefreshTokenService).
+    val remember: Boolean = false,
 )
 
 data class AuthResponse(val token: String, val username: String)
+
+private const val TOKEN_COOKIE = "token"
+private const val REFRESH_COOKIE = "refresh"
+private const val REFRESH_PATH = "/api/auth"

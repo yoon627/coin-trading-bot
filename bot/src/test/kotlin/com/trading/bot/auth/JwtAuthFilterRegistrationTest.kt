@@ -32,7 +32,7 @@ class JwtAuthFilterRegistrationTest {
     @ComponentScan(
         basePackageClasses = [SecurityConfig::class],
         excludeFilters = [
-            ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = [AuthController::class, JwtProvider::class]),
+            ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = [AuthController::class, JwtProvider::class, RefreshTokenService::class]),
         ],
     )
     class Config {
