@@ -257,17 +257,19 @@ class MarketDataIngestionService(
     }
 
     private suspend fun fetchM1WithRateLimitRetry(market: String) {
-        try {
-            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, M1_FETCH_COUNT))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // 연결 리셋·파싱 오류는 바로 다시 해도 결과가 같아 429 만 재시도한다.
-            if (!isRateLimited(e)) throw e
-            log.debug("Rate limited on {}; retrying in {}ms", market, RATE_LIMIT_RETRY_DELAY_MS)
-            delay(RATE_LIMIT_RETRY_DELAY_MS.milliseconds)
-            ingest(upbitMarketFeed.getCandles(market, CandleInterval.M1, M1_FETCH_COUNT))
-        }
+        ingest(withRateLimitRetry(market) { upbitMarketFeed.getCandles(market, CandleInterval.M1, M1_FETCH_COUNT) })
+    }
+
+    // 연결 리셋·파싱 오류는 바로 다시 해도 결과가 같아 429 만 한 번 재시도한다.
+    private suspend fun <T> withRateLimitRetry(market: String, fetch: suspend () -> T): T = try {
+        fetch()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (!isRateLimited(e)) throw e
+        log.debug("Rate limited on {}; retrying in {}ms", market, RATE_LIMIT_RETRY_DELAY_MS)
+        delay(RATE_LIMIT_RETRY_DELAY_MS.milliseconds)
+        fetch()
     }
 
     // Upbit 은 최신순으로 준다. 집계기는 더 새 분봉이 와야 이전 분봉을 확정하므로 오래된 것부터 넣는다.
@@ -507,7 +509,8 @@ class MarketDataIngestionService(
         // 첫 분봉 라운드가 어제 분봉을 실어 오면 어제 일봉이 부분봉으로 덮이므로 지금 이전 period 는 집계하지 않는다.
         candleAggregator.startFrom(Exchange.UPBIT, market, clock.instant())
         return try {
-            val candles = upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT)
+            // 봇이 뜰 때 엔진들의 REST 일봉 조회와 IP 한도를 나눠 429 가 난다. 1분 재시도까지 기다리지 않고 한 번 더 받는다.
+            val candles = withRateLimitRetry(market) { upbitMarketFeed.getCandles(market, CandleInterval.D1, SEED_DAILY_CANDLE_COUNT) }
             val fetchedAt = clock.instant()
             candles.forEach { marketDataStore.addCandle(it) }
             // 오늘(UTC) 봉은 이후 분봉이 이어서 집계하므로 집계기에 등록해야 첫 분봉이 seed 를 덮지 않는다.
