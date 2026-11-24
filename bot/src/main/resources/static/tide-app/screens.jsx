@@ -152,25 +152,30 @@ function TickerPicker({ value, onChange }) {
       e.preventDefault();
       if (hits[cursor]) add(hits[cursor].market);
       else if ((failed || markets === null) && /^KRW-[A-Z0-9]+$/.test(query.trim().toUpperCase())) add(query.trim().toUpperCase());
-    } else if (e.key === 'Backspace' && !query && value.length) remove(value[value.length - 1]);
+    }
   };
+  const label = { fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 8 };
   return (
-    <div style={{ position: 'relative' }}>
-      <div className="tide-input" style={{ height: 'auto', minHeight: 44, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '6px 10px' }}>
+    <div>
+      <div style={label}>감시 중인 코인 ({value.length}/{MAX_TICKERS})</div>
+      <div data-testid="ticker-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, minHeight: 44, padding: 10, borderRadius: 10,
+                                              background: 'var(--ink-50)', border: '1px dashed var(--ink-200)', marginBottom: 16 }}>
+        {value.length === 0 && <span style={{ fontSize: 12, color: 'var(--ink-500)', alignSelf: 'center' }}>아직 없습니다 — 아래에서 검색해 추가하세요.</span>}
         {value.map(code => (
-          <span key={code} data-ticker={code} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 8,
-                                    background: 'var(--tide-primary-soft)', color: 'var(--tide-primary)', fontSize: 12, fontWeight: 700 }}>
+          <span key={code} data-ticker={code} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', borderRadius: 8,
+                                    background: '#fff', border: '1px solid var(--tide-primary)', color: 'var(--tide-primary)', fontSize: 12, fontWeight: 700 }}>
             {names.get(code) ? `${names.get(code)} ` : ''}{code.replace(/^KRW-/, '')}
             <button type="button" aria-label={`${code} 빼기`} onClick={() => remove(code)}
                     style={{ border: 'none', background: 'none', color: 'inherit', cursor: 'pointer', padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
           </span>
         ))}
-        <input value={query} disabled={full} onKeyDown={onKeyDown}
-               onChange={e => { setQuery(e.target.value); setCursor(0); setOpen(true); }}
-               onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
-               placeholder={full ? `최대 ${MAX_TICKERS}개` : failed ? 'KRW-BTC 처럼 입력하고 Enter' : '코인 이름·코드 검색 (예: 비트코인, BTC)'}
-               style={{ flex: 1, minWidth: 140, border: 'none', outline: 'none', fontSize: 14, fontWeight: 600, background: 'transparent' }}/>
       </div>
+      <div style={label}>코인 추가</div>
+      <div style={{ position: 'relative' }}>
+      <input className="tide-input" value={query} disabled={full} onKeyDown={onKeyDown}
+             onChange={e => { setQuery(e.target.value); setCursor(0); setOpen(true); }}
+             onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+             placeholder={full ? `최대 ${MAX_TICKERS}개까지 감시합니다` : failed ? 'KRW-BTC 처럼 입력하고 Enter' : '코인 이름·코드 검색 (예: 비트코인, BTC)'}/>
       {hits.length > 0 && (
         <div role="listbox" style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 10, background: '#fff',
                                      border: '1px solid var(--ink-200)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.08)', overflow: 'hidden' }}>
@@ -185,6 +190,7 @@ function TickerPicker({ value, onChange }) {
           ))}
         </div>
       )}
+      </div>
       {failed && <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 6 }}>코인 목록을 불러오지 못했습니다 — 코드를 직접 입력하세요.</div>}
     </div>
   );
@@ -192,32 +198,75 @@ function TickerPicker({ value, onChange }) {
 
 function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
-  // 고정 기본값을 두면 그대로 시작했을 때 목록이 그 값 하나로 줄어 저장되므로 서버 기본 목록으로 채운다.
-  const [tickers, setTickers] = React.useState([]);
-  const [touched, setTouched] = React.useState(false);
+  // 감시 목록은 서버에 저장된 것을 보여 주고, 고치면 잠시 뒤 저장한다(연달아 고치면 마지막 것만). 도는 봇은 저장할 때 그 목록으로
+  // 바뀌고(엔진을 다시 띄우는 몇 초는 매매하지 않는다), 멈춘 봇은 다음 시작이 그 목록으로 뜬다.
+  const [tickers, setTickers] = React.useState(null);
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  const [saveState, setSaveState] = React.useState('idle');
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
-  // 폴링이 실패해 status 가 비어도 수정 여부 판정이 흔들리지 않게 마지막 기본값을 따로 둔다.
-  const prefilled = React.useRef([]);
-  const defaultKey = (status.data?.default_tickers || []).join(',');
-  const sameTickers = (a, b) => [...a].sort().join(',') === [...b].sort().join(',');
+  const running = !!status.data?.running;
+  const timer = React.useRef(null);
+  const latest = React.useRef(null);
+  const saving = React.useRef(Promise.resolve());
 
-  // 사용자가 고친 뒤에는 비워도 폴링이 덮어쓰지 않는다.
+  // 처음 불러오기에 실패하면 고칠 수 없게 둔다 — 빈 목록에서 고치면 저장된 목록 전체를 덮는다.
+  const loadTickers = () => TideAPI.botTickers().then(
+    r => { setLoadFailed(false); setTickers(r.tickers || []); },
+    () => setLoadFailed(true));
+
+  const save = (next) => {
+    saving.current = saving.current.then(async () => {
+      setSaveState('saving');
+      try {
+        const res = await TideAPI.saveBotTickers(next);
+        setSaveState('saved');
+        if (res?.status === 'tickers_changed') setToast({ msg: '감시 목록을 바꿨습니다 — 빠진 코인의 보유분은 청산될 때까지 관리합니다', tone: 'up' });
+        status.reload();
+      } catch (e) {
+        // 실패하면 서버의 목록(되돌린 목록)을 다시 보여 준다. 그사이 고친 것이 저장을 기다리면 그 저장이 덮어쓴다.
+        setSaveState('error');
+        setToast({ msg: e.message, tone: 'down' });
+        if (timer.current === null) loadTickers();
+      }
+    });
+    return saving.current;
+  };
+  const flush = () => {
+    if (timer.current === null) return saving.current;
+    clearTimeout(timer.current);
+    timer.current = null;
+    return save(latest.current);
+  };
+  // 저장을 기다리는 동안 화면을 떠나거나 탭을 닫아도 고친 목록을 보낸다.
   React.useEffect(() => {
-    if (!touched && defaultKey) {
-      prefilled.current = defaultKey.split(',');
-      setTickers(prefilled.current);
-    }
-  }, [defaultKey, touched]);
-  const changeTickers = (next) => { setTouched(true); setTickers(next); };
+    loadTickers();
+    const leave = () => {
+      if (timer.current === null) return;
+      clearTimeout(timer.current);
+      timer.current = null;
+      TideAPI.saveBotTickers(latest.current, true).catch(() => {});
+    };
+    window.addEventListener('pagehide', leave);
+    return () => { window.removeEventListener('pagehide', leave); leave(); };
+  }, []);
 
+  const changeTickers = (next) => {
+    setTickers(next);
+    clearTimeout(timer.current);
+    timer.current = null;
+    if (next.length === 0) { setSaveState('empty'); return; }
+    latest.current = next;
+    setSaveState('pending');
+    timer.current = setTimeout(() => { timer.current = null; save(next); }, 1500);
+  };
+
+  // 시작은 저장된 목록으로 뜬다 — 저장을 기다리는 변경이 있으면 먼저 저장한다.
   const start = async () => {
     setBusy(true);
     try {
-      // 기본 목록과 같거나 비었으면 tickers 를 빼서, 이미 도는 봇에 409 대신 already_running 을 받는다.
-      const req = {};
-      if (tickers.length && !sameTickers(tickers, prefilled.current)) req.tickers = tickers;
-      const res = await TideAPI.botStart(req);
+      await flush();
+      const res = await TideAPI.botStart({});
       setToast(res?.status === 'already_running'
         ? { msg: `이미 실행 중입니다 (전략: ${res.strategy})`, tone: 'warn' }
         : { msg: '봇이 시작되었습니다', tone: 'up' });
@@ -225,6 +274,7 @@ function BotPage({ user, setActive }) {
     } catch (e) { setToast({ msg: e.message, tone: 'down' }); }
     finally { setBusy(false); }
   };
+  const saveLabel = { pending: '저장 대기…', saving: '저장 중…', saved: '저장됨', error: '저장 실패', empty: '1개 이상 골라야 저장됩니다' }[saveState];
   const stop = async () => {
     setBusy(true);
     try { await TideAPI.botStop(); setToast({ msg: '봇이 정지되었습니다', tone: 'warn' }); status.reload(); }
@@ -242,20 +292,29 @@ function BotPage({ user, setActive }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>봇 설정</div>
-              <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 4 }}>거래쌍을 정하고 시작하세요.</div>
+              <div style={{ fontSize: 12, color: 'var(--ink-500)', marginTop: 4 }}>감시할 코인을 고르면 바로 저장됩니다{running ? ' — 도는 봇에도 곧바로 적용합니다' : ''}.</div>
             </div>
             <Badge tone={status.data?.running ? 'live' : 'neutral'} dot>
               {status.data?.running ? '실행 중' : '정지'}
             </Badge>
           </div>
 
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 8 }}>거래쌍 (최대 {MAX_TICKERS}개)</div>
-            <TickerPicker value={tickers} onChange={changeTickers}/>
+          <div style={{ marginBottom: 8 }}>
+            {tickers !== null
+              ? <TickerPicker value={tickers} onChange={changeTickers}/>
+              : loadFailed
+                ? <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+                    감시 목록을 불러오지 못했습니다 — 불러올 때까지 고칠 수 없습니다.{' '}
+                    <button type="button" onClick={loadTickers} style={{ border: 'none', background: 'none', color: 'var(--tide-primary)', fontWeight: 700, cursor: 'pointer', padding: 0 }}>다시 불러오기</button>
+                  </div>
+                : <div style={{ fontSize: 12, color: 'var(--ink-500)' }}>감시 목록을 불러오는 중…</div>}
+          </div>
+          <div data-testid="save-state" style={{ fontSize: 11, minHeight: 16, color: saveState === 'error' || saveState === 'empty' ? 'var(--warn)' : 'var(--ink-500)' }}>
+            {saveLabel || ''}
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 24 }}>
-            {status.data?.running ? (
+            {running ? (
               <Button onClick={stop} variant="danger" icon="pause" disabled={busy} size="lg" full>봇 정지</Button>
             ) : (
               <Button onClick={start} icon="play" disabled={busy || !user?.has_upbit_keys} size="lg" full>봇 시작</Button>

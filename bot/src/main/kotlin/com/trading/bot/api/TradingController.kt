@@ -5,6 +5,7 @@ import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.reloadFailureMessage
 import com.trading.bot.engine.RuntimeReloadFailedException
+import com.trading.bot.engine.TickerChangeFailedException
 import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
@@ -19,6 +20,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
@@ -45,8 +47,36 @@ class TradingController(
         val manager = managers.get(target)
         val tickers = req?.tickers?.let { requestValidators.normalizeMarkets(target, it) }
         if (target == Exchange.UPBIT && tickers != null) requireListedOnUpbit(tickers)
-        return failOnError(persisting { manager.startBot(userId, tickers) })
+        return failOnError(changingTickers { manager.startBot(userId, tickers) })
     }
+
+    /** 화면에 보일 감시 목록(도는 엔진의 목록, 아니면 저장된 목록, 그것도 없으면 설정 기본 목록). */
+    @GetMapping("/bot/tickers")
+    suspend fun tickers(@RequestParam(required = false) exchange: String? = null): Map<String, Any> =
+        mapOf("tickers" to managerFor(exchange).savedTickers(currentUserId()))
+
+    /** 감시 목록을 저장한다. 도는 봇이면 엔진을 그 목록으로 바꾸고, 멈춘 봇이면 다음 시작이 그 목록으로 뜬다. */
+    @PutMapping("/bot/tickers")
+    suspend fun saveTickers(
+        @RequestBody req: StartBotRequest,
+        @RequestParam(required = false) exchange: String? = null,
+    ): Map<String, Any> {
+        val userId = currentUserId()
+        val target = requestValidators.parseExchange(exchange)
+        val tickers = requestValidators.normalizeMarkets(target, req.tickers.orEmpty())
+        if (target == Exchange.UPBIT) requireListedOnUpbit(tickers)
+        return failOnError(changingTickers { managers.get(target).saveTickers(userId, tickers) })
+    }
+
+    // 도는 봇의 목록 교체가 실패하면 503 이다. 옛 엔진으로 돌아갔으면 목록 문구, 옛 엔진도 못 살렸으면 키 저장과 같은 교체 실패 문구.
+    private suspend fun <T> changingTickers(block: suspend () -> T): T =
+        try {
+            persisting { block() }
+        } catch (e: TickerChangeFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.message, e)
+        } catch (e: RuntimeReloadFailedException) {
+            throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)
+        }
 
     // 업비트는 없는 마켓 구독을 조용히 무시해 봇이 그 종목에서 아무것도 하지 않는다. 목록을 못 받았으면 형식 검사만 한다.
     private suspend fun requireListedOnUpbit(tickers: List<String>) {
@@ -56,12 +86,10 @@ class TradingController(
         }
     }
 
-    // UserTradingManager 는 전제 조건 실패를 {"error": ...} 로 돌려준다. 클라이언트가 상태 코드로 분기하도록 4xx 로 바꾸고,
-    // code 가 있으면 문구보다 먼저 본다.
+    // UserTradingManager 는 전제 조건 실패를 {"error": ...} 로 돌려준다. 클라이언트가 상태 코드로 분기하도록 4xx 로 바꾼다.
     private fun <M : Map<String, Any?>> failOnError(result: M): M {
         result["error"]?.let { msg ->
             val status = when {
-                result["code"] == UserTradingManager.CONFLICT_CODE -> HttpStatus.CONFLICT
                 (msg as? String)?.contains("not found", ignoreCase = true) == true -> HttpStatus.NOT_FOUND
                 else -> HttpStatus.BAD_REQUEST
             }

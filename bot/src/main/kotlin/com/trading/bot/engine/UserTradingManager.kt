@@ -307,10 +307,11 @@ class UserTradingManager(
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
         val initialStates = loadInitialStates(userId)
         // 엔진이 첫 매수를 보기 전에 저장된 중지를 읽는다. 읽지 못하면 다른 DB 실패처럼 시작하지 않는다.
-        rememberEntriesPause(userId, botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull())
+        val savedRow = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
+        rememberEntriesPause(userId, savedRow)
+        val tickerList = tickers ?: tickersOf(savedRow) ?: runtime.profile.tickerList()
         val engine = registerNewEngine(userId, decryptedUser)
 
-        val tickerList = tickers ?: runtime.profile.tickerList()
         exitParamsDeclarationCheck?.report("수동 기동 user=$userId")
         // 기동 뒤에 저장하면 저장이 실패해도 봇이 돌고 재시작 때 복원되지 않으므로 먼저 저장한다.
         try {
@@ -328,9 +329,46 @@ class UserTradingManager(
         mapOf("status" to "started", "strategy" to strategy.name)
     }
 
+    /** 화면에 보일 감시 목록 — 도는 엔진의 목록, 아니면 저장 행의 목록, 그것도 없으면 설정 기본 목록. */
+    suspend fun savedTickers(userId: Long): List<String> {
+        engines[userId]?.takeIf { it.isRunning() }?.let { return it.getUserTickers() }
+        return storedTickers(userId) ?: runtime.profile.tickerList()
+    }
+
     /**
-     * 도는 엔진에 다른 목록으로 start 하면 거절한다. 저장만 하면 엔진은 옛 목록으로 돌다가 재시작 때 새 목록이 적용된다.
-     * 목록이 같거나 없으면 저장 행을 엔진의 사용자 목록에 맞춘다.
+     * 화면에서 고친 감시 목록을 저장한다. 도는 봇이면 엔진을 그 목록으로 바꾸고, 멈춘 봇이면 저장만 해 다음 시작이 그 목록으로 뜬다
+     * (running 은 바꾸지 않는다).
+     */
+    suspend fun saveTickers(userId: Long, tickers: List<String>): Map<String, Any> = lockFor(userId).withLock {
+        if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
+        val running = engines[userId]?.takeIf { it.isRunning() }
+        if (running != null) return@withLock respondToRunningEngine(userId, running, tickers)
+        persistOrFail(userId, TICKERS_UNPERSISTED_MESSAGE) { saveStoppedTickers(userId, tickers) }
+        mapOf("status" to "saved")
+    }
+
+    private suspend fun storedTickers(userId: Long): List<String>? =
+        tickersOf(botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull())
+
+    private fun tickersOf(row: BotStateEntity?): List<String>? =
+        row?.tickers?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.takeIf { it.isNotEmpty() }
+
+    private suspend fun saveStoppedTickers(userId: Long, tickers: List<String>) {
+        val existing = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
+        val tickersStr = tickers.joinToString(",")
+        if (existing != null) {
+            if (existing.tickers == tickersStr) return
+            botStateRepository.save(existing.copy(tickers = tickersStr, updatedAt = LocalDateTime.now())).awaitSingle()
+        } else {
+            botStateRepository.save(
+                BotStateEntity(userId = userId, exchange = exchangeKey, running = false, strategy = strategy.name, tickers = tickersStr)
+            ).awaitSingle()
+        }
+    }
+
+    /**
+     * 도는 엔진에 다른 목록으로 start 하면 새 목록을 먼저 저장하고 키 저장과 같은 교체 경로로 엔진을 새 목록으로 다시 띄운다.
+     * 빠진 종목의 보유분은 새 엔진이 청산 대기로 관리한다. 목록이 같거나 없으면 저장 행을 엔진의 사용자 목록에 맞춘다.
      */
     private suspend fun respondToRunningEngine(
         userId: Long,
@@ -339,13 +377,43 @@ class UserTradingManager(
     ): Map<String, Any> {
         val current = engine.getUserTickers()
         if (tickers != null && normalizedTickers(tickers) != normalizedTickers(current)) {
-            return mapOf(
-                "error" to "Bot is already running with $current — stop it before changing tickers",
-                "code" to CONFLICT_CODE,
-            )
+            return changeTickersLocked(userId, current, tickers)
         }
         persistOrFail(userId, RUNNING_UNPERSISTED_MESSAGE) { saveRunningState(userId, current) }
         return mapOf("status" to "already_running", "strategy" to strategy.name)
+    }
+
+    /**
+     * 저장을 먼저 한다 — 교체 뒤에 저장하다 실패하면 재시작 때 옛 목록으로 뜬다. 교체 뒤 새 목록으로 도는 엔진이 없으면(실패해 옛
+     * 엔진으로 돌아감, 요청이 끊김, 사용자 없음) 저장도 옛 목록으로 되돌린다. 옛 엔진도 되살리지 못했거나 종료가 끼어들었으면 새 목록을
+     * 둔다 — 재시작이 그 목록으로 복원한다.
+     */
+    private suspend fun changeTickersLocked(userId: Long, current: List<String>, tickers: List<String>): Map<String, Any> {
+        // 보낸 저장 문이 취소 뒤에 커밋되면 되돌리기와 엇갈린다 — 저장은 끝까지 마친다.
+        withContext(NonCancellable) { persistOrFail(userId, TICKERS_UNPERSISTED_MESSAGE) { saveRunningState(userId, tickers) } }
+        try {
+            reloadLocked(userId, tickers)
+        } catch (e: Throwable) {
+            withContext(NonCancellable) { revertIfOldEngineRuns(userId, current, tickers) }
+            if (e is RuntimeReloadFailedException && e.engineRestored) throw TickerChangeFailedException(userId, TICKERS_NOT_CHANGED_MESSAGE, e)
+            throw e
+        }
+        val now = engines[userId]?.takeIf { it.isRunning() }?.getUserTickers()
+        if (now != null && normalizedTickers(now) == normalizedTickers(tickers)) {
+            log.info("user {} 감시 목록을 바꿨다: {} → {}", userId, current, tickers)
+            return mapOf("status" to "tickers_changed", "strategy" to strategy.name)
+        }
+        if (shuttingDown) throw TickerChangeFailedException(userId, TICKERS_SAVED_SHUTTING_DOWN_MESSAGE)
+        withContext(NonCancellable) { revertIfOldEngineRuns(userId, current, tickers) }
+        throw TickerChangeFailedException(userId, TICKERS_NOT_CHANGED_MESSAGE)
+    }
+
+    private suspend fun revertIfOldEngineRuns(userId: Long, current: List<String>, tickers: List<String>) {
+        val back = engines[userId]?.takeIf { it.isRunning() }?.getUserTickers() ?: return
+        if (normalizedTickers(back) != normalizedTickers(current)) return
+        runCatching { saveRunningState(userId, current) }.onFailure {
+            log.error("user {} 목록 교체 실패 뒤 저장 목록을 되돌리지 못했다 — 재시작 때 {} 로 뜬다: {}", userId, tickers, it.message)
+        }
     }
 
     // 요청은 검증기가 대문자·distinct 로 만들지만 엔진 목록은 bot_state·설정에서 trim 만 된 값이다.
@@ -508,7 +576,8 @@ class UserTradingManager(
         }
     }
 
-    private suspend fun reloadLocked(userId: Long) {
+    /** [newTickers] 가 있으면 교체 엔진을 그 목록으로 띄운다(실패해 되살린 옛 엔진은 옛 목록 그대로). */
+    private suspend fun reloadLocked(userId: Long, newTickers: List<String>? = null) {
         if (shuttingDown) return
         val existing = engines[userId] ?: return
         val decryptedUser = try {
@@ -524,7 +593,7 @@ class UserTradingManager(
         }
         val wasRunning = existing.isRunning()
         // 활성 목록(getActiveTickers)을 넘기면 목록에서 빠진 티커가 새 엔진의 진입 대상이 된다.
-        val tickers = existing.getUserTickers()
+        val tickers = newTickers ?: existing.getUserTickers()
         // 요청이 끊겨도 루프 join 까지 기다린다. join 전에 돌아가면 옛 루프와 새 루프가 겹친다.
         withContext(NonCancellable) { existing.stop() }
         if (leftToShutdown(userId)) return
@@ -776,14 +845,18 @@ class UserTradingManager(
     private fun sellRefs(states: List<TradingState>): Map<String, String?> = states.associate { it.ticker to it.pendingSellRef() }
 
     companion object {
-        // 컨트롤러가 409 로 응답한다.
-        const val CONFLICT_CODE = "conflict"
-
         private const val RESTORE_MAX_ATTEMPTS = 5
 
-        // 저장하지 않은 "Service is shutting down" 과 달리 재시작 때 봇이 다시 뜬다.
+        private const val TICKERS_UNPERSISTED_MESSAGE =
+            "감시 목록을 저장하지 못해 바꾸지 않았습니다. 잠시 후 다시 시도하세요."
+        internal const val TICKERS_NOT_CHANGED_MESSAGE =
+            "감시 목록을 바꾸지 못해 이전 목록으로 계속 거래 중입니다. 잠시 후 다시 시도하세요."
+        private const val TICKERS_SAVED_SHUTTING_DOWN_MESSAGE =
+            "서버가 종료 중이라 감시 목록은 저장만 했습니다 — 재시작 뒤 새 목록으로 거래합니다."
         private const val ENTRIES_UNPERSISTED_MESSAGE =
             "신규 매수 중지 설정을 저장하지 못해 바꾸지 않았습니다. 잠시 후 다시 시도하세요."
+
+        // 저장하지 않은 "Service is shutting down" 과 달리 재시작 때 봇이 다시 뜬다.
         internal const val START_SAVED_SHUTTING_DOWN_MESSAGE =
             "Service is shutting down — the start is saved and the bot resumes after the restart"
         private const val FINAL_STOP_SAVE_TIMEOUT_MS = 5_000L

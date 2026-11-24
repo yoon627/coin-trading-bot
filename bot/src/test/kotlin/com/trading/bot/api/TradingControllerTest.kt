@@ -2,6 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.TradingManagers
+import com.trading.bot.engine.TickerChangeFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
@@ -89,15 +90,37 @@ class TradingControllerTest {
         assertEquals("started", authed { controller.startBot(StartBotRequest(tickers = listOf("KRW-BTC"))) }["status"])
     }
 
+    // 도는 봇의 목록 교체가 실패해 옛 엔진·옛 목록으로 돌아가면 503 과 목록 문구다 — 키 저장 문구("저장은 완료")는 사실과 다르다.
     @Test
-    fun `startBot surfaces a running-engine ticker conflict as 409`() {
-        coEvery { manager.startBot(userId, null) } returns
-            mapOf("error" to "Bot is already running with [KRW-BTC] — stop it before changing tickers", "code" to "conflict")
+    fun `startBot surfaces a failed ticker change as 503 with the ticker message`() {
+        coEvery { manager.startBot(userId, listOf("KRW-BTC")) } throws
+            TickerChangeFailedException(userId, UserTradingManager.TICKERS_NOT_CHANGED_MESSAGE, RuntimeException("db down"))
 
         val ex = assertThrows<ResponseStatusException> {
-            authed { controller.startBot(null) }
+            authed { controller.startBot(StartBotRequest(tickers = listOf("KRW-BTC"))) }
         }
-        assertEquals(HttpStatus.CONFLICT, ex.statusCode)
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.statusCode)
+        assertEquals(UserTradingManager.TICKERS_NOT_CHANGED_MESSAGE, ex.reason)
+    }
+
+    @Test
+    fun `tickers returns the manager's saved list`() {
+        coEvery { manager.savedTickers(userId) } returns listOf("KRW-ETH")
+
+        assertEquals(mapOf("tickers" to listOf("KRW-ETH")), authed { controller.tickers() })
+    }
+
+    // 화면이 고칠 때마다 저장한다 — 시작 요청과 같은 형식·업비트 목록 검증을 거친다.
+    @Test
+    fun `saveTickers validates the list and hands it to the manager`() {
+        coEvery { manager.saveTickers(userId, listOf("KRW-ETH")) } returns mapOf("status" to "saved")
+        coEvery { catalog.unknown(listOf("KRW-NOPE")) } returns listOf("KRW-NOPE")
+
+        assertEquals("saved", authed { controller.saveTickers(StartBotRequest(tickers = listOf("krw-eth"))) }["status"])
+        val unknown = assertThrows<ResponseStatusException> { authed { controller.saveTickers(StartBotRequest(tickers = listOf("KRW-NOPE"))) } }
+        val empty = assertThrows<ResponseStatusException> { authed { controller.saveTickers(StartBotRequest(tickers = emptyList())) } }
+        assertEquals(HttpStatus.BAD_REQUEST, unknown.statusCode)
+        assertEquals(HttpStatus.BAD_REQUEST, empty.statusCode)
     }
 
     @Test

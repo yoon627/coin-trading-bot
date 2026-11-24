@@ -125,6 +125,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | POST | `/api/auth/refresh` | 로그인 유지 쿠키로 접근 JWT 를 새로 받는다(아래 로그인 유지) |
 | GET | `/api/user/me` | 내 정보 |
 | POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
+| GET·PUT | `/api/bot/tickers` | 감시 목록(`{tickers}`, `exchange`). GET 은 도는 엔진의 목록, 아니면 저장된 목록, 그것도 없으면 `TRADING_TICKERS`. PUT 은 시작과 같은 검증을 거쳐 저장한다 — 도는 봇이면 그 목록으로 바꾸고(`tickers_changed`), 멈춘 봇이면 저장만 한다(`saved`, 다음 시작이 그 목록으로 뜬다) |
 | POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`). 업비트 봇의 `tickers` 는 업비트 KRW 마켓 목록에 있어야 한다(없으면 400 `Unknown markets: …`, 목록을 못 받았으면 형식만 본다) |
 | GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
@@ -199,7 +200,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - DB 를 SQL 로 직접 고친 값은 재시작 전까지 도는 봇에 반영되지 않는다. API 를 쓴다.
 - V32 이전 이미지로 앱을 롤백하면 이 값을 읽지 않아 매수가 다시 나간다. 롤백할 때는 봇을 정지한다.
 
-봇 화면은 감시 종목을 업비트 KRW 마켓의 한글·영문 이름이나 코드로 검색해 태그로 고른다(최대 20개, `/api/market/markets`). 목록을 못 받으면 `KRW-BTC` 처럼 코드를 입력해 넣는다. 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
+봇 화면은 감시 종목을 업비트 KRW 마켓의 한글·영문 이름이나 코드로 검색해(코인 추가) 감시 중인 코인 태그로 고른다(최대 20개, `/api/market/markets`). 목록을 못 받으면 `KRW-BTC` 처럼 코드를 입력해 넣는다. 태그를 넣거나 빼면 1.5초 뒤 `PUT /api/bot/tickers` 로 저장하고(연달아 고치면 마지막 것만), 시작은 저장된 목록으로 뜬다 — 목록 없이 `/api/bot/start` 를 보내면 저장된 목록, 그것도 없으면 `TRADING_TICKERS` 다. 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 정지 없이 목록을 바꾼다(`status: tickers_changed`). 새 목록을 먼저 저장하고 키 저장과 같은 교체 경로로 엔진을 새 목록으로 다시 띄운다 — 옛 엔진을 멈추고 매도 기록을 마친 뒤 저장된 상태로 새 엔진을 시작하며, 그사이 몇 초는 매매하지 않는다. 교체가 실패하면 옛 엔진이 옛 목록으로 돌아가고 저장한 목록도 되돌리려 한 뒤(되돌리기 저장이 실패하면 ERROR) 503 이다. 옛 엔진도 되살리지 못했으면 새 목록을 저장해 둔 채 503 이고 재시작이 새 목록으로 복원한다. 저장 중에 서버 종료가 시작되면 바꾸지 않고 저장만 해 두었다고 알린다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다(청산 대기).
 
 ### 미해소 주문 대사
 
