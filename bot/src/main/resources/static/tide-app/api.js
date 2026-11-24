@@ -57,6 +57,11 @@ const TideAPI = {
   botStatus: () => TideAPI._fetch('/api/bot/status'),
   botStart: (req = {}) => TideAPI._fetch('/api/bot/start', { method: 'POST', body: JSON.stringify(req) }),
   botStop: () => TideAPI._fetch('/api/bot/stop', { method: 'POST' }),
+  // 감시 목록. 저장하면 도는 봇은 그 목록으로 바뀌고({status: 'tickers_changed'}), 멈춘 봇은 다음 시작이 그 목록으로 뜬다({status: 'saved'}).
+  botTickers: () => TideAPI._fetch('/api/bot/tickers'),
+  // keepalive 는 탭을 닫을 때 보내는 저장이 페이지와 함께 끊기지 않게 한다.
+  saveBotTickers: (tickers, keepalive = false) =>
+    TideAPI._fetch('/api/bot/tickers', { method: 'PUT', body: JSON.stringify({ tickers }), keepalive }),
   // 응답은 { markets: [{ market: 'KRW-BTC', korean_name, english_name }] } 이다. 목록을 못 받았으면 503.
   markets: () => TideAPI._fetch('/api/market/markets'),
 

@@ -216,19 +216,6 @@ class UserTradingManagerCharacterizationTest {
     }
 
     @Test
-    fun `starting a running bot with other tickers is a conflict and saves nothing`() = runTest {
-        registerRunningEngine()
-        every { engine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
-
-        val result = manager.startBot(1L, listOf("KRW-SOL"))
-
-        assertEquals("Bot is already running with [KRW-BTC, KRW-ETH] — stop it before changing tickers", result["error"])
-        assertEquals(UserTradingManager.CONFLICT_CODE, result["code"])
-        verify(exactly = 0) { botStateRepository.save(any()) }
-        verify(exactly = 1) { engine.start(any(), any()) } // 복원 때의 한 번뿐이다
-    }
-
-    @Test
     fun `stop halts the engine and then saves the existing UPBIT row with running false`() = runTest {
         registerRunningEngine()
         val saved = slot<BotStateEntity>()

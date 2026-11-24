@@ -558,19 +558,220 @@ class UserTradingManagerTest {
         verify(exactly = 0) { mockEngine.getActiveTickers() }
     }
 
+    // 도는 봇의 목록을 바꾸면 새 목록을 먼저 저장하고(재시작 때 복원) 키 저장과 같은 교체 경로로 엔진을 새 목록으로 다시 띄운다.
+    // 빠진 종목의 보유분은 새 엔진이 청산 대기로 관리한다(TradingEngineTickerSetTest).
     @Test
-    fun `startBot on a running engine with a different ticker list is refused before any side effect`() = runTest {
+    fun `startBot on a running engine with a different list saves it and restarts the engine with it`() = runTest {
         engines()[1L] = mockEngine
         every { mockEngine.isRunning() } returns true
         every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        val loaded = mapOf("KRW-ETH" to TradingState("KRW-ETH"))
+        coEvery { tradingStateService.loadStates(1L) } returns loaded
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+        val replacement = mockk<TradingEngine>(relaxed = true)
+        every { manager.createEngine(any()) } returns replacement
+        every { replacement.isRunning() } returns true
+        every { replacement.getUserTickers() } returns listOf("KRW-BTC", "KRW-SOL")
 
-        val result = manager.startBot(1L, listOf("KRW-BTC"))
+        val result = manager.startBot(1L, listOf("KRW-BTC", "KRW-SOL"))
 
-        assertEquals("conflict", result["code"])
-        assertTrue(result.containsKey("error"))
+        assertEquals("tickers_changed", result["status"])
+        assertEquals(listOf<String?>("KRW-BTC,KRW-SOL"), saved)
+        assertSame(replacement, engines()[1L])
+        coVerify(ordering = Ordering.ORDERED) {
+            botStateRepository.save(any())
+            mockEngine.stop()
+            replacement.start(listOf("KRW-BTC", "KRW-SOL"), loaded)
+        }
         coVerify(exactly = 0) { mockEngine.start(any(), any()) }
-        coVerify(exactly = 0) { tradingStateService.loadStates(any()) }
-        verify(exactly = 0) { botStateRepository.save(any()) }
+    }
+
+    // 교체가 실패해 옛 엔진이 옛 목록으로 돌아가면 저장한 목록도 되돌린다 — 아니면 재시작 때 다른 목록으로 뜬다.
+    @Test
+    fun `a failed ticker change brings the old engine back and restores the saved list`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+
+        assertThrows(TickerChangeFailedException::class.java) {
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
+        }
+
+        assertEquals(listOf<String?>("KRW-BTC", "KRW-BTC,KRW-ETH"), saved)
+        verify(exactly = 1) { mockEngine.resume() }
+        assertSame(mockEngine, engines()[1L])
+    }
+
+    // 옛 엔진도 되살리지 못했으면 새 목록을 둔다 — 재시작이 그 목록으로 복원한다.
+    @Test
+    fun `a ticker change that cannot bring the old engine back keeps the new list saved`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true andThen true andThen false
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { mockEngine.resume() } throws RuntimeException("resume failed")
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws RuntimeException("db down")
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+
+        val thrown = assertThrows(RuntimeReloadFailedException::class.java) {
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
+        }
+
+        assertFalse(thrown.engineRestored)
+        assertEquals(listOf<String?>("KRW-BTC"), saved)
+        assertNull(engines()[1L])
+    }
+
+    // 요청이 끊기면 교체 경로가 옛 엔진을 되살린다 — 저장도 옛 목록으로 되돌린다.
+    @Test
+    fun `a cancelled ticker change restores the saved list`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } throws CancellationException("client gone")
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+
+        assertThrows(CancellationException::class.java) {
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
+        }
+
+        assertEquals(listOf<String?>("KRW-BTC", "KRW-BTC,KRW-ETH"), saved)
+        verify(exactly = 1) { mockEngine.resume() }
+    }
+
+    // 저장 중에 종료가 시작되면 교체하지 않고 새 목록은 저장해 둔다 — 바꿨다고 답하지 않는다.
+    @Test
+    fun `a ticker change overtaken by shutdown keeps the list saved and says so`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { markShuttingDown(); saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+
+        val thrown = assertThrows(TickerChangeFailedException::class.java) {
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
+        }
+
+        assertTrue(thrown.message!!.contains("재시작 뒤"))
+        assertEquals(listOf<String?>("KRW-BTC"), saved)
+        coVerify(exactly = 0) { mockEngine.stop() }
+    }
+
+    // 교체 경로가 아무것도 하지 않고 돌아오면(사용자 행이 없음) 옛 엔진이 옛 목록으로 돈다 — 저장을 되돌리고 바꾸지 못했다고 알린다.
+    @Test
+    fun `a ticker change that leaves the old engine running restores the saved list and reports failure`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { userRepository.findById(1L) } returns Mono.empty()
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+
+        val thrown = assertThrows(TickerChangeFailedException::class.java) {
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
+        }
+
+        assertEquals(UserTradingManager.TICKERS_NOT_CHANGED_MESSAGE, thrown.message)
+        assertEquals(listOf<String?>("KRW-BTC", "KRW-BTC,KRW-ETH"), saved)
+        coVerify(exactly = 0) { mockEngine.stop() }
+    }
+
+    // 화면은 이 목록을 보여 주고 고치면 바로 저장한다 — 도는 엔진의 목록, 아니면 저장 행, 그것도 없으면 설정 기본 목록.
+    @Test
+    fun `savedTickers is the running engine's list, else the saved row, else the config default`() = runTest {
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        assertEquals(listOf("KRW-BTC"), manager.savedTickers(1L))
+
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns
+            Mono.just(BotStateEntity(userId = 1L, running = false, strategy = "combined", tickers = "KRW-ETH,KRW-SOL"))
+        assertEquals(listOf("KRW-ETH", "KRW-SOL"), manager.savedTickers(1L))
+
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-XRP")
+        assertEquals(listOf("KRW-XRP"), manager.savedTickers(1L))
+    }
+
+    // 멈춘 봇의 목록은 저장만 한다 — 시작하지 않고 running 도 바꾸지 않는다.
+    @Test
+    fun `saveTickers on a stopped bot stores the list without starting it`() = runTest {
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns
+            Mono.just(BotStateEntity(id = 3L, userId = 1L, running = false, strategy = "combined", tickers = "KRW-BTC")) andThen Mono.empty()
+        val saved = mutableListOf<BotStateEntity>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>(); Mono.just(firstArg()) }
+
+        assertEquals("saved", manager.saveTickers(1L, listOf("KRW-ETH", "KRW-SOL"))["status"])
+        manager.saveTickers(1L, listOf("KRW-DOGE"))
+
+        assertEquals(listOf("KRW-ETH,KRW-SOL", "KRW-DOGE"), saved.map { it.tickers })
+        assertEquals(listOf(false, false), saved.map { it.running })
+        assertEquals(3L, saved[0].id)
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) }
+    }
+
+    @Test
+    fun `saveTickers on a running bot changes the engine's list`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC")
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        coEvery { tradingStateService.loadStates(1L) } returns emptyMap()
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        every { botStateRepository.save(any()) } answers { Mono.just(firstArg()) }
+
+        val replacement = mockk<TradingEngine>(relaxed = true)
+        every { manager.createEngine(any()) } returns replacement
+        every { replacement.isRunning() } returns true
+        every { replacement.getUserTickers() } returns listOf("KRW-ETH")
+
+        assertEquals("tickers_changed", manager.saveTickers(1L, listOf("KRW-ETH"))["status"])
+
+        coVerify(exactly = 1) { replacement.start(listOf("KRW-ETH"), emptyMap()) }
+    }
+
+    // 화면이 저장해 둔 목록으로 시작한다. 목록 없이 시작하면 설정 기본 목록으로 줄어들던 것을 막는다.
+    @Test
+    fun `startBot without tickers starts with the saved list`() = runTest {
+        every { userRepository.findById(1L) } returns Mono.just(user(1L))
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns
+            Mono.just(BotStateEntity(id = 3L, userId = 1L, running = false, strategy = "combined", tickers = "KRW-ETH,KRW-SOL"))
+        every { botStateRepository.save(any()) } answers { Mono.just(firstArg()) }
+
+        manager.startBot(1L, null)
+
+        coVerify(exactly = 1) { mockEngine.start(listOf("KRW-ETH", "KRW-SOL"), any()) }
+    }
+
+    // 새 목록을 저장하지 못하면 엔진은 건드리지 않는다.
+    @Test
+    fun `a ticker change that cannot be saved leaves the running engine alone`() = runTest {
+        engines()[1L] = mockEngine
+        every { mockEngine.isRunning() } returns true
+        every { mockEngine.getUserTickers() } returns listOf("KRW-BTC", "KRW-ETH")
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        every { botStateRepository.save(any()) } returns Mono.error(RuntimeException("db down"))
+
+        assertThrows(BotControlPersistFailedException::class.java) {
+            runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
+        }
+
+        coVerify(exactly = 0) { mockEngine.stop() }
+        coVerify(exactly = 0) { mockEngine.start(any(), any()) }
     }
 
     @Test
