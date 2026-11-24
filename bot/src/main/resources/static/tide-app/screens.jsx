@@ -28,14 +28,15 @@ function ApiKeyWarning({ go }) {
 function Dashboard({ user, setActive }) {
   const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 5000);
-
   const hasKeys = user?.has_upbit_keys;
-  const p = portfolio.data;
+  const market = useMarketStream(!!hasKeys);
+  // 수량·평단은 10초마다 서버에서, 가격은 시세판 스트림에서 1초마다(멈췄으면 서버 값).
+  const p = liveHoldings(portfolio.data, market.fresh);
 
   return (
     <Shell active="dashboard" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
            title="대시보드" subtitle={new Date().toLocaleString('ko-KR')}
-           actions={<Button size="sm" icon="refresh" variant="outline" onClick={() => { portfolio.reload(); status.reload(); }}>새로고침</Button>}>
+           actions={<>{hasKeys && <LiveBadge live={!!market.fresh}/>}<Button size="sm" icon="refresh" variant="outline" onClick={() => { portfolio.reload(); status.reload(); }}>새로고침</Button></>}>
       {!hasKeys && <div style={{ marginBottom: 16 }}><ApiKeyWarning go={() => setActive('settings')}/></div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 16, marginBottom: 16 }}>
@@ -376,12 +377,13 @@ function OrdersPage({ user, setActive }) {
 
 function WalletPage({ user, setActive }) {
   const portfolio = useAPI(() => TideAPI.portfolio(), [], 10000);
-  const p = portfolio.data;
+  const market = useMarketStream(!!user?.has_upbit_keys);
+  const p = liveHoldings(portfolio.data, market.fresh);
 
   return (
     <Shell active="wallet" setActive={setActive} user={user} onLogout={() => TideAPI.logout().then(() => location.href = '/login.html')}
            title="지갑·자산" subtitle="Upbit 계좌"
-           actions={<Button size="sm" icon="refresh" variant="outline" onClick={portfolio.reload}>새로고침</Button>}>
+           actions={<>{user?.has_upbit_keys && <LiveBadge live={!!market.fresh}/>}<Button size="sm" icon="refresh" variant="outline" onClick={portfolio.reload}>새로고침</Button></>}>
       {!user?.has_upbit_keys ? <ApiKeyWarning go={() => setActive('settings')}/> :
        portfolio.loading ? <div style={{ padding: 40, textAlign: 'center' }}><span className="tide-spinner"/></div> :
        portfolio.error ? <Card padding={24}><div style={{ color: 'var(--down)', fontSize: 13 }}>{portfolio.error}</div></Card> :
@@ -411,6 +413,11 @@ function WalletPage({ user, setActive }) {
   );
 }
 
+// 표의 가격이 스트림에서 오는지. 아니면 10초마다 오는 서버 값이다 — 숫자와 같은 조건(freshRows)으로 정한다.
+function LiveBadge({ live }) {
+  return live ? <Badge tone="live" dot>실시간</Badge> : <Badge dot>10초 갱신</Badge>;
+}
+
 // 한 줄. 가격이 같으면 다시 그리지 않는다(300줄이 1초마다 바뀐 몇 줄만 그린다).
 const MarketRow = React.memo(function MarketRow({ r, first }) {
   const prev = React.useRef(r.p);
@@ -428,18 +435,16 @@ const MarketRow = React.memo(function MarketRow({ r, first }) {
 }, (a, b) => a.r.p === b.r.p && a.r.r === b.r.r && a.r.v === b.r.v && a.first === b.first);
 
 function MarketPage({ user, setActive }) {
-  const { rows, status, lastAt } = useMarketStream();
+  const { rows, status, fresh } = useMarketStream();
   const [query, setQuery] = React.useState('');
-  const [now, setNow] = React.useState(Date.now());
-  React.useEffect(() => { const id = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(id); }, []);
 
   const list = React.useMemo(() => {
     const q = query.trim().toUpperCase();
     return [...rows.values()].filter(r => !q || r.m.includes(q)).sort((a, b) => b.v - a.v);
   }, [rows, query]);
 
-  // delta 는 1초마다 오므로 10초 넘게 아무것도 오지 않으면 시세가 멈춘 것으로 보인다.
-  const delayed = status === 'live' && lastAt && now - lastAt > 10000;
+  // 연결은 살아 있는데 10초 넘게 갱신이 없으면 시세가 멈춘 것이다(freshRows).
+  const delayed = status === 'live' && !fresh;
   const badge = status === 'live' && !delayed ? <Badge tone="live" dot>실시간</Badge>
     : status === 'live' ? <Badge tone="warn" dot>지연</Badge>
     : status === 'retrying' ? <Badge tone="warn" dot>다시 연결 중</Badge>
