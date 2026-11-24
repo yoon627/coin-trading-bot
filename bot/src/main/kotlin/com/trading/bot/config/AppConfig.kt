@@ -5,7 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 @ConfigurationProperties(prefix = "app")
 data class AppProperties(
     val jwtSecret: String = "",
-    val jwtExpirationMs: Long = 86_400_000,
+    // 짧게 둔다 — 만료되면 화면이 로그인 유지 쿠키로 새로 받는다(RefreshTokenService). 서버에서 끊은 로그인이 이만큼 더 쓰인다.
+    val jwtExpirationMs: Long = 3_600_000,
     val encryptionSecret: String = "",
 )
 

@@ -49,7 +49,7 @@ class AppConfigBindingTest {
         for (files in listOf(listOf(BASE_YML), listOf(PROD_YML, BASE_YML))) {
             val binder = binder(files, emptyMap())
 
-            assertThat(binder.bindOrCreate("app", AppProperties::class.java)).describedAs("$files").isEqualTo(AppProperties("", 86_400_000, ""))
+            assertThat(binder.bindOrCreate("app", AppProperties::class.java)).describedAs("$files").isEqualTo(AppProperties("", 3_600_000, ""))
             assertThat(binder.bindOrCreate("upbit", UpbitProperties::class.java)).describedAs("$files").isEqualTo(UpbitProperties("https://api.upbit.com"))
             assertThat(binder.bindOrCreate("discord", DiscordProperties::class.java)).describedAs("$files").isEqualTo(DiscordProperties(""))
             assertThat(binder.bindOrCreate("discord.error-alert", ErrorAlertProperties::class.java)).describedAs("$files")
@@ -71,7 +71,7 @@ class AppConfigBindingTest {
             ),
         )
 
-        assertThat(binder.bindOrCreate("app", AppProperties::class.java)).isEqualTo(AppProperties("jwt-test", 86_400_000, "enc-test"))
+        assertThat(binder.bindOrCreate("app", AppProperties::class.java)).isEqualTo(AppProperties("jwt-test", 3_600_000, "enc-test"))
         assertThat(binder.bindOrCreate("discord", DiscordProperties::class.java))
             .isEqualTo(DiscordProperties("https://discord.example.test/general"))
         assertThat(binder.bindOrCreate("discord.error-alert", ErrorAlertProperties::class.java))

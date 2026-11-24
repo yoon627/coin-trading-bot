@@ -159,7 +159,7 @@ class AuthController(
             .secure(shouldMarkSecure(request))
             .path("/")
             .sameSite("Lax")
-            .maxAge(Duration.ofDays(1))
+            .maxAge(jwtProvider.expiration)
             .build()
 
     // 다른 API 요청에 실리지 않게 /api/auth 로만, 다른 사이트에서 보내지지 않게 Strict 로 둔다.

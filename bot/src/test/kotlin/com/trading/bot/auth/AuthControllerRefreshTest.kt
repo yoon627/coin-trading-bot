@@ -32,7 +32,10 @@ class AuthControllerRefreshTest {
         every { matches(any(), any()) } returns true
         every { encode(any()) } returns "hash"
     }
-    private val jwtProvider = mockk<JwtProvider> { every { generateToken(any(), any()) } returns "access-jwt" }
+    private val jwtProvider = mockk<JwtProvider> {
+        every { generateToken(any(), any()) } returns "access-jwt"
+        every { expiration } returns java.time.Duration.ofHours(1)
+    }
     private val refreshTokens = mockk<RefreshTokenService>(relaxed = true)
     private val user = UserEntity(id = 1L, username = "owner", password = "hash")
 
@@ -68,6 +71,16 @@ class AuthControllerRefreshTest {
         assertThat(Regex("Max-Age=(\\d+)").find(refresh)!!.groupValues[1].toLong()).isEqualTo(30L * 24 * 3600)
         assertThat(set).anySatisfy { assertThat(it).startsWith("token=access-jwt") }
         coVerify { refreshTokens.issue(1L, true) }
+    }
+
+    // 접근 JWT 쿠키는 JWT 수명만큼만 남긴다 — 만료 뒤에는 로그인 유지 쿠키로 새로 받는다.
+    @Test
+    fun `the access token cookie lives as long as the JWT`() {
+        every { userRepository.findByUsername("owner") } returns Mono.just(user)
+
+        val token = cookies(login(remember = false).expectStatus().isOk).single { it.startsWith("token=") }
+
+        assertThat(token).contains("Max-Age=3600").contains("Path=/").contains("HttpOnly").contains("SameSite=Lax")
     }
 
     @Test

@@ -30,7 +30,7 @@ class AuthControllerRegistrationTest {
 
     private val userRepository = mockk<UserRepository>()
     private val passwordEncoder = mockk<PasswordEncoder>()
-    private val jwtProvider = mockk<JwtProvider>()
+    private val jwtProvider = mockk<JwtProvider> { every { expiration } returns java.time.Duration.ofHours(1) }
     private val secrets = mockk<UserSecretsService>()
     private val controller = AuthController(
         // 해시를 시험 스케줄러 밖의 실제 스레드로 보내면 advanceUntilIdle 이 동시 가입의 겹침을 붙잡지 못한다.

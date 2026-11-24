@@ -23,7 +23,7 @@ class AuthControllerPasswordLengthTest {
 
     private val userRepository = mockk<UserRepository>()
     private val passwordEncoder = BCryptPasswordEncoder(4)
-    private val jwtProvider = mockk<JwtProvider>()
+    private val jwtProvider = mockk<JwtProvider> { every { expiration } returns java.time.Duration.ofHours(1) }
     private val secrets = mockk<UserSecretsService>()
     private val controller = AuthController(
         userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), refreshTokens(),
