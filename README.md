@@ -84,6 +84,8 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 
 기본값은 `TradingProperties.kt`, `KisTradingProperties.kt`, `AppConfig.kt`, `application.yml`에 있다.
 
+업비트 봇의 매매 값 8개(`TRADING_K_VALUE`·`TRADING_INVEST_RATIO`·`TRADING_MAX_INVEST_AMOUNT`·청산 5개)는 사용자가 봇 화면의 매매 설정에서 바꿀 수 있다(`/api/bot/params`, 표 `user_trading_params`). 아래 env 값은 사용자가 정하지 않은 항목의 기본값이다. 사용자 값은 같은 허용 구간(`ExitParamRanges`)으로 검사하고, 시작·재기동 복원·키 저장·감시 목록 교체 모두 그 값으로 엔진을 띄운다. 사용자 값을 읽지 못하면 env 로 내려가지 않고 시작·교체를 하지 않는다(낮춰 둔 한도가 풀리지 않게).
+
 | 환경변수 | 기본값 | 설명 |
 |---|---|---|
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5433` / `trading` / `trading` / `trading` | prod 프로필의 기본 포트는 5432 |
@@ -126,6 +128,8 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | GET | `/api/user/me` | 내 정보 |
 | POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
 | GET·PUT | `/api/bot/tickers` | 감시 목록(`{tickers}`, `exchange`). GET 은 도는 엔진의 목록, 아니면 저장된 목록, 그것도 없으면 `TRADING_TICKERS`. PUT 은 시작과 같은 검증을 거쳐 저장한다 — 도는 봇이면 그 목록으로 바꾸고(`tickers_changed`), 멈춘 봇이면 저장만 한다(`saved`, 다음 시작이 그 목록으로 뜬다) |
+| GET·PUT | `/api/bot/params` | 업비트 봇 매매 값. GET 은 `{defaults, params, effective}`(env 기본·사용자 값·덮은 결과, 키는 `k_value`·`invest_ratio`·`max_invest_amount`·`take_profit_pct`·`max_loss_pct`·`trailing_stop_pct`·`trailing_arm_pct`·`max_hold_days`). PUT 은 전체 교체(빠진 항목·null 은 env 기본, 모르는 키는 400)다 — 범위 밖이거나 모든 매수가 건너뛰어지는 조합(손절가에서 최소 주문 미만)이면 400, 보유 포지션의 청산 값이 바뀌는데 그 내용을 미리본 `confirm_token` 이 없거나 맞지 않으면 409 와 `changes`(포지션별 전→후, 지금 가격으로 곧바로 걸리는 청산 `triggers`)·새 `confirm_token`, 저장·적용하지 못했으면 503. 응답의 `warnings` 는 엔진 기동 때와 같은 조합 경고다(막지 않는다) |
+| POST | `/api/bot/params/preview` | 같은 본문으로 저장하지 않고 `changes`·`confirm_token`·`warnings` 만 돌려준다 |
 | POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`). 업비트 봇의 `tickers` 는 업비트 KRW 마켓 목록에 있어야 한다(없으면 400 `Unknown markets: …`, 목록을 못 받았으면 형식만 본다) |
 | GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
@@ -288,6 +292,8 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 - 익절은 트레일링 폭과 활성 수익률보다 커야 한다. 작으면 익절이 항상 먼저 걸려 트레일링이 동작하지 않는다.
 - 엔진을 시작할 때 설정 조합을 알린다. 익절이 트레일링 폭·활성 수익률 이하이거나 왕복 수수료 이하면 WARN 이다. 1회 매수 상한이 최소 주문에 못 미치거나 손절가에서 팔 때 최소 주문 미만이 돼 모든 매수가 건너뛰어지는 조합이면 ERROR(Discord)다.
 - 매도 기록의 `pnl_percent`는 수수료를 뺀 값이고, 청산 판정은 수수료 전 수익률로 한다.
+- 사용자가 매매 값을 저장하면 보유 포지션의 청산 값(스냅샷)도 지금 실효 값 전체로 바뀐다 — 바꾸지 않은 항목도 그 포지션의 진입 때 값에서 지금 값으로 바뀔 수 있다. 손절·추적 손절을 좁히거나 최대 보유일을 줄이면 곧바로 시장가로 팔릴 수 있어, 바뀌는 포지션이 있으면 서버가 포지션별 전→후와 지금 가격(시세판, 모르면 '현재가 모름')으로 곧바로 걸리는 청산을 보여 주고, 그 내용(값·포지션별 전→후)에 묶인 확인 토큰이 맞아야 저장한다 — 확인 뒤 값을 바꾸거나 그사이 포지션이 바뀌면 다시 확인을 받는다. 잔량을 놓아 준 행은 보유로 세지 않는다. 도는 봇은 정지 → 매도 기록 → 상태 로드 뒤 값과 스냅샷을 한 트랜잭션으로 저장하고 그 값으로 엔진을 다시 띄운다(몇 초 매매하지 않는다, 추적 고점은 유지). 커밋되지 않으면 옛 엔진이 옛 값으로 돌아온다. 매도 중인 포지션은 바꾸지 않는다. env 를 바꾼 재배포만으로는 지금처럼 보유 포지션에 닿지 않는다.
+- 그림자 청산 관찰(`TRADING_SHADOW_EXIT_ENABLED`)은 라이브 청산 값이 포지션 동안 그대로라고 보고 짝지어 비교한다. 보유 중에 사용자가 값을 바꾼 포지션의 관찰은 섞인다. 표는 마지막 저장 시각만 가지므로, 분석할 때는 앱 로그의 `매매 값을 바꿨다` 줄(저장마다 남는다) 시각이 그 포지션의 진입과 청산 사이인 관찰을 뺀다.
 - 청산·주문·주기 파라미터의 허용 구간은 `ExitParamRanges.kt`에 있다. 손절을 `-5`처럼 부호를 틀리거나, 주기 `10`초를 ms 로 `10000`처럼 단위·자릿수를 틀려 적는 실수를 거른다. 익절·arm 상한 100, 돌파 계수 상한 2, 주기 상한 60초, 미확인 주문 알림 임계 상한 100 은 판정식이 아니라 이런 오기를 거르는 경계다.
 - `deploy/vultr/preflight_exit_params.sh`가 배포 전에 형식과 구간을 검사한다. `TRADING_AUTO_START`가 켜져 있으면 청산 키 5개(`TAKE_PROFIT_PCT`, `MAX_LOSS_PCT`, `TRAILING_STOP_PCT`, `TRAILING_ARM_PCT`, `MAX_HOLD_DAYS`)를 `.env`에 명시하지 않은 배포도 막는다. `KIS_TRADING_*` 청산 키는 같은 구간으로, 비용 요율 키 2개는 `[0, 0.01)`로 검사하지만 선언은 요구하지 않는다. 앱은 KIS 값을 기동 로그에 남기지 않고, `KIS_TRADING_ENABLED=true` 일 때만 구간 위반을 ERROR 로 알린다.
 - 앱은 기동 시 실효값을 로그로 남기고, 미선언이거나 구간 밖이면 ERROR로 알린다. 보유 포지션의 손절이 멈추지 않도록 거래는 막지 않는다.
@@ -589,6 +595,12 @@ V44 는 체결 알림 대기열의 `trade_execution_id` 를 비울 수 있게만
 V45 는 `refresh_tokens` 표만 더한다(위 로그인 유지). 직전 이미지는 이 표를 모른 채 그대로 뜨므로 자동 롤백 호환이다. 롤백하면 새 이미지가 낸 접근 JWT 는 자기 만료까지 그대로 쓰이고, 옛 이미지에는 `/api/auth/refresh` 가 없어 그 뒤 한 번 다시 로그인한다. 남은 `refresh` 쿠키·행은 해가 없고 다시 올리면 그대로 쓰인다.
 
 - 적용된 V45 마이그레이션 파일은 revert 하지 않는다 — 고친 이미지로 앞으로 간다. 표를 정말 지워야 할 때만 `deploy/vultr/sql/V45_down.sql` 을 쓴다(V45 가 마지막 적용 버전일 때만 돈다. 잃는 것은 로그인 유지뿐이다).
+
+### V46 (사용자 매매 값 `user_trading_params`)
+
+V46 은 `user_trading_params` 표만 더한다(위 설정 절). 직전 이미지는 이 표를 모른 채 그대로 뜨므로 자동 롤백 호환이다. 롤백하면 새 매수는 env 의 매수 금액·k·청산 값으로 돌아가고, 보유 포지션은 사용자 값으로 덮인 청산 스냅샷을 그대로 쓴다(스냅샷 모양은 그대로다). 사용자가 매수 상한을 낮춰 두었다면 롤백할 때 봇을 멈춘다. 다시 올리면 표의 값이 그대로 쓰인다.
+
+- 적용된 V46 마이그레이션 파일은 revert 하지 않는다 — 고친 이미지로 앞으로 간다. 표를 정말 지워야 할 때만 `deploy/vultr/sql/V46_down.sql` 을 쓴다(V46 이 마지막 적용 버전일 때만 돈다. 잃는 것은 사용자 매매 값뿐이다).
 
 ### 주문 생애 (스키마 변경 없음)
 

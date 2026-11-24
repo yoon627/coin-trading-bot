@@ -2,7 +2,7 @@ package com.trading.bot.api
 
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.TradingManagers
-import com.trading.bot.engine.TickerChangeFailedException
+import com.trading.bot.engine.BotChangeFailedException
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
@@ -94,7 +94,7 @@ class TradingControllerTest {
     @Test
     fun `startBot surfaces a failed ticker change as 503 with the ticker message`() {
         coEvery { manager.startBot(userId, listOf("KRW-BTC")) } throws
-            TickerChangeFailedException(userId, UserTradingManager.TICKERS_NOT_CHANGED_MESSAGE, RuntimeException("db down"))
+            BotChangeFailedException(userId, UserTradingManager.TICKERS_NOT_CHANGED_MESSAGE, RuntimeException("db down"))
 
         val ex = assertThrows<ResponseStatusException> {
             authed { controller.startBot(StartBotRequest(tickers = listOf("KRW-BTC"))) }

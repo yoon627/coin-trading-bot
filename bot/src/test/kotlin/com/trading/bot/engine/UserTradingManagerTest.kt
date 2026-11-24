@@ -601,7 +601,7 @@ class UserTradingManagerTest {
         val saved = mutableListOf<String?>()
         every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
 
-        assertThrows(TickerChangeFailedException::class.java) {
+        assertThrows(BotChangeFailedException::class.java) {
             runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
         }
 
@@ -662,7 +662,7 @@ class UserTradingManagerTest {
         val saved = mutableListOf<String?>()
         every { botStateRepository.save(any()) } answers { markShuttingDown(); saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
 
-        val thrown = assertThrows(TickerChangeFailedException::class.java) {
+        val thrown = assertThrows(BotChangeFailedException::class.java) {
             runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
         }
 
@@ -682,7 +682,7 @@ class UserTradingManagerTest {
         val saved = mutableListOf<String?>()
         every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
 
-        val thrown = assertThrows(TickerChangeFailedException::class.java) {
+        val thrown = assertThrows(BotChangeFailedException::class.java) {
             runBlocking { manager.startBot(1L, listOf("KRW-BTC")) }
         }
 

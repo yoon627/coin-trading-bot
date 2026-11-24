@@ -40,7 +40,7 @@ interface ExchangeRuntime {
     /** bot_state 의 exchange 칸에 [Exchange.name] 으로 쓴다. */
     val exchange: Exchange
 
-    /** 매니저의 자동 복원 여부·기본 티커와 엔진 설정의 단일 출처. [ExchangeParts.profile] 과 같은 값이어야 한다. */
+    /** 매니저의 자동 복원 여부·기본 티커와 엔진 설정의 기본값(env). 엔진은 이 위에 사용자 매매 값을 덮어 쓴다. [ExchangeParts.profile] 과 같은 값이어야 한다. */
     val profile: TradingProperties
 
     /**

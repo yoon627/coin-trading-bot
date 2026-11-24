@@ -196,6 +196,126 @@ function TickerPicker({ value, onChange }) {
   );
 }
 
+// 화면에서 바꿀 수 있는 매매 값. pct 는 % 단위, 나머지는 그대로다.
+const PARAM_FIELDS = [
+  { key: 'take_profit_pct', label: '익절', unit: '%', step: 0.1 },
+  { key: 'max_loss_pct', label: '손절', unit: '%', step: 0.1 },
+  { key: 'trailing_stop_pct', label: '추적 손절', unit: '%', step: 0.1 },
+  { key: 'trailing_arm_pct', label: '추적 시작(수익)', unit: '%', step: 0.1 },
+  { key: 'max_hold_days', label: '최대 보유', unit: '거래일', step: 1 },
+  { key: 'invest_ratio', label: '1회 매수 비율', unit: '(0~1)', step: 0.01 },
+  { key: 'max_invest_amount', label: '1회 매수 상한', unit: '원', step: 1000 },
+  { key: 'k_value', label: '돌파 계수 k', unit: '(0~2)', step: 0.05 },
+];
+const TRIGGER_LABEL = { take_profit: '익절', stop_loss: '손절', trailing_stop: '추적 손절', max_hold_days: '최대 보유' };
+
+// 매매 값: 비운 칸은 서버 기본값을 쓴다. 저장하면 도는 봇과 보유 포지션의 청산 값에 바로 적용된다 — 보유 포지션이 바뀌면 서버가
+// 바뀌는 내용(곧바로 팔릴 포지션 포함)을 보여 주고 확인을 받은 뒤에만 저장한다.
+function TradingParamsCard({ setToast, onSaved }) {
+  const [data, setData] = React.useState(null);
+  const [form, setForm] = React.useState({});
+  const [failed, setFailed] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [pending, setPending] = React.useState(null);
+  const load = () => TideAPI.botParams().then(d => {
+    setData(d); setFailed(false);
+    setForm(Object.fromEntries(PARAM_FIELDS.map(f => [f.key, d.params?.[f.key] ?? ''])));
+  }, () => setFailed(true));
+  React.useEffect(() => { load(); }, []);
+
+  // 빈 칸은 null(서버 기본값). 숫자가 아니거나 무한대면 보내지 않는다 — JSON 에서 null 이 되어 조용히 기본값으로 돌아간다.
+  const body = () => {
+    const out = {};
+    for (const f of PARAM_FIELDS) {
+      if (form[f.key] === '') { out[f.key] = null; continue; }
+      const n = Number(form[f.key]);
+      if (!Number.isFinite(n)) throw new Error(`${f.label} 값이 숫자가 아닙니다`);
+      out[f.key] = n;
+    }
+    return out;
+  };
+  const done = (res) => {
+    setPending(null);
+    const warnings = res?.warnings || [];
+    setToast(warnings.length
+      ? { msg: `저장했습니다 — 확인할 점: ${warnings.join(' / ')}`, tone: 'warn' }
+      : { msg: res?.status === 'unchanged' ? '바뀐 값이 없습니다' : '매매 값을 저장했습니다', tone: 'up' });
+    load(); onSaved?.();
+  };
+  // 확인은 미리본 본문과 그 토큰을 그대로 보낸다. 그사이 서버 쪽 내용이 달라졌으면 다시 409 로 새 미리보기가 온다.
+  const save = async (sent, token) => {
+    setBusy(true);
+    try { done(await TideAPI.saveBotParams(sent, token)); }
+    catch (e) {
+      if (e.status === 409 && e.body?.changes) setPending({ ...e.body, sent });
+      else setToast({ msg: e.message, tone: 'down' });
+    } finally { setBusy(false); }
+  };
+  const submit = () => {
+    let sent;
+    try { sent = body(); } catch (e) { setToast({ msg: e.message, tone: 'down' }); return; }
+    save(sent, null);
+  };
+
+  if (failed) return (
+    <Card padding={24}>
+      <div style={{ fontSize: 12, color: 'var(--warn)' }}>매매 값을 불러오지 못했습니다.{' '}
+        <button type="button" onClick={load} style={{ border: 'none', background: 'none', color: 'var(--tide-primary)', fontWeight: 700, cursor: 'pointer', padding: 0 }}>다시 불러오기</button>
+      </div>
+    </Card>
+  );
+  if (!data) return <Card padding={24}><span className="tide-spinner"/></Card>;
+  return (
+    <Card padding={24}>
+      <div style={{ fontSize: 16, fontWeight: 700 }}>매매 설정</div>
+      <div style={{ fontSize: 12, color: 'var(--ink-500)', margin: '4px 0 16px' }}>
+        비운 칸은 서버 기본값을 씁니다. 저장하면 도는 봇과 <b>보유 중인 포지션의 청산 기준에도 바로 적용</b>됩니다.
+      </div>
+      <div data-testid="params-form" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        {PARAM_FIELDS.map(f => (
+          <label key={f.key} style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)' }}>
+            {f.label} <span style={{ color: 'var(--ink-500)', fontWeight: 400 }}>{f.unit}</span>
+            <input className="tide-input" type="number" step={f.step} name={f.key} value={form[f.key]} disabled={!!pending}
+                   placeholder={`기본 ${data.defaults[f.key]}`}
+                   onChange={e => setForm({ ...form, [f.key]: e.target.value })} style={{ marginTop: 6 }}/>
+          </label>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+        <Button onClick={submit} disabled={busy || !!pending}>저장</Button>
+        <Button variant="ghost" disabled={busy || !!pending} onClick={() => setForm(Object.fromEntries(PARAM_FIELDS.map(f => [f.key, ''])))}>모두 기본값으로</Button>
+      </div>
+      {pending && (
+        <div data-testid="params-confirm" style={{ marginTop: 16, padding: 16, borderRadius: 10, border: '1px solid var(--warn)', background: 'var(--warn-soft)' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>보유 포지션 {pending.changes.length}개의 청산 기준이 바뀝니다</div>
+          {pending.changes.map(c => (
+            <div key={c.ticker} style={{ fontSize: 12, padding: '6px 0', borderTop: '1px solid rgba(0,0,0,.06)' }}>
+              <b>{c.ticker}</b>{' '}
+              {c.pnl_pct == null ? '(현재가 모름)' : `현재 수익률 ${c.pnl_pct.toFixed(2)}%`}{' — '}
+              {['take_profit_pct', 'max_loss_pct', 'trailing_stop_pct', 'trailing_arm_pct', 'max_hold_days']
+                .filter(k => c.before[k] !== c.after[k]).map(k => `${PARAM_FIELDS.find(f => f.key === k).label} ${c.before[k]}→${c.after[k]}`).join(', ')}
+              {c.triggers.length > 0 && (
+                <span data-testid="sell-now" style={{ marginLeft: 6, color: 'var(--up)', fontWeight: 700 }}>
+                  저장하면 바로 매도({c.triggers.map(t => TRIGGER_LABEL[t] || t).join(', ')})
+                </span>
+              )}
+            </div>
+          ))}
+          {(pending.warnings || []).length > 0 && (
+            <div style={{ fontSize: 12, marginTop: 8, color: 'var(--ink-700)' }}>확인할 점: {pending.warnings.join(' / ')}</div>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <Button variant="danger" onClick={() => save(pending.sent, pending.confirm_token)} disabled={busy}>
+              {pending.changes.some(c => c.triggers.length) ? '팔려도 저장' : '이대로 저장'}
+            </Button>
+            <Button variant="ghost" onClick={() => setPending(null)} disabled={busy}>취소</Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
   // 감시 목록은 서버에 저장된 것을 보여 주고, 고치면 잠시 뒤 저장한다(연달아 고치면 마지막 것만). 도는 봇은 저장할 때 그 목록으로
@@ -342,6 +462,9 @@ function BotPage({ user, setActive }) {
           </Card>
 
         </div>
+      </div>
+      <div style={{ marginTop: 16 }}>
+        <TradingParamsCard setToast={setToast} onSaved={status.reload}/>
       </div>
       {toast && <Toast message={toast.msg} tone={toast.tone} onClose={() => setToast(null)}/>}
     </Shell>

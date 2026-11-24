@@ -71,7 +71,7 @@ class JwtAuthFilterRegistrationTest {
             listOf("/actuator/health", "/actuator/info").forEach {
                 client.get().uri(it).exchange().expectStatus().isNotFound
             }
-            listOf("/actuator", "/actuator/env", "/actuator/heapdump", "/actuator/prometheus", "/api/market/markets").forEach {
+            listOf("/actuator", "/actuator/env", "/actuator/heapdump", "/actuator/prometheus", "/api/market/markets", "/api/bot/params").forEach {
                 client.get().uri(it).exchange().expectStatus().isUnauthorized
             }
         }
