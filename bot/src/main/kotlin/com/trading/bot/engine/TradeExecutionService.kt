@@ -34,15 +34,17 @@ class TradeExecutionService(
      * 이미 기록된 주문이면 건너뛰고 false 를 돌려준다. [notificationPayload] 는 트랜잭션 전에 만든 JSON 이다.
      */
     internal suspend fun saveAudit(record: TradeRecord, notificationPayload: String = TradeNotificationPayload.toJson(record)): Boolean {
-        // 재시작 뒤 같은 주문을 다시 확정해도 이중으로 기록·알림하지 않는다.
-        if (orderLedger.alreadyRecorded(record)) {
-            log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", record.userId, record.ticker, record.exchangeOrderId)
-            return false
-        }
         val (fee, feeKind) = fee(record)
-        val orderRowId = orderLedger.recordFill(record, fee, feeKind)
+        val orderRowId = when (val recorded = orderLedger.recordFill(record, fee, feeKind)) {
+            // 재시작 뒤 같은 주문을 다시 확정해도 이중으로 기록·알림하지 않는다.
+            OrderLedger.FillRecord.AlreadyRecorded -> {
+                log.info("Trade already recorded — idempotent skip: userId={}, market={}, orderId={}", record.userId, record.ticker, record.exchangeOrderId)
+                return false
+            }
+            is OrderLedger.FillRecord.Recorded -> recorded.orderRowId
+        }
         // 체결과 같은 트랜잭션이라 이 삽입이 실패하면 체결도 되돌아간다. 그래서 실패할 경로(직렬화·길이 제한)를 두지 않았고,
-        // FK 가 가리키는 orders 줄은 같은 트랜잭션에서 방금 넣은 줄이다.
+        // FK 가 가리키는 orders 줄은 같은 트랜잭션에서 방금 넣었거나 FILLED 로 바꾼 줄이다.
         val now = clock.instant()
         outboxRepository.save(
             TradeNotificationOutboxEntity(
