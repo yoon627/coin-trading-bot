@@ -35,8 +35,10 @@ const TideAPI = {
     }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
-      try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
-      throw new Error(msg);
+      let body = null;
+      try { body = await res.json(); msg = body.message || body.error || msg; } catch {}
+      // 409 같은 응답은 본문에 다음 단계에 쓸 내용이 있다(매매 값 저장의 미리보기).
+      throw Object.assign(new Error(msg), { status: res.status, body });
     }
     if (res.status === 204) return null;
     const ct = res.headers.get('content-type') || '';
@@ -60,6 +62,11 @@ const TideAPI = {
   // 감시 목록. 저장하면 도는 봇은 그 목록으로 바뀌고({status: 'tickers_changed'}), 멈춘 봇은 다음 시작이 그 목록으로 뜬다({status: 'saved'}).
   botTickers: () => TideAPI._fetch('/api/bot/tickers'),
   // keepalive 는 탭을 닫을 때 보내는 저장이 페이지와 함께 끊기지 않게 한다.
+  // 매매 값. 빠진 항목은 서버 기본값(env)이다. 보유 포지션이 바뀌면 미리본 내용의 confirm_token 이 없으면 409 와
+  // { changes, confirm_token } 를 돌려준다 — 확인은 그 토큰과 같은 본문으로 다시 보낸다.
+  botParams: () => TideAPI._fetch('/api/bot/params'),
+  saveBotParams: (params, confirmToken = null) =>
+    TideAPI._fetch('/api/bot/params', { method: 'PUT', body: JSON.stringify({ ...params, confirm_token: confirmToken }) }),
   saveBotTickers: (tickers, keepalive = false) =>
     TideAPI._fetch('/api/bot/tickers', { method: 'PUT', body: JSON.stringify({ tickers }), keepalive }),
   // 응답은 { markets: [{ market: 'KRW-BTC', korean_name, english_name }] } 이다. 목록을 못 받았으면 503.
