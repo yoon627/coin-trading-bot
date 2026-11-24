@@ -86,6 +86,50 @@ function useAPI(fn, deps = [], intervalMs = null) {
   return { data, error, loading, reload };
 }
 
+// 시세판 SSE. 200 스트림이 끊기면 브라우저가 retry 대로 다시 붙지만, 503·429·502·401 처럼 200 이 아닌 응답 뒤에는
+// 스스로 다시 붙지 않아(EventSource 규칙) 1~3초에서 시작해 30초까지 늘려 가며(지터) 손수 다시 연다. 먼저 로그인을 확인한다 — 401 이면 로그인 화면으로 간다.
+function useMarketStream() {
+  const [rows, setRows] = React.useState(() => new Map());
+  const [status, setStatus] = React.useState('connecting');
+  const [lastAt, setLastAt] = React.useState(null);
+
+  React.useEffect(() => {
+    let es = null, timer = null, wait = 2000, closed = false;
+    const apply = (data, replace) => {
+      setLastAt(Date.now());
+      setRows(prev => {
+        const next = replace ? new Map() : new Map(prev);
+        data.rows.forEach(r => next.set(r.m, r));
+        (data.removed || []).forEach(m => next.delete(m));
+        return next;
+      });
+    };
+    const retry = () => {
+      if (closed) return;
+      setStatus('retrying');
+      const delay = Math.min(30000, wait * (0.5 + Math.random()));
+      wait = Math.min(wait * 2, 30000);
+      timer = setTimeout(() => TideAPI.me().then(open, retry), delay);
+    };
+    const open = () => {
+      if (closed) return;
+      es = new EventSource('/api/market/stream');
+      es.addEventListener('snapshot', e => { wait = 2000; setStatus('live'); apply(JSON.parse(e.data), true); });
+      es.addEventListener('delta', e => apply(JSON.parse(e.data), false));
+      es.onerror = () => {
+        if (es.readyState !== EventSource.CLOSED) { setStatus('retrying'); return; }
+        es.close();
+        retry();
+      };
+    };
+    open();
+    return () => { closed = true; clearTimeout(timer); if (es) es.close(); };
+  }, []);
+
+  return { rows, status, lastAt };
+}
+
 window.TideAPI = TideAPI;
+window.useMarketStream = useMarketStream;
 window.fmtKRW = fmtKRW; window.fmtPct = fmtPct; window.fmtNum = fmtNum;
 window.useAPI = useAPI;

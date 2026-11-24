@@ -61,6 +61,11 @@ input[type="range"] { accent-color: var(--tide-primary); }
 .tide-scroll::-webkit-scrollbar-track { background: transparent; }
 
 @keyframes tide-spin { to { transform: rotate(360deg); } }
+/* 시세판: 값이 바뀐 칸을 잠깐 칠한다. key 를 값으로 두어 바뀔 때마다 다시 그린다. */
+@keyframes tide-flash-up { from { background: var(--up-soft); } to { background: transparent; } }
+@keyframes tide-flash-down { from { background: var(--down-soft); } to { background: transparent; } }
+.flash-up { animation: tide-flash-up .8s ease-out; border-radius: 4px; }
+.flash-down { animation: tide-flash-down .8s ease-out; border-radius: 4px; }
 .tide-spinner {
   width: 18px; height: 18px; border: 2px solid var(--ink-200);
   border-top-color: var(--tide-primary); border-radius: 50%;
