@@ -4,6 +4,7 @@ import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
+import com.trading.bot.events.UserEventHub
 import com.trading.bot.notification.TradeNotificationPayload
 import com.trading.bot.notification.TradeNotificationQueued
 import com.trading.bot.persistence.TradeNotificationOutboxRepository
@@ -136,6 +137,28 @@ class TradeExecutionServiceTest {
         assertEquals(1.5, payload.pnlPercent)
         assertFalse(row.captured.payload.contains("webhook"))
         assertEquals(listOf<Any>(TradeNotificationQueued), events)
+    }
+
+    // 신호는 커밋된 뒤에만 — 롤백된 체결을 화면이 다시 읽어도 바뀐 것이 없다.
+    @Test
+    fun `a recorded fill signals trade and state, a fill already recorded only state, a failed commit nothing`() = runTest {
+        val hub = UserEventHub()
+        val signaling = TradeExecutionService(outboxRepository, orderLedger, transactionalOperator, TradingProperties(), userEvents = hub)
+
+        signaling.commitFill(persistState = {}, record = record("fill-3"))
+        assertEquals(1L, hub.versions(1L)[UserEventHub.Kind.TRADE.ordinal])
+        assertEquals(1L, hub.versions(1L)[UserEventHub.Kind.STATE.ordinal])
+
+        coEvery { orderLedger.recordFill(any(), any(), any()) } returns OrderLedger.FillRecord.AlreadyRecorded
+        signaling.commitFill(persistState = {}, record = record("fill-3"))
+        assertEquals(1L, hub.versions(1L)[UserEventHub.Kind.TRADE.ordinal])
+        assertEquals(2L, hub.versions(1L)[UserEventHub.Kind.STATE.ordinal])
+
+        coEvery { orderLedger.recordFill(any(), any(), any()) } returns OrderLedger.FillRecord.Recorded(12L)
+        every { outboxRepository.save(any()) } returns Mono.error(IllegalStateException("db down"))
+        assertTrue(runCatching { signaling.commitFill(persistState = {}, record = record("fill-4")) }.isFailure)
+        assertEquals(1L, hub.versions(1L)[UserEventHub.Kind.TRADE.ordinal])
+        assertEquals(2L, hub.versions(1L)[UserEventHub.Kind.STATE.ordinal])
     }
 
     @Test

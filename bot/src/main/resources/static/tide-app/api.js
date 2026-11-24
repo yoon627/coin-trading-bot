@@ -112,12 +112,16 @@ function useAPI(fn, deps = [], intervalMs = null) {
   const [error, setError] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
 
+  // 신호·polling·버튼이 겹쳐 읽으면 늦게 온 옛 응답이 새 응답을 덮지 않게, 지금 보이는 것보다 나중에 보낸 요청의 응답만 쓴다.
+  const seq = React.useRef(0);
+  const shown = React.useRef(0);
   const reload = React.useCallback(async () => {
+    const mine = ++seq.current;
     try {
       setError(null);
       const d = await fn();
-      setData(d);
-    } catch (e) { setError(e.message || String(e)); }
+      if (mine > shown.current) { shown.current = mine; setError(null); setData(d); }
+    } catch (e) { if (mine > shown.current) { shown.current = mine; setError(e.message || String(e)); } }
     finally { setLoading(false); }
     // eslint-disable-next-line
   }, deps);
@@ -192,6 +196,90 @@ function useMarketStream(enabled = true) {
   return { rows, status, lastAt, fresh: enabled ? freshRows(status, lastAt, rows, now) : null };
 }
 
+// 내 체결·봇 상태가 바뀌었다는 신호(SSE /api/user/events). 탭마다 연결 하나를 화면들이 나눠 쓰고, 듣는 화면이 없으면 닫는다.
+// 데이터는 오지 않는다 — 화면이 REST 로 다시 읽는다. 끊기면 시세판 스트림과 같은 규칙으로 다시 연다. 연결·재연결마다 hello 가 온다.
+// 앱은 화면을 하나만 띄우므로 화면을 옮길 때 듣는 쪽이 잠깐 0 이 된다 — 바로 닫지 않고 30초 기다려, 옮길 때마다 다시 붙지 않는다.
+const userEvents = (() => {
+  const listeners = new Set();
+  const liveListeners = new Set();
+  let es = null, timer = null, idle = null, wait = 2000, live = false;
+  const setLive = v => { if (live !== v) { live = v; liveListeners.forEach(f => f(v)); } };
+  const dispatch = kind => listeners.forEach(f => f(kind));
+  const retry = () => {
+    if (es) return;
+    setLive(false);
+    if (!listeners.size) return;
+    const delay = Math.min(30000, wait * (0.5 + Math.random()));
+    wait = Math.min(wait * 2, 30000);
+    timer = setTimeout(() => { timer = null; TideAPI.me().then(open, retry); }, delay);
+  };
+  const open = () => {
+    if (!listeners.size || es) return;
+    es = new EventSource('/api/user/events');
+    es.addEventListener('hello', () => { wait = 2000; setLive(true); dispatch('hello'); });
+    es.addEventListener('trade', () => dispatch('trade'));
+    es.addEventListener('state', () => dispatch('state'));
+    es.onerror = () => {
+      if (es.readyState !== EventSource.CLOSED) { setLive(false); return; }
+      es.close();
+      es = null;
+      retry();
+    };
+  };
+  const close = () => { clearTimeout(timer); timer = null; if (es) { es.close(); es = null; } setLive(false); };
+  return {
+    subscribe(fn) {
+      listeners.add(fn);
+      clearTimeout(idle);
+      if (!es && !timer) open();
+      return () => {
+        listeners.delete(fn);
+        if (!listeners.size) { clearTimeout(idle); idle = setTimeout(() => { if (!listeners.size) close(); }, 30000); }
+      };
+    },
+    onLive(fn) { liveListeners.add(fn); fn(live); return () => liveListeners.delete(fn); },
+  };
+})();
+
+// 신호가 붙어 있는가. 붙어 있으면 화면은 polling 을 늘린다(신호를 잃었을 때만 메우면 된다).
+function useUserEventsLive(enabled = true) {
+  const [live, setLive] = React.useState(false);
+  React.useEffect(() => (enabled ? userEvents.onLive(setLive) : undefined), [enabled]);
+  return enabled && live;
+}
+
+// kinds(trade·state) 신호나 hello 가 오면 reload 한다. 같은 대상은 2초에 한 번까지(나머지는 2초 뒤 한 번으로 묶는다) —
+// 화면 REST 는 IP 당 분당 60회 한도와 업비트 계정 한도를 엔진과 함께 쓴다. 숨긴 탭은 읽지 않고, 다시 보일 때 한 번 읽는다.
+// enabled 가 false 면(업비트 키가 없는 사용자 — 도는 봇이 없다) 연결하지 않는다.
+const USER_EVENT_GAP_MS = 2000;
+function useUserEventReload(enabled, kinds, reload) {
+  const reloadRef = React.useRef(reload);
+  reloadRef.current = reload;
+  const key = kinds.join(',');
+  React.useEffect(() => {
+    if (!enabled) return undefined;
+    const wanted = new Set(['hello', ...key.split(',')]);
+    let last = 0, trailing = null, missed = false;
+    const run = () => {
+      trailing = null;
+      if (document.hidden) { missed = true; return; }
+      last = Date.now();
+      reloadRef.current();
+    };
+    const fire = () => {
+      if (document.hidden) { missed = true; return; }
+      if (trailing) return;
+      const wait = last + USER_EVENT_GAP_MS - Date.now();
+      if (wait <= 0) run(); else trailing = setTimeout(run, wait);
+    };
+    const onVisible = () => { if (!document.hidden && missed) { missed = false; fire(); } };
+    // 첫 연결의 hello 도 읽는다 — 화면이 읽은 뒤 스트림이 기준을 잡기 전의 변화는 hello 로만 메워진다.
+    const off = userEvents.subscribe(kind => { if (wanted.has(kind)) fire(); });
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { off(); clearTimeout(trailing); document.removeEventListener('visibilitychange', onVisible); };
+  }, [enabled, key]);
+}
+
 // /api/portfolio 의 보유 목록에 시세판 실시간 가격을 덧씌운다. 식은 서버(PortfolioController)와 같다.
 // 시세판에 없는 코인(목록 밖·스트림 없음)은 서버가 준 값을 그대로 둔다.
 function liveHoldings(portfolio, rows) {
@@ -216,5 +304,7 @@ window.liveHoldings = liveHoldings;
 window.freshRows = freshRows;
 window.searchMarkets = searchMarkets;
 window.useMarketStream = useMarketStream;
+window.useUserEventsLive = useUserEventsLive;
+window.useUserEventReload = useUserEventReload;
 window.fmtKRW = fmtKRW; window.fmtPct = fmtPct; window.fmtNum = fmtNum;
 window.useAPI = useAPI;

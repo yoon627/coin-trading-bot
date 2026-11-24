@@ -42,9 +42,11 @@ class PositionManagerStateVersionTest {
 
     // 체결 커밋의 트랜잭션. 롤백이면 저장소도 커밋 전 버전으로 돌린다.
     private var commitOutcome: (suspend (suspend () -> Unit) -> Boolean) = { persist -> persist(); true }
+    private var savedSignals = 0
     private val manager = PositionManager(
         upbit, TradingProperties(), stateService, 1L,
         commitFill = { persist, _: TradeRecord -> commitOutcome(persist) },
+        stateSaved = { savedSignals++ },
     )
 
     private val logger = LoggerFactory.getLogger("com.trading.bot") as Logger
@@ -102,6 +104,8 @@ class PositionManagerStateVersionTest {
         assertFalse(state.versionConflict)
         assertEquals(store.versions["KRW-BTC"], state.rowVersion)
         assertTrue(store.writes >= 5, "선기록·uuid·체결·고점·매도 선기록·uuid·체결")
+        // 체결 둘은 체결 커밋(TradeExecutionService)이 알린다.
+        assertEquals(store.writes - 2, savedSignals, "그 밖의 커밋된 저장마다 화면 신호 하나")
         assertTrue(errors().isEmpty(), errors().toString())
     }
 
@@ -165,6 +169,7 @@ class PositionManagerStateVersionTest {
         manager.sell("KRW-BTC", state, price, SellReason.STOP_LOSS)
 
         assertEquals(writesAtConflict, store.writes, "충돌 뒤에는 DB 를 부르지 않는다")
+        assertEquals(writesAtConflict, savedSignals, "저장되지 않은 상태는 신호도 없다")
         assertEquals("ask", sent.single().side, "손절은 기록이 막혀도 나간다")
         assertTrue(state.hasPendingSell(), "체결을 기록할 수 없어 pending 이 남는다")
         assertEquals(1, errors().size, errors().toString())

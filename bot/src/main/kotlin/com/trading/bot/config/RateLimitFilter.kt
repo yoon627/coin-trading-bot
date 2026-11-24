@@ -31,6 +31,9 @@ class RateLimitFilter(
         // 시세판 스트림 (재)연결. API 몫과 나눠, 재연결이 몰려도 다른 화면의 폴링을 막지 않는다.
         private const val MAX_STREAM_REQUESTS_PER_MINUTE = 20
         private const val STREAM_PATH = "/api/market/stream"
+
+        // 사용자 이벤트 스트림 (재)연결. 시세판 스트림과도 나눠, 한쪽 재연결이 다른 쪽을 막지 않는다.
+        private const val EVENTS_PATH = "/api/user/events"
     }
 
     override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
@@ -41,6 +44,7 @@ class RateLimitFilter(
         val (bucket, limit) = when {
             path.startsWith("/api/auth") -> "auth" to MAX_AUTH_REQUESTS_PER_MINUTE
             path == STREAM_PATH -> "stream" to MAX_STREAM_REQUESTS_PER_MINUTE
+            path == EVENTS_PATH -> "events" to MAX_STREAM_REQUESTS_PER_MINUTE
             else -> "api" to MAX_REQUESTS_PER_MINUTE
         }
         return if (isRateLimited("$bucket:${clientIp(exchange)}", limit)) reject(exchange, limit) else chain.filter(exchange)

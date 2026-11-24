@@ -56,6 +56,8 @@ class TradingEngine(
     private val rules: MarketRules = UpbitMarketRules,
     // 끄면 체결을 받지 않아 바퀴만 판단한다.
     private val priceEvents: PriceEventsProperties = PriceEventsProperties(),
+    /** 엔진 상태가 바뀌었다(화면 신호) — 작업자가 정지 없이 끝났을 때. 던지지 않는 것을 준다. */
+    private val statusChanged: () -> Unit = {},
     // 시험이 가상 시간으로 시계·작업자를 돌린다.
     dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
@@ -361,6 +363,7 @@ class TradingEngine(
         if (released) return
         if (running.get()) {
             deadPart = part
+            statusChanged()
             log.error("[ENGINE DEAD] {} for user {} ({}) ended without stop — 손절·청산 평가가 멈췄다. 봇을 정지한 뒤 다시 시작한다", part, userId, username, cause)
         } else if (cause != null && cause !is CancellationException) {
             // 정지 중 후처리에서 난 Error 는 scope 처리기가 버리므로 여기서만 남는다.

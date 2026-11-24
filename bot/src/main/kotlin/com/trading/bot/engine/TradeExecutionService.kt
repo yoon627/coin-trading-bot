@@ -1,5 +1,6 @@
 package com.trading.bot.engine
 
+import com.trading.bot.events.UserEventHub
 import com.trading.bot.domain.FeeBasis
 import com.trading.bot.domain.FeeKind
 import com.trading.bot.domain.TradePnl
@@ -26,6 +27,7 @@ class TradeExecutionService(
     private val tradingProperties: TradingProperties,
     private val events: ApplicationEventPublisher = ApplicationEventPublisher {},
     private val clock: Clock = Clock.systemUTC(),
+    private val userEvents: UserEventHub? = null,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -101,6 +103,9 @@ class TradeExecutionService(
             )
             throw e
         }
+        // 커밋된 뒤에만 알린다(롤백이면 위에서 던졌다). 이미 기록된 체결의 재확인도 상태(대기 해제)는 커밋한다.
+        userEvents?.publish(record.userId, UserEventHub.Kind.STATE)
+        if (recorded) userEvents?.publish(record.userId, UserEventHub.Kind.TRADE)
         // 커밋된 뒤에만 깨운다. 발송기가 못 받아도 행이 남아 주기 실행이 보낸다 — 그래서 여기서 실패해도 커밋 결과를 바꾸지 않는다.
         if (recorded) {
             try {

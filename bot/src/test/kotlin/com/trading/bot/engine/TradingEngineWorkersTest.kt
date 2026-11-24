@@ -102,8 +102,11 @@ class TradingEngineWorkersTest {
         marketDataStore = marketDataStore,
         clock = virtualClock(),
         priceEvents = priceEvents,
+        statusChanged = { statusSignals++ },
         dispatcher = StandardTestDispatcher(testScheduler),
     )
+
+    private var statusSignals = 0
 
     private fun TestScope.trade(market: String, price: Double, exchange: Exchange = Exchange.UPBIT, at: Instant = virtualClock().instant()) =
         NormalizedTrade(exchange, market, price, volume = 1.0, tradeTime = at, sequentialId = seq++)
@@ -200,6 +203,7 @@ class TradingEngineWorkersTest {
 
             assertTrue(engine.isLoopAlive())
             assertTrue(errors().none { "ENGINE DEAD" in it }, errors().toString())
+            assertEquals(0, statusSignals)
             coVerify { positionManager.persistState(match { it.ticker == "KRW-OLD" && it.buyDate == null }) }
         } finally {
             engine.stop()
@@ -215,6 +219,7 @@ class TradingEngineWorkersTest {
             withTimeout(5_000) { while (engine.isLoopAlive()) delay(20) }
 
             assertTrue(errors().any { "ENGINE DEAD" in it && "KRW-BTC" in it }, errors().toString())
+            assertEquals(1, statusSignals, "죽은 엔진을 화면이 곧바로 보게 한 번 알린다")
             assertTrue(engine.isRunning(), "정지하기 전까지 running 은 그대로다")
         } finally {
             engine.stop()

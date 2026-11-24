@@ -3,10 +3,6 @@ package com.trading.bot.marketdata
 import com.trading.common.domain.MarketPair
 import com.trading.common.domain.NormalizedTicker
 import java.time.Duration
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +12,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.web.context.WebServerGracefulShutdownLifecycle
 import org.springframework.context.SmartLifecycle
@@ -55,66 +50,20 @@ class MarketStream internal constructor(
 
     data class Payload(val rows: List<Row>, val removed: List<String> = emptyList())
 
-    /** 열린 스트림 한 자리. 두 번 돌려줘도 한 번만 센다. */
-    inner class Lease internal constructor(private val userId: Long) {
-        private val released = AtomicBoolean(false)
-
-        fun release() {
-            if (!released.compareAndSet(false, true)) return
-            total.decrementAndGet()
-            perUser.computeIfPresent(userId) { _, count -> (count - 1).takeIf { it > 0 } }
-        }
-    }
-
-    private val total = AtomicInteger()
-    private val perUser = ConcurrentHashMap<Long, Int>()
-
-    private val log = LoggerFactory.getLogger(javaClass)
-    private val lastRefusalWarnAt = AtomicLong()
-
-    @Volatile
-    private var closing = false
+    private val slots = StreamSlots("Market stream", maxConnections, maxPerUser)
 
     @Volatile
     private var running = false
 
+    private val closing get() = slots.closing
+
     /** 지금 이 사용자에게 자리가 있는가. 응답 전에 503 을 정하는 데만 쓴다 — 자리는 본문을 읽기 시작할 때 [events] 가 잡는다. */
-    fun hasRoom(userId: Long): Boolean {
-        val room = !closing && total.get() < maxConnections && (perUser[userId] ?: 0) < maxPerUser
-        if (!room) refused(userId)
-        return room
-    }
+    fun hasRoom(userId: Long): Boolean = slots.hasRoom(userId)
 
     /** 자리가 있으면 잡는다. 없으면(전체·사용자 상한, 종료 중) null. */
-    internal fun tryOpen(userId: Long): Lease? {
-        if (closing) return refused(userId)
-        if (total.incrementAndGet() > maxConnections) {
-            total.decrementAndGet()
-            return refused(userId)
-        }
-        var admitted = false
-        perUser.compute(userId) { _, count ->
-            val next = (count ?: 0) + 1
-            if (next > maxPerUser) count else next.also { admitted = true }
-        }
-        if (!admitted) {
-            total.decrementAndGet()
-            return refused(userId)
-        }
-        return Lease(userId)
-    }
+    internal fun tryOpen(userId: Long): StreamSlots.Lease? = slots.tryOpen(userId)
 
-    // 상한에 닿은 것이 보이게 남긴다(1분에 한 번).
-    private fun refused(userId: Long): Lease? {
-        val now = System.currentTimeMillis()
-        val last = lastRefusalWarnAt.get()
-        if (!closing && now - last >= 60_000 && lastRefusalWarnAt.compareAndSet(last, now)) {
-            log.warn("Market stream refused a connection: open={}/{}, user {} open={}/{}", total.get(), maxConnections, userId, perUser[userId] ?: 0, maxPerUser)
-        }
-        return null
-    }
-
-    fun openConnections(): Int = total.get()
+    fun openConnections(): Int = slots.openConnections()
 
     /**
      * 사용자 스트림. 자리는 본문을 읽기 시작할 때 잡고 끝날 때 돌려준다 — HEAD 처럼 본문을 읽지 않는 요청이나 쓰기 전에 끊긴 요청은
@@ -156,12 +105,12 @@ class MarketStream internal constructor(
         Row(MarketPair.toUpbitFormat(t.market), t.price, t.changeRate24h, t.quoteVolume24h, t.timestamp.toEpochMilli())
 
     override fun start() {
-        closing = false
+        slots.closing = false
         running = true
     }
 
     override fun stop() {
-        closing = true
+        slots.closing = true
         running = false
     }
 

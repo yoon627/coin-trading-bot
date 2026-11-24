@@ -96,6 +96,15 @@ class RateLimitFilterTest {
         assertEquals(1, send("/api/market/stream").chainCalls)
     }
 
+    @Test
+    fun `사용자 이벤트 스트림은 시세판 스트림·API 와 따로 분당 20회를 센다`() {
+        repeat(20) { send("/api/market/stream") }
+        repeat(20) { assertEquals(1, send("/api/user/events").chainCalls, "${it + 1}번째는 한도 안") }
+
+        assertTrue(send("/api/user/events").limited)
+        assertEquals(1, send().chainCalls)
+    }
+
     // Caddy 가 X-Forwarded-For 를 자신이 본 peer IP 로 덮어쓴다. 체인이면 첫 항목이 클라이언트다.
     @Test
     fun `클라이언트는 X-Forwarded-For 의 첫 값으로 가른다`() {

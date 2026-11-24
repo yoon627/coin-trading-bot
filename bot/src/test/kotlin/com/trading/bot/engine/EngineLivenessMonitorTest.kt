@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.trading.bot.events.UserEventHub
 import com.trading.common.domain.Exchange
 import io.mockk.every
 import io.mockk.mockk
@@ -26,7 +27,8 @@ class EngineLivenessMonitorTest {
     private var stalled = true
 
     // TradingManagers 가 만들 때 manager.exchange 를 읽으므로 setup 뒤에 만든다.
-    private val monitor by lazy { EngineLivenessMonitor(TradingManagers(listOf(manager)), Clock.fixed(now, ZoneOffset.UTC)) }
+    private val hub = UserEventHub()
+    private val monitor by lazy { EngineLivenessMonitor(TradingManagers(listOf(manager)), Clock.fixed(now, ZoneOffset.UTC), hub) }
 
     private val logger = LoggerFactory.getLogger(EngineLivenessMonitor::class.java) as Logger
     private val appender = ListAppender<ILoggingEvent>()
@@ -53,6 +55,7 @@ class EngineLivenessMonitorTest {
     fun `같은 멈춤은 한 번만 알리고 회복하면 INFO, 다시 멈추면 또 알린다`() {
         repeat(3) { monitor.check() }
         assertEquals(1, lines(Level.ERROR).size)
+        assertEquals(1L, hub.versions(4L)[UserEventHub.Kind.STATE.ordinal], "멈춤 한 번에 신호 한 번")
         val alert = lines(Level.ERROR).single()
         assert(alert.contains("[ENGINE STALLED]") && alert.contains("user 4") && alert.contains("UPBIT")) { alert }
 
@@ -60,6 +63,7 @@ class EngineLivenessMonitorTest {
         monitor.check()
         monitor.check()
         assertEquals(1, lines(Level.INFO).count { it.contains("recovered") })
+        assertEquals(2L, hub.versions(4L)[UserEventHub.Kind.STATE.ordinal], "회복도 화면에 알린다")
 
         stalled = true
         monitor.check()
