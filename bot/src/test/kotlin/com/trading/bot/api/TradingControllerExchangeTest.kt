@@ -8,6 +8,7 @@ import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
+import com.trading.bot.marketdata.MarketCatalog
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.domain.Exchange
 import io.mockk.coEvery
@@ -49,8 +50,11 @@ class TradingControllerExchangeTest {
         )
     }
 
+    // 업비트 목록에는 다 있다고 본다 — 목록 검증은 TradingControllerTest 가 본다.
+    private val catalog = mockk<MarketCatalog> { coEvery { unknown(any()) } returns emptyList() }
+
     private fun client(managers: TradingManagers = TradingManagers.of(Exchange.UPBIT to upbit)): WebTestClient = WebTestClient
-        .bindToController(TradingController(managers, userRepository, RequestValidators(), userSecretsService))
+        .bindToController(TradingController(managers, userRepository, RequestValidators(), userSecretsService, catalog))
         .webFilter<WebTestClient.ControllerSpec>(authFilter())
         .build()
 
@@ -110,6 +114,7 @@ class TradingControllerExchangeTest {
 
         coVerify(exactly = 1) { paper.startBot(1L, listOf("KRX-005930")) }
         coVerify(exactly = 0) { upbit.startBot(any(), any()) }
+        coVerify(exactly = 0) { catalog.unknown(any()) }
     }
 
     @Test

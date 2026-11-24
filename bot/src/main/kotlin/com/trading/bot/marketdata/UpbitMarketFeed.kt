@@ -209,16 +209,25 @@ class UpbitMarketFeed internal constructor(
         }
     }
 
-    /** 업비트 KRW 마켓 전체(내부 표기). market 그룹 한도(IP 당 초당 10회) 안에서 하루 한 번 부른다. */
-    suspend fun getKrwMarkets(): List<String> =
+    /** 업비트 KRW 마켓 전체(내부 표기). 시세판과 [MarketCatalog] 가 하루 한 번쯤(실패하면 1분·5분 간격) 불러 market 그룹 한도(IP 당 초당 10회)에 한참 못 미친다. */
+    suspend fun getKrwMarkets(): List<String> = getKrwMarketListings().map { it.market }
+
+    /** [getKrwMarkets] 와 같은 마켓을 한글·영문 이름과 함께. 이름이 없으면 빈 문자열이다. */
+    suspend fun getKrwMarketListings(): List<MarketListing> =
         upbitWebClient.get()
             .uri("/v1/market/all")
             .retrieve()
             .bodyToMono<List<JsonNode>>()
             .awaitSingle()
-            .mapNotNull { node -> node["market"]?.asText()?.takeIf { it.startsWith("KRW-") } }
-            .filter { MarketPair.isValid(Exchange.UPBIT, it) }
-            .map { MarketPair.normalize(Exchange.UPBIT, it) }
+            .mapNotNull { node ->
+                val code = node["market"]?.asText()?.takeIf { it.startsWith("KRW-") && MarketPair.isValid(Exchange.UPBIT, it) }
+                    ?: return@mapNotNull null
+                MarketListing(
+                    market = MarketPair.normalize(Exchange.UPBIT, code),
+                    koreanName = node["korean_name"]?.asText().orEmpty(),
+                    englishName = node["english_name"]?.asText().orEmpty(),
+                )
+            }
 
     suspend fun getCandles(market: String, interval: CandleInterval, count: Int): List<NormalizedCandle> {
         val upbitMarket = MarketPair.toUpbitFormat(market)

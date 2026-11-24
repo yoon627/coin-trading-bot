@@ -121,34 +121,102 @@ function Dashboard({ user, setActive }) {
   );
 }
 
+const MAX_TICKERS = 20;
+
+// 감시 코인을 이름·코드로 검색해 태그로 고른다. 목록이 아직 없거나 못 받으면 KRW-코드를 그대로 입력해 Enter 로 넣는다(서버가 본다).
+function TickerPicker({ value, onChange }) {
+  const [markets, setMarkets] = React.useState(null);
+  const [failed, setFailed] = React.useState(false);
+  const [query, setQuery] = React.useState('');
+  const [cursor, setCursor] = React.useState(0);
+  const [open, setOpen] = React.useState(false);
+  React.useEffect(() => {
+    TideAPI.markets().then(r => setMarkets(r?.markets || []), () => setFailed(true));
+  }, []);
+  const names = React.useMemo(() => new Map((markets || []).map(m => [m.market, m.korean_name])), [markets]);
+  const hits = open ? searchMarkets(markets, query, value) : [];
+  const full = value.length >= MAX_TICKERS;
+  const add = (code) => {
+    if (!code || full || value.includes(code)) return;
+    onChange([...value, code]);
+    setQuery(''); setCursor(0);
+  };
+  const remove = (code) => onChange(value.filter(c => c !== code));
+  const onKeyDown = (e) => {
+    // 한글 조합 중의 Enter 는 조합을 끝내는 키다 — 여기서 넣으면 조합이 끝난 뒤의 Enter 로 한 번 더 들어간다.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Escape') { setOpen(false); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setCursor(c => Math.min(c + 1, Math.max(hits.length - 1, 0))); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setCursor(c => Math.max(c - 1, 0)); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (hits[cursor]) add(hits[cursor].market);
+      else if ((failed || markets === null) && /^KRW-[A-Z0-9]+$/.test(query.trim().toUpperCase())) add(query.trim().toUpperCase());
+    } else if (e.key === 'Backspace' && !query && value.length) remove(value[value.length - 1]);
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <div className="tide-input" style={{ height: 'auto', minHeight: 44, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '6px 10px' }}>
+        {value.map(code => (
+          <span key={code} data-ticker={code} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 8,
+                                    background: 'var(--tide-primary-soft)', color: 'var(--tide-primary)', fontSize: 12, fontWeight: 700 }}>
+            {names.get(code) ? `${names.get(code)} ` : ''}{code.replace(/^KRW-/, '')}
+            <button type="button" aria-label={`${code} 빼기`} onClick={() => remove(code)}
+                    style={{ border: 'none', background: 'none', color: 'inherit', cursor: 'pointer', padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
+          </span>
+        ))}
+        <input value={query} disabled={full} onKeyDown={onKeyDown}
+               onChange={e => { setQuery(e.target.value); setCursor(0); setOpen(true); }}
+               onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+               placeholder={full ? `최대 ${MAX_TICKERS}개` : failed ? 'KRW-BTC 처럼 입력하고 Enter' : '코인 이름·코드 검색 (예: 비트코인, BTC)'}
+               style={{ flex: 1, minWidth: 140, border: 'none', outline: 'none', fontSize: 14, fontWeight: 600, background: 'transparent' }}/>
+      </div>
+      {hits.length > 0 && (
+        <div role="listbox" style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 10, background: '#fff',
+                                     border: '1px solid var(--ink-200)', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.08)', overflow: 'hidden' }}>
+          {hits.map((m, i) => (
+            <div key={m.market} role="option" aria-selected={i === cursor} onMouseDown={e => { e.preventDefault(); add(m.market); }}
+                 onMouseEnter={() => setCursor(i)}
+                 style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', cursor: 'pointer', fontSize: 13,
+                          background: i === cursor ? 'var(--ink-50)' : '#fff' }}>
+              <span style={{ fontWeight: 700 }}>{m.korean_name || m.market}</span>
+              <span style={{ color: 'var(--ink-500)' }}>{m.market.replace(/^KRW-/, '')} · {m.english_name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {failed && <div style={{ fontSize: 11, color: 'var(--ink-500)', marginTop: 6 }}>코인 목록을 불러오지 못했습니다 — 코드를 직접 입력하세요.</div>}
+    </div>
+  );
+}
+
 function BotPage({ user, setActive }) {
   const status = useAPI(() => TideAPI.botStatus().catch(() => null), [], 3000);
   // 고정 기본값을 두면 그대로 시작했을 때 목록이 그 값 하나로 줄어 저장되므로 서버 기본 목록으로 채운다.
-  const [tickers, setTickers] = React.useState('');
+  const [tickers, setTickers] = React.useState([]);
   const [touched, setTouched] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState(null);
   // 폴링이 실패해 status 가 비어도 수정 여부 판정이 흔들리지 않게 마지막 기본값을 따로 둔다.
-  const prefilled = React.useRef('');
-  const defaultTickers = (status.data?.default_tickers || []).join(', ');
-  const tickerList = (text) => [...new Set(text.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))];
+  const prefilled = React.useRef([]);
+  const defaultKey = (status.data?.default_tickers || []).join(',');
   const sameTickers = (a, b) => [...a].sort().join(',') === [...b].sort().join(',');
 
-  // 사용자가 고친 뒤에는 빈칸이라도 폴링이 덮어쓰지 않는다.
+  // 사용자가 고친 뒤에는 비워도 폴링이 덮어쓰지 않는다.
   React.useEffect(() => {
-    if (!touched && defaultTickers) {
-      prefilled.current = defaultTickers;
-      setTickers(defaultTickers);
+    if (!touched && defaultKey) {
+      prefilled.current = defaultKey.split(',');
+      setTickers(prefilled.current);
     }
-  }, [defaultTickers, touched]);
+  }, [defaultKey, touched]);
+  const changeTickers = (next) => { setTouched(true); setTickers(next); };
 
   const start = async () => {
     setBusy(true);
     try {
       // 기본 목록과 같거나 비었으면 tickers 를 빼서, 이미 도는 봇에 409 대신 already_running 을 받는다.
-      const list = tickerList(tickers);
       const req = {};
-      if (list.length && !sameTickers(list, tickerList(prefilled.current))) req.tickers = list;
+      if (tickers.length && !sameTickers(tickers, prefilled.current)) req.tickers = tickers;
       const res = await TideAPI.botStart(req);
       setToast(res?.status === 'already_running'
         ? { msg: `이미 실행 중입니다 (전략: ${res.strategy})`, tone: 'warn' }
@@ -182,9 +250,8 @@ function BotPage({ user, setActive }) {
           </div>
 
           <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 8 }}>거래쌍 (쉼표로 구분)</div>
-            <input className="tide-input" value={tickers} onChange={e => { setTouched(true); setTickers(e.target.value); }}
-                   placeholder="비워 두면 서버 기본 목록 (예: KRW-BTC, KRW-ETH)"/>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 8 }}>거래쌍 (최대 {MAX_TICKERS}개)</div>
+            <TickerPicker value={tickers} onChange={changeTickers}/>
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginTop: 24 }}>

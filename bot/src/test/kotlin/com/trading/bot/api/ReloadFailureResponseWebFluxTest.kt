@@ -41,7 +41,7 @@ class ReloadFailureResponseWebFluxTest {
 
     private fun userClient(): WebTestClient = WebTestClient
         .bindToController(
-            TradingController(TradingManagers.of(Exchange.UPBIT to userTradingManager), userRepository, requestValidators, userSecretsService),
+            TradingController(TradingManagers.of(Exchange.UPBIT to userTradingManager), userRepository, requestValidators, userSecretsService, mockk(relaxed = true)),
         )
         .webFilter<WebTestClient.ControllerSpec>(authFilter())
         .build()

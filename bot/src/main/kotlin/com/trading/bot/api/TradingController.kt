@@ -1,5 +1,6 @@
 package com.trading.bot.api
 
+import com.trading.bot.marketdata.MarketCatalog
 import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.reloadFailureMessage
@@ -31,6 +32,7 @@ class TradingController(
     private val userRepository: UserRepository,
     private val requestValidators: RequestValidators,
     private val userSecretsService: UserSecretsService,
+    private val marketCatalog: MarketCatalog,
 ) {
 
     @PostMapping("/bot/start")
@@ -42,7 +44,16 @@ class TradingController(
         val target = requestValidators.parseExchange(exchange)
         val manager = managers.get(target)
         val tickers = req?.tickers?.let { requestValidators.normalizeMarkets(target, it) }
+        if (target == Exchange.UPBIT && tickers != null) requireListedOnUpbit(tickers)
         return failOnError(persisting { manager.startBot(userId, tickers) })
+    }
+
+    // 업비트는 없는 마켓 구독을 조용히 무시해 봇이 그 종목에서 아무것도 하지 않는다. 목록을 못 받았으면 형식 검사만 한다.
+    private suspend fun requireListedOnUpbit(tickers: List<String>) {
+        val unknown = marketCatalog.unknown(tickers)
+        if (!unknown.isNullOrEmpty()) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown markets: ${unknown.joinToString(", ")}")
+        }
     }
 
     // UserTradingManager 는 전제 조건 실패를 {"error": ...} 로 돌려준다. 클라이언트가 상태 코드로 분기하도록 4xx 로 바꾸고,
