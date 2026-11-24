@@ -201,4 +201,21 @@ class UpbitMarketFeedParsingTest {
 
         assertEquals(listOf("BTC/KRW", "T/KRW"), UpbitMarketFeed(client, ObjectMapper()).getKrwMarkets())
     }
+
+    // 검색 화면용: 같은 KRW 마켓을 한글·영문 이름과 함께. 이름이 없으면 빈 문자열.
+    @Test
+    fun `the market listings keep the Korean and English names`() = kotlinx.coroutines.test.runTest {
+        val body = """[{"market":"KRW-BTC","korean_name":"비트코인","english_name":"Bitcoin"},{"market":"BTC-ETH","korean_name":"이더리움"},{"market":"KRW-T"}]"""
+        val client = WebClient.builder().exchangeFunction {
+            reactor.core.publisher.Mono.just(
+                org.springframework.web.reactive.function.client.ClientResponse.create(org.springframework.http.HttpStatus.OK)
+                    .header("Content-Type", "application/json").body(body).build(),
+            )
+        }.build()
+
+        assertEquals(
+            listOf(MarketListing("BTC/KRW", "비트코인", "Bitcoin"), MarketListing("T/KRW", "", "")),
+            UpbitMarketFeed(client, ObjectMapper()).getKrwMarketListings(),
+        )
+    }
 }

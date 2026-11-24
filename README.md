@@ -125,11 +125,12 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | POST | `/api/auth/refresh` | 로그인 유지 쿠키로 접근 JWT 를 새로 받는다(아래 로그인 유지) |
 | GET | `/api/user/me` | 내 정보 |
 | POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
-| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`) |
+| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`). 업비트 봇의 `tickers` 는 업비트 KRW 마켓 목록에 있어야 한다(없으면 400 `Unknown markets: …`, 목록을 못 받았으면 형식만 본다) |
 | GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
 | POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
 | GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`). `orders` 의 체결 줄을 체결 시각 내림차순으로 읽는다(V43 절) |
+| GET | `/api/market/markets` | 업비트 KRW 마켓 목록 `{markets: [{market: "KRW-BTC", korean_name, english_name}]}` — 봇 화면의 코인 검색이 쓴다. 처음 필요할 때 업비트 `/v1/market/all` 로 받아 하루 동안 쓰고, 받지 못하면 받아 둔 목록을, 그것도 없으면 503(`Retry-After: 60`)이다(실패 뒤 1분은 다시 묻지 않는다). 시세판과 따로라 `MARKETDATA_BOARD_ENABLED=false` 여도 된다 |
 | GET | `/api/market/stream` | 시세판 실시간 시세(SSE, `text/event-stream`). 표 아래 설명 |
 | GET | `/api/kis/keys` | KIS 모의(`KIS_PAPER`)·실전(`KIS`) 키 저장 여부, 마스킹한 계좌(`****5678-01`), 갱신 시각(`updated_at`, UTC ISO-8601) |
 | PUT, DELETE | `/api/kis/keys/{KIS_PAPER\|KIS}` | KIS 키 저장(`app_key`, `app_secret`, `account_number`)·삭제 |
@@ -198,7 +199,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - DB 를 SQL 로 직접 고친 값은 재시작 전까지 도는 봇에 반영되지 않는다. API 를 쓴다.
 - V32 이전 이미지로 앱을 롤백하면 이 값을 읽지 않아 매수가 다시 나간다. 롤백할 때는 봇을 정지한다.
 
-실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
+봇 화면은 감시 종목을 업비트 KRW 마켓의 한글·영문 이름이나 코드로 검색해 태그로 고른다(최대 20개, `/api/market/markets`). 목록을 못 받으면 `KRW-BTC` 처럼 코드를 입력해 넣는다. 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 409다. 목록을 바꾸려면 정지 후 다시 시작한다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다.
 
 ### 미해소 주문 대사
 

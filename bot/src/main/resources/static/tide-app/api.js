@@ -57,6 +57,8 @@ const TideAPI = {
   botStatus: () => TideAPI._fetch('/api/bot/status'),
   botStart: (req = {}) => TideAPI._fetch('/api/bot/start', { method: 'POST', body: JSON.stringify(req) }),
   botStop: () => TideAPI._fetch('/api/bot/stop', { method: 'POST' }),
+  // 응답은 { markets: [{ market: 'KRW-BTC', korean_name, english_name }] } 이다. 목록을 못 받았으면 503.
+  markets: () => TideAPI._fetch('/api/market/markets'),
 
   portfolio: () => TideAPI._fetch('/api/portfolio'),
   account: () => TideAPI._fetch('/api/account'),
@@ -75,6 +77,19 @@ const TideAPI = {
     TideAPI._fetch('/api/user/settings', { method: 'POST', body: JSON.stringify(patch) }),
 
 };
+
+// 감시 코인 검색: 코드(BTC·KRW-BTC)·한글·영문 이름에 검색어가 들어간 마켓을 고른 것은 빼고 limit 개까지.
+// 코드나 이름이 검색어와 같은 마켓, 검색어로 시작하는 마켓 순으로 앞에 둔다 — Enter 는 첫 줄을 넣는다
+// ("이더리움" 은 이더리움네임서비스보다 이더리움이, "BTC" 는 WBTC 보다 비트코인이 먼저).
+function searchMarkets(markets, query, selected, limit = 8) {
+  const q = (query || '').trim().toUpperCase();
+  if (!q) return [];
+  const taken = new Set(selected);
+  const keys = m => [m.market.replace(/^KRW-/, ''), m.market, (m.korean_name || '').toUpperCase(), (m.english_name || '').toUpperCase()];
+  const hits = (markets || []).filter(m => !taken.has(m.market) && keys(m).some(k => k.includes(q)));
+  const rank = m => (keys(m).some(k => k === q) ? 0 : keys(m).some(k => k.startsWith(q)) ? 1 : 2);
+  return hits.sort((a, b) => rank(a) - rank(b)).slice(0, limit);
+}
 
 const fmtKRW = v => '₩' + Math.round(v || 0).toLocaleString();
 const fmtPct = v => ((v || 0) >= 0 ? '+' : '') + (v || 0).toFixed(2) + '%';
@@ -187,6 +202,7 @@ function liveHoldings(portfolio, rows) {
 window.TideAPI = TideAPI;
 window.liveHoldings = liveHoldings;
 window.freshRows = freshRows;
+window.searchMarkets = searchMarkets;
 window.useMarketStream = useMarketStream;
 window.fmtKRW = fmtKRW; window.fmtPct = fmtPct; window.fmtNum = fmtNum;
 window.useAPI = useAPI;

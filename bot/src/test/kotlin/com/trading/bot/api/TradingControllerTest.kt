@@ -7,6 +7,7 @@ import com.trading.bot.persistence.UserRepository
 import com.trading.bot.persistence.entity.UserEntity
 import com.trading.bot.security.UserSecretsService
 import com.trading.common.domain.Exchange
+import com.trading.bot.marketdata.MarketCatalog
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -38,7 +39,8 @@ class TradingControllerTest {
     private val userRepo = mockk<UserRepository>()
     private val validators = RequestValidators()
     private val secrets = mockk<UserSecretsService> { every { encryptWebhook(any()) } answers { firstArg<String?>()?.let { "enc:$it" } } }
-    private val controller = TradingController(TradingManagers.of(Exchange.UPBIT to manager), userRepo, validators, secrets)
+    private val catalog = mockk<MarketCatalog> { coEvery { unknown(any()) } returns emptyList() }
+    private val controller = TradingController(TradingManagers.of(Exchange.UPBIT to manager), userRepo, validators, secrets, catalog)
 
     private fun <T : Any> authed(block: suspend () -> T): T =
         mono { block() }.contextWrite(authContext).block()!!
@@ -63,6 +65,28 @@ class TradingControllerTest {
             authed { controller.startBot(null) }
         }
         assertEquals(HttpStatus.NOT_FOUND, ex.statusCode)
+    }
+
+    // 업비트에 없는 마켓은 봇이 시세를 받지 못해 조용히 아무것도 하지 않는다 — 시작 전에 거절한다.
+    @Test
+    fun `startBot refuses markets that Upbit does not list`() {
+        coEvery { catalog.unknown(listOf("KRW-BTC", "KRW-NOPE")) } returns listOf("KRW-NOPE")
+
+        val ex = assertThrows<ResponseStatusException> {
+            authed { controller.startBot(StartBotRequest(tickers = listOf("KRW-BTC", "KRW-NOPE"))) }
+        }
+        assertEquals(HttpStatus.BAD_REQUEST, ex.statusCode)
+        assertEquals("Unknown markets: KRW-NOPE", ex.reason)
+        coVerify(exactly = 0) { manager.startBot(any(), any()) }
+    }
+
+    // 목록을 못 받았으면(업비트 장애) 형식 검사만으로 시작한다.
+    @Test
+    fun `startBot accepts well-formed markets when the market list is unavailable`() {
+        coEvery { catalog.unknown(any()) } returns null
+        coEvery { manager.startBot(userId, listOf("KRW-BTC")) } returns mapOf("status" to "started")
+
+        assertEquals("started", authed { controller.startBot(StartBotRequest(tickers = listOf("KRW-BTC"))) }["status"])
     }
 
     @Test
