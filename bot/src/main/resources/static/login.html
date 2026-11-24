@@ -37,18 +37,22 @@ function Auth() {
   const [password, setPassword] = React.useState('');
   const [accessKey, setAccessKey] = React.useState('');
   const [secretKey, setSecretKey] = React.useState('');
+  const [remember, setRemember] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState(null);
+
+  // 이미 로그인돼 있으면(로그인 유지 쿠키로 새로 받는 경우 포함) 앱으로 보낸다.
+  React.useEffect(() => { TideAPI.me().then(() => { location.href = '/app.html'; }, () => {}); }, []);
 
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
       if (mode === 'login') {
-        await TideAPI.login(username, password);
+        await TideAPI.login(username, password, remember);
       } else {
         // 가입 응답이 인증 쿠키를 설정하므로 login() 을 다시 부르지 않는다. 다시 부르다 실패하면 성공한 가입이 실패로 보인다.
-        await TideAPI.register(username, password, accessKey || undefined, secretKey || undefined);
+        await TideAPI.register(username, password, accessKey || undefined, secretKey || undefined, remember);
       }
       location.href = '/app.html';
     } catch (e) {
@@ -92,6 +96,11 @@ function Auth() {
               <input className="tide-input mono" type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} placeholder="Secret Key (선택)" autoComplete="one-time-code"/>
             </div>
           </>}
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--ink-700)', marginBottom: 16, cursor: 'pointer' }}>
+            <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)}/>
+            로그인 유지 <span style={{ color: 'var(--ink-500)', fontSize: 12 }}>(30일 — 끄면 24시간)</span>
+          </label>
 
           {err && <div style={{ padding: 12, background: 'var(--up-soft)', color: 'var(--up)', borderRadius: 8, fontSize: 12, marginBottom: 12 }}>{err}</div>}
 
