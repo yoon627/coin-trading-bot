@@ -250,6 +250,22 @@ class MarketDataIngestionServiceTest {
         verify { store.addCandle(candle) }
     }
 
+    // 봇이 뜰 때 엔진들의 REST 일봉 조회와 같은 IP 한도를 나눠 시드가 429 를 받는다. 1분 재시도까지 그 마켓은 체결 기반 매수 판단이 꺼진다.
+    @Test
+    fun `seedDailyCandles retries once after 429 instead of waiting for the backoff`() = runTest {
+        val d1 = candle.copy(interval = CandleInterval.D1)
+        coEvery { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) }
+            .throws(RuntimeException("429 Too Many Requests from GET https://api.upbit.com/v1/candles/days"))
+            .andThen(listOf(d1))
+
+        service.seedDailyCandles(listOf("BTC/KRW"))
+
+        verify { store.addCandle(d1) }
+        clock.now = clock.now.plus(1, ChronoUnit.HOURS)
+        service.retryFailedSeeds()
+        coVerify(exactly = 2) { feed.getCandles("BTC/KRW", CandleInterval.D1, any()) }
+    }
+
     // Upbit 은 최신순으로 돌려주지만 집계기는 더 새 분봉이 오면 이전 분봉을 확정하므로 오름차순으로 넣어야 한다.
     // 내림차순이면 부분 봉이 확정되고 완결본은 오래된 봉으로 무시된다.
     @Test
