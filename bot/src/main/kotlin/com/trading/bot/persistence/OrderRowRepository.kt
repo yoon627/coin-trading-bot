@@ -43,6 +43,34 @@ interface OrderRowRepository : R2dbcRepository<OrderRowEntity, Long> {
     )
     fun findRecordedOrderIds(userId: Long, exchange: String, orderIds: Collection<String>): Flux<String>
 
+    /**
+     * 만든 지 1시간 넘게 대기·접수로 남은 줄을 마지막으로 고친 순서(오래된 것부터)로 [limit] 개. 대사가 미해결로 둔 줄은 updated_at 이
+     * 바뀌어 뒤로 밀린다 — 풀리지 않는 줄이 상한을 계속 차지하지 않는다. 기준 시각은 DB 의 now() 다.
+     */
+    @Query(
+        """
+        SELECT * FROM orders WHERE user_id = :userId AND exchange = :exchange AND status IN ('PENDING', 'OPEN')
+          AND created_at < now() - INTERVAL '1 hour'
+        ORDER BY updated_at ASC, id ASC LIMIT :limit
+        """,
+    )
+    fun findStaleUnfinished(userId: Long, exchange: String, limit: Int): Flux<OrderRowEntity>
+
+    /** 대기·접수 줄 하나를 끝난 상태로 닫는다. note 는 앞에 붙인다. 그사이 다른 쓰기가 닫았으면 비어 끝난다. */
+    @Query(
+        """
+        UPDATE orders SET status = :status, exchange_state = COALESCE(:exchangeState, exchange_state), note = CONCAT_WS(' | ', :note, note),
+            completed_at = now(), updated_at = now()
+        WHERE id = :id AND status IN ('PENDING', 'OPEN')
+        RETURNING id
+        """,
+    )
+    fun closeStale(id: Long, status: String, exchangeState: String?, note: String): Mono<Long>
+
+    /** 대기·접수 줄을 그대로 두고 대사가 본 결과만 남긴다(updated_at 도 지금으로). 끝난 줄이면 비어 끝난다. */
+    @Query("UPDATE orders SET note = :note, updated_at = now() WHERE id = :id AND status IN ('PENDING', 'OPEN') RETURNING id")
+    fun markUnresolved(id: Long, note: String): Mono<Long>
+
     /** 이 사용자·거래소의 거래소 주문번호를 가진 줄(uq_orders_exchange_order 와 같은 키). 상태는 가리지 않는다. */
     @Query("SELECT * FROM orders WHERE user_id = :userId AND exchange = :exchange AND exchange_order_id = :exchangeOrderId")
     fun findByExchangeOrderId(userId: Long, exchange: String, exchangeOrderId: String): Mono<OrderRowEntity>
