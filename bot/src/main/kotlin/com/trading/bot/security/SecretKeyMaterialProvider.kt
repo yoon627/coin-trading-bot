@@ -30,6 +30,9 @@ class SecretKeyMaterialProvider(
 
     fun jwtExpirationMs(): Long = appProperties.jwtExpirationMs
 
+    /** false 면 암호화 키가 기동마다 새로 만들어지는 임시 키다 — 그 키로 암호화한 값은 재시작 뒤 풀 수 없다. */
+    fun encryptionSecretConfigured(): Boolean = appProperties.encryptionSecret.isNotBlank()
+
     private fun resolveSecret(value: String, propertyName: String): String {
         if (value.isNotBlank()) {
             return value

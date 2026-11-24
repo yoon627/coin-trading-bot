@@ -152,6 +152,26 @@ class RequestValidatorsExtendedTest {
         assertNull(validators.normalizeDiscordWebhookUrl("   "))
     }
 
+    // 암호문이 컬럼(VARCHAR(500))에 들도록 저장할 webhook 은 UTF-8 300 바이트까지 — 글자 수가 아니라 바이트다.
+    @Test
+    fun `requireStorableDiscordWebhook caps the stored webhook at 300 UTF-8 bytes`() {
+        val base = "https://discord.com/api/webhooks/123/"
+        val fits = base + "a".repeat(300 - base.length)
+        assertEquals(fits, validators.requireStorableDiscordWebhook(fits))
+        assertEquals(null, validators.requireStorableDiscordWebhook(null))
+        for (tooLong in listOf(base + "a".repeat(301 - base.length), base + "가".repeat(100))) {
+            val ex = assertThrows<ResponseStatusException> { validators.requireStorableDiscordWebhook(tooLong) }
+            assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, ex.statusCode)
+        }
+    }
+
+    // 길이 상한은 저장할 때만 본다 — 발송 경로(전역 env webhook 포함)는 그대로다.
+    @Test
+    fun `normalizeDiscordWebhookUrl does not cap the length`() {
+        val long = "https://discord.com/api/webhooks/123/" + "a".repeat(400)
+        assertEquals(long, validators.normalizeDiscordWebhookUrl(long))
+    }
+
     @Test
     fun `normalizeDiscordWebhookUrl rejects non-Discord URLs`() {
         assertThrows<ResponseStatusException> {

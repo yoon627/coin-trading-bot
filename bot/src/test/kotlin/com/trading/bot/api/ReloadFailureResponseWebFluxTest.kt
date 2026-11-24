@@ -26,7 +26,7 @@ class ReloadFailureResponseWebFluxTest {
 
     private val userTradingManager: UserTradingManager = mockk(relaxed = true)
     private val userRepository: UserRepository = mockk()
-    private val userSecretsService: UserSecretsService = mockk()
+    private val userSecretsService: UserSecretsService = mockk { every { encryptWebhook(any()) } answers { firstArg<String?>()?.let { "enc:$it" } } }
     private val requestValidators = RequestValidators()
 
     private fun user() = UserEntity(id = 1L, username = "u", password = "p")

@@ -37,7 +37,7 @@ class TradingControllerTest {
     private val manager = mockk<UserTradingManager>()
     private val userRepo = mockk<UserRepository>()
     private val validators = RequestValidators()
-    private val secrets = mockk<UserSecretsService>()
+    private val secrets = mockk<UserSecretsService> { every { encryptWebhook(any()) } answers { firstArg<String?>()?.let { "enc:$it" } } }
     private val controller = TradingController(TradingManagers.of(Exchange.UPBIT to manager), userRepo, validators, secrets)
 
     private fun <T : Any> authed(block: suspend () -> T): T =
@@ -127,8 +127,8 @@ class TradingControllerTest {
 
         val res = authed { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = "  $webhook ")) }
 
-        assertEquals(listOf<String?>(webhook), saved)
-        assertEquals(true, res["has_discord_webhook"])
+        assertEquals(listOf<String?>("enc:$webhook"), saved)
+        assertEquals(mapOf("has_discord_webhook" to true), res)
         coVerify(exactly = 1) { manager.reloadUserRuntime(userId) }
     }
 
@@ -169,7 +169,7 @@ class TradingControllerTest {
     fun `a save that outlasts the limit still reloads and reports the result as unconfirmed`() = runTest {
         // 상한을 넘긴 저장은 커밋 여부를 모른다. reload 는 DB 를 다시 읽을 뿐이라 그래도 부르고, 500 이 아니라 확인 불가로 알린다.
         every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
-        every { userRepo.updateDiscordWebhookUrl(userId, webhook) } returns Mono.never()
+        every { userRepo.updateDiscordWebhookUrl(userId, "enc:$webhook") } returns Mono.never()
         coEvery { manager.reloadUserRuntime(userId) } returns Unit
 
         val ex = runCatching {
@@ -186,12 +186,12 @@ class TradingControllerTest {
         // 커밋 뒤 요청이 끊겨 reload 가 빠지면 DB 와 실행 중인 엔진이 갈린다.
         every { userRepo.findById(userId) } returns Mono.just(UserEntity(id = userId, username = "u", password = "p"))
         val saving = Sinks.one<Int>()
-        every { userRepo.updateDiscordWebhookUrl(userId, webhook) } returns saving.asMono()
+        every { userRepo.updateDiscordWebhookUrl(userId, "enc:$webhook") } returns saving.asMono()
         coEvery { manager.reloadUserRuntime(userId) } returns Unit
 
         val request = mono { controller.updateSettings(UserSettingsRequest(discordWebhookUrl = webhook)) }
             .contextWrite(authContext).subscribe({}, {})
-        verify(timeout = 2_000) { userRepo.updateDiscordWebhookUrl(userId, webhook) }
+        verify(timeout = 2_000) { userRepo.updateDiscordWebhookUrl(userId, "enc:$webhook") }
         request.dispose()
         saving.tryEmitValue(1)
 

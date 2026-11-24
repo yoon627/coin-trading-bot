@@ -95,9 +95,21 @@ class RequestValidators {
         return normalized
     }
 
+    /**
+     * 저장할 webhook 의 길이만 본다(발송 경로의 검사와 따로). 암호문은 `enc:` + Base64(IV 12 + 본문 + 태그 16) 라
+     * UTF-8 300 바이트가 444 자로 users.discord_webhook_url(VARCHAR(500)) 안에 든다.
+     */
+    fun requireStorableDiscordWebhook(url: String?): String? {
+        if (url != null && url.toByteArray(Charsets.UTF_8).size > MAX_STORED_WEBHOOK_BYTES) {
+            throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Discord webhook URL is too long")
+        }
+        return url
+    }
+
     fun sanitizeTradeLimit(limit: Int): Int = limit.coerceIn(1, 500)
 
     companion object {
+        private const val MAX_STORED_WEBHOOK_BYTES = 300
         private val USERNAME_REGEX = Regex("^[a-z0-9_-]{3,30}$")
         private val API_KEY_REGEX = Regex("^[A-Za-z0-9_-]+$")
         private val ALLOWED_DISCORD_HOSTS = setOf("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")

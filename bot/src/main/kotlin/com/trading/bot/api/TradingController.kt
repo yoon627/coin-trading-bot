@@ -123,8 +123,8 @@ class TradingController(
         val requested = req.discordWebhookUrl
             ?: return mapOf("has_discord_webhook" to !user.discordWebhookUrl.isNullOrBlank())
         // 빈 문자열이 해제다. normalizeDiscordWebhookUrl 이 null 로 바꾼다.
-        val nextWebhook = requestValidators.normalizeDiscordWebhookUrl(requested)
-        saveThenReload(userId) { userRepository.updateDiscordWebhookUrl(userId, nextWebhook).awaitSingle() }
+        val nextWebhook = requestValidators.requireStorableDiscordWebhook(requestValidators.normalizeDiscordWebhookUrl(requested))
+        saveThenReload(userId) { userRepository.updateDiscordWebhookUrl(userId, userSecretsService.encryptWebhook(nextWebhook)).awaitSingle() }
         return mapOf("has_discord_webhook" to !nextWebhook.isNullOrBlank())
     }
 
