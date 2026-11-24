@@ -633,6 +633,7 @@ class UserTradingManager(
             displayName = parts.displayName,
             entriesPaused = { entriesPaused(userId) },
             clock = clock,
+            lifecycle = tradeExecutionService.orderLifecycle,
         )
         val dailyResetManager = DailyResetManager(parts.profile, userId = user.id!!, calendar = parts.calendar)
 

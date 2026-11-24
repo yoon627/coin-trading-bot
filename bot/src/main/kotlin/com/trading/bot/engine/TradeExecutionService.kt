@@ -29,6 +29,9 @@ class TradeExecutionService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    /** 주문 경로가 체결이 아닌 생애를 남기는 곳. 체결과 같은 orders 줄이라 같은 장부를 쓴다. */
+    val orderLifecycle: OrderLifecycle get() = orderLedger
+
     /**
      * 거래 기록과 그 체결 알림 이벤트를 저장한다. 트랜잭션을 직접 열지 않고 호출자의 트랜잭션에 참여한다.
      * 이미 기록된 주문이면 건너뛰고 false 를 돌려준다. [notificationPayload] 는 트랜잭션 전에 만든 JSON 이다.

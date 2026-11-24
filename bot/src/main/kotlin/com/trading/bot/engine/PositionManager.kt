@@ -79,6 +79,8 @@ class PositionManager(
     private val displayName: String = "Upbit",
     /** 소유자가 신규 매수를 멈췄는지. 매수마다 다시 읽어 도는 엔진에도 바로 적용된다. */
     private val entriesPaused: () -> Boolean = { false },
+    /** 체결이 아닌 주문 생애를 orders 에 남긴다. 최선이라 실패해도 매매 흐름은 같다. 운영은 OrderLedger 를 준다. */
+    private val lifecycle: OrderLifecycle = OrderLifecycle.NONE,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -87,6 +89,21 @@ class PositionManager(
 
     // 중지 동안 매 tick 같은 로그가 쌓이지 않게 종목마다 한 번만 남긴다. 열린 상태에서 매수를 보면 비운다.
     private val pausedSkipLogged = ConcurrentHashMap.newKeySet<String>()
+
+    private fun lifecycleOrder(
+        ticker: String,
+        state: TradingState,
+        side: TradeSide,
+        clientOrderId: String?,
+        exchangeOrderId: String? = null,
+        decisionPrice: Double? = null,
+        requestedFunds: Double? = null,
+        requestedVolume: Double? = null,
+    ) = LifecycleOrder(userId, state.exchange, ticker, side, clientOrderId, exchangeOrderId, decisionPrice, requestedFunds, requestedVolume)
+
+    private companion object {
+        const val NOT_FOUND_NOTE = "the exchange never saw this order"
+    }
 
     private suspend fun findAccount(currency: String): Account? =
         upbitClient.getAccounts().find { it.currency == currency }
@@ -369,17 +386,25 @@ class PositionManager(
                 log.warn("Buy for {} not sent — could not record order {} first: {}", ticker, identifier, e.message)
                 return@withContext null
             }
+            val buyOrder = lifecycleOrder(
+                ticker, state, TradeSide.BUY, identifier, decisionPrice = currentPrice,
+                requestedFunds = (size as? MarketBuySize.QuoteAmount)?.krw?.toDouble(),
+                requestedVolume = (size as? MarketBuySize.Quantity)?.qty?.toDouble(),
+            )
+            lifecycle.pending(buyOrder)
             val order = try {
                 upbitClient.placeOrder(rules.buyOrderRequest(ticker, size, identifier))
             } catch (e: CancellationException) {
                 throw e // 전송 여부는 모르지만 identifier 가 남아 있어 reconcile 이 확정한다.
             } catch (e: Exception) {
                 // 매수는 닿지 않은 실패도 결과 불명과 같이 identifier 로 확정한다(다시 보내지 않는다).
-                if (errorClassifier.classify(e).isRejection) {
+                val failure = errorClassifier.classify(e)
+                if (failure.isRejection) {
                     log.error("Failed to place buy order {}: {}", ticker, e.message, e)
                     orderGate.onDefinitiveRejection(ticker, TradeSide.BUY, clock.instant())
                     state.clearPendingBuy()
                     persist(state)
+                    lifecycle.closed(buyOrder, OrderLifecycle.Outcome.REJECTED, note = failure.name)
                 } else {
                     log.error("Buy order {} for {} has an unknown outcome — kept pending, confirming by identifier: {}", identifier, ticker, e.message, e)
                 }
@@ -388,6 +413,8 @@ class PositionManager(
             // 이후 체결 확인이 실패해도 다음 tick reconcile 이 이 uuid 로 이어받아 중복 매수를 막는다.
             state.adoptBuyOrder(order.uuid)
             persistPending(state)
+            // 같은 코루틴에서 기다려 쓴다 — 체결 기록이 이 접수 줄보다 먼저 가지 않는다.
+            lifecycle.open(buyOrder.copy(exchangeOrderId = order.uuid))
             try {
                 val filled = upbitClient.awaitFill(order.uuid, fillPoll)
                 applyFillOutcome(ticker, state, currentPrice, filled)
@@ -452,18 +479,29 @@ class PositionManager(
      * uuid 가 없으면 같은 시각의 수동 매매와 구분할 수 없고 중복 기록 방지 키도 없다.
      */
     private suspend fun resolveBuyByIdentifier(ticker: String, state: TradingState, currentPrice: Double, identifier: String): TradeRecord? {
-        when (val verdict = unknownOrders.resolve(ticker, TradeSide.BUY, state, identifier)) {
+        val notPlacedNote: String? = when (val verdict = unknownOrders.resolve(ticker, TradeSide.BUY, state, identifier)) {
             is UnknownOrderVerdict.Found -> {
                 state.adoptBuyOrder(verdict.order.uuid)
                 recordLookupSuccess(state)
                 persist(state)
+                lifecycle.open(lifecycleOrder(ticker, state, TradeSide.BUY, identifier, verdict.order.uuid))
                 return applyFillOutcome(ticker, state, currentPrice, verdict.order)
             }
-            UnknownOrderVerdict.NotPlaced -> state.clearPendingBuy()
-            is UnknownOrderVerdict.TracedNotPlaced -> settleTracedBuy(ticker, state, identifier)
-            is UnknownOrderVerdict.Undecided -> recordUndecided(state, verdict.reason, state.pendingBuyPriorVolume)
+            UnknownOrderVerdict.NotPlaced -> {
+                state.clearPendingBuy()
+                NOT_FOUND_NOTE
+            }
+            is UnknownOrderVerdict.TracedNotPlaced -> {
+                settleTracedBuy(ticker, state, identifier)
+                "balance moved but the order was never found — it may have filled outside the bot book"
+            }
+            is UnknownOrderVerdict.Undecided -> {
+                recordUndecided(state, verdict.reason, state.pendingBuyPriorVolume)
+                null
+            }
         }
         persist(state)
+        notPlacedNote?.let { lifecycle.closed(lifecycleOrder(ticker, state, TradeSide.BUY, identifier), OrderLifecycle.Outcome.NOT_PLACED, note = it) }
         return null
     }
 
@@ -517,8 +555,13 @@ class PositionManager(
             }
             else -> {
                 log.warn("Pending buy unfilled for {}: state={} — order abandoned", ticker, filled?.state)
+                val orderId = state.pendingBuyUuid
                 state.clearPendingBuy()
                 persist(state)
+                lifecycle.closed(
+                    lifecycleOrder(ticker, state, TradeSide.BUY, filled?.identifier, orderId), OrderLifecycle.Outcome.CANCELLED,
+                    exchangeState = filled?.state, note = if (filled == null) "no fill result" else null,
+                )
                 null
             }
         }
@@ -850,10 +893,12 @@ class PositionManager(
                 state.adoptSellOrder(verdict.order.uuid)
                 recordLookupSuccess(state)
                 persist(state)
+                lifecycle.open(lifecycleOrder(ticker, state, TradeSide.SELL, identifier, verdict.order.uuid))
                 applySellFillOutcome(ticker, state, currentPrice, verdict.order)
             }
             UnknownOrderVerdict.NotPlaced -> {
                 releaseUnplacedSell(ticker, state)
+                lifecycle.closed(lifecycleOrder(ticker, state, TradeSide.SELL, identifier), OrderLifecycle.Outcome.NOT_PLACED, note = NOT_FOUND_NOTE)
                 null
             }
             is UnknownOrderVerdict.TracedNotPlaced -> {
@@ -894,6 +939,10 @@ class PositionManager(
                 ticker, identifier,
             )
             releaseUnplacedSell(ticker, state)
+            lifecycle.closed(
+                lifecycleOrder(ticker, state, TradeSide.SELL, identifier), OrderLifecycle.Outcome.NOT_PLACED,
+                note = "balance moved but the order was never found — the bot book was not reduced (order volume unknown)",
+            )
             return
         }
         if (!state.position || !state.bookKnown) syncPosition(ticker, state)
@@ -919,6 +968,10 @@ class PositionManager(
             "[UNKNOWN ORDER] {} 매도 주문 {} 을 잔고 흔적 뒤에도 찾지 못하고 종료 주문 목록에도 없어 미접수로 확정했다 — " +
                 "줄어든 잔고 {} 만큼 봇 장부를 줄였다({} → {}). 거래 기록은 남기지 않는다",
             ticker, identifier, left, before, state.holdVolume,
+        )
+        lifecycle.closed(
+            lifecycleOrder(ticker, state, TradeSide.SELL, identifier), OrderLifecycle.Outcome.NOT_PLACED,
+            note = "balance moved but the order was never found — the bot book was reduced by $left",
         )
     }
 
@@ -1034,6 +1087,8 @@ class PositionManager(
             // 기록 장애가 손절을 막으면 안 되므로 매수와 달리 기록이 실패해도 보낸다.
             // 이중 매도는 메모리의 identifier 가 막고, 크래시 창은 pendingPersistFailed(진입 차단·매 tick 재기록)가 좁힌다.
             persistPending(state)
+            // 같은 이유로 보내기 전에는 orders 를 기다리지 않는다 — 매도의 첫 생애 줄은 접수나 거절이다.
+            val sellOrder = lifecycleOrder(ticker, state, TradeSide.SELL, identifier, decisionPrice = currentPrice, requestedVolume = volume)
             val order = try {
                 placeSellResending(
                     ticker,
@@ -1056,6 +1111,7 @@ class PositionManager(
                     orderGate.onDefinitiveRejection(ticker, TradeSide.SELL, clock.instant())
                     state.clearPendingSell() // 코인은 그대로라 다음 tick 에 다시 판다
                     persist(state)
+                    lifecycle.closed(sellOrder, OrderLifecycle.Outcome.REJECTED, note = failure.name)
                 } else {
                     log.error("Sell order {} for {} has an unknown outcome — kept pending, confirming by identifier: {}", identifier, ticker, e.message, e)
                 }
@@ -1064,6 +1120,8 @@ class PositionManager(
             // 이후 체결 확인이 실패해도 다음 tick reconcile 이 이 uuid 로 이어받아 이중 매도와 기록 누락을 막는다.
             state.adoptSellOrder(order.uuid)
             persistPending(state)
+            // 같은 코루틴에서 기다려 쓴다 — 체결 기록이 이 접수 줄보다 먼저 가지 않는다.
+            lifecycle.open(sellOrder.copy(exchangeOrderId = order.uuid))
             try {
                 val filled = upbitClient.awaitFill(order.uuid, fillPoll)
                 if (filled?.state == "done") {
@@ -1144,8 +1202,14 @@ class PositionManager(
             else -> {
                 // 체결 없이 끝났다. 복원 직후라 position 이 false 일 수 있어 실잔고로 되살리고 다음 tick 에 다시 판다.
                 log.warn("Pending sell unfilled for {}: state={} — order abandoned, position kept", ticker, filled?.state)
+                val orderId = state.pendingSellUuid
                 if (!state.position) syncPosition(ticker, state)
                 state.clearPendingSell()
+                // 상태는 호출자(reconcilePendingSell)가 저장한다. 그 저장이 실패해도 이 줄은 끝난 상태라 다음 바퀴의 같은 쓰기가 무해하다.
+                lifecycle.closed(
+                    lifecycleOrder(ticker, state, TradeSide.SELL, filled?.identifier, orderId), OrderLifecycle.Outcome.CANCELLED,
+                    exchangeState = filled?.state, note = if (filled == null) "no fill result" else null,
+                )
                 null
             }
         }
