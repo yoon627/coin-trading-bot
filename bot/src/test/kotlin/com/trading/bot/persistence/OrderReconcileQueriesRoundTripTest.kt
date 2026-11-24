@@ -2,6 +2,7 @@ package com.trading.bot.persistence
 
 import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
+import kotlinx.coroutines.reactor.awaitSingleOrNull
 import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
 import org.flywaydb.core.Flyway
@@ -20,6 +21,7 @@ import org.springframework.test.context.DynamicPropertySource
 class OrderReconcileQueriesRoundTripTest {
 
     @Autowired private lateinit var botStates: BotStateRepository
+    @Autowired private lateinit var orders: OrderRowRepository
     @Autowired private lateinit var databaseClient: DatabaseClient
 
     companion object {
@@ -62,7 +64,7 @@ class OrderReconcileQueriesRoundTripTest {
     @AfterEach
     fun cleanUp() = runTest {
         val owned = "SELECT id FROM users WHERE username LIKE 'it-%-$runId'"
-        for (sql in listOf("DELETE FROM bot_state WHERE user_id IN ($owned)", "DELETE FROM users WHERE username LIKE 'it-%-$runId'")) {
+        for (sql in listOf("DELETE FROM orders WHERE user_id IN ($owned)", "DELETE FROM bot_state WHERE user_id IN ($owned)", "DELETE FROM users WHERE username LIKE 'it-%-$runId'")) {
             databaseClient.sql(sql).fetch().rowsUpdated().awaitSingle()
         }
     }
@@ -72,6 +74,57 @@ class OrderReconcileQueriesRoundTripTest {
             .bind("u", "it-$label-$runId")
             .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
             .one().awaitSingle()
+
+    private suspend fun insertOrder(userId: Long, key: String, status: String, ageMinutes: Long, touchedMinutesAgo: Long = ageMinutes, exchange: String = "UPBIT"): Long =
+        databaseClient.sql(
+            "INSERT INTO orders (user_id, exchange, market, side, client_order_id, status, created_at, updated_at) " +
+                "VALUES (:u, :e, 'KRW-BTC', 'BUY', :k, :s, now() - make_interval(mins => :age), now() - make_interval(mins => :touched)) RETURNING id",
+        )
+            .bind("u", userId).bind("e", exchange).bind("k", "ctb-$key-$runId").bind("s", status)
+            .bind("age", ageMinutes.toInt()).bind("touched", touchedMinutesAgo.toInt())
+            .map { row -> row.get("id", java.lang.Long::class.java)!!.toLong() }
+            .one().awaitSingle()
+
+    private suspend fun statusOf(id: Long): String =
+        databaseClient.sql("SELECT status FROM orders WHERE id = :id").bind("id", id).map { row -> row.get("status", String::class.java)!! }.one().awaitSingle()
+
+    // 기준은 DB 의 now() 라 만든 시각을 1시간 양쪽에 직접 넣는다. 미해결로 둔 줄은 updated_at 이 바뀌어 뒤로 간다.
+    @Test
+    fun `stale unfinished rows are older than an hour, still pending or open, and come least recently touched first`() = runTest {
+        val userId = insertUser("st")
+        val other = insertUser("st2")
+        val older = insertOrder(userId, "a", "OPEN", ageMinutes = 300, touchedMinutesAgo = 10)
+        val oldest = insertOrder(userId, "b", "PENDING", ageMinutes = 120, touchedMinutesAgo = 100)
+        insertOrder(userId, "c", "PENDING", ageMinutes = 59)
+        insertOrder(userId, "d", "FILLED", ageMinutes = 300)
+        insertOrder(userId, "e", "PENDING", ageMinutes = 300, exchange = "KIS")
+        insertOrder(other, "f", "PENDING", ageMinutes = 300)
+
+        assertThat(orders.findStaleUnfinished(userId, "UPBIT", 50).collectList().awaitSingle().map { it.id }).containsExactly(oldest, older)
+        assertThat(orders.findStaleUnfinished(userId, "UPBIT", 1).collectList().awaitSingle().map { it.id }).containsExactly(oldest)
+
+        assertThat(orders.markUnresolved(oldest, "reconcile: exchange state wait").awaitSingle()).isEqualTo(oldest)
+        assertThat(orders.findStaleUnfinished(userId, "UPBIT", 50).collectList().awaitSingle().map { it.id }).containsExactly(older, oldest)
+    }
+
+    @Test
+    fun `closing by id keeps the earlier note and leaves rows another writer already finished`() = runTest {
+        val userId = insertUser("cl")
+        val open = insertOrder(userId, "a", "OPEN", ageMinutes = 120)
+        databaseClient.sql("UPDATE orders SET note = 'engine note' WHERE id = :id").bind("id", open).fetch().rowsUpdated().awaitSingle()
+        val done = insertOrder(userId, "b", "NOT_PLACED", ageMinutes = 120)
+
+        assertThat(orders.closeStale(open, "CANCELLED", "cancel", "reconcile (was OPEN): cancel without a fill").awaitSingle()).isEqualTo(open)
+        assertThat(orders.closeStale(done, "CANCELLED", "cancel", "x").awaitSingleOrNull()).isNull()
+        assertThat(orders.markUnresolved(done, "x").awaitSingleOrNull()).isNull()
+
+        val closed = orders.findById(open).awaitSingle()
+        assertThat(closed.status).isEqualTo("CANCELLED")
+        assertThat(closed.exchangeState).isEqualTo("cancel")
+        assertThat(closed.note).isEqualTo("reconcile (was OPEN): cancel without a fill | engine note")
+        assertThat(closed.completedAt).isNotNull()
+        assertThat(statusOf(done)).isEqualTo("NOT_PLACED")
+    }
 
     @Test
     fun `bot state rows are listed by exchange whether running or not`() = runTest {
