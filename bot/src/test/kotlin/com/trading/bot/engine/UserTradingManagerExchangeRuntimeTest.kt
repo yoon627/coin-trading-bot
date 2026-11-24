@@ -80,8 +80,11 @@ class UserTradingManagerExchangeRuntimeTest {
         override fun queryClient(user: UserEntity) = client
     }
 
+    private val orderLifecycle = mockk<OrderLifecycle>()
+    private val tradeExecutionService = mockk<TradeExecutionService>(relaxed = true) { every { orderLifecycle } returns this@UserTradingManagerExchangeRuntimeTest.orderLifecycle }
+
     private fun newManager() = UserTradingManager(
-        userRepository, botStateRepository, mockk(relaxed = true), mockk(relaxed = true),
+        userRepository, botStateRepository, tradeExecutionService, mockk(relaxed = true),
         strategy, TradingProperties(autoStart = true), mockk(relaxed = true),
         userSecretsService, mockk(relaxed = true), tradingStateService,
         runtime = runtime,
@@ -194,6 +197,8 @@ class UserTradingManagerExchangeRuntimeTest {
             assertSame(field(parts, name), field(positionManager, name), name)
         }
         assertSame(parts.unknownOrderPolicy, field(field(positionManager, "unknownOrders")!!, "policy"))
+        // 기본값(NONE)으로 남으면 생애 줄이 조용히 안 남는다.
+        assertSame(orderLifecycle, field(positionManager, "lifecycle"))
 
         val dailyResetManager = field(engine, "dailyResetManager")!!
         assertSame(parts.calendar, field(dailyResetManager, "calendar"))

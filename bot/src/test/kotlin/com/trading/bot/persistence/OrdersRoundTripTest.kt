@@ -10,15 +10,19 @@ import com.trading.bot.domain.FillSource
 import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
+import com.trading.bot.engine.LifecycleOrder
 import com.trading.bot.engine.OrderLedger
+import com.trading.bot.engine.OrderLifecycle
 import com.trading.bot.engine.TradeExecutionService
 import com.trading.common.config.TradingProperties
+import com.trading.common.domain.Exchange
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.reactor.awaitSingle
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -539,6 +543,80 @@ class OrdersRoundTripTest {
             .bind("u", userId).bind("o", "s-$runId").map { r -> r.get("missing", java.lang.Boolean::class.java)!!.booleanValue() }.all().collectList().awaitSingle()
         assertThat(withoutClientId).containsExactly(true)
         assertThat(count("trade_notification_outbox", userId)).isEqualTo(1)
+    }
+
+    // --- 생애 줄: 대기 → 접수 → 끝남, 한 주문에 한 줄, 앞으로만 ---
+
+    // 생애 쓰기의 시한은 실제 시간이다. runTest 의 가상 시계는 DB 를 기다리는 동안 시한을 바로 넘긴다.
+    private val ledger by lazy { OrderLedger(orderRows) }
+
+    private fun lifecycleBuy(userId: Long, orderId: String? = null) = LifecycleOrder(
+        userId, Exchange.UPBIT, "KRW-BTC", TradeSide.BUY, clientOrderId = "ctb-$runId", exchangeOrderId = orderId,
+        decisionPrice = 50_000_000.0, requestedFunds = 100_000.0,
+    )
+
+    @Test
+    fun `a buy's lifecycle keeps one row from pending through open to cancelled, with its order values`(): Unit = runBlocking {
+        val userId = insertUser("lifecycle")
+
+        ledger.pending(lifecycleBuy(userId))
+        ledger.pending(lifecycleBuy(userId))
+        assertThat(orderRow(userId)).containsEntry("status", "PENDING").containsEntry("exchange_order_id", null).containsEntry("completed_at", null)
+
+        ledger.open(lifecycleBuy(userId, "b-$runId"))
+        assertThat(orderRow(userId)).containsEntry("status", "OPEN").containsEntry("exchange_order_id", "b-$runId")
+
+        ledger.closed(lifecycleBuy(userId, "b-$runId"), OrderLifecycle.Outcome.CANCELLED, exchangeState = "cancel")
+        assertThat(count("orders", userId)).isEqualTo(1)
+        val row = orderRow(userId)
+        assertThat(row).containsEntry("status", "CANCELLED").containsEntry("exchange_state", "cancel")
+            .containsEntry("decision_price", 50_000_000.0).containsEntry("requested_funds", 100_000.0)
+        assertThat(row["completed_at"]).isNotNull()
+    }
+
+    // 접수 쓰기가 실패하면 대기 줄에 주문번호가 없다. 끝남은 식별자로 그 줄을 찾아 주문번호를 채운다.
+    @Test
+    fun `a pending row whose open write was lost is still closed by its identifier`(): Unit = runBlocking {
+        val userId = insertUser("lostopen")
+        ledger.pending(lifecycleBuy(userId))
+
+        ledger.closed(lifecycleBuy(userId, "b-$runId"), OrderLifecycle.Outcome.CANCELLED)
+
+        assertThat(count("orders", userId)).isEqualTo(1)
+        assertThat(orderRow(userId)).containsEntry("status", "CANCELLED").containsEntry("exchange_order_id", "b-$runId")
+    }
+
+    // 매도는 대기 줄이 없고, 거절·안 나감은 줄이 없을 수 있다 — 그때는 그 상태로 넣는다.
+    @Test
+    fun `open and closed insert the row when no pending row exists`(): Unit = runBlocking {
+        val opened = insertUser("openinsert")
+        ledger.open(lifecycleBuy(opened, "b-$runId"))
+        assertThat(orderRow(opened)).containsEntry("status", "OPEN").containsEntry("completed_at", null)
+
+        val rejected = insertUser("closedinsert")
+        ledger.closed(lifecycleBuy(rejected), OrderLifecycle.Outcome.REJECTED, note = "insufficient_funds_bid")
+        val row = orderRow(rejected)
+        assertThat(row).containsEntry("status", "REJECTED").containsEntry("note", "insufficient_funds_bid").containsEntry("exchange_order_id", null)
+        assertThat(row["completed_at"]).isNotNull()
+    }
+
+    // 늦게 온 쓰기가 체결·끝난 줄을 되돌리거나 같은 주문의 줄을 하나 더 만들지 않는다.
+    @Test
+    fun `lifecycle writes never move a filled or closed row backwards or add a second row`(): Unit = runBlocking {
+        val filled = insertUser("fwdfilled")
+        existingOrder(filled, "FILLED", orderId = "b-$runId", clientOrderId = "ctb-$runId")
+        ledger.open(lifecycleBuy(filled, "b-$runId"))
+        ledger.closed(lifecycleBuy(filled, "b-$runId"), OrderLifecycle.Outcome.CANCELLED)
+        ledger.pending(lifecycleBuy(filled))
+        assertThat(count("orders", filled)).isEqualTo(1)
+        assertThat(orderRow(filled)).containsEntry("status", "FILLED")
+
+        val cancelled = insertUser("fwdclosed")
+        existingOrder(cancelled, "CANCELLED", orderId = "b-$runId", clientOrderId = "ctb-$runId")
+        ledger.open(lifecycleBuy(cancelled, "b-$runId"))
+        ledger.closed(lifecycleBuy(cancelled, "b-$runId"), OrderLifecycle.Outcome.NOT_PLACED)
+        assertThat(count("orders", cancelled)).isEqualTo(1)
+        assertThat(orderRow(cancelled)).containsEntry("status", "CANCELLED")
     }
 
     // 손으로 옛 표를 맞추는 파일은 옛 표를 거쳐 들어온 체결만 옮긴다 — 이 이미지가 쓴 줄은 건드리지 않는다.

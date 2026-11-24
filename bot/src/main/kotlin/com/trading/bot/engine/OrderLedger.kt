@@ -6,17 +6,71 @@ import com.trading.bot.domain.TradeRecord
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.persistence.OrderRowRepository
 import com.trading.bot.persistence.entity.OrderRowEntity
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.reactor.awaitSingle
 import kotlinx.coroutines.reactor.awaitSingleOrNull
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 
-/** 봇이 보낸 주문을 `orders` 에 한 줄씩 남긴다. 체결 기록은 이 줄뿐이고, 거래 기록 화면·왕복 손익·매일 대조가 FILLED 줄을 읽는다. */
+/** 봇이 보낸 주문을 `orders` 에 한 줄씩 남긴다 — 생애(대기·접수·끝남)는 최선으로, 체결은 같은 트랜잭션에서. 거래 기록 화면·왕복 손익·매일 대조는 FILLED 줄을 읽는다. */
 @Service
 class OrderLedger(
     private val repository: OrderRowRepository,
-) {
+) : OrderLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    override suspend fun pending(order: LifecycleOrder) = bestEffort("PENDING", order) {
+        insert(order, "PENDING", completed = false)
+    }
+
+    override suspend fun open(order: LifecycleOrder) = bestEffort("OPEN", order) {
+        val orderId = checkNotNull(order.exchangeOrderId) { "an open order needs its exchange order id" }
+        val linked = order.clientOrderId?.let { repository.markOpen(order.userId, order.exchange.name, it, orderId).awaitSingleOrNull() }
+        // 대기 줄이 없다(매도, 직전 이미지의 주문, 대기 쓰기 실패). 같은 주문의 줄이 이미 있으면 넣기가 아무것도 하지 않는다.
+        if (linked == null) insert(order, "OPEN", completed = false)
+    }
+
+    override suspend fun closed(order: LifecycleOrder, outcome: OrderLifecycle.Outcome, exchangeState: String?, note: String?) =
+        bestEffort(outcome.name, order) {
+            val updated = repository.markClosed(
+                order.userId, order.exchange.name, order.clientOrderId, order.exchangeOrderId, outcome.name, exchangeState, note,
+            ).awaitSingleOrNull()
+            if (updated == null) insert(order, outcome.name, completed = true, exchangeState = exchangeState, note = note)
+        }
+
+    private suspend fun insert(order: LifecycleOrder, status: String, completed: Boolean, exchangeState: String? = null, note: String? = null) {
+        // 식별자도 주문번호도 없으면 다음 쓰기가 찾을 수 없는 줄이 된다.
+        if (order.clientOrderId == null && order.exchangeOrderId == null) return
+        repository.insertLifecycle(
+            userId = order.userId,
+            exchange = order.exchange.name,
+            market = order.market,
+            side = order.side.name,
+            clientOrderId = order.clientOrderId,
+            exchangeOrderId = order.exchangeOrderId,
+            status = status,
+            decisionPrice = order.decisionPrice,
+            requestedFunds = order.requestedFunds,
+            requestedVolume = order.requestedVolume,
+            exchangeState = exchangeState,
+            note = note,
+            completed = completed,
+        ).awaitSingleOrNull()
+    }
+
+    // 이 시한만 null 로 끝난다(withTimeoutOrNull). 호출자의 취소와 바깥 시한은 그대로 던진다.
+    private suspend fun bestEffort(status: String, order: LifecycleOrder, write: suspend () -> Unit) {
+        try {
+            withTimeoutOrNull(LIFECYCLE_WRITE_TIMEOUT) { write() }
+                ?: log.warn("orders {} row not written in {} — trading goes on: market={}, side={}, clientOrderId={}, orderId={}", status, LIFECYCLE_WRITE_TIMEOUT, order.market, order.side, order.clientOrderId, order.exchangeOrderId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("orders {} row not written — trading goes on: market={}, side={}, clientOrderId={}, orderId={}: {}", status, order.market, order.side, order.clientOrderId, order.exchangeOrderId, e.message)
+        }
+    }
 
     /** 체결 기록의 결과. */
     sealed interface FillRecord {
@@ -128,6 +182,9 @@ class OrderLedger(
 
     private companion object {
         const val FILLED = "FILLED"
+
+        // 생애 줄은 최선이라 DB 가 느리면 기다리지 않는다. 체결 기록(같은 줄을 FILLED 로)은 이 시한 밖이다.
+        val LIFECYCLE_WRITE_TIMEOUT = 2.seconds
 
         // 아직 끝나지 않은 주문의 상태. 체결이 이 줄을 바꾸는 것이 보통의 길이다.
         val LIVE = setOf("PENDING", "OPEN")
