@@ -195,6 +195,19 @@ class DeployNotifyScriptTest {
         }
     }
 
+    // 배포 job 의 실패 알림 스텝은 이 파일이 없을 때만 알린다(같은 실패를 두 번 알리지 않는다).
+    @Test
+    fun `deploy 는 결과를 알린 뒤 표시 파일을 남긴다`() {
+        val repo = deployRepo()
+        val marker = File(dir, "deploy-notified")
+
+        val result = deploy(repo, remoteRc = 255, mapOf("DEPLOY_NOTIFIED_MARKER" to marker.path))
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(1)
+        assertThat(curlArgs.readText()).contains("결과 불명")
+        assertThat(marker).exists()
+    }
+
     @Test
     fun `알림 스크립트가 없어도 deploy 의 종료 코드는 그대로다`() {
         val repo = deployRepo()

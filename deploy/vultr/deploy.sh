@@ -785,9 +785,12 @@ deploy_failure_message() {
 }
 
 # .env 를 source 한 셸 변수라 export 되지 않으므로 알림 스크립트에 명시해 넘긴다. 알림 실패가 배포 결과를 바꾸지 않는다.
+# DEPLOY_NOTIFIED_MARKER 가 있으면 알림을 시도했다는 표시를 남긴다 — 배포 job 의 실패 알림 스텝이 같은 실패를 두 번 알리지 않게 한다
+# (webhook 전송이 실패했어도 같은 webhook 으로 다시 보내지 않는다).
 notify_deploy() {
     DISCORD_DEPLOY_WEBHOOK_URL="${DISCORD_DEPLOY_WEBHOOK_URL:-}" DISCORD_ERROR_WEBHOOK_URL="${DISCORD_ERROR_WEBHOOK_URL:-}" \
         bash "$SCRIPT_DIR/notify_deploy.sh" "$@" || true
+    if [[ -n "${DEPLOY_NOTIFIED_MARKER:-}" ]]; then : > "$DEPLOY_NOTIFIED_MARKER" || true; fi
 }
 
 do_ssh()    { load_state; ssh "${SSH_HOST_KEY_OPTIONS[@]}" -i "$KEY_PEM" "${SSH_USER}@${PUBLIC_IP}"; }

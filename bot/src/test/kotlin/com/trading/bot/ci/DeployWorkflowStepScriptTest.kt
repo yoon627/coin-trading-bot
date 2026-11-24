@@ -172,23 +172,171 @@ class DeployWorkflowStepScriptTest {
     // 보류된 push 는 뒤 push 도 계속 보류되어 운영이 뒤처진다. 경고 주석만으로는 안 보여 배포 webhook 으로 알린다.
     @Test
     fun `자동 배포를 보류하면 배포 webhook 으로 알리고 webhook 값은 출력하지 않는다`() {
-        val webhook = "https://discord.example.test/api/webhooks/1/secret?wait=true&x=1"
-        File(repo, "deploy/vultr").mkdirs()
-        File(repo, "deploy/vultr/notify_deploy.sh").writeText(
-            "echo \"notify level=${'$'}1 webhook_set=${'$'}{DISCORD_DEPLOY_WEBHOOK_URL:+yes}\" >> '${File(work, "notify.calls").path}'\n" +
-                "[[ \"${'$'}DISCORD_DEPLOY_WEBHOOK_URL\" == '$webhook' ]] && echo exact >> '${File(work, "notify.calls").path}'\n" +
-                "echo \"${'$'}2\" >> '${File(work, "notify.calls").path}'\n",
-        )
+        fakeNotify()
         // deploy.sh 처럼 source 로 읽으므로 export 접두·따옴표·주석 줄도 같은 값이 된다.
-        val env = gateEnv("push") + ("VULTR_DEPLOY_ENV" to "# comment\nDB_PASSWORD=x\nexport DISCORD_DEPLOY_WEBHOOK_URL=\"$webhook\"\n")
+        val env = gateEnv("push") + ("VULTR_DEPLOY_ENV" to "# comment\nDB_PASSWORD=x\nexport DISCORD_DEPLOY_WEBHOOK_URL=\"$WEBHOOK\"\n")
 
         val result = runStep("deploy-vultr", "gate", repo, env, gateFake(exit = 0, output = "auto=false\nservices.caddy 가 바뀌었다"))
 
-        val calls = File(work, "notify.calls").readText()
+        val calls = notifyCalls.readText()
         assertThat(result.githubOutput).isEqualTo("go=false\n")
         assertThat(calls).contains("notify level=failure webhook_set=yes", "exact", "자동 배포 보류", "services.caddy")
-        assertThat(result.output).doesNotContain(webhook)
+        assertThat(result.output).doesNotContain(WEBHOOK)
     }
+
+    // 배포 job 까지 가지 못한 실패(2026-11-24 이미지 빌드의 Maven 429)는 알림 없이 run 만 빨갛게 남았다.
+    @Test
+    fun `test 나 이미지 빌드가 실패하면 실패한 job 을 배포 webhook 으로 한 번 알린다`() {
+        fakeNotify()
+        val cases = mapOf(
+            Triple("success", "failure", "skipped") to "build-and-push: failure",
+            Triple("failure", "skipped", "skipped") to "test: failure",
+            Triple("success", "cancelled", "skipped") to "build-and-push: cancelled",
+        )
+
+        for ((results, expected) in cases) {
+            notifyCalls.delete()
+            val result = runStep("notify-failure", "notify", repo, failureEnv(results))
+
+            assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+            assertThat(notifyCount()).describedAs("$results").isEqualTo(1)
+            assertThat(notifyCalls.readText()).describedAs("$results")
+                .contains("notify level=failure webhook_set=yes", "exact", SHA.take(12), "/actions/runs/7", expected, "배포되지 않았다")
+            assertThat(result.output).doesNotContain(WEBHOOK)
+        }
+    }
+
+    /**
+     * 배포 job 이 실패 알림 스텝까지 가지 못한 경우는 그 job 의 스텝 결과(API)로 가른다. 같은 concurrency 그룹에서 대기하다
+     * 밀려난 job 도 cancelled 라, 스텝이 하나도 없으면 알리지 않는다. 모르는 결과(timed_out 등)는 원격 배포가 돈 것으로 본다.
+     */
+    @Test
+    fun `배포 job 이 알림 스텝까지 가지 못하고 끝나면 원격 배포가 돌았는지로 알림을 가른다`() {
+        fakeNotify()
+        val cases = listOf(
+            Case("cancelled", mapOf("Deploy to Vultr" to "cancelled"), "결과 불명"),
+            Case("cancelled", mapOf("Deploy to Vultr" to "in_progress"), "결과 불명"),
+            Case("failure", mapOf("Deploy to Vultr" to "failure", "Notify deploy job failure" to "cancelled"), "결과 불명"),
+            Case("cancelled", mapOf("Deploy to Vultr" to "timed_out"), "결과 불명"),
+            Case("failure", mapOf("Set up job" to "failure"), "원격 배포 전에 멈췄다"),
+            Case("cancelled", mapOf("Prepare Vultr deploy files" to "cancelled", "Deploy to Vultr" to "skipped"), "원격 배포 전에 멈췄다"),
+            Case("cancelled", emptyMap(), null),
+            Case("failure", mapOf("Deploy to Vultr" to "failure", "Notify deploy job failure" to "success"), null),
+            Case("failure", mapOf("Deploy to Vultr" to "success"), null),
+            Case("success", emptyMap(), null),
+        )
+
+        for (case in cases) {
+            notifyCalls.delete()
+            val result = runStep("notify-failure", "notify", repo, failureEnv(Triple("success", "success", case.result)), fakeGh(case.steps))
+
+            assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+            if (case.expected == null) {
+                assertThat(notifyCalls).describedAs("$case\n${result.output}").doesNotExist()
+            } else {
+                assertThat(notifyCount()).describedAs("$case").isEqualTo(1)
+                assertThat(notifyCalls.readText()).describedAs("$case").contains("deploy-vultr: ${case.result}", case.expected)
+            }
+        }
+    }
+
+    @Test
+    fun `배포 job 의 스텝을 조회하지 못하면 알린다`() {
+        fakeNotify()
+
+        val result = runStep("notify-failure", "notify", repo, failureEnv(Triple("success", "success", "cancelled")), fakeGh(null))
+
+        assertThat(result.exit).describedAs(result.output).isEqualTo(0)
+        assertThat(notifyCount()).isEqualTo(1)
+        assertThat(notifyCalls.readText()).contains("조회하지 못했다")
+    }
+
+    @Test
+    fun `배포 job 의 실패는 deploy sh 가 알리지 않았을 때만 알린다`() {
+        fakeNotify()
+        val marker = File(work, "deploy-notified")
+        val env = mapOf(
+            "VULTR_DEPLOY_ENV" to "DISCORD_DEPLOY_WEBHOOK_URL='$WEBHOOK'",
+            "DEPLOY_NOTIFIED_MARKER" to marker.path,
+            "GITHUB_SHA" to SHA,
+        )
+
+        marker.writeText("")
+        val notified = runStep("deploy-vultr", "notify-failure", repo, env)
+        assertThat(notified.exit).describedAs(notified.output).isEqualTo(0)
+        assertThat(notifyCalls).describedAs(notified.output).doesNotExist()
+
+        marker.delete()
+        val silent = runStep("deploy-vultr", "notify-failure", repo, env)
+        assertThat(silent.exit).describedAs(silent.output).isEqualTo(0)
+        assertThat(notifyCount()).isEqualTo(1)
+        assertThat(notifyCalls.readText()).contains("notify level=failure webhook_set=yes", "exact", "배포 job 실패", SHA.take(12))
+        assertThat(silent.output).doesNotContain(WEBHOOK)
+    }
+
+    @Test
+    fun `실패 알림은 main 의 push 와 수동 실행에서만 돌고 deploy sh 와 같은 표시 파일을 본다`() {
+        val workflow: Map<*, *> = Yaml().load(RepoFiles.file(WORKFLOW).readText())
+        val job = (workflow["jobs"] as Map<*, *>)["notify-failure"] as Map<*, *>
+        val deploy = steps("deploy-vultr").first { it["name"] == "Deploy to Vultr" }
+        val failureStep = step("deploy-vultr", "notify-failure")
+        val marker = "\${{ runner.temp }}/deploy-notified"
+
+        assertThat(job["needs"]).isEqualTo(listOf("test", "build-and-push", "deploy-vultr"))
+        assertThat(job["if"] as String).startsWith("always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'")
+        assertThat(failureStep["if"]).isEqualTo("failure()")
+        assertThat((job["permissions"] as Map<*, *>)["actions"]).isEqualTo("read")
+        assertThat((deploy["env"] as Map<*, *>)["DEPLOY_NOTIFIED_MARKER"]).isEqualTo(marker)
+        assertThat((failureStep["env"] as Map<*, *>)["DEPLOY_NOTIFIED_MARKER"]).isEqualTo(marker)
+    }
+
+    private val notifyCalls by lazy { File(work, "notify.calls") }
+
+    private data class Case(val result: String, val steps: Map<String, String>, val expected: String?)
+
+    private fun notifyCount() = notifyCalls.readLines().count { it.startsWith("notify level=") }
+
+    /** `gh api …/jobs` 를 대신한다 — [steps] 가 null 이면 조회 실패, 아니면 deploy-vultr job 의 스텝 결과. */
+    private fun fakeGh(steps: Map<String, String>?): File {
+        val bin = File(work, "bin").apply { mkdirs() }
+        val body = if (steps == null) {
+            "echo 'HTTP 403' >&2\nexit 1\n"
+        } else {
+            val json = steps.entries.joinToString(",") { (name, state) ->
+                if (state == "in_progress") "{\"name\":\"$name\",\"status\":\"in_progress\",\"conclusion\":null}"
+                else "{\"name\":\"$name\",\"status\":\"completed\",\"conclusion\":\"$state\"}"
+            }
+            "cat <<'JSON'\n{\"jobs\":[{\"name\":\"test\",\"steps\":[]},{\"name\":\"deploy-vultr\",\"steps\":[$json]}]}\nJSON\n"
+        }
+        File(bin, "gh").apply {
+            writeText("#!/usr/bin/env bash\n$body")
+            setExecutable(true)
+        }
+        return bin
+    }
+
+    /** notify_deploy.sh 를 대신해 받은 결과·webhook 을 기록한다. webhook 을 읽는 notify_ci.sh 는 진짜를 쓴다. */
+    private fun fakeNotify() {
+        File(repo, "deploy/vultr").mkdirs()
+        RepoFiles.file("deploy/vultr/notify_ci.sh").copyTo(File(repo, "deploy/vultr/notify_ci.sh"), overwrite = true)
+        File(repo, "deploy/vultr/notify_deploy.sh").writeText(
+            "echo \"notify level=${'$'}1 webhook_set=${'$'}{DISCORD_DEPLOY_WEBHOOK_URL:+yes}\" >> '${notifyCalls.path}'\n" +
+                "[[ \"${'$'}DISCORD_DEPLOY_WEBHOOK_URL\" == '$WEBHOOK' ]] && echo exact >> '${notifyCalls.path}'\n" +
+                "echo \"${'$'}2\" >> '${notifyCalls.path}'\n",
+        )
+    }
+
+    private fun failureEnv(results: Triple<String, String, String>) = mapOf(
+        "VULTR_DEPLOY_ENV" to "DISCORD_DEPLOY_WEBHOOK_URL='$WEBHOOK'",
+        "TEST_RESULT" to results.first,
+        "BUILD_RESULT" to results.second,
+        "DEPLOY_RESULT" to results.third,
+        "GITHUB_SHA" to SHA,
+        "GITHUB_SERVER_URL" to "https://github.com",
+        "GITHUB_REPOSITORY" to "owner/app",
+        "GITHUB_RUN_ID" to "7",
+        "GITHUB_RUN_ATTEMPT" to "1",
+    )
 
     @Test
     fun `push 는 main 이 앞서 있으면 최신 커밋에 맡기고 문서만 앞서 있으면 그대로 배포한다`() {
@@ -404,5 +552,6 @@ class DeployWorkflowStepScriptTest {
         const val WORKFLOW = ".github/workflows/deploy.yml"
         const val SCRIPT = "deploy/vultr/deploy_needed.sh"
         const val SHA = "0123456789abcdef0123456789abcdef01234567"
+        const val WEBHOOK = "https://discord.example.test/api/webhooks/1/secret?wait=true&x=1"
     }
 }
