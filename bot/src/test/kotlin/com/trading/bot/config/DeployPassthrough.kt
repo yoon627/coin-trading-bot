@@ -23,6 +23,7 @@ internal object DeployPassthrough {
         ShadowExitProperties::class,
         PriceEventsProperties::class,
         MarketDataWatchdogProperties::class,
+        MarketBoardProperties::class,
         KisTradingProperties::class,
     )
 

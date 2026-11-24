@@ -187,4 +187,18 @@ class UpbitMarketFeedParsingTest {
             appender.stop()
         }
     }
+
+    // 시세판 목록: KRW 마켓만, 내부 표기로. BTC·USDT 마켓과 형식이 틀린 코드는 뺀다.
+    @Test
+    fun `the board catalog keeps only KRW markets in internal form`() = kotlinx.coroutines.test.runTest {
+        val body = """[{"market":"KRW-BTC"},{"market":"BTC-ETH"},{"market":"USDT-XRP"},{"market":"KRW-T"},{"market":"KRW-bad"},{}]"""
+        val client = WebClient.builder().exchangeFunction {
+            reactor.core.publisher.Mono.just(
+                org.springframework.web.reactive.function.client.ClientResponse.create(org.springframework.http.HttpStatus.OK)
+                    .header("Content-Type", "application/json").body(body).build(),
+            )
+        }.build()
+
+        assertEquals(listOf("BTC/KRW", "T/KRW"), UpbitMarketFeed(client, ObjectMapper()).getKrwMarkets())
+    }
 }

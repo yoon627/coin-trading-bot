@@ -30,6 +30,12 @@ data class MarketDataWatchdogProperties(
         lastReceivedAt > 0 && now - lastReceivedAt > staleMs
 }
 
+/** 시세판 전용 업비트 연결 스위치. 끄면 시세판 연결을 열지 않는다 — 봇 연결과 따로라 봇 매매에는 영향이 없다. */
+@ConfigurationProperties(prefix = "marketdata.board")
+data class MarketBoardProperties(
+    val enabled: Boolean = true,
+)
+
 @ConfigurationProperties(prefix = "discord")
 data class DiscordProperties(
     val webhookUrl: String = "",

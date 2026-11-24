@@ -44,6 +44,8 @@ class UpbitMarketFeed internal constructor(
     private val wsUri: URI,
     private val baseReconnectDelayMs: Long,
     private val pingIntervalMs: Long = PING_INTERVAL_MS,
+    // 연결이 둘(봇·시세판)이라 로그와 진단 수를 가른다. 봇은 빈 값이라 로그가 그대로다.
+    private val label: String = "",
 ) {
     // 기본값 파라미터로 두면 같은 타입의 빈이 생겼을 때 조용히 주입되므로 생성자를 따로 둔다.
     @Autowired
@@ -51,6 +53,7 @@ class UpbitMarketFeed internal constructor(
         this(upbitWebClient, objectMapper, URI.create(WS_URL), BASE_RECONNECT_DELAY_MS)
 
     private val log = LoggerFactory.getLogger(javaClass)
+    private val tag = if (label.isEmpty()) "" else "[$label] "
 
     companion object {
         private const val WS_URL = "wss://api.upbit.com/websocket/v1"
@@ -61,6 +64,10 @@ class UpbitMarketFeed internal constructor(
         // 업비트는 120초 동안 주고받은 것이 없으면 닫고, PING 을 받아야 약 10초마다 {"status":"UP"} 을 보낸다(문서·2026-11-23 접속 시험).
         private const val PING_INTERVAL_MS = 30_000L
         private const val PING = "PING"
+
+        /** 시세판처럼 봇과 따로 여는 연결용. 진단 수(읽지 못한 프레임·버린 체결)를 봇 연결과 섞지 않는다. */
+        fun labeled(upbitWebClient: WebClient, objectMapper: ObjectMapper, label: String) =
+            UpbitMarketFeed(upbitWebClient, objectMapper, URI.create(WS_URL), BASE_RECONNECT_DELAY_MS, label = label)
 
         // 수집이 10초 멈춰도 실측 최대(BTC 초당 40건) × 13종목을 담는다 — 종목이 늘어도 체결률은 BTC 가 이끈다. 그보다 밀리면 오래된 체결부터 버린다.
         internal const val TRADE_CHANNEL_CAPACITY = 40 * 13 * 10
@@ -84,10 +91,10 @@ class UpbitMarketFeed internal constructor(
     }
 
     private val droppedTrades = ThrottledCounts { count, _ ->
-        log.warn("Upbit WS collector fell behind; dropped {} trades since the last warning", count)
+        log.warn("{}Upbit WS collector fell behind; dropped {} trades since the last warning", tag, count)
     }
     private val parseFailures = ThrottledCounts { count, detail ->
-        log.warn("Upbit WS dropped {} malformed frames since the last warning (latest: {})", count, detail)
+        log.warn("{}Upbit WS dropped {} malformed frames since the last warning (latest: {})", tag, count, detail)
     }
 
     /**
@@ -122,7 +129,8 @@ class UpbitMarketFeed internal constructor(
                     connected.set(true)
                     // 시세를 한 번이라도 받은 연결에서만 UP 을 생존으로 친다. 구독이 거절되거나 아무것도 오지 않는 연결은 UP 이 와도 끊긴 것이다.
                     val delivered = AtomicBoolean(false)
-                    log.info("Upbit WebSocket connected. Markets: {}", markets)
+                    // 시세판 연결은 수백 개라 수만 찍는다.
+                    log.info("{}Upbit WebSocket connected. Markets: {}", tag, if (label.isEmpty()) markets else "${markets.size} markets")
 
                     val subscriptionMessage = buildSubscriptionMessage(markets, includeTrades)
                     val pings = reactor.core.publisher.Flux.interval(Duration.ofMillis(pingIntervalMs)).map { PING }
@@ -138,7 +146,7 @@ class UpbitMarketFeed internal constructor(
                             // 횟수는 연결이 끝날 때만 늘어 한 연결에서는 처음 받은 메시지에서만 0 이 아니다.
                             if (event !is MarketEvent.Alive) {
                                 val failed = reconnectAttempts.getAndSet(0)
-                                if (failed > 0) log.info("Upbit WS receiving data; reconnect backoff reset after {} attempts", failed)
+                                if (failed > 0) log.info("{}Upbit WS receiving data; reconnect backoff reset after {} attempts", tag, failed)
                             }
                             when (event) {
                                 is MarketEvent.Ticker -> {
@@ -152,14 +160,14 @@ class UpbitMarketFeed internal constructor(
                                 MarketEvent.Alive -> if (running.get() && delivered.get()) onAlive()
                             }
                         }
-                        .doOnError { e -> log.warn("Upbit WS receive error: {}", e.message) }
+                        .doOnError { e -> log.warn("{}Upbit WS receive error: {}", tag, e.message) }
                         .then()
 
                     // PING 은 연결 내내 보내므로 받기와 나란히 돈다. 받기가 끝나면(서버가 닫음) 연결도 끝난다.
                     Mono.firstWithSignal(receiveMono, sendMono)
                 }
                 .doOnError { e ->
-                    log.warn("Upbit WS connection error: {}", e.message)
+                    log.warn("{}Upbit WS connection error: {}", tag, e.message)
                     connected.set(false)
                 }
                 .doFinally {
@@ -168,7 +176,7 @@ class UpbitMarketFeed internal constructor(
                         val attempt = reconnectAttempts.incrementAndGet()
                         val delay = (baseReconnectDelayMs * (1L shl minOf(attempt - 1, 5)))
                             .coerceAtMost(MAX_RECONNECT_DELAY_MS)
-                        log.info("Upbit WS reconnecting in {}ms (attempt {})", delay, attempt)
+                        log.info("{}Upbit WS reconnecting in {}ms (attempt {})", tag, delay, attempt)
                         // netty 스레드에서 sleep 하면 이벤트 루프를 붙잡으므로 별도 스레드에서 기다린다.
                         val thread = Thread {
                             try {
@@ -197,9 +205,20 @@ class UpbitMarketFeed internal constructor(
             reconnectThread.get()?.interrupt()
             disposable.get()?.dispose()
             trades.cancel()
-            log.info("Upbit market flow closed")
+            log.info("{}Upbit market flow closed", tag)
         }
     }
+
+    /** 업비트 KRW 마켓 전체(내부 표기). market 그룹 한도(IP 당 초당 10회) 안에서 하루 한 번 부른다. */
+    suspend fun getKrwMarkets(): List<String> =
+        upbitWebClient.get()
+            .uri("/v1/market/all")
+            .retrieve()
+            .bodyToMono<List<JsonNode>>()
+            .awaitSingle()
+            .mapNotNull { node -> node["market"]?.asText()?.takeIf { it.startsWith("KRW-") } }
+            .filter { MarketPair.isValid(Exchange.UPBIT, it) }
+            .map { MarketPair.normalize(Exchange.UPBIT, it) }
 
     suspend fun getCandles(market: String, interval: CandleInterval, count: Int): List<NormalizedCandle> {
         val upbitMarket = MarketPair.toUpbitFormat(market)
