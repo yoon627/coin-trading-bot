@@ -26,7 +26,7 @@ class AuthControllerPasswordLengthTest {
     private val jwtProvider = mockk<JwtProvider>()
     private val secrets = mockk<UserSecretsService>()
     private val controller = AuthController(
-        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(),
+        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), refreshTokens(),
     )
 
     // 25자지만 75바이트라 문자 수 상한(72)은 통과하고 bcrypt 한계는 넘는다.

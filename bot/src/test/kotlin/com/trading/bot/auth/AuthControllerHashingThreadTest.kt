@@ -34,7 +34,7 @@ class AuthControllerHashingThreadTest {
     private val jwtProvider = mockk<JwtProvider> { every { generateToken(any(), any()) } returns "jwt" }
     private val secrets = mockk<UserSecretsService> { every { encryptUpbitKeys(null, null) } returns (null to null) }
     private val controller = AuthController(
-        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), hashThread.asCoroutineDispatcher(),
+        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), refreshTokens(), hashThread.asCoroutineDispatcher(),
     )
     private val user = UserEntity(id = 1, username = "owner", password = "hash")
 

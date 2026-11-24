@@ -34,7 +34,7 @@ class AuthControllerRegistrationTest {
     private val secrets = mockk<UserSecretsService>()
     private val controller = AuthController(
         // 해시를 시험 스케줄러 밖의 실제 스레드로 보내면 advanceUntilIdle 이 동시 가입의 겹침을 붙잡지 못한다.
-        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), Dispatchers.Unconfined,
+        userRepository, passwordEncoder, jwtProvider, RequestValidators(), secrets, StandardEnvironment(), refreshTokens(), Dispatchers.Unconfined,
     )
 
     private fun request() = MockServerHttpRequest.post("http://localhost/api/auth/register").build()

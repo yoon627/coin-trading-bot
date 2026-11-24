@@ -27,6 +27,7 @@ class AuthControllerCookieTest {
             requestValidators = mockk<RequestValidators>(),
             userSecretsService = mockk<UserSecretsService>(),
             environment = env,
+            refreshTokens = refreshTokens(),
         )
     }
 
