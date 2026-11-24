@@ -5,7 +5,7 @@ import com.trading.bot.auth.currentUserId
 import com.trading.bot.engine.BotControlPersistFailedException
 import com.trading.bot.engine.reloadFailureMessage
 import com.trading.bot.engine.RuntimeReloadFailedException
-import com.trading.bot.engine.TickerChangeFailedException
+import com.trading.bot.engine.BotChangeFailedException
 import com.trading.bot.engine.TradingManagers
 import com.trading.bot.engine.UserTradingManager
 import com.trading.bot.persistence.UserRepository
@@ -72,7 +72,7 @@ class TradingController(
     private suspend fun <T> changingTickers(block: suspend () -> T): T =
         try {
             persisting { block() }
-        } catch (e: TickerChangeFailedException) {
+        } catch (e: BotChangeFailedException) {
             throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.message, e)
         } catch (e: RuntimeReloadFailedException) {
             throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, reloadFailureMessage(e), e)

@@ -24,7 +24,7 @@ class DailyResetManager(
 
     fun getTradingDate(): LocalDate = calendar.tradingDate(clock)
 
-    /** 보유 일수 상한은 진입 시점 스냅샷을 따른다. 스냅샷이 없으면 전역 설정값을 쓴다. */
+    /** 보유 일수 상한은 포지션 스냅샷(진입 때, 또는 사용자가 값을 저장할 때 덮은 값)을 따른다. 없으면 엔진 설정값을 쓴다. */
     fun shouldSellForDailyReset(state: TradingState): Boolean {
         if (!state.position) return false
         val buyDate = state.buyDate ?: return false

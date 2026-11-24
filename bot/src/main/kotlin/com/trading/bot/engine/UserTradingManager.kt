@@ -1,5 +1,9 @@
 package com.trading.bot.engine
 
+import com.trading.bot.exchange.UpbitMarketRules
+import com.trading.bot.exchange.UpbitTradingCalendar
+import com.trading.bot.persistence.UserTradingParamsService
+import com.trading.bot.domain.UserTradingParams
 import com.trading.bot.client.UpbitClient
 import com.trading.bot.domain.TradeSide
 import com.trading.bot.domain.TradingState
@@ -69,10 +73,16 @@ class UserTradingManager(
     private val exitParamsDeclarationCheck: ExitParamsDeclarationCheck? = null,
     runtime: ExchangeRuntime? = null,
     private val priceEventsProperties: PriceEventsProperties = PriceEventsProperties(),
+    private val userTradingParams: UserTradingParamsService? = null,
 ) : SmartLifecycle {
     private val log = LoggerFactory.getLogger(javaClass)
     private val upbitRuntime = UpbitExchangeRuntime(upbitWebClient, tradingProperties, marketDataStore, dailyCandleCache)
     private val runtime: ExchangeRuntime = runtime ?: upbitRuntime
+
+    init {
+        // 기본값 null 은 테스트용이다. 운영에서 빠지면 사용자가 낮춘 한도가 env 로 풀리므로 알린다.
+        if (userTradingParams == null) log.warn("사용자 매매 값 저장소가 없다 — 모든 엔진이 env 매매 값으로 돈다")
+    }
     val exchange: Exchange get() = runtime.exchange
     private val exchangeKey: String = this.runtime.exchange.name
     private val engines = ConcurrentHashMap<Long, TradingEngine>()
@@ -272,8 +282,9 @@ class UserTradingManager(
             // 복호화와 상태 로드가 실패할 수 있으므로 엔진 등록보다 먼저 한다. 복호화를 로드 뒤에 두면
             // 복호화 실패 때 정지 엔진을 바꾸지 않았는데도 그 매도를 버린다고 알린다.
             val decryptedUser = userSecretsService.decryptUserSecrets(user)
+            val profile = profileFor(userId)
             val initialStates = loadInitialStates(userId)
-            val engine = registerNewEngine(userId, decryptedUser)
+            val engine = registerNewEngine(userId, decryptedUser, profile)
             engine.start(tickers, initialStates)
             log.info("Restored bot for user {}: strategy={}, tickers={}", userId, strategy.name, tickers)
             true
@@ -305,12 +316,19 @@ class UserTradingManager(
         }
 
         val decryptedUser = userSecretsService.decryptUserSecrets(user)
+        val profile = try {
+            profileFor(userId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw BotControlPersistFailedException(PARAMS_UNREADABLE_MESSAGE, e)
+        }
         val initialStates = loadInitialStates(userId)
         // 엔진이 첫 매수를 보기 전에 저장된 중지를 읽는다. 읽지 못하면 다른 DB 실패처럼 시작하지 않는다.
         val savedRow = botStateRepository.findByUserIdAndExchange(userId, exchangeKey).awaitSingleOrNull()
         rememberEntriesPause(userId, savedRow)
         val tickerList = tickers ?: tickersOf(savedRow) ?: runtime.profile.tickerList()
-        val engine = registerNewEngine(userId, decryptedUser)
+        val engine = registerNewEngine(userId, decryptedUser, profile)
 
         exitParamsDeclarationCheck?.report("수동 기동 user=$userId")
         // 기동 뒤에 저장하면 저장이 실패해도 봇이 돌고 재시작 때 복원되지 않으므로 먼저 저장한다.
@@ -345,6 +363,102 @@ class UserTradingManager(
         if (running != null) return@withLock respondToRunningEngine(userId, running, tickers)
         persistOrFail(userId, TICKERS_UNPERSISTED_MESSAGE) { saveStoppedTickers(userId, tickers) }
         mapOf("status" to "saved")
+    }
+
+    /** 화면에 보일 매매 값 — 사용자가 정한 항목과 env 기본. 읽기 실패는 던진다. */
+    suspend fun savedParams(userId: Long): UserTradingParams = paramsService().find(userId, runtime.exchange)
+
+    /** env 기본 값(사용자가 정하지 않은 항목이 따르는 값). */
+    fun defaultProfile(): TradingProperties = runtime.profile
+
+    /**
+     * [params] 를 저장했을 때 보유 포지션이 받는 변화(전→후, 지금 가격으로 곧바로 걸리는 청산)와 그 확인 토큰. [priceOf] 는 `KRW-BTC` 의 현재가.
+     */
+    suspend fun previewParams(userId: Long, params: UserTradingParams, priceOf: (String) -> Double?): ParamsPreviewResult =
+        lockFor(userId).withLock {
+            val changes = changesFor(userId, params, priceOf)
+            ParamsPreviewResult(changes, ParamsPreview.confirmToken(params, changes))
+        }
+
+    /** 저장을 막는 문제 — 편집 항목의 범위, 그리고 모든 매수가 건너뛰어지는 조합(손절가에서 최소 주문 미만). */
+    fun paramsProblems(params: UserTradingParams): List<String> {
+        val merged = params.applyTo(runtime.profile)
+        val skip = buySkip(merged.maxInvestAmount, merged.maxLossPct, UpbitMarketRules.MIN_ORDER_KRW)
+        return params.violations(runtime.profile) + listOfNotNull(
+            skip?.let { "max_invest_amount × (1 − max_loss_pct/100) 가 최소 주문(${UpbitMarketRules.MIN_ORDER_KRW.toLong()}원) 미만이라 모든 매수가 건너뛰어진다" },
+        )
+    }
+
+    /** 막지는 않는 조합 경고 — 엔진이 기동 때 남기는 것과 같은 규칙이다. 매매 값 API 는 업비트만 받는다. */
+    fun paramsWarnings(params: UserTradingParams): List<String> =
+        TradingEngine.startupConfigWarnings(params.applyTo(runtime.profile), UpbitMarketRules.MIN_ORDER_KRW).map { it.message }
+
+    /**
+     * 매매 값을 저장한다(빠진 항목은 env 기본 — 전체 교체). 보유 포지션의 청산 스냅샷이 바뀌면, 미리보기에서 받은 [confirmToken] 이
+     * 지금 저장할 내용(값·포지션별 전→후)과 맞을 때만 저장하고 아니면 바뀌는 내용과 새 토큰을 돌려준다 — 손절을 좁히면 곧바로 시장가로
+     * 팔리는데 되돌릴 수 없다. 도는 봇은 교체 경로로 새 값 엔진을 띄우고, 멈춘 봇은 값과 스냅샷만 저장한다.
+     */
+    suspend fun saveParams(userId: Long, params: UserTradingParams, confirmToken: String?, priceOf: (String) -> Double?): Map<String, Any> =
+        lockFor(userId).withLock {
+            if (shuttingDown) return@withLock mapOf("error" to "Service is shutting down")
+            val running = engines[userId]?.takeIf { it.isRunning() }
+            // 멈춘 봇은 맵에 남은 정지 엔진의 미기록 상태를 먼저 남긴 뒤 그 상태로 판단한다 — 확인한 것과 덮을 것이 같은 상태다.
+            val stoppedStates = if (running == null) persistOrFail(userId, PARAMS_NOT_SAVED_MESSAGE) { loadInitialStates(userId) } else null
+            val changes = changesFor(params, running?.getStates()?.values ?: stoppedStates!!.values, priceOf)
+            val token = ParamsPreview.confirmToken(params, changes)
+            if (changes.isNotEmpty() && confirmToken != token) {
+                return@withLock mapOf("status" to "confirm_required", "changes" to changes, "confirm_token" to token)
+            }
+            if (changes.isEmpty() && params == persistOrFail(userId, PARAMS_NOT_SAVED_MESSAGE) { paramsService().find(userId, runtime.exchange) }) {
+                return@withLock mapOf("status" to "unchanged", "changes" to changes)
+            }
+            val rewrite = changes.mapTo(HashSet()) { it.ticker }
+            if (stoppedStates != null) {
+                // 덮은 뒤 정지 엔진이 옛 버전으로 저장하면 충돌하므로 맵에서 뺀다(다음 시작은 새 엔진을 만든다).
+                engines[userId]?.takeIf { !it.isRunning() }?.let { engines.remove(userId, it) }
+                val targets = stoppedStates.values.filter { it.ticker in rewrite }
+                withContext(NonCancellable) {
+                    persistOrFail(userId, PARAMS_NOT_SAVED_MESSAGE) {
+                        paramsService().saveAndRewrite(userId, runtime.exchange, params, targets, params.applyTo(runtime.profile).exitParamsSnapshot())
+                    }
+                }
+                return@withLock mapOf("status" to "saved", "changes" to changes)
+            }
+            try {
+                reloadLocked(userId, newParams = params, rewriteTickers = rewrite)
+            } catch (e: RuntimeReloadFailedException) {
+                if (e.engineRestored) throw BotChangeFailedException(userId, PARAMS_NOT_APPLIED_MESSAGE, e)
+                throw e
+            }
+            val now = engines[userId]?.takeIf { it.isRunning() }
+            if (now != null && now !== running) {
+                log.info("user {} 매매 값을 바꿨다: {} (보유 포지션 {}개 청산 값 갱신)", userId, params, changes.size)
+                return@withLock mapOf("status" to "applied", "changes" to changes)
+            }
+            // 교체 엔진이 없다 — 종료가 끼어들었거나 교체가 일찍 돌아왔다. 값이 커밋됐는지로 문구를 가른다.
+            val saved = runCatching { paramsService().find(userId, runtime.exchange) == params }.getOrDefault(false)
+            throw BotChangeFailedException(
+                userId,
+                when {
+                    saved -> PARAMS_SAVED_SHUTTING_DOWN_MESSAGE
+                    shuttingDown -> PARAMS_SHUTTING_DOWN_NOT_SAVED_MESSAGE
+                    else -> PARAMS_NOT_APPLIED_MESSAGE
+                },
+            )
+        }
+
+    private suspend fun changesFor(userId: Long, params: UserTradingParams, priceOf: (String) -> Double?): List<PositionChange> {
+        val held = engines[userId]?.takeIf { it.isRunning() }?.getStates()?.values
+            ?: tradingStateService.loadStates(userId, runtime.exchange).values
+        return changesFor(params, held, priceOf)
+    }
+
+    private fun changesFor(params: UserTradingParams, states: Collection<TradingState>, priceOf: (String) -> Double?): List<PositionChange> {
+        val after = params.applyTo(runtime.profile).exitParamsSnapshot()
+        val today = UpbitTradingCalendar.tradingDate(Clock.systemUTC())
+        return states.mapNotNull { state ->
+            ParamsPreview.change(state, after, priceOf(state.ticker), state.buyDate?.let { UpbitTradingCalendar.tradingDaysBetween(it, today) })
+        }
     }
 
     private suspend fun storedTickers(userId: Long): List<String>? =
@@ -395,7 +509,7 @@ class UserTradingManager(
             reloadLocked(userId, tickers)
         } catch (e: Throwable) {
             withContext(NonCancellable) { revertIfOldEngineRuns(userId, current, tickers) }
-            if (e is RuntimeReloadFailedException && e.engineRestored) throw TickerChangeFailedException(userId, TICKERS_NOT_CHANGED_MESSAGE, e)
+            if (e is RuntimeReloadFailedException && e.engineRestored) throw BotChangeFailedException(userId, TICKERS_NOT_CHANGED_MESSAGE, e)
             throw e
         }
         val now = engines[userId]?.takeIf { it.isRunning() }?.getUserTickers()
@@ -403,9 +517,9 @@ class UserTradingManager(
             log.info("user {} 감시 목록을 바꿨다: {} → {}", userId, current, tickers)
             return mapOf("status" to "tickers_changed", "strategy" to strategy.name)
         }
-        if (shuttingDown) throw TickerChangeFailedException(userId, TICKERS_SAVED_SHUTTING_DOWN_MESSAGE)
+        if (shuttingDown) throw BotChangeFailedException(userId, TICKERS_SAVED_SHUTTING_DOWN_MESSAGE)
         withContext(NonCancellable) { revertIfOldEngineRuns(userId, current, tickers) }
-        throw TickerChangeFailedException(userId, TICKERS_NOT_CHANGED_MESSAGE)
+        throw BotChangeFailedException(userId, TICKERS_NOT_CHANGED_MESSAGE)
     }
 
     private suspend fun revertIfOldEngineRuns(userId: Long, current: List<String>, tickers: List<String>) {
@@ -576,13 +690,22 @@ class UserTradingManager(
         }
     }
 
-    /** [newTickers] 가 있으면 교체 엔진을 그 목록으로 띄운다(실패해 되살린 옛 엔진은 옛 목록 그대로). */
-    private suspend fun reloadLocked(userId: Long, newTickers: List<String>? = null) {
+    /**
+     * [newTickers] 가 있으면 교체 엔진을 그 목록으로 띄운다(실패해 되살린 옛 엔진은 옛 목록 그대로). [newParams] 가 있으면 상태를
+     * 읽은 뒤 그 값과 보유 포지션 청산 스냅샷을 한 트랜잭션으로 저장하고 그 값으로 띄운다 — 커밋 전 실패면 옛 엔진이 옛 값으로 돌아온다.
+     */
+    private suspend fun reloadLocked(
+        userId: Long,
+        newTickers: List<String>? = null,
+        newParams: UserTradingParams? = null,
+        rewriteTickers: Set<String> = emptySet(),
+    ) {
         if (shuttingDown) return
         val existing = engines[userId] ?: return
-        val decryptedUser = try {
+        // 사용자 값도 엔진을 멈추기 전에 읽는다. 읽지 못하면 env 로 내려가지 않고 교체하지 않는다 — 낮춰 둔 한도가 풀리면 안 된다.
+        val (decryptedUser, profile) = try {
             val user = userRepository.findById(userId).awaitSingleOrNull() ?: return
-            userSecretsService.decryptUserSecrets(user)
+            userSecretsService.decryptUserSecrets(user) to (newParams?.applyTo(runtime.profile) ?: profileFor(userId))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -592,6 +715,7 @@ class UserTradingManager(
             return
         }
         val wasRunning = existing.isRunning()
+        var committed: Map<String, TradingState>? = null
         // 활성 목록(getActiveTickers)을 넘기면 목록에서 빠진 티커가 새 엔진의 진입 대상이 된다.
         val tickers = newTickers ?: existing.getUserTickers()
         // 요청이 끊겨도 루프 join 까지 기다린다. join 전에 돌아가면 옛 루프와 새 루프가 겹친다.
@@ -603,8 +727,27 @@ class UserTradingManager(
             try {
                 val unrecorded = flushStoppedEngine(userId, existing)
                 check(unrecorded.isEmpty()) { "매도 주문 기록을 DB 에 남기지 못함: ${sellRefs(unrecorded)}" }
-                tradingStateService.loadStates(userId, runtime.exchange)
+                tradingStateService.loadStates(userId, runtime.exchange).also { states ->
+                    if (newParams != null) {
+                        val targets = states.values.filter { it.ticker in rewriteTickers && it.exitParams != null && !it.hasPendingSell() }
+                        withContext(NonCancellable) {
+                            paramsService().saveAndRewrite(userId, runtime.exchange, newParams, targets, profile.exitParamsSnapshot())
+                        }
+                        committed = states
+                    }
+                }
             } catch (e: CancellationException) {
+                // 커밋된 뒤라면 옛 엔진을 되살리지 않는다 — 옛 버전·옛 값을 들고 있어 저장이 충돌한다. 새 값 엔진을 띄운다.
+                val states = committed
+                if (states != null && !leftToShutdown(userId)) {
+                    withContext(NonCancellable) {
+                        val replacement = createEngine(decryptedUser, profile)
+                        engines[userId] = replacement
+                        replacement.start(tickers, states)
+                        stopIfShutdownStarted(userId, replacement)
+                    }
+                    throw e
+                }
                 // stop() 은 이미 끝났으므로 되살리지 않으면 손절이 멈춘 엔진만 남는다.
                 if (!leftToShutdown(userId)) {
                     withContext(NonCancellable) {
@@ -640,7 +783,7 @@ class UserTradingManager(
             emptyMap()
         }
         if (leftToShutdown(userId)) return
-        val replacement = createEngine(decryptedUser)
+        val replacement = createEngine(decryptedUser, profile)
         engines[userId] = replacement
         if (wasRunning) {
             replacement.start(tickers, initialStates)
@@ -675,7 +818,7 @@ class UserTradingManager(
         return true
     }
 
-    internal fun createEngine(user: UserEntity): TradingEngine {
+    internal fun createEngine(user: UserEntity, profile: TradingProperties = runtime.profile): TradingEngine {
         // Upbit 엔진 클라이언트는 createUpbitClient 로 만들어야 그 메서드를 stub 한 spy 가 엔진 클라이언트도 바꾼다.
         val parts = if (runtime === upbitRuntime) upbitRuntime.partsFor(createUpbitClient(user)) else runtime.partsFor(user)
         // 결과를 모르는 주문은 identifier 조회로만 확정한다. 그 조회가 없는 거래소는 확정할 길이 없어 엔진을 만들지 않는다.
@@ -688,7 +831,7 @@ class UserTradingManager(
         // 엔진과 포지션 관리가 같은 시계로 시세 나이·조회 백오프·막힘 알림을 잰다.
         val clock = Clock.systemUTC()
         val positionManager = PositionManager(
-            client, parts.profile, tradingStateService, userId,
+            client, profile, tradingStateService, userId,
             commitFill = { persistState, record ->
                 tradeExecutionService.commitFill(persistState, record)
             },
@@ -704,14 +847,14 @@ class UserTradingManager(
             clock = clock,
             lifecycle = tradeExecutionService.orderLifecycle,
         )
-        val dailyResetManager = DailyResetManager(parts.profile, userId = user.id!!, calendar = parts.calendar)
+        val dailyResetManager = DailyResetManager(profile, userId = user.id!!, calendar = parts.calendar)
 
         return TradingEngine(
             upbitClient = client,
             positionManager = positionManager,
             dailyResetManager = dailyResetManager,
             strategy = strategy,
-            tradingProperties = parts.profile,
+            tradingProperties = profile,
             userId = user.id!!,
             username = user.username,
             discordWebhookUrl = user.discordWebhookUrl,
@@ -826,8 +969,17 @@ class UserTradingManager(
     /**
      * 맵에 남은 정지 엔진은 이전 자격증명으로 만들어졌을 수 있어 재사용하지 않는다. [loadInitialStates] 뒤에 부른다.
      */
-    private fun registerNewEngine(userId: Long, user: UserEntity): TradingEngine =
-        createEngine(user).also { engines[userId] = it }
+    private fun registerNewEngine(userId: Long, user: UserEntity, profile: TradingProperties): TradingEngine =
+        createEngine(user, profile).also { engines[userId] = it }
+
+    /** env 설정 위에 사용자 값을 덮은 엔진 설정. 읽기 실패는 던진다. */
+    private suspend fun profileFor(userId: Long): TradingProperties {
+        val params = userTradingParams?.find(userId, runtime.exchange) ?: UserTradingParams.NONE
+        if (params != UserTradingParams.NONE) log.info("user {} 매매 값(사용자 지정): {}", userId, params)
+        return params.applyTo(runtime.profile)
+    }
+
+    private fun paramsService(): UserTradingParamsService = checkNotNull(userTradingParams) { "사용자 매매 값 저장소가 없다" }
 
     /**
      * 선기록까지 실패한 매도는 아무도 확정하지 않는다. uuid 기록만 실패한 매도도 섞여 있는데, 이쪽은 다음 기동이
@@ -847,6 +999,16 @@ class UserTradingManager(
     companion object {
         private const val RESTORE_MAX_ATTEMPTS = 5
 
+        private const val PARAMS_UNREADABLE_MESSAGE =
+            "저장된 매매 값을 읽지 못해 봇을 시작하지 않았습니다. 잠시 후 다시 시도하세요."
+        internal const val PARAMS_NOT_APPLIED_MESSAGE =
+            "매매 값을 바꾸지 못해 이전 값으로 계속 거래 중입니다. 잠시 후 다시 시도하세요."
+        internal const val PARAMS_SAVED_SHUTTING_DOWN_MESSAGE =
+            "서버가 종료 중이라 매매 값은 저장만 했습니다 — 재시작 뒤 새 값으로 거래합니다."
+        internal const val PARAMS_SHUTTING_DOWN_NOT_SAVED_MESSAGE =
+            "서버가 종료 중이라 매매 값을 저장하지 못했습니다. 재시작 뒤 다시 저장하세요."
+        internal const val PARAMS_NOT_SAVED_MESSAGE =
+            "매매 값을 저장하지 못했습니다. 잠시 후 다시 시도하세요."
         private const val TICKERS_UNPERSISTED_MESSAGE =
             "감시 목록을 저장하지 못해 바꾸지 않았습니다. 잠시 후 다시 시도하세요."
         internal const val TICKERS_NOT_CHANGED_MESSAGE =
