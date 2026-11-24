@@ -7,7 +7,8 @@ function refreshSession() {
   if (!refreshing) {
     const call = () => fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' }).then(r => r.ok, () => false);
     const run = typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request('tide-refresh', call) : call();
-    refreshing = Promise.resolve(run).finally(() => { refreshing = null; });
+    // 잠금 요청이 거절돼도(드물다) 갱신 실패로 보고 원래 요청을 한 번 다시 보내는 길로 간다.
+    refreshing = Promise.resolve(run).catch(() => false).finally(() => { refreshing = null; });
   }
   return refreshing;
 }
