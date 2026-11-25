@@ -210,6 +210,58 @@ class UserTradingManagerTest {
         verify(exactly = 0) { mockEngine.getActiveTickers() }
     }
 
+    // 옛 엔진을 멈춘 뒤 새 엔진을 만들거나 띄우지 못하면, 되살리지 않을 때 손절이 멈춘 엔진만 남는다(#409).
+    @Test
+    fun `a replacement that cannot be built or started brings the old engine back`() = runTest {
+        val broken = mockk<TradingEngine>(relaxed = true)
+        every { broken.start(any(), any()) } throws IllegalStateException("start failed")
+        for (failure in listOf<() -> TradingEngine>({ throw IllegalStateException("build failed") }, { broken })) {
+            runningEngineToReload()
+            coEvery { tradingStateService.loadStates(1L) } returns emptyMap()
+            every { manager.createEngine(any()) } answers { failure() }
+
+            val thrown = assertThrows(RuntimeReloadFailedException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+
+            assertTrue(thrown.engineRestored)
+            assertSame(mockEngine, engines()[1L], "되살린 옛 엔진이 맵에 있어야 정지·상태 조회가 그 엔진을 본다")
+        }
+        verify(exactly = 2) { mockEngine.resume() }
+    }
+
+    // 감시 목록을 바꾸다 새 엔진을 띄우지 못하면 옛 엔진이 옛 목록으로 돌아오고 저장한 목록도 되돌린다.
+    @Test
+    fun `a ticker change whose replacement cannot start keeps trading the old list and restores the saved list`() = runTest {
+        runningEngineToReload()
+        every { botStateRepository.findByUserIdAndExchange(1L, "UPBIT") } returns Mono.empty()
+        val saved = mutableListOf<String?>()
+        every { botStateRepository.save(any()) } answers { saved += firstArg<BotStateEntity>().tickers; Mono.just(firstArg()) }
+        coEvery { tradingStateService.loadStates(1L) } returns emptyMap()
+        val broken = mockk<TradingEngine>(relaxed = true)
+        every { broken.start(any(), any()) } throws IllegalStateException("start failed")
+        every { manager.createEngine(any()) } returns broken
+
+        val thrown = assertThrows(BotChangeFailedException::class.java) { runBlocking { manager.startBot(1L, listOf("KRW-ETH")) } }
+
+        assertEquals(UserTradingManager.TICKERS_NOT_CHANGED_MESSAGE, thrown.message)
+        verify(exactly = 1) { mockEngine.resume() }
+        assertSame(mockEngine, engines()[1L])
+        assertEquals(listOf<String?>("KRW-ETH", "KRW-BTC"), saved)
+    }
+
+    @Test
+    fun `a replacement failure whose restore also fails drops the engine and says it is stopped`() = runTest {
+        runningEngineToReload()
+        coEvery { tradingStateService.loadStates(1L) } returns emptyMap()
+        every { manager.createEngine(any()) } throws IllegalStateException("build failed")
+        every { mockEngine.resume() } throws IllegalStateException("resume failed")
+
+        val thrown = assertThrows(RuntimeReloadFailedException::class.java) { runBlocking { manager.reloadUserRuntime(1L) } }
+
+        assertFalse(thrown.engineRestored)
+        assertNull(engines()[1L])
+        verify { mockEngine.unpersistedSells() }
+    }
+
     @Test
     fun `reload rethrows only after the old engine is back up`() = runTest {
         // 순서가 뒤바뀌면 stop 된 엔진만 남아 손절이 멈춘다.

@@ -9,6 +9,8 @@ class RuntimeReloadFailedException(
     cause: Throwable,
     /** false 면 이전 엔진도 되살리지 못해 봇이 정지돼 있고 손절도 돌지 않는다. */
     val engineRestored: Boolean,
+    /** 새 매매 값과 보유 포지션 청산 스냅샷은 커밋됐다 — 되살린 엔진은 신규 매수만 이전 값이다. */
+    val paramsSaved: Boolean = false,
 ) : RuntimeException(
     "user $userId 런타임 교체 실패 — " +
         if (engineRestored) "이전 자격증명 엔진으로 복귀" else "복귀 실패, 엔진 정지 상태",

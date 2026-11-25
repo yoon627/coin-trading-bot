@@ -439,7 +439,9 @@ class UserTradingManager(
             try {
                 reloadLocked(userId, newParams = params, rewriteTickers = rewrite)
             } catch (e: RuntimeReloadFailedException) {
-                if (e.engineRestored) throw BotChangeFailedException(userId, PARAMS_NOT_APPLIED_MESSAGE, e)
+                if (e.engineRestored) {
+                    throw BotChangeFailedException(userId, if (e.paramsSaved) PARAMS_SAVED_NOT_APPLIED_MESSAGE else PARAMS_NOT_APPLIED_MESSAGE, e)
+                }
                 throw e
             }
             val now = engines[userId]?.takeIf { it.isRunning() }
@@ -795,12 +797,51 @@ class UserTradingManager(
             emptyMap()
         }
         if (leftToShutdown(userId)) return
-        val replacement = createEngine(decryptedUser, profile)
-        engines[userId] = replacement
-        if (wasRunning) {
-            replacement.start(tickers, initialStates)
-            stopIfShutdownStarted(userId, replacement)
+        if (!wasRunning) {
+            engines[userId] = createEngine(decryptedUser, profile)
+            return
         }
+        val replacement = try {
+            createEngine(decryptedUser, profile).also {
+                engines[userId] = it
+                it.start(tickers, initialStates)
+            }
+        } catch (e: Exception) {
+            restoreAfterFailedReplacement(userId, existing, committed?.let { initialStates }, e)
+            return
+        }
+        stopIfShutdownStarted(userId, replacement)
+    }
+
+    /**
+     * 옛 엔진을 멈춘 뒤 새 엔진을 만들거나 띄우지 못했다 — 그대로 두면 손절이 멈춘 엔진만 남는다. 옛 엔진을 되살린다. 새 값이 이미
+     * 커밋됐으면([committedStates]) 옛 엔진의 메모리는 옛 행 버전이라 저장이 충돌하므로 커밋한 상태(새 버전·새 청산 값)로 띄운다 —
+     * 엔진 설정(신규 매수)만 이전 값이다. 종료가 끼어들었으면 띄우지 않고 종료에 맡긴다. 아니면 반영 실패로 던진다.
+     */
+    private suspend fun restoreAfterFailedReplacement(
+        userId: Long,
+        existing: TradingEngine,
+        committedStates: Map<String, TradingState>?,
+        cause: Exception,
+    ) {
+        log.error("reload: user {} 새 엔진을 띄우지 못함 — 기존 엔진으로 복귀: {}", userId, cause.message, cause)
+        engines[userId] = existing
+        if (leftToShutdown(userId, cause)) return
+        val paramsSaved = committedStates != null
+        try {
+            withContext(NonCancellable) {
+                if (committedStates != null) existing.start(existing.getUserTickers(), committedStates) else existing.resume()
+            }
+        } catch (restoreFailure: Exception) {
+            log.error("reload: user {} 기존 엔진 복귀 실패 — 엔진이 정지 상태로 남는다", userId, restoreFailure)
+            // 알림을 받은 사람이 DB 를 맞추므로 엔진은 버린다. 맵에 남기면 다음 시작·정지가 메모리 값으로 DB 를 되쓴다.
+            alertDroppedSells(userId, existing.unpersistedSells())
+            engines.remove(userId, existing)
+            restoreFailure.addSuppressed(cause)
+            throw RuntimeReloadFailedException(userId, restoreFailure, engineRestored = false, paramsSaved = paramsSaved)
+        }
+        if (stopIfShutdownStarted(userId, existing)) return
+        throw RuntimeReloadFailedException(userId, cause, engineRestored = true, paramsSaved = paramsSaved)
     }
 
     /**
@@ -1017,6 +1058,10 @@ class UserTradingManager(
             "저장된 매매 값을 읽지 못해 봇을 시작하지 않았습니다. 잠시 후 다시 시도하세요."
         internal const val PARAMS_NOT_APPLIED_MESSAGE =
             "매매 값을 바꾸지 못해 이전 값으로 계속 거래 중입니다. 잠시 후 다시 시도하세요."
+        internal const val PARAMS_SAVED_NOT_APPLIED_MESSAGE =
+            "매매 값은 저장했지만 새 값으로 봇을 다시 띄우지 못했습니다. 봇은 계속 돌며 보유 포지션의 청산 값은 새 값이지만, 신규 매수와 " +
+                "그사이 새로 산 포지션의 청산 값은 이전 값입니다. 잠시 뒤 봇을 정지했다 다시 시작하면 새 값으로 뜹니다 — 시작이 실패하면 " +
+                "봇이 멈춘 채 남아 손절이 돌지 않으니 바로 확인하세요."
         internal const val PARAMS_SAVED_SHUTTING_DOWN_MESSAGE =
             "서버가 종료 중이라 매매 값은 저장만 했습니다 — 재시작 뒤 새 값으로 거래합니다."
         internal const val PARAMS_SHUTTING_DOWN_NOT_SAVED_MESSAGE =

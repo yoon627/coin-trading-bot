@@ -25,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -167,6 +169,41 @@ class UserTradingManagerParamsTest {
         verify(exactly = 1) { oldEngine.resume() }
         assertSame(oldEngine, engines()[1L])
         verify(exactly = 0) { manager.createEngine(any(), any()) }
+    }
+
+    // 커밋 뒤에는 옛 엔진의 메모리가 옛 버전이라 그대로 되살리면 저장이 충돌한다 — 커밋한 상태(새 버전)로 옛 엔진을 띄운다(#409).
+    @Test
+    fun `a replacement that fails after the values committed restarts the old engine from the committed states`() = runTest {
+        running()
+        every { oldEngine.getStates() } returns mapOf("KRW-BTC" to held())
+        val loaded = mapOf("KRW-BTC" to stored())
+        coEvery { tradingStateService.loadStates(1L, any()) } returns loaded
+        coEvery { params.saveAndRewrite(1L, any(), userParams, any(), any()) } returns listOf("KRW-BTC")
+        every { newEngine.start(any(), any()) } throws IllegalStateException("start failed")
+        val token = tokenFor(userParams)
+
+        val thrown = assertThrows(BotChangeFailedException::class.java) { runBlocking { manager.saveParams(1L, userParams, token) { 99.0 } } }
+
+        assertEquals(UserTradingManager.PARAMS_SAVED_NOT_APPLIED_MESSAGE, thrown.message)
+        verify(exactly = 0) { oldEngine.resume() }
+        verify { oldEngine.start(listOf("KRW-BTC"), loaded) }
+        assertSame(oldEngine, engines()[1L])
+    }
+
+    @Test
+    fun `a committed save whose restore also fails says the bot is stopped`() = runTest {
+        running()
+        every { oldEngine.getStates() } returns mapOf("KRW-BTC" to held())
+        coEvery { tradingStateService.loadStates(1L, any()) } returns mapOf("KRW-BTC" to stored())
+        coEvery { params.saveAndRewrite(1L, any(), userParams, any(), any()) } returns listOf("KRW-BTC")
+        every { manager.createEngine(any(), any()) } throws IllegalStateException("build failed")
+        every { oldEngine.start(any(), any()) } throws IllegalStateException("start failed")
+        val token = tokenFor(userParams)
+
+        val thrown = assertThrows(RuntimeReloadFailedException::class.java) { runBlocking { manager.saveParams(1L, userParams, token) { 99.0 } } }
+
+        assertFalse(thrown.engineRestored)
+        assertNull(engines()[1L])
     }
 
     // 멈춘 봇: 맵에 남은 정지 엔진의 미기록 상태를 먼저 남기고 빼고, 값과 스냅샷만 저장한다.
