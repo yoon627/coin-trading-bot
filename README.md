@@ -8,9 +8,11 @@ Upbit 현물 자동매매 봇. Kotlin 2.1, Spring Boot 3.4 WebFlux, R2DBC, Postg
 
 - Upbit WebSocket ticker와 REST 캔들로 시세 수집
 - 일봉 기반 `combined` 전략으로 자동 매수, 손절·익절·트레일링 스탑·보유 기간 상한으로 청산
-- 사용자별 Upbit API 키·Discord webhook 암호화 저장(AES-GCM, `APP_ENCRYPTION_SECRET`). 암호화 전에 평문으로 저장된 webhook 은 기동 때 암호문으로 바꾼다(그사이 새로 저장된 값은 덮지 않는다). webhook 주소는 UTF-8 300바이트까지 받는다. 암호화된 webhook 은 #401 이전 이미지가 읽지 못한다 — 그보다 옛 이미지로 수동 롤백하면 설정 화면에서 webhook 을 다시 저장한다
+- 사용자별 Upbit API 키·Discord webhook 암호화 저장(AES-GCM, `APP_ENCRYPTION_SECRET`). webhook 주소는 UTF-8 300바이트까지
 - 포트폴리오, 거래 이력, 라운드트립 조회
-- JWT httpOnly 쿠키 인증, IP 기준 rate limit(인증 경로 분당 30회, 그 외 API 분당 60회)
+- 업비트 KRW 마켓 전체 실시간 시세판(SSE)
+- KIS 모의·실전 키 저장(`KIS_TRADING_ENABLED`, 매매 엔진 미연결)
+- JWT httpOnly 쿠키 인증, IP 기준 rate limit(인증 경로 분당 30회, 그 외 API 분당 60회, SSE 두 경로는 각각 분당 20회 — 정적 파일·actuator 는 세지 않는다)
 - Discord 거래 알림과 서버 오류 알림
 - 빌드 단계 없는 React 18 SPA(`bot/src/main/resources/static`)
 
@@ -22,6 +24,11 @@ bot/      Spring Boot 애플리케이션
   api/          REST 컨트롤러
   auth/         JWT 인증, Security 설정
   client/       Upbit REST 클라이언트
+  config/       앱 설정 프로퍼티·빈, rate limit, 기동 점검
+  domain/       주문·거래·상태 등 봇 도메인 모델
+  exchange/     거래소 공통 인터페이스(클라이언트, 주문 게이트, 시장 규칙, 거래일)
+  events/       사용자 신호 스트림(`/api/user/events`)
+  kis/          KIS 클라이언트·설정·시장 규칙, 키 저장(`kis/keys/KisKeyController`)
   engine/       매매 엔진, 포지션 관리, 주문 실행
   marketdata/   시세 수집과 인메모리 저장소
   stream/       분봉을 상위 봉으로 집계
@@ -69,7 +76,7 @@ DB 통합 테스트는 `TEST_DB_*` 접속 정보가 없으면 건너뛴다. CI�
 
 ### 포맷
 
-Kotlin 포맷 기준은 ktlint(Spotless)이고, 규칙은 루트 `.editorconfig`에 있다. VSCode의 JetBrains Kotlin 확장도 같은 `.editorconfig`를 읽어, 저장 시 포맷(`editor.formatOnSave`)이 ktlint와 같은 결과를 내도록 맞춰 두었다(지금 코드 전체에서 확인). 처음 보는 코드 모양에서 드물게 다르면 CI의 `spotlessCheck`가 알려 주고, `./gradlew spotlessApply`로 맞춘다.
+Kotlin 포맷 기준은 ktlint(Spotless)이고, 규칙은 루트 `.editorconfig`에 있다. VSCode의 JetBrains Kotlin 확장도 같은 `.editorconfig`를 읽어, 저장 시 포맷(`editor.formatOnSave`)이 ktlint와 같은 결과를 내도록 맞춰 두었다. 처음 보는 코드 모양에서 드물게 다르면 CI의 `spotlessCheck`가 알려 주고, `./gradlew spotlessApply`로 맞춘다.
 
 ```bash
 ./gradlew spotlessApply    # 포맷
@@ -78,17 +85,17 @@ Kotlin 포맷 기준은 ktlint(Spotless)이고, 규칙은 루트 `.editorconfig`
 
 `.editorconfig`를 바꾼 뒤에는 `./gradlew --stop`으로 Gradle daemon을 내리고 `build/spotless-clean`을 지운 다음 돌린다. 그러지 않으면 바꾸기 전 설정으로 포맷한다.
 
-Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/claude-format-hook.sh`)이 Edit·Write 한 이 repo의 `.kt`·`.kts` 파일 하나를 바로 포맷한다(Gradle daemon이 떠 있으면 약 2초). 자동으로 못 고치는 lint 오류는 Claude에게 알리고, Gradle 실패는 편집을 막지 않는다. Bash로 고친 파일과 저장소 여러 개를 쓰는 웹 세션·project thread 에는 훅이 돌지 않으므로 CI의 `spotlessCheck`가 막는다.
+Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/claude-format-hook.sh`)이 Edit·Write·MultiEdit 한 이 repo의 `.kt`·`.kts` 파일 하나를 바로 포맷한다(Gradle daemon이 떠 있으면 약 2초). 자동으로 못 고치는 lint 오류는 Claude에게 알리고, Gradle 실패는 편집을 막지 않는다. Bash로 고친 파일과 저장소 여러 개를 쓰는 웹 세션·project thread 에는 훅이 돌지 않으므로 CI의 `spotlessCheck`가 막는다.
 
 ## 설정
 
-기본값은 `TradingProperties.kt`, `KisTradingProperties.kt`, `AppConfig.kt`, `application.yml`에 있다.
+기본값은 `TradingProperties.kt`, `PriceEventsProperties.kt`, `ShadowExitProperties.kt`, `KisTradingProperties.kt`, `KisApiProperties.kt`, `AppConfig.kt`, `application.yml`에 있다.
 
 업비트 봇의 매매 값 8개(`TRADING_K_VALUE`·`TRADING_INVEST_RATIO`·`TRADING_MAX_INVEST_AMOUNT`·청산 5개)는 사용자가 봇 화면의 매매 설정에서 바꿀 수 있다(`/api/bot/params`, 표 `user_trading_params`). 아래 env 값은 사용자가 정하지 않은 항목의 기본값이다. 사용자 값은 같은 허용 구간(`ExitParamRanges`)으로 검사하고, 시작·재기동 복원·키 저장·감시 목록 교체 모두 그 값으로 엔진을 띄운다. 사용자 값을 읽지 못하면 env 로 내려가지 않고 시작·교체를 하지 않는다(낮춰 둔 한도가 풀리지 않게).
 
 | 환경변수 | 기본값 | 설명 |
 |---|---|---|
-| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5433` / `trading` / `trading` / `trading` | prod 프로필의 기본 포트는 5432 |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5433` / `trading` / `trading` / `trading` | prod 프로필의 기본 포트는 5432. prod 프로필은 `DB_SSL_MODE`(기본 `disable`)를 R2DBC `sslMode`·Flyway JDBC `sslmode` 로 넘긴다 |
 | `JWT_SECRET` | 없음 | 바꾸면 기존 세션이 끊긴다 |
 | `APP_ENCRYPTION_SECRET` | 없음 | 바꾸면 저장된 API 키를 복호화할 수 없다 |
 | `TRADING_TICKERS` | `KRW-BTC` | 거래 종목, 쉼표 구분한 대문자 Upbit 마켓 코드(예: `KRW-BTC`). 형식이 틀리면 배포 preflight 가 막는다. 앱은 목록을 바꾸지 않고 형식이 틀린 항목이나 빈 목록을 기동 뒤 ERROR 로 알린다(복원되는 봇은 저장된 목록을 쓴다) |
@@ -104,7 +111,8 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | `TRADING_ROUND_TRIP_FEE_RATE` | `0.001` | 기록용 수익률에서 빼는 왕복 수수료율 |
 | `TRADING_INTERVAL_SECONDS` | `10` | 공용 시계 주기(초). 허용 `[1, 60]` — 바퀴마다 작업자가 체결 확인·일일 리셋·보유일 청산을 하고, 체결이 30초 넘게 없는 종목은 이 주기로 손절·익절·트레일링·매수를 평가한다 |
 | `TRADING_RECONCILE_ALERT_THRESHOLD` | `20` | 미해소 주문(매수·매도)이 이 값 × 매매 주기(초) 넘게 확정되지 않으면 ERROR 로 한 번 알린다(주문 시각·알림 여부는 저장돼 재시작해도 같은 주문을 다시 알리지 않는다). 그동안 미해소 주문이 그 종목의 매매를 막는다. 허용 `[1, 100]` |
-| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신(시세·PING 응답) 감지·재연결 |
+| `MARKETDATA_WATCHDOG_ENABLED` | `true` | WebSocket 무수신(시세·PING 응답) 감지·재연결. 조정 키 `MARKETDATA_WATCHDOG_STALE_MS`·`_INTERVAL_MS`·`_INITIAL_DELAY_MS`·`_RESTART_BACKOFF_MS`(기본 `60000`·`20000`·`30000`·`1000`) |
+| `TRADING_SHADOW_EXIT_ENABLED` / `TRADING_SHADOW_EXIT_TRAILING_STOP_PCT` / `TRADING_SHADOW_EXIT_TRAILING_ARM_PCT` | `false` / `1.5` / `0.0` | 그림자 청산 관찰 — 후보 트레일링 값을 라이브 매매에 영향 없이 계산·기록만 한다(아래 리스크 관리). 값이 허용 구간 밖이면 기동은 막지 않고 관찰기만 만들지 않는다 |
 | `TRADING_PRICE_EVENTS_ENABLED` | `true` | 시세 수집이 업비트 체결(`trade`)도 같은 연결로 받고, 종목 작업자가 체결마다 청산·매수를 판단한다(아래 매매 엔진 절). 끄면 ticker 만 받고 엔진도 체결을 받지 않아 바퀴만 판단한다 — 문제가 생겼을 때 env 로 끄는 비상용(재시작만으로 되돌림) |
 | `MARKETDATA_BOARD_ENABLED` | `true` | 시세판 전용 업비트 연결(KRW 마켓 전체 ticker, 아래 시세 수집 절). 끄면 시세판 연결만 열지 않는다 — 봇 연결과 따로라 매매에 영향이 없다(재시작만으로 되돌림) |
 | `KIS_TRADING_ENABLED` / `KIS_TRADING_LIVE_ENABLED` | `false` / `false` | KIS 주식 매매, 실전 계좌 사용. 엔진에는 아직 연결되지 않았다. 켰을 때 KIS 설정 오류는 앱 기동을 막지 않고 ERROR 로그로 알린 뒤 KIS 클라이언트만 만들지 않는다 |
@@ -116,6 +124,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | `DISCORD_DEPLOY_WEBHOOK_URL` | 없음 | 배포 결과 알림(배포 스크립트만 읽는다 — 앱 컨테이너에는 넘기지 않는다) |
 | `DISCORD_ERROR_ALERT_ENABLED` / `DISCORD_ERROR_WEBHOOK_URL` | `false` / 없음 | 서버 ERROR 로그 알림(`error_alert_outbox` 를 거쳐 보낸다 — 아래 ERROR 알림 절). 스위치는 배포 preflight 가 소문자 `true`/`false` 만 받는다(오기면 새 컨테이너와 롤백이 함께 기동에 실패한다) |
 | `APP_DOMAIN` | 없음 | 운영 CORS origin과 Caddy TLS 도메인 |
+| `APP_AUTH_COOKIE_FORCE_INSECURE` | `false` | 켜면 인증 쿠키에 Secure 를 붙이지 않는다(prod 포함). TLS 없는 임시 테스트 서버용이고, 켜 두는 동안 JWT 가 평문으로 오간다 |
 
 ## API
 
@@ -126,15 +135,15 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 | POST | `/api/auth/register`, `/api/auth/login`, `/api/auth/logout` | 첫 계정 생성, 로그인(`remember`), 로그아웃 |
 | POST | `/api/auth/refresh` | 로그인 유지 쿠키로 접근 JWT 를 새로 받는다(아래 로그인 유지) |
 | GET | `/api/user/me` | 내 정보 |
-| POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다) |
-| GET·PUT | `/api/bot/tickers` | 감시 목록(`{tickers}`, `exchange`). GET 은 도는 엔진의 목록, 아니면 저장된 목록, 그것도 없으면 `TRADING_TICKERS`. PUT 은 시작과 같은 검증을 거쳐 저장한다 — 도는 봇이면 그 목록으로 바꾸고(`tickers_changed`), 멈춘 봇이면 저장만 한다(`saved`, 다음 시작이 그 목록으로 뜬다) |
+| POST | `/api/user/keys`, `/api/user/settings` | Upbit 키, 사용자 설정 저장(저장 뒤 등록된 모든 거래소 엔진이 다시 읽는다). 반영하지 못하면 503 — 문구가 옛 엔진으로 계속 도는지, 봇이 정지돼 손절이 멈췄는지 알린다. 저장이 10초 안에 끝나지 않아도 반영 여부를 모른다는 503 이다 |
+| GET·PUT | `/api/bot/tickers` | 감시 목록(`{tickers}`, `exchange`). GET 은 도는 엔진의 목록, 아니면 저장된 목록, 그것도 없으면 `TRADING_TICKERS`. PUT 은 시작과 같은 검증을 거쳐 저장한다 — 도는 봇이면 그 목록으로 바꾸고(`tickers_changed`), 멈춘 봇이면 저장만 한다(`saved`, 다음 시작이 그 목록으로 뜬다). 도는 봇의 교체가 실패하거나 제어 상태를 저장하지 못하면 503 |
 | GET·PUT | `/api/bot/params` | 업비트 봇 매매 값. GET 은 `{defaults, params, effective}`(env 기본·사용자 값·덮은 결과, 키는 `k_value`·`invest_ratio`·`max_invest_amount`·`take_profit_pct`·`max_loss_pct`·`trailing_stop_pct`·`trailing_arm_pct`·`max_hold_days`). PUT 은 전체 교체(빠진 항목·null 은 env 기본, 모르는 키는 400)다 — 범위 밖이거나 모든 매수가 건너뛰어지는 조합(손절가에서 최소 주문 미만)이면 400, 보유 포지션의 청산 값이 바뀌는데 그 내용을 미리본 `confirm_token` 이 없거나 맞지 않으면 409 와 `changes`(포지션별 전→후, 지금 가격으로 곧바로 걸리는 청산 `triggers`)·새 `confirm_token`, 저장·적용하지 못했으면 503. 응답의 `warnings` 는 엔진 기동 때와 같은 조합 경고다(막지 않는다) |
 | POST | `/api/bot/params/preview` | 같은 본문으로 저장하지 않고 `changes`·`confirm_token`·`warnings` 만 돌려준다 |
-| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`). 업비트 봇의 `tickers` 는 업비트 KRW 마켓 목록에 있어야 한다(없으면 400 `Unknown markets: …`, 목록을 못 받았으면 형식만 본다) |
+| POST | `/api/bot/start`, `/api/bot/stop` | 봇 시작·정지 (`exchange`). 업비트 봇의 `tickers` 는 업비트 KRW 마켓 목록에 있어야 한다(없으면 400 `Unknown markets: …`, 목록을 못 받았으면 형식만 본다). 도는 봇의 교체가 실패하거나 제어 상태를 저장하지 못하면 503(정지는 저장 실패만) |
 | GET | `/api/bot/status` | 봇 상태, 엔진 생존(`loop`), 신규 매수 중지(`entries_paused`), 포지션(상태 저장 충돌 `version_conflict`, 확인 조회 연속 실패 `lookup_failures`·다음 조회 시각 `next_lookup_at`, 미해소 주문 시각 `pending_buy.since`·`pending_sell.since` 포함), 미해소 주문 (`exchange`) |
-| POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`) |
+| POST | `/api/bot/entries` | 신규 매수 중지·재개 `{"paused": true\|false}` — 매도는 그대로 (`exchange`). 저장하지 못하면 503(아래 신규 매수 중지) |
 | GET | `/api/account`, `/api/portfolio` | 잔고, 포트폴리오 (`exchange`, `UPBIT` 만) |
-| GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`). `orders` 의 체결 줄을 체결 시각 내림차순으로 읽는다(V43 절) |
+| GET | `/api/trades`, `/api/trades/roundtrips` | 한 거래소의 거래 이력, 라운드트립(`total` 도 그 거래소 기준) (`exchange`). `orders` 의 체결 줄을 체결 시각 내림차순으로 읽는다(아래 주문 생애) |
 | GET | `/api/market/markets` | 업비트 KRW 마켓 목록 `{markets: [{market: "KRW-BTC", korean_name, english_name}]}` — 봇 화면의 코인 검색이 쓴다. 처음 필요할 때 업비트 `/v1/market/all` 로 받아 하루 동안 쓰고, 받지 못하면 받아 둔 목록을, 그것도 없으면 503(`Retry-After: 60`)이다(실패 뒤 1분은 다시 묻지 않는다). 시세판과 따로라 `MARKETDATA_BOARD_ENABLED=false` 여도 된다 |
 | GET | `/api/market/stream` | 시세판 실시간 시세(SSE, `text/event-stream`). 표 아래 설명 |
 | GET | `/api/user/events` | 내 체결·봇 상태가 바뀌었다는 신호(SSE). 표 아래 설명 |
@@ -151,7 +160,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 
 `/api/kis/keys`는 `KIS_TRADING_ENABLED=true`일 때만 있다(꺼져 있으면 404). 세 값은 `APP_ENCRYPTION_SECRET`으로 각각 암호화해 `user_broker_keys`에 두고, 응답에는 앱키·앱시크릿을 어떤 형태로도 내지 않는다. 앱키는 128자, 앱시크릿은 512자 이하의 공백 없는 ASCII, 계좌번호는 `12345678-01` 또는 `1234567801`이다. 형식이 틀리거나 경로가 `KIS_PAPER`·`KIS`가 아니면 400, `KIS_TRADING_LIVE_ENABLED=false`에서 실전(`KIS`) 키를 저장하면 409, DB 가 10초 안에 답하지 않거나 DB 오류면 503 이다(저장 요청이었다면 반영됐는지 상태 조회로 확인한다). 삭제는 실전 키도 받는다. 저장·삭제 뒤 그 환경의 매니저가 등록돼 있으면 도는 엔진이 키를 다시 읽는다. 지금은 KIS 매니저가 없어 저장·삭제만 한다. 다시 읽기에 실패하면 503 이고 저장·삭제는 이미 반영된 상태다. `APP_ENCRYPTION_SECRET`을 바꾸면 저장된 KIS 키를 복호화하지 못하므로 키를 다시 저장한다. 그때 상태 조회는 `configured: true`에 `account: null`로 보인다.
 
-`running` 은 시작·정지 상태이고, 엔진이 실제로 도는지는 `loop` 로 본다 — `alive`(공용 시계와 종목 작업자가 정지 없이 끝나지 않았는지 — 봇이 정지돼 있으면 false)와 `last_progress_at`(시계와 활성 작업자 중 가장 오래 진행하지 않은 쪽의 시각, UTC, 정지돼 있으면 null — 매수 창구 앞에서 기다리는 종목은 뺀다). 한 바퀴가 오류로 끝나는 종목도 진행으로 보이지만 그때는 그 바퀴마다 오류 ERROR 가 따로 나간다. 시계나 작업자가 정지 없이 끝나면 바로 어느 쪽인지 붙여 `[ENGINE DEAD]`, 5분 넘게 진행이 없으면 `[ENGINE STALLED]` ERROR(Discord)가 한 번 나간다(회복하면 INFO). 둘 다 그 사용자의 손절·청산 평가가 멈췄다는 뜻이라 봇을 정지한 뒤 다시 시작하고, 정지가 끝나지 않으면 컨테이너를 재시작한다. 목록 밖 종목을 더 관리할 것이 없어 정리할 때 그 작업자가 끝나는 것은 정상이다. 설정 저장도 엔진을 새로 띄운다.
+`running` 은 시작·정지 상태이고, 엔진이 실제로 도는지는 `loop` 로 본다 — `alive`(공용 시계와 종목 작업자가 정지 없이 끝나지 않았는지 — 봇이 정지돼 있으면 false)와 `last_progress_at`(시계와 활성 작업자 중 가장 오래 진행하지 않은 쪽의 시각, UTC, 정지돼 있으면 null — 매수 창구 앞에서 기다리는 종목은 뺀다). 한 바퀴가 오류로 끝나는 종목도 진행으로 보이지만 그때는 그 바퀴마다 오류 ERROR 가 따로 나간다. 시계나 작업자가 정지 없이 끝나면 바로 어느 쪽인지 붙여 `[ENGINE DEAD]`, 5분 넘게 진행이 없으면 `[ENGINE STALLED]` ERROR(Discord)가 한 번 나간다(회복하면 INFO). 둘 다 그 사용자의 손절·청산 평가가 멈췄다는 뜻이라 봇을 정지한 뒤 다시 시작하고, 정지가 끝나지 않으면 컨테이너를 재시작한다. 목록 밖 종목을 더 관리할 것이 없어 정리할 때 그 작업자가 끝나는 것은 정상이다. 설정 저장도 엔진을 새로 띄운다 — 새 엔진을 띄우지 못하면 옛 엔진을 되살리고(503), 그것도 실패하면 봇이 정지된 채 남아 수동으로 시작해야 한다.
 
 ### 매매 엔진
 
@@ -162,9 +171,9 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - 업비트 private 요청은 계좌마다 어떤 1초 창에서도 주문 10·그 밖 25 를 넘지 않게 기다렸다 보낸다(공식 한도 12·30). 엔진·포트폴리오 화면·잔고 API·09:05 대조가 같은 계좌의 한도를 함께 쓴다. 공개 시세 API 는 따로 센다.
 - 바깥(상태 API·관리자)은 종목 상태를 읽기만 한다. 정지는 모든 작업자가 끝날 때까지(주문 중이면 그 주문이 끝날 때까지) 기다린다.
 
-시세 수집 대상은 돌고 있는 업비트 봇들의 활성 종목(사용자 종목 + 청산만 남은 보유)의 합집합이다. 봇이 시작·정지·재시작되거나 엔진이 종목을 정리하면 2초 모아 지금 연결과 다를 때만 새 목록으로 다시 연결한다(재연결 사이 최소 15초 — 누구의 시작·정지든 모든 사용자의 피드를 다시 연결한다). 재연결 몇 초 동안의 체결은 빠지고 시세는 REST 로 이어진다. 봇이 없으면 연결하지 않는다. 형식이 틀린 종목 코드는 구독에서 빼고 WARN 을 남긴다(없는·상장 폐지 코드는 업비트가 무시한다). 구독에서 빠진 마켓은 저장소의 시세·봉을 지우고, 다시 들어오면 일봉을 새로 시드한다. ticker 는 구독 때 마켓마다 현재 상태(스냅샷)를 한 번 받고, 30초마다 PING 을 보내 업비트의 `{"status":"UP"}` 응답도 시세처럼 생존 신호로 본다 — 거래가 뜸한 마켓만 구독해도 무수신 워치독·`[FEED DOWN]` 이 오판하지 않는다. 다만 시세를 한 번도 받지 못한 연결(구독 거절 등)의 UP 은 생존으로 치지 않는다. 업비트의 오류 프레임은 읽지 못한 프레임으로 세고 WARN 을 남긴다. 시세 수집은 ticker 와 함께 업비트 체결(`trade`)을 같은 WebSocket 연결·같은 구독 요청으로 받는다. ticker 는 체결을 건너뛰어(실측: BTC 체결 100건 중 14건이 ticker 에 안 보였다) 체결마다 판단하려면 `trade` 가 필요하다. 받은 체결은 체결 번호(`sequential_id`)로 중복만 거른 뒤 저장소의 체결 흐름에 싣는다(번호가 연속이 아니라 빠진 체결은 알 수 없다). ticker 는 체결과 다른 길로 받는 즉시 저장소에 넣어, 체결이 밀려도 최신 ticker 를 잃지 않는다(밀린 체결은 오래된 것부터 버린다). 5분마다 INFO `[trade intake]` 한 줄에 마켓별 받은 수·중복·피드에서 밀려 버린 수·읽지 못한 프레임 수가 남는다.
+시세 수집 대상은 돌고 있는 업비트 봇들의 활성 종목(사용자 종목 + 청산만 남은 보유)의 합집합이다. 봇이 시작·정지·재시작되거나 엔진이 종목을 정리하면 2초 모아 지금 연결과 다를 때만 새 목록으로 다시 연결한다(재연결 사이 최소 15초 — 누구의 시작·정지든 모든 사용자의 피드를 다시 연결한다). 재연결 몇 초 동안의 체결은 빠지고 시세는 REST 로 이어진다. 봇이 없으면 연결하지 않는다. 형식이 틀린 종목 코드는 구독에서 빼고 WARN 을 남긴다(없는·상장 폐지 코드는 업비트가 무시한다). 구독에서 빠진 마켓은 저장소의 시세·봉을 지우고, 다시 들어오면 일봉을 새로 시드한다. ticker 는 구독 때 마켓마다 현재 상태(스냅샷)를 한 번 받고, 30초마다 PING 을 보내 업비트의 `{"status":"UP"}` 응답도 시세처럼 생존 신호로 본다 — 거래가 뜸한 마켓만 구독해도 무수신 워치독·`[FEED DOWN]` 이 오판하지 않는다. 다만 시세를 한 번도 받지 못한 연결(구독 거절 등)의 UP 은 생존으로 치지 않는다. 업비트의 오류 프레임은 읽지 못한 프레임으로 세고 WARN 을 남긴다. 시세 수집은 ticker 와 함께 업비트 체결(`trade`)을 같은 WebSocket 연결·같은 구독 요청으로 받는다. ticker 는 체결을 건너뛰어 체결마다 판단하려면 `trade` 가 필요하다. 받은 체결은 체결 번호(`sequential_id`)로 중복만 거른 뒤 저장소의 체결 흐름에 싣는다(번호가 연속이 아니라 빠진 체결은 알 수 없다). ticker 는 체결과 다른 길로 받는 즉시 저장소에 넣어, 체결이 밀려도 최신 ticker 를 잃지 않는다(밀린 체결은 오래된 것부터 버린다). 5분마다 INFO `[trade intake]` 한 줄에 마켓별 받은 수·중복·피드에서 밀려 버린 수·읽지 못한 프레임 수가 남는다.
 
-시세판은 봇 연결과 따로 업비트 WebSocket 연결을 하나 더 연다(`MarketBoard`). 업비트 `/v1/market/all` 의 KRW 마켓 전체(2026-11 기준 약 300개)의 ticker 만 받아 시세판 저장소에 마켓별 최신 값을 둔다 — 체결·캔들·시드는 받지 않고, 봇 연결·저장소와 섞이지 않아 봇 시작·정지가 시세판을 끊지 않고 목록 갱신이 봇 체결을 끊지 않는다. 목록은 하루 한 번 KST 04:00 에 다시 받아 바뀌었을 때만 다시 연결하고, 빠진 마켓은 시세판 저장소에서 지운다. 첫 목록을 못 받으면 1분부터 두 배씩(상한 30분) 다시 받고, 빈 목록·실패는 받아 둔 목록을 덮지 않는다. 시세도 UP 도 120초 넘게 없으면(30초마다 보므로 120~150초 뒤) 연결을 새로 연다 — 업비트 장애 중에는 이 재시작이 피드의 재연결 대기를 1초로 되돌려 2~3분마다 몇 번 더 접속을 시도한다. 시세판 연결의 피드 로그는 `[board]`, 시세판 자체 로그는 `Market board` 로 시작하고, 읽지 못한 프레임 수는 봇 `[trade intake]` 에 섞이지 않는다. 실측(2026-11-24, 한 연결 300개): 70초 끊김 없음, 초당 평균 67건·최대 340건, 약 63KB/s, 84개는 그동안 거래가 없어 스냅샷만 왔다. `MARKETDATA_BOARD_ENABLED=false` 면 시세판 연결을 열지 않는다(재시작만으로 되돌림, 봇 매매에는 영향 없음).
+시세판은 봇 연결과 따로 업비트 WebSocket 연결을 하나 더 연다(`MarketBoard`). 업비트 `/v1/market/all` 의 KRW 마켓 전체(2026-11 기준 약 300개)의 ticker 만 받아 시세판 저장소에 마켓별 최신 값을 둔다 — 체결·캔들·시드는 받지 않고, 봇 연결·저장소와 섞이지 않아 봇 시작·정지가 시세판을 끊지 않고 목록 갱신이 봇 체결을 끊지 않는다. 목록은 하루 한 번 KST 04:00 에 다시 받아 바뀌었을 때만 다시 연결하고, 빠진 마켓은 시세판 저장소에서 지운다. 첫 목록을 못 받으면 1분부터 두 배씩(상한 30분) 다시 받고, 빈 목록·실패는 받아 둔 목록을 덮지 않는다. 시세도 UP 도 120초 넘게 없으면(30초마다 보므로 120~150초 뒤) 연결을 새로 연다 — 업비트 장애 중에는 이 재시작이 피드의 재연결 대기를 1초로 되돌려 2~3분마다 몇 번 더 접속을 시도한다. 시세판 연결의 피드 로그는 `[board]`, 시세판 자체 로그는 `Market board` 로 시작하고, 읽지 못한 프레임 수는 봇 `[trade intake]` 에 섞이지 않는다. `MARKETDATA_BOARD_ENABLED=false` 면 시세판 연결을 열지 않는다(재시작만으로 되돌림, 봇 매매에는 영향 없음).
 
 체결로 판단한다(`TRADING_PRICE_EVENTS_ENABLED`, 기본 켬). 엔진마다 수집기 하나가 작업자가 뜬 뒤 저장소의 체결 흐름을 구독해 자기 거래소의 체결을 그 종목 작업자에게 넣는다(정리된 종목의 체결은 버린다). 수집기가 엔진이 도는 중에 끝나면 `[ENGINE DEAD] trade collector` 다.
 
@@ -180,21 +189,13 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 
 ### 시세판 부하 측정
 
-`scripts/loadtest/run_board_load.sh <app image> [초] [접속 수…]` 는 운영 이미지를 운영 compose 의 app 과 같은 설정(prod 프로필, `JAVA_OPTS`, 메모리 832MB)에 CPU 1개 제한을 더해 로컬(`127.0.0.1:18090`, 컨테이너 `ltapp`·`ltdb`)에 띄우고, 접속 수 단계마다 `sse_load.py` 로 `/api/market/stream` 을 열어 둔 채 잰다. CPU 제한은 운영(제한 없음)보다 좁다 — 같은 호스트의 운영 앱을 지키려고 측정에만 둔다. 사용자당 3개씩 열고, 10% 는 수신 버퍼 4KB 소켓으로 상태 줄만 읽고 더 읽지 않는 연결(서버 쓰기가 막히도록 만든 연결 — 실제로 막혔는지는 재지 않았다)이고 '느린 연결' 은 그중 200 을 받은 수다. 자원(메모리·CPU·스레드, 5초씩 쉬며 약 6초마다)은 로그인을 마친 뒤부터 그 단계의 측정 시간 동안만 잰다. 지연은 "도착 시각 − 그 delta 안 가장 늦은 시세 시각(업비트 `timestamp`)" 이라 업비트→서버 지연과 두 시계의 차이까지 들어간다. '열림' 은 `snapshot` 을 받은 연결, 실패는 200 이 아닌 health·서버가 닫은 스트림·연결 오류 수다. 운영 앱·DB 에는 손대지 않고 운영 앱의 health 상태(같은 주기)와 그 단계 동안의 ERROR 로그 수만 읽는다.
+`scripts/loadtest/run_board_load.sh <app image> [초] [접속 수…]` 는 운영 이미지를 운영 compose 의 app 과 같은 설정(prod 프로필, `JAVA_OPTS`, 메모리 832MB)에 CPU 1개 제한을 더해 로컬(`127.0.0.1:18090`, 컨테이너 `ltapp`·`ltdb`)에 띄우고, 접속 수 단계마다 `sse_load.py` 로 `/api/market/stream` 을 열어 둔 채 앱 메모리·CPU·스레드, 전달 지연, `/actuator/health` 왕복을 잰다. 운영 앱·DB 에는 손대지 않고 운영 앱의 health 상태와 ERROR 로그 수만 읽는다. 측정 중에 같은 호스트에서 다른 빌드를 돌리면 수치가 오염된다.
 
-실측(2026-11-24, 운영 이미지 `54a9c364`, 운영 호스트(2 vCPU)에서 단계마다 120초, KRW 301개 — 스크립트 출력 그대로):
+SSE 시세판은 전체 500·사용자당 3 연결이 상한이고 넘으면 503 이다. 2026-11-24 측정(운영 이미지, CPU 1개)에서 500 접속에도 health p99·스레드 수가 그대로여서 별도 서비스로 나누지 않았다 — 상한을 올리거나 화면이 늘면 다시 잰다.
 
-| 접속 | 열림 | 느린 연결 | 503 | 실패 (health·끊김·오류) | 앱 메모리 최대 (첫 단계 대비) | CPU 평균 | 스레드 최대 | 지연 p50 / p99 | 도착 간격 p99 | health p50 / p99 | 운영 앱 healthy · ERROR |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | 0 | 0 | 0 | 0 · 0 · 0 | 285 MiB | 12% | 40 | - / - ms | - ms | 7 / 19 ms | 20/20 · +0 |
-| 100 | 90 | 10 | 0 | 0 · 0 · 0 | 313 MiB (+28) | 17% | 36 | 80 / 309 ms | 1006 ms | 5 / 13 ms | 20/20 · +0 |
-| 300 | 270 | 30 | 0 | 0 · 0 · 0 | 353 MiB (+68) | 16% | 40 | 90 / 325 ms | 1003 ms | 4 / 12 ms | 20/20 · +0 |
-| 500 | 450 | 50 | 0 | 0 · 0 · 0 | 377 MiB (+92) | 16% | 39 | 79 / 323 ms | 1005 ms | 4 / 16 ms | 20/20 · +0 |
-| 600 | 450 | 50 | 100 | 0 · 0 · 0 | 400 MiB (+115) | 16% | 42 | 82 / 312 ms | 1003 ms | 4 / 21 ms | 20/20 · +0 |
+### 감시 종목 바꾸기
 
-해석: 접속이 늘어도 스레드는 36~42 로 그대로다 — 연결마다 스레드를 잡지 않고 이벤트 루프 몇 개가 모든 스트림을 보낸다. 읽지 않는 연결이 섞여도 나머지 연결은 1초 주기를 지켰고(도착 간격 p99 약 1.0초, 지연 p99 약 0.3초), 같은 앱의 health 는 p50 이 7→4ms 로 줄고 p99 는 12~21ms 사이였다. 상한(500)을 넘는 100개는 503 으로 거절됐다. 메모리는 500 접속까지 +92 MiB 였다 — 한 JVM 에서 단계를 오름차순으로 재 시간에 따른 증가가 섞여 있다(600 단계는 열린 수가 500 과 같은데 +23). 연결 하나의 비용은 이보다 작다.
-
-분리 판단: 시세판을 별도 서비스로 나누지 않는다. 기준은 "500 접속에서 health p99 가 0 접속의 2배 이하이고 메모리가 한도의 80% 아래" 다. health p99 는 19→16ms 였다. 메모리는 측정 앱이 빈 DB·엔진 없음이라 절대값 대신 증가분(500 접속 +92 MiB)을 운영 앱 사용량에 더해 본다 — 측정 직후 한 번 읽은 값(325 MiB, 엔진·시세판 포함)이면 약 417 MiB(한도 832MB 의 50%), 운영 compose 의 `mem_reservation`(640MB)을 보수적인 운영 사용량으로 보면 732 MiB(88%)다. 뒤쪽은 80% 를 넘지만 한도 안이고, 최악은 SSE 연결이 아니라 힙 상한(`MaxRAMPercentage=70`, 약 582 MiB)이 정한다. 한계 — 엔진(주문 경로) 지연은 업비트 키가 없어 재지 못했고 `/actuator/health` 왕복으로 대신했다. 부하 클라이언트도 같은 호스트에서 돌았다(`nice -n 19`). 측정 중에 같은 호스트에서 다른 빌드를 돌리면 수치가 오염된다(첫 측정에서 Gradle 빌드와 겹친 단계의 health p99 가 653ms 였다). 접속 상한을 올리거나 화면이 늘면 다시 잰다.
+봇 화면은 감시 종목을 업비트 KRW 마켓의 한글·영문 이름이나 코드로 검색해(코인 추가) 감시 중인 코인 태그로 고른다(최대 20개, `/api/market/markets`). 목록을 못 받으면 `KRW-BTC` 처럼 코드를 입력해 넣는다. 태그를 넣거나 빼면 1.5초 뒤 `PUT /api/bot/tickers` 로 저장하고(연달아 고치면 마지막 것만), 시작은 저장된 목록으로 뜬다 — 목록 없이 `/api/bot/start` 를 보내면 저장된 목록, 그것도 없으면 `TRADING_TICKERS` 다. 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 정지 없이 목록을 바꾼다(`status: tickers_changed`). 새 목록을 먼저 저장하고 키 저장과 같은 교체 경로로 엔진을 새 목록으로 다시 띄운다 — 옛 엔진을 멈추고 매도 기록을 마친 뒤 저장된 상태로 새 엔진을 시작하며, 그사이 몇 초는 매매하지 않는다. 교체가 실패하면(새 엔진을 만들거나 띄우지 못한 경우 포함) 옛 엔진이 옛 목록으로 돌아가고 저장한 목록도 되돌리려 한 뒤(되돌리기 저장이 실패하면 ERROR) 503 이다. 옛 엔진도 되살리지 못했으면 새 목록을 저장해 둔 채 503 이고 재시작이 새 목록으로 복원한다. 저장 중에 서버 종료가 시작되면 바꾸지 않고 저장만 해 두었다고 알린다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다(청산 대기).
 
 ### 신규 매수 중지
 
@@ -204,10 +205,7 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - 값은 `bot_state` 에 사용자·거래소별로 저장돼 봇 정지·시작, 설정 저장, 재시작·배포 뒤에도 유지된다. 봇을 한 번도 시작하지 않았어도 켤 수 있고, 그러면 다음 시작부터 적용된다.
 - `GET /api/bot/status` 의 `entries_paused`(읽지 못했으면 null)와 `entries_paused_changed_at`(마지막으로 바뀐 시각, UTC)으로 확인한다. 같은 값을 다시 보내면 시각은 바뀌지 않는다.
 - `paused` 가 빠졌거나 참·거짓으로 읽을 수 없는 값이면 400 이다. 저장이 실패하면 503 이고 값은 바뀌지 않는다. 저장이 10초 안에 끝나지 않아도 503 인데, 이때는 DB 에 반영됐는지 알 수 없으니 상태를 확인하고 같은 요청을 다시 보낸다(같은 값이면 저장된 값을 그대로 적용한다). 봇 정지·설정 저장이 진행 중이면 그것이 끝날 때까지 기다린다.
-- DB 를 SQL 로 직접 고친 값은 재시작 전까지 도는 봇에 반영되지 않는다. API 를 쓴다.
-- V32 이전 이미지로 앱을 롤백하면 이 값을 읽지 않아 매수가 다시 나간다. 롤백할 때는 봇을 정지한다.
-
-봇 화면은 감시 종목을 업비트 KRW 마켓의 한글·영문 이름이나 코드로 검색해(코인 추가) 감시 중인 코인 태그로 고른다(최대 20개, `/api/market/markets`). 목록을 못 받으면 `KRW-BTC` 처럼 코드를 입력해 넣는다. 태그를 넣거나 빼면 1.5초 뒤 `PUT /api/bot/tickers` 로 저장하고(연달아 고치면 마지막 것만), 시작은 저장된 목록으로 뜬다 — 목록 없이 `/api/bot/start` 를 보내면 저장된 목록, 그것도 없으면 `TRADING_TICKERS` 다. 실행 중인 봇에 다른 종목 목록으로 `/api/bot/start`를 보내면 정지 없이 목록을 바꾼다(`status: tickers_changed`). 새 목록을 먼저 저장하고 키 저장과 같은 교체 경로로 엔진을 새 목록으로 다시 띄운다 — 옛 엔진을 멈추고 매도 기록을 마친 뒤 저장된 상태로 새 엔진을 시작하며, 그사이 몇 초는 매매하지 않는다. 교체가 실패하면(새 엔진을 만들거나 띄우지 못한 경우 포함) 옛 엔진이 옛 목록으로 돌아가고 저장한 목록도 되돌리려 한 뒤(되돌리기 저장이 실패하면 ERROR) 503 이다. 옛 엔진도 되살리지 못했으면 새 목록을 저장해 둔 채 503 이고 재시작이 새 목록으로 복원한다. 저장 중에 서버 종료가 시작되면 바꾸지 않고 저장만 해 두었다고 알린다. 목록에서 뺀 종목도 이미 보유한 포지션은 청산될 때까지 관리한다(청산 대기).
+- DB 를 SQL 로 직접 고친 값은 봇을 정지·시작하거나 앱을 재시작하기 전까지 도는 봇에 반영되지 않는다. API 를 쓴다.
 
 ### 미해소 주문 대사
 
@@ -217,13 +215,13 @@ Claude Code 세션에서는 `.claude/settings.json`의 PostToolUse 훅(`scripts/
 - 닿았을 수 있는 일시 장애(응답 시한 초과·연결 끊김·5xx·429)는 잔고 전부를 파는 매도만 다시 보낸다. 소유자가 따로 산 코인이 남는 매도는 다시 보내지 않는다 — 중복 방지가 새면 그 코인까지 팔린다.
 - 다시 보낸 요청이 `duplicated_identifier` 로 거절되면 앞 요청이 접수된 것이라 그 주문을 조회해 이어받는다. 닿았을 수 있는 실패 뒤의 다른 거절은 확정으로 읽지 않고 identifier 로 확정한다.
 - 인증 실패·해석할 수 없는 응답은 다시 보내지 않는다. 매수는 어떤 실패에도 다시 보내지 않는다.
-- 업비트가 응답하지 않으면 매도 한 건이 보통 33초(매번 새 연결이면 60~78초) 걸리고, 그동안 같은 라운드의 뒤 종목 판단(손절 포함)이 그만큼 늦는다.
+- 업비트가 응답하지 않으면 매도 한 건이 보통 33초(매번 새 연결이면 60~78초) 걸리고, 그동안 그 종목의 다음 판단(손절 포함)이 그만큼 늦는다 — 다른 종목은 기다리지 않는다(매수는 매수 창구에서 줄을 선다).
 
 결과를 모르는 주문(pending)은 사람이 풀지 않는다. 대사(거래소 조회)로만 성공·실패가 되고, 그때까지 그 종목은 매수·매도하지 않는다. `GET /api/bot/status`의 `positions[].pending_buy`·`pending_sell`로 보인다.
 
 1. identifier 로 찾으면 그 주문으로 이어받는다 — 체결량이 있으면 체결로 기록하고, 체결 없이 끝났으면(취소) pending 을 비운다.
 2. 404(그런 주문 없음)인데 잔고가 주문 전과 같으면 연속 2번·첫 404 뒤 60초가 지나 미접수로 확정한다. 조회 실패·"아직 안 보임"·잔고 조회 실패가 끼면 다시 센다.
-3. 404 인데 잔고가 주문 전과 다르면(매수는 보유가 늘었고, 매도는 free 가 줄었다) 첫 흔적 뒤 30분이 지난 404 에서 업비트 종료 주문 목록(`GET /v1/orders/closed`, done·cancel)을 다시 보고 identifier 를 맞춰 본다. 매도는 주문 시각(1분 앞당김)부터, 매수는 업비트가 허용하는 7일 창 전체를 본다(V38 전에 낸 매수는 주문 시각이 없어 확인한 때로 채워지므로 창에 쓰지 않는다).
+3. 404 인데 잔고가 주문 전과 다르면(매수는 보유가 늘었고, 매도는 free 가 줄었다) 첫 흔적 뒤 30분이 지난 404 에서 업비트 종료 주문 목록(`GET /v1/orders/closed`, done·cancel)을 다시 보고 identifier 를 맞춰 본다. 매도는 주문 시각(1분 앞당김)부터, 매수는 업비트가 허용하는 7일 창 전체를 본다.
    - 목록에 있으면 그 주문을 다시 읽어 1 처럼 이어받는다.
    - 없으면 미접수로 확정하고 `[UNKNOWN ORDER]` ERROR 를 한 번 낸다. 거래 기록은 남기지 않는다. 매수는 그 거래일에 다시 사지 않는다(실제로 체결됐다면 그 코인은 봇 장부 밖에 남는다). 매도는 줄어든 잔고 min(주문 수량, 주문 전 free − 지금 free)만큼 봇 장부를 줄인다 — 실제로 팔렸는데 못 찾은 경우 소유자 코인을 팔지 않는다(소유자가 판 것이었다면 그만큼 봇 코인이 장부 밖에 남는다). 주문 수량이 없는 옛 매도 행은 장부를 그대로 두고 미접수로 푼다(WARN).
    - 30분 타이머는 첫 흔적을 본 때부터 재고, 조회 실패·잔고 조회 실패·흔적이 사라진 조회가 끼어도 끊지 않는다. 메모리에만 있어 재시작하면 다시 센다(늦어지는 쪽). 확정은 잔고를 본 조회에서만 하고, 목록·주문 조회가 실패하면 다음 조회에서 다시 본다.
@@ -244,7 +242,7 @@ identifier 로 주문을 찾지 못하는 거래소(`UnknownOrderPolicy.supports
 
 매일 09:05 KST(업비트 거래일이 바뀌는 09:00 직후)에 한 번 봇 사용자마다 업비트의 최근 48시간 안에 만든 종료 주문(`GET /v1/orders/closed`, 막 만든 1시간은 제외 — 그 1시간은 다음 날 대조에 든다)을 받아, 봇이 낸 주문(identifier `ctb-`) 중 체결됐는데 `orders` 에 업비트 체결 줄(FILLED)이 없는 것을 사용자별 ERROR `[ORDER RECONCILE]` 한 줄(앞 8건의 시장·매수/매도·체결량·만든 시각·uuid, 나머지 uuid 는 로그 파일의 WARN)로 알린다. 아직 처리 중인 pending 주문은 뺀다. 고치지는 않는다.
 
-- 보정할 때는 그 체결을 `orders` 의 FILLED 줄로 만든다(V44 부터 체결 기록은 `orders` 뿐이다). 그 uuid(`exchange_order_id`)나 식별자(`client_order_id`)를 가진 대기·접수 줄이 이미 있으면 그 줄을 `status = 'FILLED'` 로 UPDATE 한다(같은 주문번호 줄을 하나 더 넣으면 고유 키에 막힌다). 없으면 `status = 'FILLED'`, `exchange = 'UPBIT'`, `exchange_order_id = <uuid>` 인 줄을 넣는다. 화면 값 칼럼을 채운다 — 매도는 `decision_price`·`filled_volume`(또는 `requested_volume`)·`filled_funds`, 매수는 `book_avg_price`·`position_volume_after`·`filled_funds`, 그리고 `fill_source`·`fee_basis`·`completed_at`. 그래야 화면에 보이고 다음 대조에서 빠진다(같은 주문번호 줄이 있으면 엔진도 그 체결을 다시 기록하지 않는다). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
+- 보정할 때는 그 체결을 `orders` 의 FILLED 줄로 만든다. 그 uuid(`exchange_order_id`)나 식별자(`client_order_id`)를 가진 대기·접수 줄이 이미 있으면 그 줄을 `status = 'FILLED'` 로 UPDATE 한다(같은 주문번호 줄을 하나 더 넣으면 고유 키에 막힌다). 없으면 `status = 'FILLED'`, `exchange = 'UPBIT'`, `exchange_order_id = <uuid>` 인 줄을 넣는다. 화면 값 칼럼을 채운다 — 매도는 `decision_price`·`filled_volume`(또는 `requested_volume`)·`filled_funds`, 매수는 `book_avg_price`·`position_volume_after`·`filled_funds`, 그리고 `fill_source`·`fee_basis`·`completed_at`. 그래야 화면에 보이고 다음 대조에서 빠진다(같은 주문번호 줄이 있으면 엔진도 그 체결을 다시 기록하지 않는다). `orders` 줄을 지우려면 그 줄을 가리키는 알림 대기열의 `order_id` 를 먼저 비운다(`UPDATE trade_notification_outbox SET order_id = NULL WHERE order_id = <id>`). 넣는 줄은 매도·엔진 매수의 총액 = 가격 × 수량을 지킨다. 같은 주문은 한 프로세스에서 한 번만 알리고, 재시작하면 48시간 안에서 한 번 더 알린다.
 - 거짓 경보가 나는 경우: 같은 업비트 키를 다른 환경(로컬 실행 등)이 써서 그쪽 DB 에 기록된 주문, 같은 키를 두 사용자가 등록한 경우.
 - 끝나지 않은 주문 줄: 같은 실행에서 만든 지 1시간 넘게 대기(PENDING)·접수(OPEN)로 남은 `orders` 줄(주문 생애 쓰기는 매매를 막지 않으려고 최선이라 앱이 죽거나 쓰기가 실패하면 남는다)을 사용자당 50줄까지(마지막으로 고친 순) 식별자로 업비트에서 찾아 분명한 증거가 있을 때만 닫는다 — 취소됐거나 체결 없이 끝났으면 `CANCELLED`, 주문번호 없이 식별자로도 찾을 수 없고 만든 지 7일 안이면 `NOT_PLACED`(식별자는 계정에서 영구 고유라 접수되지 않은 것이다. 업비트가 식별자 조회를 얼마나 오래 지원하는지 문서에 없어 오래된 줄은 단정하지 않는다). 닫은 줄의 `note` 는 `reconcile (was <이전 상태>): …` 로 시작해, 되돌려야 하면 그 note 로 찾는다. 체결됐는데 기록이 없으면 줄 id·uuid 를 담아 ERROR 한 번(note 에 남겨 재시작해도 다시 알리지 않는다 — 위 보정 방법대로 그 줄을 FILLED 로), 다른 줄에 체결이 기록돼 있으면(잔고 복구 경로가 식별자 없이 새 줄을 넣은 경우) 알리지 않는다. 아직 거래소에서 대기 중, 주문번호가 있는데 식별자로 안 보이는 줄, 오래된 404, 식별자 없는 줄은 그대로 두고 `note`(`reconcile: …`)만 남긴다 — 다음 날 뒤로 밀려 상한을 차지하지 않는다. 엔진이 붙잡고 있는 주문(대기 주문의 uuid·식별자, 조회로 받은 uuid)은 건너뛴다. 조회가 실패하면 그 줄에 note 를 남겨 뒤로 보내고 그 사용자의 나머지 줄은 다음 날로 미루며 WARN 한 줄(식별자 조회도 404 가 아닌 오류는 ERROR 로 남긴다). 체결 대조에서 키가 거절됐으면(401·403) 이 점검은 건너뛴다. 주문번호로는 조회하지 않는다(그 조회는 404 도 ERROR 로 남긴다). 다른 줄에 체결이 기록된 고아 줄은 매일 다시 보므로, 손으로 정리하려면 `note` 에 남은 그 줄 id 를 확인하고 고아 줄을 `CANCELLED` 로 닫는다. 이 점검의 실패는 위 체결 대조를 막지 않고, "모든 사용자 실패" ERROR 에도 세지 않는다.
 - 업비트 키를 다른 계정의 키로 바꾸면 옛 계정 주문은 식별자로 찾을 수 없어, 주문번호가 없는 7일 안의 대기 줄이 `NOT_PLACED` 로 닫힌다 — 바꾸기 전에 대기 줄이 없는지 본다.
@@ -269,7 +267,7 @@ SELECT id, attempts, next_attempt_at, last_error FROM trade_notification_outbox 
 
 ### ERROR 알림
 
-서버 ERROR 로그 알림(분당 5건, 넘으면 60초 뒤 요약 1건)도 `error_alert_outbox` 에 한 행으로 남은 뒤 보낸다. 로그 쪽은 메모리 큐에 넣기만 하고 발송 루프가 DB 에 넣어 보낸 뒤 결과를 적는다. 발송 규칙(5초 주기·backoff·24시간·실패 시 회차 멈춤·한 번 더 갈 수 있음)은 체결 알림과 같다. 알림의 시각은 ERROR 가 난 시각이다.
+서버 ERROR 로그 알림(같은 ERROR 는 5분에 한 번, 전체 분당 5건, 넘은 것은 60초 뒤 요약 1건)도 `error_alert_outbox` 에 한 행으로 남은 뒤 보낸다. 로그 쪽은 메모리 큐에 넣기만 하고 발송 루프가 DB 에 넣어 보낸 뒤 결과를 적는다. 발송 규칙(5초 주기·backoff·24시간·실패 시 회차 멈춤·한 번 더 갈 수 있음)은 체결 알림과 같다. 알림의 시각은 ERROR 가 난 시각이다.
 
 - DB 에 넣지 못하거나 5초 안에 끝나지 않으면, 또 발송 루프가 2분 넘게 돌지 않으면 그 알림은 예전처럼 바로 보낸다(DB 장애를 알리는 ERROR 도 간다).
 - 종료 때 남은 큐와 보류된 요약은 DB 에 넣고(최대 2초) 다음 기동에 보낸다. 그 안에 넣지 못한 것은 로그 파일에만 남는다.
@@ -281,21 +279,17 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 
 ### 봇 종목을 앱에서 직접 사고팔 때
 
-봇은 자기 장부 수량까지만 판다. 봇이 사면 이번에 산 만큼(주문 체결량)만 장부에 더하고 평단은 체결가로 잡아(체결 내역이 없으면 주문 전 보유가 없을 때는 계좌 평단, 있으면 그때 가격), 그 전부터 있던 코인은 장부에 들지 않는다. 봇이 보유 중인 종목을 앱에서 더 사도 다음 청산에서 그 코인은 팔지 않고 봇이 산 만큼만 판다(WARN 한 줄). 장부와 잔고의 차이가 최소 주문(5,000원) 미만이면 팔 수 없는 자투리를 남기지 않도록 같이 판다. 체결 뒤 남은 코인과 응답 없는 매도의 확정도 이번 주문 수량 기준이라, 남은 코인을 봇 포지션으로 다시 잡지 않는다.
+봇은 자기 장부 수량까지만 판다. 봇이 사면 이번에 산 만큼(주문 체결량)만 장부에 더하고 평단은 체결가로 잡아(체결 내역이 없으면 주문 전 보유가 없을 때는 계좌 평단, 있으면 그때 가격), 그 전부터 있던 코인은 장부에 들지 않는다. 봇이 보유 중인 종목을 앱에서 더 사도 다음 청산에서 그 코인은 팔지 않고 봇이 산 만큼만 판다(WARN 한 줄). 장부와 잔고의 차이가 최소 주문(5,000원) 미만이면 팔 수 없는 자투리를 남기지 않도록 같이 판다(이 자투리 처리는 #419 에서 다시 정한다). 체결 뒤 남은 코인과 응답 없는 매도의 확정도 이번 주문 수량 기준이라, 남은 코인을 봇 포지션으로 다시 잡지 않는다.
 
 봇 장부는 `trading_states` 에 저장된다(V34). 재시작·설정 저장(reload)·재동기화는 저장된 장부를 잔고 합(free+locked)만큼 줄이기만 하고 늘리지 않는다 — 앱에서 산 코인은 재시작 뒤에도 장부에 들지 않는다. 우리 것이 아닌 잠금(수동 주문·출금 대기)은 잔고 합에 들어가 장부를 줄이지 않는다. 팔 수 있는 잔고가 없으면 장부로 손절 평가를 계속하되 새로 사지 않는다.
 
-장부를 저장하기 전에 쌓인 행(이 변경 이전)은 첫 동기화에서 한 번 정한다:
+V34 이전에 저장된 행은 첫 동기화에서 봇 흔적이 있을 때만 잔고 전체를 편입한다(WARN).
 
-- 봇이 산 흔적(진입 전략·매수일·미해소 주문)이 있으면 그 종목 잔고 전체를 봇 장부로 편입한다(WARN 한 줄). 우리 것이 아닌 잠금이 있으면 풀릴 때까지 미룬다. 그때 손으로 산 코인이 섞여 있었으면 나눌 수 없다. 미해소 매도가 있으면 그 주문 수량을 장부로 쓴다.
-- 흔적이 없으면 편입하지 않는다(팔 수 있는 잔고가 있으면 WARN 한 줄) — 손으로 산 코인으로 보고 봇이 손절·청산하지 않는다.
-
-그래도 봇이 산 코인 일부를 앱에서 팔면 장부가 그만큼 줄 뿐 기록(SELL)은 남지 않는다. 봇이 다루는 종목은 앱에서 직접 사고팔지 않는 것이 안전하다. V34 이전 버전으로 롤백할 때는 미해소 매도가 없을 때 하고, 롤백한 동안에는 옛 코드가 잔고 전체를 봇 포지션으로 잡는다.
+그래도 봇이 산 코인 일부를 앱에서 팔면 장부가 그만큼 줄 뿐 기록(SELL)은 남지 않는다. 봇이 다루는 종목은 앱에서 직접 사고팔지 않는 것이 안전하다.
 
 ## 리스크 관리
 
-- 익절은 트레일링 폭과 활성 수익률보다 커야 한다. 작으면 익절이 항상 먼저 걸려 트레일링이 동작하지 않는다.
-- 엔진을 시작할 때 설정 조합을 알린다. 익절이 트레일링 폭·활성 수익률 이하이거나 왕복 수수료 이하면 WARN 이다. 1회 매수 상한이 최소 주문에 못 미치거나 손절가에서 팔 때 최소 주문 미만이 돼 모든 매수가 건너뛰어지는 조합이면 ERROR(Discord)다.
+- 엔진을 시작할 때 설정 조합을 알린다. 익절이 트레일링 폭·활성 수익률 이하이거나(익절이 먼저 걸려 트레일링이 동작하지 않는다) 왕복 수수료 이하면 WARN 이다. 활성 수익률이 0 보다 크고 트레일링 폭 이하여도(arm 이 효과 없음) WARN 이다. 1회 매수 상한이 최소 주문에 못 미치거나 손절가에서 팔 때 최소 주문 미만이 돼 모든 매수가 건너뛰어지는 조합이면 ERROR(Discord)다.
 - 매도 기록의 `pnl_percent`는 수수료를 뺀 값이고, 청산 판정은 수수료 전 수익률로 한다.
 - 사용자가 매매 값을 저장하면 보유 포지션의 청산 값(스냅샷)도 지금 실효 값 전체로 바뀐다 — 바꾸지 않은 항목도 그 포지션의 진입 때 값에서 지금 값으로 바뀔 수 있다. 손절·추적 손절을 좁히거나 최대 보유일을 줄이면 곧바로 시장가로 팔릴 수 있어, 바뀌는 포지션이 있으면 서버가 포지션별 전→후와 지금 가격(시세판, 모르면 '현재가 모름')으로 곧바로 걸리는 청산을 보여 주고, 그 내용(값·포지션별 전→후)에 묶인 확인 토큰이 맞아야 저장한다 — 확인 뒤 값을 바꾸거나 그사이 포지션이 바뀌면 다시 확인을 받는다. 잔량을 놓아 준 행은 보유로 세지 않는다. 도는 봇은 정지 → 매도 기록 → 상태 로드 뒤 값과 스냅샷을 한 트랜잭션으로 저장하고 그 값으로 엔진을 다시 띄운다(몇 초 매매하지 않는다, 추적 고점은 유지). 커밋되지 않으면 옛 엔진이 옛 값으로 돌아온다. 커밋 뒤 새 엔진을 만들거나 띄우지 못하면 옛 엔진을 커밋한 상태로 다시 띄운다 — 보유 포지션 청산 값은 새 값이지만 신규 매수와 그사이 새로 산 포지션의 청산 값은 봇을 다시 시작할 때까지 이전 값이고, 503 으로 그렇게 알린다(다시 시작이 같은 원인으로 실패하면 봇이 멈춘 채 남는다). 같은 값을 다시 저장하면 바뀐 것이 없어 다시 띄우지 않는다. 매도 중인 포지션은 바꾸지 않는다. env 를 바꾼 재배포만으로는 지금처럼 보유 포지션에 닿지 않는다.
 - 그림자 청산 관찰(`TRADING_SHADOW_EXIT_ENABLED`)은 라이브 청산 값이 포지션 동안 그대로라고 보고 짝지어 비교한다. 보유 중에 사용자가 값을 바꾼 포지션의 관찰은 섞인다. 표는 마지막 저장 시각만 가지므로, 분석할 때는 앱 로그의 `매매 값을 바꿨다` 줄(저장마다 남는다) 시각이 그 포지션의 진입과 청산 사이인 관찰을 뺀다.
@@ -311,13 +305,13 @@ SELECT status, count(*) FROM error_alert_outbox GROUP BY status;
 - main push(머지): 테스트 → multi-arch 이미지 빌드 → GHCR push → 운영 변경 판정 → 자동 배포 판정 → SSH로 Vultr에 `deploy.sh deploy`. 배포가 곧 엔진 재시작(그동안 손절 평가가 잠깐 멈춘다)이라 운영에 들어가는 파일이 바뀐 push 만 배포한다. `**.md`와 `docs/**`만 바뀐 push는 테스트·빌드도 건너뛴다.
 - 자동 배포 판정(`deploy/vultr/auto_deploy_gate.sh`): 운영 compose(`deploy/vultr/docker-compose.prod.yml`)에서 app 밖(postgres·caddy 서비스, 볼륨·네트워크 등)이 마지막 정상 배포와 다르면 배포하지 않고 경고(warning)를 남긴다 — 서버의 `docker compose up -d` 가 그 컨테이너를 다시 만들어 DB·HTTPS 가 재시작되므로, 봇을 멈출지 정한 뒤 수동 실행으로 배포한다. 마지막 정상 배포 커밋이 없거나 compose 를 읽지 못해도 자동 배포하지 않는다.
 - main에서의 수동 실행(workflow_dispatch): push 와 같지만 자동 배포 판정을 거치지 않는다. 실행한 커밋을 그대로 배포한다. 다른 브랜치에서 수동 실행하면 이미지만 올리고(이미 있으면 건너뜀) 배포하지 않는다.
-- 운영 변경 판정(`deploy/vultr/deploy_needed.sh`): 서버의 마지막 정상 배포(`/opt/app/.last-good-sha`)의 컨테이너가 healthy 로 돌고 있고, 그 뒤 제외 목록(문서·테스트·`scripts/`·`.gitignore`·로컬 개발 파일) 밖 파일이 바뀌지 않았으면 배포하지 않고 알림(notice)만 남긴다. 지금 컨테이너가 마지막 정상 배포가 아니거나 healthy 가 아니면(실패한 배포가 남긴 컨테이너, 수동 롤백, 정지) 배포한다. 실행한 커밋이 마지막 정상 배포보다 옛 커밋이면 실패로 멈춘다(배포 두 개가 순서가 뒤바뀌어 끝난 경우).
+- 운영 변경 판정(`deploy/vultr/deploy_needed.sh`): 서버의 마지막 정상 배포(`/opt/app/.last-good-sha`)의 컨테이너가 healthy 로 돌고 있고, 그 뒤 제외 목록(문서·테스트·`scripts/`·`.gitignore`·로컬 개발 파일) 밖 파일이 바뀌지 않았으면 배포하지 않고 알림(notice)만 남긴다. 지금 컨테이너가 마지막 정상 배포가 아니거나 healthy 가 아니면(실패한 배포가 남긴 컨테이너, 수동 롤백, 정지) 배포한다. 실행한 커밋이 마지막 정상 배포보다 옛 커밋이면 실패로 멈춘다(배포 두 개가 순서가 뒤바뀌어 끝난 경우). 옛 커밋으로 되돌리려면 force 로 수동 실행한다(V44 이전 커밋은 안 된다 — 아래 V47 절).
 - push·수동 실행 모두 그 커밋의 이미지가 GHCR 에 이미 있으면 다시 빌드하지 않는다(force 여도). 베이스 이미지 태그가 떠 있어 다시 빌드하면 같은 태그의 내용이 바뀌고, 재기동·롤백이 검증하지 않은 이미지를 받기 때문이다. 베이스 이미지 보안 패치는 `Dockerfile` 을 고친 새 커밋으로 받는다 — 새 태그라 헬스체크가 실패하면 직전 정상 SHA 로 자동 롤백한다.
 - `force`: 판정 없이 배포한다(이미지는 위 규칙대로). secret 만 바꿨을 때처럼 파일 밖 변경을 반영할 때 쓴다. 이미지와 설정이 그대로면 force 여도 컨테이너를 다시 만들지 않는다(compose 는 바뀐 것이 없으면 그대로 둔다). 단순 재시작은 서버에서 `docker compose restart app` 이다. 수동 롤백(`APP_VERSION=… up -d`) 뒤에는 force 가 필요 없다 — 지금 컨테이너가 마지막 정상 배포가 아니라 판정이 배포한다. 마지막 정상 배포와 같은 커밋을 force 로 다시 배포하면 헬스체크가 실패해도 자동 롤백하지 않는다(롤백 대상이 배포 대상과 같다).
 - push 배포는 main 이 이미 앞서 있으면(문서만 다른 경우 빼고) 배포하지 않고 최신 커밋의 실행에 맡긴다 — 테스트·빌드가 끝난 순서로 줄을 서서 옛 커밋이 엔진을 한 번 더 재시작하거나 옛 커밋 거부로 실패하지 않게 한다. 자동 배포를 보류하면 배포 webhook 으로도 알린다(보류가 풀릴 때까지 뒤 push 도 같은 이유로 보류된다). secret(`VULTR_DEPLOY_ENV`)만 바꾼 것은 판정에 보이지 않아 다음 자동 배포에 함께 들어간다 — 바로 반영하려면 force 로 수동 실행한다.
 - 헬스체크(`/actuator/health`)는 웹·DB 와 함께 실행 중이던 봇의 복원이 끝났는지 본다. 복원 중이면 503(OUT_OF_SERVICE), 재시도를 다 쓰고 복원하지 못한 봇이 있으면 503(DOWN)이다. 그 봇을 손으로 시작하거나 멈추면 다시 200 이 된다. bot state 조회 자체가 끝까지 실패했으면 재시작 전까지 503 이고, `TRADING_AUTO_START=false` 면 복원하지 않으므로 언제나 200 이다.
-- 배포 결과(성공·자동 롤백·실패)를 Discord 로 알린다. 모두 `DISCORD_DEPLOY_WEBHOOK_URL`(배포 webhook, `VULTR_DEPLOY_ENV` 시크릿에 넣는다)로 간다. 배포 webhook 이 없으면 롤백·실패만 `DISCORD_ERROR_WEBHOOK_URL` 로 가고 성공은 보내지 않는다. 거래 webhook(`DISCORD_WEBHOOK_URL`)은 체결 알림 전용이라 배포 알림을 보내지 않는다. 원격 배포 전에 멈춘 실패(설정 검사·preflight·업로드, Actions 의 준비 스텝)는 알리지 않는다 — 운영 컨테이너를 건드리기 전이고 Actions 실패로 보인다.
-- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓰고, 그 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백하지 않는다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌지 못할 수 있어 자동 롤백하지 않는다. 다만 롤백 호환 검사(아래 "스키마 변경 규칙")를 통과하면 자동 롤백한다. 어느 쪽이든 새 앱을 띄우기 전에 DB 를 덤프한다. 롤백 대상 SHA 에 V44(옛 거래 표 쓰기를 멈춤) 마이그레이션이 없어도 자동 롤백하지 않는다(아래 V47 절).
+- 배포 결과(성공·자동 롤백·실패)를 Discord 로 알린다. 모두 `DISCORD_DEPLOY_WEBHOOK_URL`(배포 webhook, `VULTR_DEPLOY_ENV` 시크릿에 넣는다)로 간다. 배포 webhook 이 없으면 롤백·실패만 `DISCORD_ERROR_WEBHOOK_URL` 로 가고 성공은 보내지 않는다. 거래 webhook(`DISCORD_WEBHOOK_URL`)은 체결 알림 전용이라 배포 알림을 보내지 않는다. main 의 push·수동 실행에서 테스트·빌드 실패, 원격 배포 전에 멈춘 배포 job(운영 조회·판정·업로드 등), 시한·취소로 끝난 배포 job 도 같은 규칙(배포 webhook, 없으면 에러 webhook)으로 알린다. deploy.sh 가 이미 결과를 알렸으면 다시 보내지 않는다.
+- 배포 후 180초 안에 헬스체크를 통과하지 못하면 마지막 정상 SHA로 롤백한다. Actions 배포는 서버의 `/opt/app/.last-good-sha`를, 수동 배포는 `deploy/vultr/.state`의 `LAST_GOOD_SHA`를 쓴다. Actions 배포는 그 값(없으면 healthy 로 도는 app 컨테이너의 이미지 SHA)을 찾지 못하면 배포 자체를 거부한다. 수동 배포는 값이 없거나, 배포 대상과 같거나, 그 커밋이 저장소에 없으면 롤백 없이 배포한다. 새 DB 마이그레이션이 들어간 배포는 구버전이 새 스키마에서 돌지 못할 수 있어 자동 롤백하지 않는다. 다만 롤백 호환 검사(아래 "스키마 변경 규칙")를 통과하면 자동 롤백한다. 어느 쪽이든 새 앱을 띄우기 전에 DB 를 덤프한다. 롤백 대상 SHA 에 V44(옛 거래 표 쓰기를 멈춤) 마이그레이션이 없어도 자동 롤백하지 않는다(아래 V47 절).
 
 필요한 secret은 `VULTR_DEPLOY_ENV`(운영 `.env` 전체), `VULTR_PUBLIC_IP`, `VULTR_SSH_PRIVATE_KEY`, `VULTR_SSH_USER`다.
 
@@ -341,278 +335,77 @@ install -m 600 deploy/vultr/.env.example deploy/vultr/.env
 - **expand**: 테이블·칼럼·인덱스·제약을 더하기만 한다. 새 칼럼은 기본값이나 NULL 을 받아 옛 코드의 insert 가 깨지지 않게 하고, 기존 행에 걸 CHECK 는 `NOT VALID` 로 건 뒤 다음 배포에서 `VALIDATE CONSTRAINT` 한다.
 - **migrate**: 새 코드가 새 칼럼을 읽고 쓴다. 옛 이미지가 잘못 읽을 새 데이터(예: 다른 거래소의 행)는 기능 플래그를 켜기 전까지 만들지 않는다.
 - **contract**: 옛 칼럼·제약을 지우는 마이그레이션은 직전 이미지로 돌아갈 일이 없을 만큼 지난 뒤 따로 낸다. 이 배포만 되돌릴 수 없고, 바뀌는 동작이 없어야 한다.
-- 한 마이그레이션에서 더하고 지우는 것을 함께 하지 않는다(V30 이 그렇게 했고, V30 이전 이미지로는 롤백하지 않는다).
+- 한 마이그레이션에서 더하고 지우는 것을 함께 하지 않는다.
 
 롤백 호환 검사: Actions 배포는 마이그레이션이 바뀌었으면 runner 의 임시 Postgres(운영과 같은 이미지)에 새 이미지를 띄워 마이그레이션한 뒤, 직전 정상 이미지를 그 스키마 위에 띄워 기동과 봇 복원 조회(`bot_state`)가 healthy 로 끝나는지 본다(`deploy/vultr/rollback_compat.sh`, 더미 시크릿·빈 DB·자동 시작 켬 — 복원할 봇이 없어 주문은 나가지 않는다). 통과하면 그 배포도 헬스체크 실패 때 직전 이미지로 자동 롤백하고, 실패하거나 검사하지 못하면 경고만 남기고 자동 롤백 없이 배포한다. 빈 DB 라 쓰기 경로(체결·주문 기록 INSERT)와 옛 코드가 새 데이터를 잘못 읽는 비호환은 잡지 못하므로 위 규칙이 먼저다 — 특히 기본값 없는 NOT NULL 칼럼 추가는 검사를 통과해도 롤백한 옛 코드의 쓰기를 깬다. V44 이전 이미지로는 검사와 상관없이 자동 롤백하지 않는다. 수동 실행의 `rollback_check` 를 켜면 마이그레이션이 없어도 검사만 돌려 볼 수 있다.
 
-`deploy.sh` 는 직전 정상 배포와 비교해 `db/migration/` 이 바뀌었거나 비교할 수 없으면, 새 이미지를 받은 뒤 새 앱을 띄우기 직전에 서버에서 DB 를 `/opt/app/backups/pre-deploy-<SHA 12자리>-<UTC 시각>.sql.gz` 로 덤프한다(배포 계정 전용, 최근 5개 보존). 멈춰 있는 postgres 는 먼저 띄운다. postgres 를 띄우지 못하거나 덤프가 완전하지 않으면 앱 컨테이너를 바꾸지 않고 배포를 멈춘다(postgres 정의가 바뀐 배포면 postgres 는 이미 새로 만들어졌을 수 있다) — 이때 서버의 `.env`·compose 파일은 이미 새 배포 것이라 `docker compose up` 을 손으로 돌리면 덤프 없이 마이그레이션된다. 같은 디스크라 호스트 유실에는 쓸모가 없다 — 오프사이트 백업은 따로 둔다.
+`deploy.sh` 는 직전 정상 배포와 비교해 `db/migration/` 이 바뀌었거나 비교할 수 없으면, 새 이미지를 받은 뒤 새 앱을 띄우기 직전에 서버에서 DB 를 `/opt/app/backups/pre-deploy-<SHA 12자리>-<UTC 시각>.sql.gz` 로 덤프한다(배포 계정 전용, 최근 5개 보존). 멈춰 있는 postgres 는 먼저 띄운다. postgres 를 띄우지 못하거나 덤프가 완전하지 않으면 앱 컨테이너를 바꾸지 않고 배포를 멈춘다(postgres 정의가 바뀐 배포면 postgres 는 이미 새로 만들어졌을 수 있다) — 이때 서버의 `.env`·compose 파일은 이미 새 배포 것이라 `docker compose up` 을 손으로 돌리면 덤프 없이 마이그레이션된다. 같은 디스크라 호스트 유실에는 쓸모가 없다. 지금은 오프사이트 백업이 없다 — S3 버킷이 없어 `backup.sh` 가 실패한다(#408). 서버에는 매일 로컬 덤프만 돈다(`/root/bin/trading-local-backup.sh`, 14일 보관).
 
-### 스키마를 바꾸는 배포 (V30 같은)
+### 제약을 바꾸는 배포
 
 실거래 테이블의 제약을 바꾸는 마이그레이션은 단독 릴리스로 거래가 적은 시간에 낸다.
 
-1. 운영 DB 에서 읽기 전용 사전 점검. 첫 쿼리는 0, 둘째 쿼리는 0행이어야 한다(V30 의 CHECK·UNIQUE 가 기존 행에 걸린다). 셋째 쿼리에는 `uq_trading_states_user_ticker` 가 있고 V30 의 제약 이름(`uq_trading_states_user_exchange_ticker`, `ck_trading_states_exchange_ticker`)은 없어야 하며, 넷째 쿼리는 29 여야 한다.
-   ```sql
-   SELECT count(*) FROM trading_states WHERE ticker LIKE 'KRX-%';
-   SELECT user_id, ticker, count(*) FROM trading_states GROUP BY 1,2 HAVING count(*) > 1;
-   SELECT conname FROM pg_constraint WHERE conrelid = 'trading_states'::regclass AND contype IN ('u', 'c');
-   SELECT max(version::int) FROM flyway_schema_history WHERE success;
-   ```
-   첫 쿼리가 0 이 아니면 Upbit 에 없는 `KRX-` 마켓을 시작 목록에 넣었던 흔적이다. 봇을 멈추고 그 `trading_states` 행과 `bot_state.tickers` 의 해당 티커를 지운 뒤 배포한다.
-2. 배포가 마이그레이션 전 덤프를 서버 디스크에 남긴다(위 절). 오프사이트 사본이 필요하면 서버 `/opt/app` 에서 `./backup.sh` 를 손으로 한 번 돌린다. 백업 cron 을 등록해 두었다면(`deploy/vultr/README.md` 6절, KST 03:00) 배포 시각이 그와 겹치지 않게 한다. `pg_dump` 가 잡은 잠금을 V30 의 `ALTER TABLE` 이 기다리는 동안 헬스체크 시간이 지나간다.
-3. 되돌리기 SQL(`deploy/vultr/sql/V30_down.sql`)을 미리 읽어 둔다. Flyway 는 이 파일을 쓰지 않는다.
-4. 기동이 실패하면 자동 롤백되지 않는다. `docker compose logs app` 로 원인을 보고 V30 이 적용됐는지 확인한다.
-   ```bash
-   docker compose exec -T postgres psql -U trading -d trading -c "SELECT version, success FROM flyway_schema_history WHERE version = '30'"
-   ```
-   - 0행이면 마이그레이션이 실패해 Postgres 트랜잭션 DDL 로 V30 전체가 되돌려진 것이다. 봇이 멈춰 있는 동안 보유 포지션의 손절도 돌지 않으므로 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 먼저 되살리고, 원인을 고친 이미지로 다시 배포한다.
-   - V30 이 적용돼 있으면 고친 이미지로 앞으로 배포한다.
+1. 운영 DB 에서 새 제약에 걸릴 기존 행이 없는지 읽기 전용으로 먼저 센다(그 버전 절에 쿼리를 둔다).
+2. 배포 직전 덤프와 별도로 남기려면 서버에서 `./dump_local.sh <이름표>` 를 돌린다. 매일 로컬 덤프 시각과 배포가 겹치지 않게 한다 — `pg_dump` 잠금을 DDL 이 기다린다.
+3. 그 버전의 `deploy/vultr/sql/V<N>_down.sql` 을 미리 읽어 둔다(Flyway 는 쓰지 않는다).
+4. 기동이 실패하면 `docker compose logs app` 로 원인을 보고 `SELECT version, success FROM flyway_schema_history WHERE version = '<N>'` 로 적용 여부를 본다. 0행이면(트랜잭션 DDL 로 되돌려짐) `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 먼저 되살린다. 적용돼 있으면 고친 이미지로 앞으로 배포한다.
 
-V30 이후에는 V30 이전 이미지로 롤백하지 않는다. 옛 코드는 거래소 축을 몰라 KIS 행까지 Upbit 상태로 읽는다. 불가피하면 앱을 멈추고 `./dump_local.sh before-V30-down` 을 돌린 뒤 아래로 KIS 행을 먼저 지우고, `V30_down.sql` 을 실행한 다음 옛 이미지를 올린다. `bot_state` 는 V17 부터 거래소 축이 있어 옛 이미지도 거래소로 걸러 읽으므로 지우지 않는다. `trade_executions` 의 KIS 체결 감사 행은 지우기 전에 복사해 둔다.
-```sql
-BEGIN;
-CREATE TABLE v30_rollback_archive_trade_executions AS SELECT * FROM trade_executions WHERE exchange <> 'UPBIT';
-DELETE FROM trade_executions WHERE exchange <> 'UPBIT';
-DELETE FROM trade_records WHERE exchange <> 'UPBIT';
-DELETE FROM trading_states WHERE exchange <> 'UPBIT';
-COMMIT;
-```
+V44 이전 이미지로는 내려가지 않는다(아래 V47 절).
 
-### V31 (KIS 키 테이블)
+### V31–V46 (요약)
 
-V31 은 `user_broker_keys` 테이블만 새로 만들고 기존 테이블은 건드리지 않는다. 기존 행에 걸리는 제약이 없어 사전 점검 쿼리는 없다. 배포 직전 백업은 배포가 서버 디스크에 남기는 마이그레이션 전 덤프(위 "스키마 변경 규칙")로 한다.
+V44 이전 이미지로는 롤백하지 않는다 — V47 이 옛 거래 표를 지웠고 `deploy.sh` 의 자동 롤백 하한이 V44 다(아래 V47 절). 그래서 V31~V43 의 down 파일과 손 롤백 절차는 더 쓰지 않는다(V47_down 이 되살린 알림 칼럼은 비어 있어 V44_down 도 멈춘다). 파일은 기록으로 `deploy/vultr/sql/` 에 남는다.
 
-- V30 이미지로의 롤백은 그대로 된다. Flyway 기본값(`ignoreMigrationPatterns` `*:future`)으로 V30 이미지는 적용된 V31 을 무시하고 뜨며, 앱 설정에 이 값을 바꾸는 키가 없다. 그래서 V31 때 `deploy.sh` 의 자동 롤백 하한은 V30 그대로였다(지금은 V44 — 아래 V47 절).
-- 다만 V31 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 V31 적용 여부와 관계없이 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백해도 되고, `V31_down.sql` 은 필요 없다.
-- V30 이전으로 내려가야 하면 (V32 가 적용돼 있으면 `V32_down.sql` 부터) `V31_down.sql` 을 먼저 돌리고 위 V30 절차를 따른다. `V30_down.sql` 은 V30 뒤에 적용된 마이그레이션이 있으면 멈춘다.
-- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V31_down.sql` 을 쓴다. 저장된 KIS 앱키·앱시크릿·계좌번호가 모두 사라져 사용자가 다시 넣어야 한다. V31 이 마지막 적용 버전일 때만 돌고, 아니면 아무것도 바꾸지 않고 멈춘다. 테이블과 `flyway_schema_history` 의 V31 행을 한 트랜잭션으로 지우므로, 이후 V31 이 든 이미지를 올리면 테이블을 다시 만든다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V31-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V31_down.sql
-  APP_VERSION=<V31 이전 SHA> docker compose up -d --pull missing
-  ```
-  `/tmp/V31_down.sql` 은 저장소의 파일을 서버로 올린 것이다. `dump_local.sh` 는 덤프를 서버의 `/opt/app/backups/manual-*.sql.gz` 에 남기고(이름표마다 최근 5개), 덤프가 끝까지 써지지 않으면 실패해 down 이 돌지 않는다. 외부 사본은 S3 백업(`./backup.sh`)을 설정했을 때만 받을 수 있다.
+| 버전 | 바꾼 것 | 지금 쓰는 곳 |
+|---|---|---|
+| V31 | `user_broker_keys` 표 | KIS 키 저장(`/api/kis/keys`) |
+| V32 | `bot_state.entries_paused`·`entries_paused_changed_at` | 신규 매수 중지 |
+| V33 | `trade_notification_outbox` 표 | 체결 알림 |
+| V34 | `trading_states` 장부 칼럼(`book_*`·`pending_buy_book_*`) | 봇 장부(봇 종목을 앱에서 직접 사고팔 때) |
+| V35 | `manual_interventions` 표 | 없음(V39 가 지움) |
+| V36 | `error_alert_outbox` 표 | ERROR 알림 |
+| V37 | `trading_states.version` | 상태 저장 충돌 |
+| V38 | `trading_states.pending_buy_since`·`pending_buy_alerted` | 막힌 매수 알림(미해소 주문 대사 4) |
+| V39 | `manual_interventions`·V21 백업 표·`users_bak_20260602`, `trading_states` 의 halt·옛 대사 칼럼 7개를 지움 | 없음 |
+| V40 | `users.public_profile`·`public_strategy`·`admin`, `trade_executions.order_type`·`status` 를 지움 | 없음 |
+| V41 | `orders` 표, 옛 체결 옮기기 | 체결 기록·주문 생애 |
+| V42 | `trade_notification_outbox.order_id`, `orders` 따라잡기·값 맞추기 | 체결 알림이 가리키는 `orders` 줄 |
+| V43 | 표 변경 없음(따라잡기 한 번 더) — 화면·매일 대조가 `orders` 를 읽기 시작 | 거래 이력, 체결 기록 대조 |
+| V44 | 알림 대기열 `trade_execution_id` NULL 허용 — 체결 기록을 `orders` 에만 쓰기 시작 | 자동 롤백 하한(칼럼은 V47 이 지움) |
+| V45 | `refresh_tokens` 표 | 로그인 유지. 롤백 호환(직전 이미지로 내려가면 한 번 다시 로그인), 표를 지울 때만 `V45_down.sql` |
+| V46 | `user_trading_params` 표 | 사용자 매매 값. 롤백하면 새 매수는 env 값 — 사용자가 매수 상한을 낮춰 두었으면 봇을 멈춘다. 표를 지울 때만 `V46_down.sql` |
+
+- down 파일은 앱을 멈추고(`docker compose stop app`) 저장소의 파일을 서버 `/tmp` 로 올린 뒤 `/opt/app` 에서 `./dump_local.sh before-Vxx-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/Vxx_down.sql` 로 돌린다. 그 버전이 마지막 적용 버전일 때만 돌고, 아니면 아무것도 바꾸지 않고 멈춘다. `dump_local.sh` 는 덤프를 `/opt/app/backups/manual-*.sql.gz` 에 남기고(이름표마다 최근 5개), 덤프가 끝까지 써지지 않으면 실패해 down 이 돌지 않는다.
+- 적용된 마이그레이션 파일은 revert 하지 않는다(체크섬) — 고친 이미지로 앞으로 간다.
 - `KIS_TRADING_ENABLED=false` 이면 `/api/kis/keys` 가 없어 사용자가 저장한 키를 API 로 지울 수 없다. 그때 한 사용자의 키를 지우려면 `/opt/app` 에서 아래를 실행한다. 한 환경만 지우면 `<환경>` 에 `KIS_PAPER`(모의) 또는 `KIS`(실전)를 넣고, 두 환경을 모두 지우면 `AND exchange = ...` 를 뺀다. 백업 조건은 위 down 과 같다.
   ```bash
   ./dump_local.sh before-kis-key-delete && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
     -c "DELETE FROM user_broker_keys WHERE user_id = <사용자 id> AND exchange = '<환경>'"
   ```
-
-### V32 (신규 매수 중지)
-
-V32 는 `bot_state` 에 `entries_paused`(기본 false)·`entries_paused_changed_at` 칼럼만 더한다. 기존 행은 중지되지 않은 상태로 읽히며 사전 점검 쿼리는 없다. 배포 직전 백업은 V31 과 같다.
-
-- V31 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 다만 그 이미지는 중지 값을 읽지 않아 켜 둔 중지가 풀린 것처럼 매수가 나가므로, 롤백했으면 봇을 정지한다.
-- V32 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V32_down.sql` 은 필요 없다.
-- V31 이전으로 내려가야 하면 (V38·V37·V36·V35·V34·V33 이 적용돼 있으면 `V38_down.sql`·`V37_down.sql`·`V36_down.sql`·`V35_down.sql`·`V34_down.sql`·`V33_down.sql` 부터) `V32_down.sql` 을 먼저 돌린다. `V31_down.sql` 은 V31 뒤에 적용된 마이그레이션이 있으면 멈춘다.
-- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V32_down.sql` 을 쓴다. 켜 둔 중지 값이 함께 사라진다. V32 가 마지막 적용 버전일 때만 돌고, 칼럼과 `flyway_schema_history` 의 V32 행을 한 트랜잭션으로 지운다. 백업 조건은 V31 down 과 같다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V32-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V32_down.sql
-  APP_VERSION=<V32 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V33 (체결 알림 outbox)
-
-V33 은 `trade_notification_outbox` 테이블만 새로 만든다. 사전 점검 쿼리는 없고, 배포 직전 백업은 V31 과 같다.
-
-- V32 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 그 이미지는 옛 방식(커밋 뒤 바로 발송)으로 알리고 테이블은 건드리지 않는다. 롤백 전에 남은 `PENDING` 은 다시 올렸을 때 보내지거나 24시간이 지났으면 실패로 끝난다. 늦은 알림이 필요 없으면 다시 올리기 전에 `UPDATE trade_notification_outbox SET status = 'SKIPPED' WHERE status = 'PENDING';` 를 돌린다.
-- V33 을 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다. `V33_down.sql` 은 필요 없다.
-- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V33_down.sql` 을 쓴다(V33 이 마지막 적용 버전일 때만 돌고, 테이블과 `flyway_schema_history` 의 V33 행을 한 트랜잭션으로 지운다).
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V33-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V33_down.sql
-  APP_VERSION=<V33 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V34 (봇 장부)
-
-V34 는 `trading_states` 에 봇 장부 칼럼(`book_volume`·`book_avg_price`·`book_written_at`), 미해소 매수의 주문 때 장부(`pending_buy_book_*`)와 미해소 주문 정리 기준값(`adopt_baseline_volume`·`sell_clear_*`, 지금 앱은 읽고 쓰지 않는다)을 더한다. 기존 행은 장부가 비어 첫 동기화가 위 규칙(흔적이 있으면 한 번 전량 편입)으로 정한다. 그래서 배포 첫 동기화가 되돌릴 수 없는 단계다 — 배포 전에 로컬 백업을 받고, `trading_states` 의 흔적 있는 행과 `GET /api/bot/status` 의 positions 를 남겨 편입·미편입 WARN 과 대조한다.
-
-- V33 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 장부 칼럼은 건드리지 않으므로 `V34_down.sql` 은 돌리지 않는다 — 돌리면 장부가 사라진다. 롤백한 동안 저장된 행은 `updated_at` 만 바뀌어, 다시 올리면 그 행의 장부는 낡은 것으로 보고 비운 채 위 첫 동기화 규칙을 다시 탄다.
-- V34 를 처음 담은 배포는 migration 변경이 들어 있어 `deploy.sh` 가 자동 롤백하지 않는다. 기동에 실패하면 `APP_VERSION=<직전 정상 SHA> docker compose up -d --pull missing` 으로 수동 롤백한다.
-- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V34_down.sql` 을 쓴다(V34 가 마지막 적용 버전일 때만 돈다 — V35 가 적용돼 있으면 `V35_down.sql` 부터).
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V34-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V34_down.sql
-  APP_VERSION=<V34 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V35 (수동 개입 기록)
-
-V35 는 `manual_interventions` 테이블을 더한다. 예전 pending 수동 해제·halt 해제가 상태 저장과 같은 트랜잭션에 한 행(사용자·거래소·종목·action·해제 전 값 JSON)을 남겼다. 지금 앱은 이 테이블을 쓰지 않는다 — pending 해제·halt 해제 API 와 사람 확인 필요 상태를 없앴다(미해소 주문은 위 대사로만 확정한다). 테이블은 V39 가 지웠다.
-
-앱은 `trading_states` 의 `halted`·`halt_reason`·`reconcile_failure_count`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume` 을 읽고 쓰지 않는다. 칼럼은 V39 가 지웠다.
-
-- V39 이전 스키마에서는 V34 이미지로의 롤백이 그대로 떴다(Flyway `*:future`). V39 뒤에는 아래 V39 절의 되돌리기를 먼저 한다.
-- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V35_down.sql` 을 쓴다(V35 가 마지막 적용 버전일 때만 돈다, 기록이 사라진다). V35 를 쓰는 옛 이미지가 떠 있는 동안 돌리면 그 이미지의 해제가 모두 503 이 되므로 앱을 멈춘 뒤 돌린다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V35-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V35_down.sql
-  APP_VERSION=<V35 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V36 (ERROR 알림 outbox)
-
-V36 은 `error_alert_outbox` 테이블을 더한다(위 ERROR 알림 절).
-
-- V35 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`). 롤백한 동안 ERROR 알림은 예전처럼 바로 간다. 남은 `PENDING` 은 다시 올리면 보내므로, 오래된 알림을 보내지 않으려면 올리기 전에 `UPDATE error_alert_outbox SET status = 'SKIPPED' WHERE status = 'PENDING';` 를 돌린다.
-- 테이블 자체를 없애야 할 때만 `deploy/vultr/sql/V36_down.sql` 을 쓴다(V36 이 마지막 적용 버전일 때만 돈다, 보내지 못한 알림이 사라진다). 앱을 멈춘 뒤 돌린다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V36-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V36_down.sql
-  APP_VERSION=<V36 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V37 (상태 저장 버전)
-
-V37 은 `trading_states.version`(기존 행 0)을 더한다(위 상태 저장 충돌 절).
-
-- V36 이미지로의 롤백은 그대로 뜬다(Flyway `*:future`, 칼럼 기본값). 롤백한 동안은 버전을 올리지 않아 덮어쓰기 방지가 없다(V37 이전과 같다). 다시 올리면 시작이 행의 버전을 읽으므로 거짓 충돌은 없다.
-- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V37_down.sql` 을 쓴다(V37 이 마지막 적용 버전일 때만 돈다). V37 이미지가 떠 있는 동안 돌리면 상태 저장이 모두 실패하므로 앱을 멈춘 뒤 돌린다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V37-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V37_down.sql
-  APP_VERSION=<V37 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V38 (막힌 매수 알림 시각)
-
-V38 은 `trading_states.pending_buy_since`·`pending_buy_alerted`(기존 행 null·false)를 더한다(위 미해소 주문 대사 4). 매수 알림이 조회 실패 횟수 대신 주문 시각부터의 경과 시간으로 바뀌어 `reconcile_failure_count` 는 더 읽고 쓰지 않는다(칼럼은 V39 가 지웠다).
-
-- V39 이전 스키마에서는 V37 이미지로의 롤백이 그대로 뜬다(V39 뒤 #372 이전 이미지는 아래 V39 절. 칼럼이 nullable·기본값이고 옛 이미지는 건드리지 않는다). 롤백한 동안 생긴 매수 pending 은 시작 시각이 없어 다시 올리면 그때부터 잰다. 롤백 순간 매수 pending 이 열려 있었고 옛 이미지가 그것을 확정한 뒤 같은 종목에 새로 샀다면, 다시 올렸을 때 그 새 pending 이 옛 시각·알림 여부를 물려받아 바로 알리거나 알리지 않는다(주문에는 영향 없음). 옛 이미지는 `reconcile_failure_count` 를 V38 전 마지막 값부터 다시 센다.
-- 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V38_down.sql` 을 쓴다(V38 이 마지막 적용 버전일 때만 돈다). V38 이미지가 떠 있는 동안 돌리면 상태 저장이 모두 실패하므로 앱을 멈춘 뒤 돌린다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V38-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V38_down.sql
-  APP_VERSION=<V38 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V39 (쓰지 않는 테이블·칼럼 삭제)
-
-V39 는 코드가 더 쓰지 않는 것을 지운다. 지운 행 수는 기동 로그에 `V39 drop:` 으로 남는다.
-
-- 테이블: `manual_interventions`(V35), V21 백필 전 값 `trade_records_v21_backup`·`trade_executions_v21_backup`, 손으로 만든 `users_bak_20260602`.
-- `trading_states` 칼럼: `halted`·`halt_reason`·`reconcile_failure_count`·`review_reason`·`adopt_baseline_volume`·`sell_clear_prior_volume`·`sell_clear_volume`.
-- 같은 배포에서 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 를 엔티티에서 뺐다. 칼럼은 V40 이 지웠다.
-
-롤백:
-- 자동 롤백(마지막 정상 배포 이미지)은 halt 제거(#372) 이후 이미지라 V39 위에서 그대로 뜬다.
-- **#372 이전 이미지로는 그대로 내려갈 수 없다.** 그 이미지는 지운 칼럼을 쓴다. 꼭 내려가야 하면 앱을 멈추고 `deploy/vultr/sql/V39_down.sql` 로 칼럼(기본값)과 빈 `manual_interventions` 를 되살린 뒤, V39 이전 이미지만 띄운다. V39 가 든 이미지가 다시 뜨면 V39 가 또 적용돼 되살린 칼럼을 지운다. 지운 값은 배포 전 덤프에만 있다. 그 아래 버전으로 더 내려가면 V38·V37… 의 down 을 차례로 돌린다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V39-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V39_down.sql
-  APP_VERSION=<V39 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V40 (매핑하지 않는 사용자·체결 칼럼 삭제)
-
-V40 은 `users.public_profile`·`public_strategy`·`admin` 과 `trade_executions.order_type`·`status` 를 지운다. V39 와 같은 배포부터 앱이 매핑하지 않았다. 기본값이 아니던 행 수는 기동 로그에 `V40 drop:` 으로 남는다.
-
-- V39 이미지로의 롤백은 그대로 뜨고 쓴다(그 이미지는 이 칼럼을 쓰지 않는다).
-- V39 이전 이미지는 이 칼럼을 넣으므로 V40 스키마에서 가입·체결 기록이 실패한다. 그 이미지로 내려가야 하면 앱을 멈추고 `deploy/vultr/sql/V40_down.sql` 로 칼럼(기본값)을 되살린 뒤 V40 이전 이미지만 띄운다. V40 이 든 이미지가 다시 뜨면 V40 이 또 적용돼 되살린 칼럼을 지운다. 더 내려가면 이어서 위 V39 절차를 따른다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V40-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V40_down.sql
-  APP_VERSION=<V40 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V41 (주문 표 `orders`)
-
-V41 은 주문마다 한 줄인 `orders` 표를 만들고 옛 체결을 `trade_executions` 기준으로 옮긴다. 옮긴 수와 짝을 못 찾은 수는 기동 로그에 `V41 orders:` 로 남는다.
-
-- V41 때는 같은 체결을 `trade_records`(화면)와 `trade_executions`(중복 방지·대사)에 두 번 적었다(V44 부터는 `orders` 에만 적는다 — 아래 V44 절). 엔진 매수 줄의 가격·수량·총액은 이 주문이 아니라 체결 뒤 보유 전체다. `orders` 는 이 주문의 체결 수량·대금·평균가(`filled_*`·`avg_fill_price`)와 체결 뒤 장부(`position_volume_after`·`book_avg_price`)를 따로 적는다. `fill_source` 가 값의 출처(주문 응답·잔고 복원·옛 기록)다.
-- 옛 엔진 매수는 이 주문 하나의 수량을 알 수 없어 비워 두고(`BACKFILL_SNAPSHOT`), 보유 전체 값을 장부 칼럼에 둔다.
-- V41 의 새 체결은 옛 두 표·상태 저장·알림 대기열과 같은 트랜잭션에서 `orders` 에 FILLED 줄로 함께 남았다. 이 쓰기가 SQL 오류를 내면 체결 기록 전체가 되돌아가 지금의 기록 실패처럼 다음에 다시 시도된다. 같은 주문 키의 줄이 이미 있으면 넣지 않고 ERROR 만 남긴다(체결 기록은 막지 않는다). 주문 생애(대기·거절·안 나감)는 아직 남기지 않는다.
-- V41 때는 아무도 `orders` 를 읽지 않았다. 화면과 매일 대조는 V43 부터 `orders` 를 읽는다.
-- V40 이미지로의 롤백은 그대로 뜬다(새 표만 더한다). 그동안의 체결은 `orders` 에 남지 않고, 읽는 쪽을 `orders` 로 바꾸는 다음 단계가 마이그레이션의 옮기기 부분을 다시 돌려 메운다.
-- 표 자체를 없애야 할 때만 `deploy/vultr/sql/V41_down.sql` 을 쓴다(V41 이 마지막 적용 버전일 때만 돈다).
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V41-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V41_down.sql
-  APP_VERSION=<V41 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V42 (화면 전환 준비: 알림 연결·값 맞추기·따라잡기)
-
-V42 는 화면·대사가 `orders` 를 읽게 바꾸기 전에 `orders` 만으로 지금 화면과 같은 값을 낼 수 있게 맞춘다. 화면은 아직 `trade_records` 를 읽는다.
-
-- 체결 알림 대기열에 `order_id`(→ `orders`)를 더하고 잇는다. `trade_execution_id` 는 옛 표를 지울 때까지 둔다.
-- `orders` 가 없는 체결(롤백 동안 옛 이미지가 쓴 것, 손으로 넣은 정정)을 V41 과 같은 규칙으로 따라잡는다. 같은 거래소 주문번호의 `orders` 줄이 이미 있으면 건너뛴다.
-- 체결 시각을 화면 기록(`trade_records.created_at`)과 같게, 잔고로 확정한 매도의 수량과 옛 수동 매수의 가격을 `trade_executions` 에서 채운다.
-- 기동 로그 `V42 orders:` 에 연결 안 된 `trade_executions`·`trade_records`·알림, 화면 값 규칙(총액 = 가격 × 수량)을 벗어난 줄, 같은 시각 묶음 수가 남는다. 화면을 바꾸기 전에 모두 0 이어야 한다(같은 시각 묶음은 순서만 갈린다).
-- 새 체결은 화면 기록과 같은 시각(같은 `LocalDateTime` 을 같은 방식으로 넘긴다)으로 `orders` 에 남고, 잔고로 확정한 매도는 주문 시점 수량을 `requested_volume` 에 남기며, 체결 알림은 같은 트랜잭션에서 넣은 `orders` 줄을 가리킨다.
-- 따라잡기는 다시 돌려도 바뀌는 것이 없고, 화면을 `orders` 로 바꾸는 마이그레이션이 바꾸기 직전에 한 번 더 돌린다.
-- ⚠️ 체결 시각의 날짜·시간대 바꿈은 JVM 시간대(지금 UTC)를 따른다. 컨테이너 TZ 를 바꾸면 표시 시각이 모두 움직이고, 일광절약 시간대면 겹치는 한 시간의 변환이 Java 와 Postgres 에서 다를 수 있다. `completed_at` 이 틀어졌으면 짝 `trade_records.created_at` 에서 V42 의 `catchup` 부분으로 다시 만든다.
-- V41 이미지로의 롤백은 그대로 뜨고 쓴다(그 이미지는 `order_id` 를 넣지 않고 체결 시각을 `now()` 로 쓴다 — 다음 따라잡기가 맞춘다). 칼럼 자체를 없애야 할 때만 `deploy/vultr/sql/V42_down.sql` 을 쓴다.
-  ```bash
-  cd /opt/app
-  docker compose stop app
-  ./dump_local.sh before-V42-down && docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading < /tmp/V42_down.sql
-  APP_VERSION=<V42 이전 SHA> docker compose up -d --pull missing
-  ```
-
-### V43 (화면·대사가 `orders` 를 읽는다)
-
-V43 은 표를 바꾸지 않고 V42 의 따라잡기를 한 번 더 돌린다. 같은 배포에서 거래 기록 화면(`/api/trades`·`/roundtrips`)과 매일 체결 대조가 `orders` 의 FILLED 줄을 읽기 시작한다. 옛 두 표는 아직 쓰고, 지우는 것은 다음 단계다.
-
-- 기동 로그 `V43 orders:` 에 V42 의 연결 안 된 수와 함께 체결 시각 없는 FILLED(화면 맨 뒤), 짝 `trade_records` 없는 FILLED(옛 화면에 없던 줄), 화면 값 칼럼이 비어 0 으로 보이는 줄, 같은 시각 묶음 수가 남는다. 배포 전 운영 덤프로 모두 0 인지 보고, 같은 결과 검증(`TradeHistoryParityTest`)이 모든 쪽과 왕복 응답에서 차이 0 인지 본다. 같은 주문 키 충돌로 `orders` 에 못 들어간 체결은 쓸 때의 ERROR 가 알린다(같은 거래소 주문번호 충돌이면 매일 대조는 기록된 것으로 본다).
-- V43 때 자동 롤백 하한은 V42 였다(지금은 V44 — 아래 V47 절). V42 이전 이미지는 체결을 `orders` 에 맞춰 쓰지 않아(시각 `now()`, 알림 연결 없음, 더 옛 이미지는 `orders` 를 모른다) 화면 기록이 어긋난다.
-- V42 이전 이미지로 손 롤백했던 동안의 체결을 맞추던 손 따라잡기 파일(`orders_catchup.sql`)은 V47 과 함께 지웠다 — V47 뒤로는 그 이미지로 내려가지 않는다. 필요하면 V47 이전 커밋에서 꺼낸다(`git show <V47 이전 SHA>:deploy/vultr/sql/orders_catchup.sql`).
-- V43 때 V42 이미지(`dd70e9c7`)로의 롤백은 그대로 떴다(V47 뒤로는 아니다). V43 기록을 지워야 할 때만 `deploy/vultr/sql/V43_down.sql` 을 쓴다(V43 이 마지막 적용 버전일 때만 돈다). V43 파일을 `git revert` 로 지우지 않는다 — 적용된 V43 이 없는 빌드도 뜨지만(Flyway 는 모르는 뒤 버전을 건너뛴다), 나중에 다른 내용의 V43 을 넣으면 체크섬 검증이 막는다. 고친 이미지로 앞으로 간다.
-
-### V44 (체결 기록을 `orders` 에만 쓴다)
-
-V44 는 체결 알림 대기열의 `trade_execution_id` 를 비울 수 있게만 바꾼다(외래 키·UNIQUE·칼럼은 그대로). 같은 배포부터 체결 기록은 `orders` 와 알림 대기열에만 남고 `trade_records`·`trade_executions` 에는 쓰지 않는다. 두 표는 V47 이 지웠다.
-
-- 체결 기록은 그 주문의 `orders` 줄을 찾는다 — 같은 사용자·거래소의 거래소 주문번호, 없으면 `client_order_id`(주문번호가 비었거나 같은 줄만). 그 줄이 FILLED 면 이미 기록된 체결로 보고 기록·알림 없이 건너뛴다(상태 저장은 커밋). 대기·접수 줄(PENDING·OPEN)이면 FILLED 로 바꾼다 — 체결이 정하는 칼럼은 새로 넣을 때와 같은 값이라 화면이 같다(요청 금액·식별자·만든 시각, 체결이 값을 주지 않는 판단 가격·요청 수량은 남긴다). 취소·거절·안 나감으로 끝난 줄이면 FILLED 로 바꾸고 ERROR(엔진에서는 생기지 않아 장부를 본다). 줄이 없으면 새로 넣는다.
-- 같은 `client_order_id` 의 줄이 다른 주문번호에 있으면 그 식별자 없이 기록하고 ERROR 를 남긴다. 되돌리면 그 종목이 체결 확정에서 멈춰 손절이 돌지 않는다.
-- 주문번호도 식별자도 없는 체결은 중복 확인 없이 기록한다(잔고로 확정한 체결은 주문번호가 있다). pending 해제가 같은 트랜잭션이라 다시 기록되지 않는다.
-
-- V44 때 자동 롤백 하한은 V43 이었다(지금은 V44 — 아래 V47 절). 그때는 직전 이미지(V43, `26bb5ad4`)로 롤백하면 그 이미지가 `trade_execution_id` 없는 알림 줄을 읽지 못해 넘기는 runbook 이 있었다 — V47 이 그 칼럼과 옛 표를 지워 그 이미지로는 내려가지 않는다.
-- NOT NULL 을 다시 걸어야 할 때만 `deploy/vultr/sql/V44_down.sql` 을 쓴다(V44 가 마지막 적용 버전이고 `trade_execution_id` 없는 알림 줄이 없을 때만 돈다 — V47 뒤에는 `V47_down.sql` 부터).
-
-### V45 (로그인 유지 토큰 `refresh_tokens`)
-
-V45 는 `refresh_tokens` 표만 더한다(위 로그인 유지). 직전 이미지는 이 표를 모른 채 그대로 뜨므로 자동 롤백 호환이다. 롤백하면 새 이미지가 낸 접근 JWT 는 자기 만료까지 그대로 쓰이고, 옛 이미지에는 `/api/auth/refresh` 가 없어 그 뒤 한 번 다시 로그인한다. 남은 `refresh` 쿠키·행은 해가 없고 다시 올리면 그대로 쓰인다.
-
-- 적용된 V45 마이그레이션 파일은 revert 하지 않는다 — 고친 이미지로 앞으로 간다. 표를 정말 지워야 할 때만 `deploy/vultr/sql/V45_down.sql` 을 쓴다(V45 가 마지막 적용 버전일 때만 돈다. 잃는 것은 로그인 유지뿐이다).
-
-### V46 (사용자 매매 값 `user_trading_params`)
-
-V46 은 `user_trading_params` 표만 더한다(위 설정 절). 직전 이미지는 이 표를 모른 채 그대로 뜨므로 자동 롤백 호환이다. 롤백하면 새 매수는 env 의 매수 금액·k·청산 값으로 돌아가고, 보유 포지션은 사용자 값으로 덮인 청산 스냅샷을 그대로 쓴다(스냅샷 모양은 그대로다). 사용자가 매수 상한을 낮춰 두었다면 롤백할 때 봇을 멈춘다. 다시 올리면 표의 값이 그대로 쓰인다.
-
-- 적용된 V46 마이그레이션 파일은 revert 하지 않는다 — 고친 이미지로 앞으로 간다. 표를 정말 지워야 할 때만 `deploy/vultr/sql/V46_down.sql` 을 쓴다(V46 이 마지막 적용 버전일 때만 돈다. 잃는 것은 사용자 매매 값뿐이다).
+- ⚠️ 체결 시각은 JVM 시간대(지금 UTC)로 `orders.completed_at` 에 쓰고 읽는다. 컨테이너 TZ 를 바꾸면 화면 시각이 모두 움직인다. 틀어지면 옛 `trade_records` 는 아카이브 덤프에만 있다(V47 절).
 
 ### V47 (옛 거래 표 지우기)
 
 V47 은 `trade_records`·`trade_executions` 표와 그 표를 가리키던 `trade_notification_outbox.trade_execution_id`, `orders.trade_execution_id`·`trade_record_id` 칼럼을 지운다(db-tidy 2-3b). V44 이미지부터 체결은 `orders` 에만 쓰고 이 표·칼럼은 아무도 쓰지도 읽지도 않았다. 옛 줄은 모두 V41~V43 이 `orders` 로 옮겼다. 지운 줄 수는 기동 로그에 `V47 drop:` 으로 남는다.
 
-- 어느 `orders` 줄과도 이어지지 않은 옛 줄이 있으면 V47 은 멈춘다(V44 이전 이미지로 손 롤백해 옮겨지지 않은 체결이 생긴 것이다 — 이어진 줄은 `orders` 에 있어 지워도 잃지 않는다). 트랜잭션이라 아무것도 바뀌지 않고 기동 실패로 끝난다(롤백 호환 검사를 통과한 배포면 자동 롤백, 아니면 수동 개입). 그 줄을 V47 이전 커밋의 `orders_catchup.sql` 로 `orders` 에 옮긴 뒤 다시 배포한다. 옮긴 뒤에도 남는 줄은 같은 주문번호의 `orders` 줄이 이미 있어 따라잡기가 건너뛴 것이다 — 그 `orders` 줄이 같은 체결인지 확인하고 옛 줄을 지운 뒤 다시 배포한다. 잠금은 10초까지만 기다린다(매일 덤프와 겹치면 실패하고 다시 배포한다).
+- 어느 `orders` 줄과도 이어지지 않은 옛 줄이 있으면 V47 은 멈춘다(V44 이전 이미지로 손 롤백해 옮겨지지 않은 체결이 생긴 것이다 — 이어진 줄은 `orders` 에 있어 지워도 잃지 않는다). 트랜잭션이라 아무것도 바뀌지 않고 기동 실패로 끝난다(롤백 호환 검사를 통과한 배포면 자동 롤백, 아니면 수동 개입). 그 줄을 V47 이전 커밋의 `orders_catchup.sql`(`git show <V47 이전 SHA>:deploy/vultr/sql/orders_catchup.sql`)로 `orders` 에 옮긴 뒤 다시 배포한다. 옮긴 뒤에도 남는 줄은 같은 주문번호의 `orders` 줄이 이미 있어 따라잡기가 건너뛴 것이다 — 그 `orders` 줄이 같은 체결인지 확인하고 옛 줄을 지운 뒤 다시 배포한다. 잠금은 10초까지만 기다린다(매일 덤프와 겹치면 실패하고 다시 배포한다).
 - 지운 줄(2026-11-24 기준 각 260줄, 모두 `orders` 와 이어짐)은 머지 전에 뜬 아카이브 덤프 `/root/db-backups/archive/legacy-trades-before-V47-*.sql.gz` 에만 있다(배포 직전 덤프와 매일 덤프는 돌아가며 지워진다). 서버 밖 복사본은 외부 백업이 정해지면 옮긴다(#408).
 - 자동 롤백 하한은 V44 다(`deploy.sh` 의 `ROLLBACK_FLOOR_MIGRATION`). V44 이전 이미지는 체결 기록에서 옛 표에 쓰다 실패한다 — 그 아래로는 내려가지 않고 고친 이미지로 앞으로 간다.
-- 적용된 V47 파일은 revert 하지 않는다. 더 아래 버전의 down 을 이어 돌려야 할 때만 `deploy/vultr/sql/V47_down.sql` 로 표·칼럼을 빈 채로 되살린다(V47 이 마지막 적용 버전일 때만 돈다). 줄과 연결 값은 아카이브 덤프에서만 돌아온다 — 되살린 표의 id 는 1 부터 다시 매기므로 옛 줄을 넣을 때는 `OVERRIDING SYSTEM VALUE` 로 넣고 `setval(pg_get_serial_sequence('<표>', 'id'), max(id))` 로 맞춘다.
+- 더 아래 버전의 down 을 이어 돌려야 할 때만 `deploy/vultr/sql/V47_down.sql` 로 표·칼럼을 빈 채로 되살린다(V47 이 마지막 적용 버전일 때만 돈다). 줄과 연결 값은 아카이브 덤프에서만 돌아온다 — 되살린 표의 id 는 1 부터 다시 매기므로 옛 줄을 넣을 때는 `OVERRIDING SYSTEM VALUE` 로 넣고 `setval(pg_get_serial_sequence('<표>', 'id'), max(id))` 로 맞춘다.
 
 ### 주문 생애 (스키마 변경 없음)
 
-체결 말고도 봇이 보낸 주문의 진행을 `orders` 의 같은 줄에 남긴다. 체결 기록(위 V44 절)은 이 줄을 FILLED 로 바꾼다.
+체결 말고도 봇이 보낸 주문의 진행을 `orders` 의 같은 줄에 남긴다. 체결 기록(아래)은 이 줄을 FILLED 로 바꾼다.
 
 - 매수: 상태 저장이 끝나고 보내기 전에 `PENDING`(식별자 `client_order_id`, 판단 가격·요청 금액/수량), 거래소가 받으면 `OPEN`(주문번호를 잇는다), 체결 없이 끝나면 `CANCELLED`(`exchange_state`), 거래소가 거절하면 `REJECTED`(`note` 에 오류 이름), 식별자 조회로 거래소에 없다고 확정되면 `NOT_PLACED`. 결과를 모르는 주문은 `PENDING` 그대로다.
 - 매도: 손절 앞에 DB 를 기다리지 않게 보내기 전에는 쓰지 않는다. 첫 줄이 `OPEN`·`REJECTED`·`NOT_PLACED`, 접수 줄이 빠졌으면 `CANCELLED` 다.
 - 상태는 앞으로만 간다 — 체결되거나 끝난 줄은 늦게 온 쓰기가 되돌리지 않는다. 같은 식별자·주문번호의 줄은 하나다. 접수 쓰기가 빠진 대기 줄은 끝날 때 식별자로 찾아 주문번호를 채운다. 다만 거래소 응답에 식별자가 없으면 그 대기 줄을 찾지 못해 끝난 줄이 따로 하나 생긴다.
-- 이 쓰기는 최선이다. DB 가 던지거나 2초 안에 끝나지 않으면 WARN 만 남기고 매매는 그대로 간다. 그래서 줄이 빠지거나 `PENDING`·`OPEN` 에 남을 수 있다(봇을 멈춘 사이 끝난 주문 포함). 화면·왕복 손익·매일 대조는 FILLED 만 읽어 영향이 없다.
-- 롤백: `13492492`(체결이 대기·접수 줄을 FILLED 로 바꾸는 이미지)보다 오래된 이미지는 그 줄이 있으면 같은 식별자 충돌로 그 주문의 체결 기록을 매번 되돌린다(그 종목이 확정에서 멈춘다). 그런 이미지로 되돌렸으면 끝나지 않은 줄을 지운다 — 알림 대기열은 FILLED 줄만 가리켜 먼저 비울 것이 없다. 자동 롤백은 마지막 정상 이미지(`13492492` 이후)로만 가므로 이 정리는 손으로 더 오래된 이미지를 띄울 때만 필요하다.
+- 체결 기록:
+  - 그 주문의 `orders` 줄을 찾는다 — 같은 사용자·거래소의 거래소 주문번호, 없으면 `client_order_id`(주문번호가 비었거나 같은 줄만). 그 줄이 FILLED 면 이미 기록된 체결로 보고 기록·알림 없이 건너뛴다(상태 저장은 커밋). 대기·접수 줄(PENDING·OPEN)이면 FILLED 로 바꾼다 — 체결이 정하는 칼럼은 새로 넣을 때와 같은 값이라 화면이 같다(요청 금액·식별자·만든 시각, 체결이 값을 주지 않는 판단 가격·요청 수량은 남긴다). 취소·거절·안 나감으로 끝난 줄이면 FILLED 로 바꾸고 ERROR(엔진에서는 생기지 않아 장부를 본다). 줄이 없으면 새로 넣는다. 같은 주문 키 줄과 충돌하면 체결 기록 트랜잭션 전체가 되돌아가 다음 확정에서 다시 시도한다.
+  - 같은 `client_order_id` 의 줄이 다른 주문번호에 있으면 그 식별자 없이 기록하고 ERROR 를 남긴다. 되돌리면 그 종목이 체결 확정에서 멈춰 손절이 돌지 않는다.
+  - 주문번호도 식별자도 없는 체결은 중복 확인 없이 기록한다(잔고로 확정한 체결은 주문번호가 있다). pending 해제가 같은 트랜잭션이라 다시 기록되지 않는다.
+- 이 쓰기는 최선이다. DB 가 던지거나 2초 안에 끝나지 않으면 WARN 만 남기고 매매는 그대로 간다. 그래서 줄이 빠지거나 `PENDING`·`OPEN` 에 남을 수 있다(봇을 멈춘 사이 끝난 주문 포함). 매일 대사가 1시간 넘게 남은 PENDING·OPEN 줄을 거래소 상태로 닫는다(위 체결 기록 대조 절). 화면·왕복 손익·매일 대조는 FILLED 만 읽어 영향이 없다.
+- 롤백: V44 이후지만 #392(`13492492`, 체결이 대기·접수 줄을 FILLED 로 바꾸는 이미지) 이전 이미지는 그 줄이 있으면 같은 식별자 충돌로 그 주문의 체결 기록을 매번 되돌린다(그 종목이 확정에서 멈춘다). 그런 이미지로 되돌렸으면 끝나지 않은 줄을 지운다 — 알림 대기열은 FILLED 줄만 가리켜 먼저 비울 것이 없다. 자동 롤백은 마지막 정상 이미지(`13492492` 이후)로만 가므로 이 정리는 손으로 더 오래된 이미지를 띄울 때만 필요하다.
   ```bash
   cd /opt/app
   docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U trading -d trading \
