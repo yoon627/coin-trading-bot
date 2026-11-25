@@ -710,7 +710,6 @@ if [ "$MIGRATION_GATE" != "rollback-ok" ]; then
     echo "  2) DB migration 적용 여부 점검, 필요 시 백업 복원"
     echo "  3) 수동 롤백: cd /opt/app && APP_VERSION=<이전정상SHA> docker compose up -d --pull missing"
     echo "     V44 이전 이미지로는 롤백하지 않는다 — V47 이 그 이미지가 쓰는 옛 거래 표를 지웠다(README V47 절)."
-    echo "     V30 이전 이미지로는 롤백하지 않는다 — 불가피하면 README 의 절차로 KIS 행을 먼저 지운다."
     echo "     이번 배포의 마이그레이션이 적용되지 않았으면(flyway_schema_history 에 새 버전 없음) 직전 이미지로 수동 롤백해도 된다."
     exit 1
 fi
